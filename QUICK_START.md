@@ -7,9 +7,20 @@ Your TOTeM-Tool project is completely set up with:
 - Electron desktop wrapper
 - Build scripts for Windows executable
 
-## 🚀 Start Development (3 Steps)
+## 🚀 Start Development
 
-### 1. Open 3 terminals in the project root:
+### Option 1: One-click start (Windows)
+```bash
+# Double-click or run:
+start-dev.bat
+```
+
+### Option 2: Automated start (Cross-platform)
+```bash
+npm run electron-dev
+```
+
+### Option 3: Manual start (3 terminals)
 
 **Terminal 1 - Backend:**
 ```bash
