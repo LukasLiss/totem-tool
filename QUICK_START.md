@@ -1,0 +1,58 @@
+# TOTeM-Tool Quick Start
+
+## ✅ What's Done
+Your TOTeM-Tool project is completely set up with:
+- Django backend with virtual environment
+- React frontend 
+- Electron desktop wrapper
+- Build scripts for Windows executable
+
+## 🚀 Start Development (3 Steps)
+
+### 1. Open 3 terminals in the project root:
+
+**Terminal 1 - Backend:**
+```bash
+cd backend
+source venv/Scripts/activate
+python manage.py runserver 8000
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm start
+```
+
+**Terminal 3 - Electron:**
+```bash
+cd electron
+NODE_ENV=development npm start
+```
+
+> **Note:** The Electron app will automatically detect if the backend is already running and won't try to start another instance. This prevents port conflicts during development.
+
+### 2. Test the API
+```bash
+curl http://localhost:8000/api/greeting/
+# Should return: {"message":"Hello, greetings from the backend!"}
+```
+
+### 3. View the App
+- Frontend: http://localhost:3000
+- Electron window should open automatically
+- Both should show: "Hello, greetings from the backend!"
+
+## 📦 Build Executable
+```bash
+npm run build-all
+```
+Creates Windows .exe in `electron/dist/`
+
+## ⚡ Next Steps
+Your foundation is ready! Now you can:
+1. Add more API endpoints in `backend/api/views.py`
+2. Build React components in `frontend/src/`
+3. Extend the Electron wrapper as needed
+
+The virtual environment is properly configured and all dependencies are installed!

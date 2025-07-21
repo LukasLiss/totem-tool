@@ -1,0 +1,9 @@
+@echo off
+echo Starting TOTeM-Tool Development Environment...
+echo.
+
+echo Setting development environment...
+set NODE_ENV=development
+
+echo Starting backend and frontend concurrently...
+npm run electron-dev
