@@ -60,86 +60,7 @@ class OcelFileImporter:
             raise ValueError(f"Unsupported file format: {self.file_format}. Please use 'sqlite', 'json', or 'xml'.")
 
     def _import_sqlite(self) -> ObjectCentricEventLog:
-        with sqlite3.connect(self.file_path) as conn:
-            # Import events and their basic attributes
-            events_query = "SELECT ocel_id, ocel_type FROM event"
-            events_df = pl.read_database(query=events_query, connection=conn)
-            
-            # Get event types for dynamic tables
-            types_query = "SELECT ocel_type_map FROM event_map_type"
-            event_types = pl.read_database(query=types_query, connection=conn)
-            
-            # Import event-object relationships
-            rel_query = "SELECT ocel_event_id, ocel_object_id FROM event_object"
-            event_object_df = pl.read_database(query=rel_query, connection=conn)
-            
-            # Process each event
-            for row in events_df.iter_rows():
-                event_id = row[0]  # ocel_id
-                activity = row[1]  # ocel_type
-                
-                # Get timestamp from corresponding event type table
-                timestamp_query = f"""
-                    SELECT ocel_time 
-                    FROM event_{activity} 
-                    WHERE ocel_id = '{event_id}'
-                """
-                timestamp_df = pl.read_database(query=timestamp_query, connection=conn)
-                timestamp = int(pl.from_pandas(pd.to_datetime(timestamp_df[0,0])).timestamp())
-                
-                # Get related objects
-                objects = (event_object_df
-                          .filter(pl.col("ocel_event_id") == event_id)
-                          .select("ocel_object_id")
-                          .to_series()
-                          .to_list())
-                
-                # Add event to log
-                self.event_log.add_event(event_id, activity, timestamp, objects)
-
-            # Import objects and their types
-            objects_query = "SELECT ocel_id as object_id, ocel_type FROM object"
-            objects_df = pl.read_database(query=objects_query, connection=conn)
-            
-            for row in objects_df.iter_rows():
-                obj_id = row[0]
-                obj_type = row[1]
-                self.event_log.add_object(obj_id, obj_type)
-
-            # Import object attributes
-            type_query = "SELECT DISTINCT ocel_type FROM object"
-            object_types = pl.read_database(query=type_query, connection=conn)
-            
-            map_query = "SELECT ocel_type, ocel_type_map FROM object_map_type"
-            object_map_types = pl.read_database(query=map_query, connection=conn)
-            
-            # Process each object type's attributes
-            for obj_type in object_types["ocel_type"]:
-                type_map = (object_map_types
-                           .filter(pl.col("ocel_type") == obj_type)
-                           .select("ocel_type_map")
-                           .item())
-                
-                attr_query = f"SELECT * FROM object_{type_map}"
-                attr_df = pl.read_database(query=attr_query, connection=conn)
-                
-                # Process attributes for this object type
-                for column in attr_df.columns:
-                    if column not in ["ocel_id", "ocel_type"]:
-                        if obj_type not in self.event_log.object_attributes:
-                            self.event_log.object_attributes[obj_type] = {}
-                        
-                        self.event_log.object_attributes[obj_type][column] = []
-                        
-                        # Add non-null attribute values
-                        for attr_row in attr_df.select([
-                            "ocel_id", 
-                            pl.col(column).alias("value")
-                        ]).filter(pl.col("value").is_not_null()).iter_rows():
-                            self.event_log.object_attributes[obj_type][column].append(
-                                (int(pl.now().timestamp()), str(attr_row[1]))
-                            )
-
+        # Todo
         return self.event_log             
 
     def _import_json(self) -> ObjectCentricEventLog:
@@ -149,3 +70,90 @@ class OcelFileImporter:
     def _import_xml(self) -> ObjectCentricEventLog:
         # Placeholder for XML import logic   
         return self.event_log
+    
+def eventsFromSQLite(file_path: str) -> pl.DataFrame:
+    
+    con = sqlite3.connect(file_path)
+    cursor = con.cursor()
+
+    # get list of activity names
+    cursor.execute("SELECT ocel_type_map as activity FROM event_map_type")
+    activities = [row[0] for row in cursor]
+    # print(activities)
+
+    # build the union timestamp table query for all activities
+    timestamp_union_query = " UNION ".join(
+        [f"SELECT ocel_id, ocel_time FROM event_{activity}" for activity in activities]
+    )
+
+    # event to object relation query (with LEFT JOIN to include all events)
+    event_object_query ="""
+        SELECT 
+            ocel_id as _eventId, 
+            ocel_type_map as _activity,
+            eo.ocel_object_id as _object,
+            eo.ocel_qualifier as _qualifier
+        FROM 
+            (((event e JOIN event_map_type emt ON e.ocel_type = emt.ocel_type) a LEFT JOIN event_object eo ON a.ocel_id = eo.ocel_event_id))
+    """
+
+    # join the event object relation with the timestamp union query
+    query = f"""
+        SELECT 
+            e._eventId, 
+            e._activity,
+            e._object,
+            e._qualifier,
+            t.ocel_time as _timestamp_str
+        FROM 
+            ({event_object_query}) e
+        LEFT JOIN 
+            ({timestamp_union_query}) t ON e._eventId = t.ocel_id
+    """
+
+    df = pl.read_database(query=query, connection=con)
+    con.close()
+    
+    # turn null values in _object and _qualifier to empty strings
+    # df = df.with_columns([
+    #     pl.col("_object").fill_null(""),
+    #     pl.col("_qualifier").fill_null("")
+    # ])
+
+    df = df.group_by("_eventId").agg([pl.col("_object").alias("_objects"), pl.col("_qualifier").alias("_qualifiers"), pl.col("_activity").first(), pl.col("_timestamp_str").first()])
+
+    # access a row "collect_hu10533" where there is no object
+    # print(df.filter(pl.col("_eventId") == "collect_hu10533"))
+
+    df = df.with_columns(
+        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+    )   
+    df = df.with_columns(
+        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestamp_epoch_s"),
+    )
+
+    return df
+
+def objectsFromSQLite(file_path: str) -> pl.DataFrame:
+    query = """
+        SELECT o.ocel_id as _object, omt.ocel_type_map as _type FROM
+        object o JOIN object_map_type omt on o.ocel_type = omt.ocel_type    
+    """
+    con = sqlite3.connect(file_path)
+    df = pl.read_database(query=query, connection=con)
+    con.close()
+
+    return df
+
+if __name__ == "__main__":
+
+    events_df = eventsFromSQLite("ocel/resources/ContainerLogistics.sqlite")
+    events_df = events_df.drop(["_timestamp_str", "_timestamp_datetime", "_qualifiers"])
+    events_df = events_df.rename({"_timestamp_epoch_s": "_timestampUnix"})
+    print(events_df)
+
+    objects_df = objectsFromSQLite("ocel/resources/ContainerLogistics.sqlite")
+    print(objects_df)
+
+    # log = ObjectCentricEventLog()
+    # print(log.events)
