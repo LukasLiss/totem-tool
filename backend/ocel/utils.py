@@ -92,7 +92,7 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     event_object_query ="""
         SELECT 
             ocel_id as _eventId, 
-            ocel_type_map as _activity,
+            e.ocel_type as _activity,
             eo.ocel_object_id as _object,
             eo.ocel_qualifier as _qualifier
         FROM 
@@ -116,13 +116,11 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     df = pl.read_database(query=query, connection=con)
     con.close()
     
-    # turn null values in _object and _qualifier to empty strings
-    # df = df.with_columns([
-    #     pl.col("_object").fill_null(""),
-    #     pl.col("_qualifier").fill_null("")
-    # ])
-
+    # Group by event ID and aggregate objects and qualifiers into lists
     df = df.group_by("_eventId").agg([pl.col("_object").alias("_objects"), pl.col("_qualifier").alias("_qualifiers"), pl.col("_activity").first(), pl.col("_timestamp_str").first()])
+
+    # transform [null] to empty list []
+    df = df.with_columns(_objects=pl.col("_objects").list.drop_nulls(), _qualifiers=pl.col("_qualifiers").list.drop_nulls())
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
@@ -132,13 +130,13 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
 
-    df = df.drop(["_timestamp_str", "_timestamp_datetime", "_qualifiers"])
+    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
 
     return df
 
 def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
     query = """
-        SELECT o.ocel_id as _objId, omt.ocel_type_map as _objType FROM
+        SELECT o.ocel_id as _objId, o.ocel_type as _objType FROM
         object o JOIN object_map_type omt on o.ocel_type = omt.ocel_type    
     """
     con = sqlite3.connect(file_path)
@@ -172,7 +170,8 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
 
-    df = df.drop("_timestamp_str", "_timestamp_datetime")
+    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
+
     return df
 
 def load_objects_from_json(json_path: str) -> pl.DataFrame:
@@ -221,7 +220,8 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
 
-    df = df.drop("_timestamp_str", "_timestamp_datetime")
+    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
+
     return df
 
 
