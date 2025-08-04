@@ -1,6 +1,8 @@
 import polars as pl
 from typing import List, Tuple, Dict
 import sqlite3
+import json
+import xml.etree.ElementTree as ET
 
 class ObjectCentricEventLog:
     def __init__(self):
@@ -71,7 +73,7 @@ class OcelFileImporter:
         # Placeholder for XML import logic   
         return self.event_log
     
-def eventsFromSQLite(file_path: str) -> pl.DataFrame:
+def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     
     con = sqlite3.connect(file_path)
     cursor = con.cursor()
@@ -122,21 +124,21 @@ def eventsFromSQLite(file_path: str) -> pl.DataFrame:
 
     df = df.group_by("_eventId").agg([pl.col("_object").alias("_objects"), pl.col("_qualifier").alias("_qualifiers"), pl.col("_activity").first(), pl.col("_timestamp_str").first()])
 
-    # access a row "collect_hu10533" where there is no object
-    # print(df.filter(pl.col("_eventId") == "collect_hu10533"))
-
+    # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
         pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
     )   
     df = df.with_columns(
-        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestamp_epoch_s"),
+        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
+
+    df = df.drop(["_timestamp_str", "_timestamp_datetime", "_qualifiers"])
 
     return df
 
-def objectsFromSQLite(file_path: str) -> pl.DataFrame:
+def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
     query = """
-        SELECT o.ocel_id as _object, omt.ocel_type_map as _type FROM
+        SELECT o.ocel_id as _objId, omt.ocel_type_map as _objType FROM
         object o JOIN object_map_type omt on o.ocel_type = omt.ocel_type    
     """
     con = sqlite3.connect(file_path)
@@ -145,15 +147,130 @@ def objectsFromSQLite(file_path: str) -> pl.DataFrame:
 
     return df
 
+
+def load_events_from_json(json_path: str) -> pl.DataFrame:
+    # Reads the file into a dict
+    with open(json_path, "r") as f:
+        data = json.load(f)
+    events = data.get("events", [])
+    # Build a DataFrame with id, type, timestamp and a list of related object IDs
+    df = pl.DataFrame({
+        "_eventId":              [e["id"]               for e in events],
+        "_activity":            [e["type"]             for e in events],
+        "_timestamp_str":       [e["time"]             for e in events],
+        "_objects": [
+            [rel["objectId"] for rel in e.get("relationships", [])]
+            for e in events
+        ],
+    })
+
+    # Convert the timestamp string to a datetime object and then to epoch seconds
+    df = df.with_columns(
+        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+    )   
+    df = df.with_columns(
+        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
+    )
+
+    df = df.drop("_timestamp_str", "_timestamp_datetime")
+    return df
+
+def load_objects_from_json(json_path: str) -> pl.DataFrame:
+    with open(json_path, "r") as f:
+        data = json.load(f)
+    objects = data.get("objects", [])
+    df = pl.DataFrame({
+        "_objId":   [o["id"]   for o in objects],
+        "_objType": [o["type"] for o in objects],
+    })
+    return df
+
+def load_events_from_xml(xml_path: str) -> pl.DataFrame:
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    ids = []
+    types = []
+    times = []
+    rels = []
+
+    for ev in root.find("events").findall("event"):
+        ids.append(ev.get("id"))
+        types.append(ev.get("type"))
+        times.append(ev.get("time"))
+
+        rel_list = []
+        objs_block = ev.find("objects")
+        if objs_block is not None:
+            for r in objs_block.findall("relationship"):
+                rel_list.append(r.get("object-id"))
+        rels.append(rel_list)
+
+    df = pl.DataFrame({
+        "_eventId":                  ids,
+        "_activity":                types,
+        "_timestamp_str":           times,
+        "_objects":  rels
+    })
+
+    # Convert the timestamp string to a datetime object and then to epoch seconds
+    df = df.with_columns(
+        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+    )   
+    df = df.with_columns(
+        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
+    )
+
+    df = df.drop("_timestamp_str", "_timestamp_datetime")
+    return df
+
+
+def load_objects_from_xml(xml_path: str) -> pl.DataFrame:
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    ids = []
+    types = []
+
+    for obj in root.find("objects").findall("object"):
+        ids.append(obj.get("id"))
+        types.append(obj.get("type"))
+
+    df = pl.DataFrame({
+        "_objId":   ids,
+        "_objType": types
+    })
+    return df
+
+
+
 if __name__ == "__main__":
 
-    events_df = eventsFromSQLite("ocel/resources/ContainerLogistics.sqlite")
-    events_df = events_df.drop(["_timestamp_str", "_timestamp_datetime", "_qualifiers"])
-    events_df = events_df.rename({"_timestamp_epoch_s": "_timestampUnix"})
-    print(events_df)
+    print("Importing from SQLite...")
+    events_df_sqlite = load_events_from_sqlite("ocel/resources/ContainerLogistics.sqlite")
+    print(events_df_sqlite)
+    print("example row with no objects:")
+    print(events_df_sqlite.filter(pl.col("_eventId") == "collect_hu10533"))
+    objects_df_sqlite = load_objects_from_sqlite("ocel/resources/ContainerLogistics.sqlite")
+    print(objects_df_sqlite)
 
-    objects_df = objectsFromSQLite("ocel/resources/ContainerLogistics.sqlite")
-    print(objects_df)
+    print("\nImporting from JSON...")
+    events_df_json = load_events_from_json("ocel/resources/ContainerLogistics.json")
+    print(events_df_json)
+    print("example row with no objects:")
+    print(events_df_json.filter(pl.col("_eventId") == "collect_hu10533"))
+    objects_df_json = load_objects_from_json("ocel/resources/ContainerLogistics.json")
+    print(objects_df_json)
+
+
+    print("\nImporting from XML...")
+    events_df_xml = load_events_from_xml("ocel/resources/ContainerLogistics.xml")
+    print(events_df_xml)
+    print("example row with no objects:")
+    print(events_df_xml.filter(pl.col("_eventId") == "collect_hu10533"))
+    objects_df_xml = load_objects_from_xml("ocel/resources/ContainerLogistics.xml")
+    print(objects_df_xml)
+    
 
     # log = ObjectCentricEventLog()
     # print(log.events)
