@@ -130,18 +130,64 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
 
-    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
+    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects", "_qualifiers"]).sort("_eventId")
 
     return df
 
 def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
-    query = """
-        SELECT o.ocel_id as _objId, o.ocel_type as _objType FROM
-        object o JOIN object_map_type omt on o.ocel_type = omt.ocel_type    
-    """
     con = sqlite3.connect(file_path)
-    df = pl.read_database(query=query, connection=con)
+
+    df_objs = pl.read_database(
+        query="""
+            SELECT
+              o.ocel_id   AS _objId,
+              o.ocel_type AS _objType
+            FROM object o
+            JOIN object_map_type omt
+              ON o.ocel_type = omt.ocel_type
+        """,
+        connection=con,
+    )
+
+    df_rel = pl.read_database(
+        query="""
+            SELECT
+              ocel_source_id AS _objId,
+              ocel_target_id,
+              ocel_qualifier
+            FROM object_object
+        """,
+        connection=con,
+    )
     con.close()
+
+    df_targets = (
+        df_rel
+        .group_by("_objId")
+        .agg([
+            pl.col("ocel_target_id").alias("_targetObjects"),
+            pl.col("ocel_qualifier").alias("_qualifiers")
+        ])
+        .with_columns([
+            pl.col("_targetObjects").list.drop_nulls().alias("_targetObjects"),
+            pl.col("_qualifiers").list.drop_nulls().alias("_qualifiers")
+        ])
+    )
+
+    df = (
+        df_objs
+        .join(df_targets, on="_objId", how="left")
+        .with_columns([
+            pl.when(pl.col("_targetObjects").is_null())
+              .then(pl.lit([]).cast(pl.List(pl.Utf8)))
+              .otherwise(pl.col("_targetObjects"))
+              .alias("_targetObjects"),
+            pl.when(pl.col("_qualifiers").is_null())
+              .then(pl.lit([]).cast(pl.List(pl.Utf8)))
+              .otherwise(pl.col("_qualifiers"))
+              .alias("_qualifiers"),
+        ])
+    )
 
     return df
 
@@ -160,6 +206,10 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
             [rel["objectId"] for rel in e.get("relationships", [])]
             for e in events
         ],
+        "_qualifiers": [
+            [rel["qualifier"] for rel in e.get("relationships", [])]
+            for e in events
+        ]
     })
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
@@ -170,7 +220,7 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     )
 
-    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
+    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects", "_qualifiers"]).sort("_eventId")
 
     return df
 
@@ -181,6 +231,14 @@ def load_objects_from_json(json_path: str) -> pl.DataFrame:
     df = pl.DataFrame({
         "_objId":   [o["id"]   for o in objects],
         "_objType": [o["type"] for o in objects],
+        "_targetObjects": [
+            [rel["objectId"] for rel in o.get("relationships", [])]
+            for o in objects
+        ],
+        "_qualifiers": [
+            [rel["qualifier"] for rel in o.get("relationships", [])]
+            for o in objects
+        ]
     })
     return df
 
@@ -188,43 +246,59 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
-    ids = []
-    types = []
-    times = []
-    rels = []
+    ids       = []
+    types     = []
+    times     = []
+    target_obj_ids      = []  
+    quals     = []  
 
     for ev in root.find("events").findall("event"):
         ids.append(ev.get("id"))
         types.append(ev.get("type"))
         times.append(ev.get("time"))
 
-        rel_list = []
+        # collect object-ids and qualifiers
+        tmp_obj_ids   = []
+        tmp_quals = []
         objs_block = ev.find("objects")
         if objs_block is not None:
-            for r in objs_block.findall("relationship"):
-                rel_list.append(r.get("object-id"))
-        rels.append(rel_list)
+            # handle both <relationship> or <object> tags
+            for r in objs_block:
+                oid = r.get("object-id")
+                if oid:
+                    tmp_obj_ids.append(oid)
+                    # qualifier may be on attribute "relationship" or "qualifier"
+                    tmp_quals.append(r.get("relationship") or r.get("qualifier"))
+
+        target_obj_ids.append(tmp_obj_ids)
+        quals.append(tmp_quals)
 
     df = pl.DataFrame({
-        "_eventId":                  ids,
-        "_activity":                types,
-        "_timestamp_str":           times,
-        "_objects":  rels
+        "_eventId":        ids,
+        "_activity":       types,
+        "_timestamp_str":  times,
+        "_objects":        target_obj_ids,
+        "_qualifiers":     quals, 
     })
 
-    # Convert the timestamp string to a datetime object and then to epoch seconds
-    df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
-    )   
-    df = df.with_columns(
-        pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
+    # convert timestamp to epoch seconds
+    df = df.with_columns([
+        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime"),
+        pl.col("_timestamp_str")
+          .str.to_datetime()
+          .dt.epoch(time_unit="s")
+          .alias("_timestampUnix"),
+    ])
+
+
+    return (
+      df
+      .select(["_eventId","_activity","_timestampUnix","_objects","_qualifiers"])
+      .sort("_eventId")
     )
 
-    df = df.select(["_eventId", "_activity", "_timestampUnix", "_objects"]).sort("_eventId")
 
-    return df
-
-
+#TODO: load o2o relations
 def load_objects_from_xml(xml_path: str) -> pl.DataFrame:
     tree = ET.parse(xml_path)
     root = tree.getroot()
@@ -243,7 +317,6 @@ def load_objects_from_xml(xml_path: str) -> pl.DataFrame:
     return df
 
 
-
 if __name__ == "__main__":
 
     print("Importing from SQLite...")
@@ -253,6 +326,8 @@ if __name__ == "__main__":
     print(events_df_sqlite.filter(pl.col("_eventId") == "collect_hu10533"))
     objects_df_sqlite = load_objects_from_sqlite("ocel/resources/ContainerLogistics.sqlite")
     print(objects_df_sqlite)
+    print("example object with multiple targets:")
+    print(objects_df_sqlite.filter(pl.col("_objId") == "cr1511"))
 
     print("\nImporting from JSON...")
     events_df_json = load_events_from_json("ocel/resources/ContainerLogistics.json")
