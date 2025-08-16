@@ -6,6 +6,7 @@ import sqlite3
 import json
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from collections import defaultdict
 # DATEFORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # ISO 8601 format with milliseconds
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -366,27 +367,51 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
     )
 
 
-#TODO: load o2o relations
 def load_objects_from_xml(xml_path: str) -> pl.DataFrame:
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
+    root = ET.parse(xml_path).getroot()
 
-    ids = []
-    types = []
+    rels = defaultdict(lambda: {"objType": None,
+                                "targets": [],
+                                "qualifiers": []})
 
-    for obj in root.find("objects").findall("object"):
-        ids.append(obj.get("id"))
-        types.append(obj.get("type"))
+    for src in root.findall("./objects/object"):
+        src_id   = src.get("id")
+        src_type = src.get("type")
 
-    df = pl.DataFrame({
-        "_objId":   ids,
-        "_objType": types
-    })
-    return df
+        if src_id is None:
+            continue
+
+        rels[src_id]["objType"] = src_type
+
+        for ref in src.findall("./objects/relationship"):
+            tgt_id = ref.get("object-id") 
+            if tgt_id is None:
+                continue
+            qualifier = ref.get("qualifier")
+            rels[src_id]["targets"].append(tgt_id)
+            rels[src_id]["qualifiers"].append(qualifier)
+
+    rows = (
+        {"_objId": oid,
+         "_objType": data["objType"],
+         "_targetObjects": data["targets"],
+         "_qualifiers": data["qualifiers"]}
+        for oid, data in rels.items()
+    )
+
+    return pl.DataFrame(rows,
+                        schema={
+                            "_objId": pl.Utf8,
+                            "_objType": pl.Utf8,
+                            "_targetObjects": pl.List(pl.Utf8),
+                            "_qualifiers": pl.List(pl.Utf8),
+                        })
+
 
 
 if __name__ == "__main__":
 
+    # Testing SQLite
     print("Importing from SQLite...")
     events_df_sqlite = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
     print(events_df_sqlite)
@@ -397,6 +422,7 @@ if __name__ == "__main__":
     print("example object with multiple targets:")
     print(objects_df_sqlite.filter(pl.col("_objId") == "cr1511"))
 
+    # Testing JSON 
     print("\nImporting from JSON...")
     events_df_json = load_events_from_json("example_data/ContainerLogistics.json")
     print(events_df_json)
@@ -404,8 +430,10 @@ if __name__ == "__main__":
     print(events_df_json.filter(pl.col("_eventId") == "collect_hu10533"))
     objects_df_json = load_objects_from_json("example_data/ContainerLogistics.json")
     print(objects_df_json)
+    print("example object with multiple targets:")
+    print(objects_df_sqlite.filter(pl.col("_objId") == "cr1511"))
 
-
+    # Testing XML
     print("\nImporting from XML...")
     events_df_xml = load_events_from_xml("example_data/ContainerLogistics.xml")
     print(events_df_xml)
@@ -413,7 +441,10 @@ if __name__ == "__main__":
     print(events_df_xml.filter(pl.col("_eventId") == "collect_hu10533"))
     objects_df_xml = load_objects_from_xml("example_data/ContainerLogistics.xml")
     print(objects_df_xml)
-    
+    print("example object with multiple targets:")
+    print(objects_df_sqlite.filter(pl.col("_objId") == "cr1511"))
+
+
 
     # log = ObjectCentricEventLog()
     # print(log.events)
