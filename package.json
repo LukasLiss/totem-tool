@@ -6,7 +6,7 @@
     "install-all": "cd backend && python -m venv venv && source venv/Scripts/activate && pip install -r requirements.txt && cd ../frontend && npm install && cd ../electron && npm install",
     "start-backend": "cd backend && source venv/Scripts/activate && python manage.py runserver 8000",
     "start-frontend": "cd frontend && npm start",
-    "start-electron": "cd electron && npm start",
+    "start-electron": "cd electron && NODE_ENV=development npm start",
     "build-frontend": "cd frontend && npm run build",
     "build-electron": "cd electron && npm run build",
     "build-electron-win": "cd electron && npm run build-win",
