@@ -37,6 +37,7 @@ totem-tool/
    ```bash
    cd backend
    source venv/Scripts/activate  # Activate virtual environment
+   # source ./venv/bin/activate  # On Unix
    python manage.py runserver 8000
    ```
 
