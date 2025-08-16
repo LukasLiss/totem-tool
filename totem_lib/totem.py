@@ -2,7 +2,6 @@ from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
 
-# temporal relation constants (constants serving as a representation that is easier to understand than just the numbers)
 TR_TOTAL = "total"
 TR_DEPENDENT = "D"
 TR_DEPENDENT_INVERSE = "Di"
@@ -28,34 +27,13 @@ LC_ZERO_MANY = "0...*"
 
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
-class Totem:
-    def __init__(self):
-        self.graph = nx.DiGraph()
-        self.cardinality_types = ["0", "0..1", "1", "1..", "0.."]
-        self.temporal_types = ["paral", "prec", "prec_inv", "dur", "dur_inv"]
-
-    def add_object_type(self, obj_type: str) -> None:
-        self.graph.add_node(obj_type)
-
-    def add_relation(self, source: str, target: str,
-                    log_cardinalities: Dict[str, float],
-                    event_cardinalities: Dict[str, float],
-                    temporal_relations: Dict[str, float]) -> None:
-        # use additional attributes to store cardinalities and temporal relations
-        self.graph.add_edge(source, target, 
-                           log_cardinalities=log_cardinalities,
-                           event_cardinalities=event_cardinalities,
-                           temporal_relations=temporal_relations)
-
-
-
+# Help functions for OCEL2.0
 
 def get_all_event_objects(ocel, event_id):
     obj_ids = []
     for obj_type in ocel.object_types:
         obj_ids += ocel.get_value(event_id, obj_type)
     return obj_ids
-
 
 def get_most_precise_lc(directed_type_tuple, tau, log_cardinalities):
     total = 0
@@ -138,7 +116,11 @@ def get_most_precise_tr(directed_type_tuple, tau, temporal_relation):
 
     return "None"
 
-def mine_totem(ocel, tau=1):
+def totemDiscovery(ocel, tau=0.9):
+    # object type to event type dict
+    obj_typ_to_ev_type: dict[str, set[str]] = dict()
+    all_event_types = set()
+
     # temporal relations results
     h_temporal_relations: dict[tuple[str, str], dict[str, int]] = dict()  # stores all the temporal relations found
     # event cardinality results
@@ -165,10 +147,11 @@ def mine_totem(ocel, tau=1):
     # a mapping from type to its objects
     type_to_object = dict()
 
-    for px in ocel.process_executions:
+    for px in ocel.process_executions:  #TODO: for ev in all events instead of process_executions
         for ev in px:
+            print(f"Processing event {ev}")
             # event infos: objects and timestamps
-            ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)
+            ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)  #TODO: just use unix timestamp?
 
             objects_of_event = get_all_event_objects(ocel, ev)
             for obj in objects_of_event:
@@ -185,6 +168,14 @@ def mine_totem(ocel, tau=1):
                 o_max_times.setdefault(obj, ev_timestamp)
                 if ev_timestamp > o_max_times[obj]:  # todo check if comparison of datetimes works correctly here
                     o_max_times[obj] = ev_timestamp
+
+            # maintain object type to event type dictionary
+            eventtype = ocel.get_value(ev, 'event_activity')
+            all_event_types.add(eventtype)
+            for type in ocel.object_types:
+                if len(ocel.get_value(ev, type)) > 0:
+                    obj_typ_to_ev_type.setdefault(type, set())
+                    obj_typ_to_ev_type[type].add(eventtype)
 
             # compute event cardinality
             involved_types = []
@@ -238,8 +229,9 @@ def mine_totem(ocel, tau=1):
                         h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
 
     # merge o2o and e2o connected objects
-    for (source_o, target_o) in ocel.o2o_graph.graph.edges:
-        print(f"{source_o} - {target_o}")
+    # for (source_o, target_o) in ocel.o2o_graph.graph.edges:
+    for source_o, target_o in ocel.o2o_graph_edges:  # Toan: use different interface
+        # print(f"{source_o} - {target_o}")
         type_of_target_o = None
         for type in ocel.object_types:
             if target_o in type_to_object[type]:
@@ -261,8 +253,8 @@ def mine_totem(ocel, tau=1):
                 h_log_cardinalities[(type_source, type_target)][LC_TOTAL] += 1
 
                 cardinality = len(o2o[obj][type_target])
-                if type_source == 'products':
-                    print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
+                # if type_source == 'products':
+                #    print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
 
                 if cardinality == 0:
                     h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO, 0)
@@ -308,27 +300,58 @@ def mine_totem(ocel, tau=1):
                     h_temporal_relations[(type_source, type_target)].setdefault(TR_PARALLEL, 0)
                     h_temporal_relations[(type_source, type_target)][TR_PARALLEL] += 1
 
-        additional_t2t = {}
-        # additional_t2t = {frozenset({'Customer Order', 'Transportation Documents'})}
-        # merge type relations
-        merged_type_relations = type_relations.union(additional_t2t)
-        # for each connection give the 6 relations
-        for connected_types in merged_type_relations:
-            t1, t2 = connected_types
-            print(f"{t1} -> {t2}")
+    # setup temporal graph
+    tempgraph = {
+        'nodes': set(),
+        TR_PARALLEL: set(),
+        TR_INITIATING: set(),
+        TR_DEPENDENT: set(),
+    }
 
-            # get log cardinality
-            lc = get_most_precise_lc((t1, t2), tau, h_log_cardinalities)
-            lc_i = get_most_precise_lc((t2, t1), tau, h_log_cardinalities)
-            print(f"LC: {lc_i} - {lc}")
-            # get event cardinality
-            ec = get_most_precise_ec((t1, t2), tau, h_event_cardinalities)
-            ec_i = get_most_precise_ec((t2, t1), tau, h_event_cardinalities)
-            print(f"EC: {ec_i} - {ec}")
-            # get temporal relation
-            tr = get_most_precise_tr((t1, t2), tau, h_temporal_relations)
-            tr_i = get_most_precise_tr((t2, t1), tau, h_temporal_relations)
-            print(f"TR: {tr}")
-            # print(f"TRi: {tr_i}")
-            print("")
-    return
+    # for each connection give the 6 relations
+    for connected_types in type_relations:
+        t1, t2 = connected_types
+        tempgraph['nodes'].add(t1)
+        tempgraph['nodes'].add(t2)
+        print(f"{t1} -> {t2}")
+
+        # get log cardinality
+        lc = get_most_precise_lc((t1, t2), tau, h_log_cardinalities)
+        lc_i = get_most_precise_lc((t2, t1), tau, h_log_cardinalities)
+        print(f"LC: {lc_i} - {lc}")
+        # get event cardinality
+        ec = get_most_precise_ec((t1, t2), tau, h_event_cardinalities)
+        ec_i = get_most_precise_ec((t2, t1), tau, h_event_cardinalities)
+        print(f"EC: {ec_i} - {ec}")
+        # get temporal relation
+        tr = get_most_precise_tr((t1, t2), tau, h_temporal_relations)
+        tr_i = get_most_precise_tr((t2, t1), tau, h_temporal_relations)
+        print(f"TR: {tr}")
+        # add relation to tempgraph
+        if tr == TR_DEPENDENT_INVERSE or tr == TR_INITIATING_REVERSE:
+            tempgraph[tr_i].add((t2, t1))
+        else:
+            tempgraph[tr].add((t1, t2))
+        # print(f"TRi: {tr_i}")
+        print("")
+
+    return tempgraph
+
+class Totem:
+    def __init__(self):
+        self.graph = nx.DiGraph()
+        self.cardinality_types = ["0", "0..1", "1", "1..", "0.."]
+        self.temporal_types = ["paral", "prec", "prec_inv", "dur", "dur_inv"]
+
+    def add_object_type(self, obj_type: str) -> None:
+        self.graph.add_node(obj_type)
+
+    def add_relation(self, source: str, target: str,
+                    log_cardinalities: Dict[str, float],
+                    event_cardinalities: Dict[str, float],
+                    temporal_relations: Dict[str, float]) -> None:
+        # use additional attributes to store cardinalities and temporal relations
+        self.graph.add_edge(source, target, 
+                           log_cardinalities=log_cardinalities,
+                           event_cardinalities=event_cardinalities,
+                           temporal_relations=temporal_relations)
