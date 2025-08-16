@@ -7,6 +7,7 @@ import json
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from collections import defaultdict
+from functools import cached_property
 # DATEFORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # ISO 8601 format with milliseconds
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -63,6 +64,20 @@ class ObjectCentricEventLog:
               self.object_df["_objType"].to_list()
             )
         )
+    
+    @cached_property
+    def o2o_graph_edges(self) -> List[Tuple[str, str]]:
+        """
+        Returns the object-to-object graph edges.
+        Each edge is a tuple (source_object_id, target_object_id).
+        """
+        objects_ungrouped_df = self.object_df.explode(["_targetObjects", "_qualifiers"]).select(
+            pl.col("_objId").alias("source"),
+            pl.col("_targetObjects").alias("target"),
+        ).drop_nulls()
+        return objects_ungrouped_df.rows()
+
+
 
     @property
     def obj_type_map(self) -> dict[str,str]:
@@ -101,9 +116,12 @@ class ObjectCentricEventLog:
         if attribute == "event_timestamp":
             # return a string that mine_totem will parse
             return datetime.utcfromtimestamp(ts_unix).strftime(DATEFORMAT)
-
-        # otherwise attribute == some object_type → filter
-        return [o for o in obj_list if self.obj_type_map.get(o) == attribute] 
+        elif attribute == "event_activity":
+            # return the activity of the event
+            return self.events.filter(pl.col("_eventId") == event_id)["_activity"].item()
+        else:
+            # otherwise attribute == some object_type → filter
+            return [o for o in obj_list if self.obj_type_map.get(o) == attribute] 
 
     
     
