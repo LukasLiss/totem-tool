@@ -22,4 +22,5 @@ print(ocel.get_value("weigh_cr916", "event_activity"))  # get activity of an eve
 print(ocel.get_value("book_vehs_td1", "Vehicle"))  # get objects of type "Vehicle" related to event "book_vehs_td1"
 # print(ocel.o2o_graph_edges)  # new interface for ocel.o2o_graph.graph.edges
 
-totemDiscovery(ocel)
+graph = totemDiscovery(ocel)
+print(graph)
