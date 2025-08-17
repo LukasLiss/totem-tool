@@ -78,6 +78,36 @@ class ObjectCentricEventLog:
         return objects_ungrouped_df.rows()
 
 
+    @cached_property
+    def event_cache(self) -> Dict[str, dict]:
+        """
+        Returns a cache of events attributes
+        The keys are event IDs and the values are dictionaries of attributes.
+        """
+        ev_cache = {}
+        
+        events_data = self.events.select([
+            "_eventId", "_activity", "_timestampUnix", "_objects"
+        ]).to_dicts()
+        
+        for event in events_data:
+            event_id = event["_eventId"]
+            objects = event["_objects"] or []
+            
+            objects_by_type = defaultdict(list)
+            for obj_id in objects:
+                obj_type = self.obj_type_map.get(obj_id)
+                if obj_type:
+                    objects_by_type[obj_type].append(obj_id)
+            
+            ev_cache[event_id] = {
+                "activity": event["_activity"],
+                "timestamp": event["_timestampUnix"],
+                "objects": objects,
+                "objects_by_type": dict(objects_by_type)
+            }
+        return ev_cache
+
 
     @property
     def obj_type_map(self) -> dict[str,str]:
@@ -98,30 +128,23 @@ class ObjectCentricEventLog:
         return [ self.events["_eventId"].to_list() ]
 
     def get_value(self, event_id: str, attribute: str):
-        # hacky interface to hook up to the original totem miner!
-        # because attribute is either object type or "event_timestamp" in the miner
+        """
+        Optimized interface for the totem miner.
+        Uses cached data for fast lookups.
+        """
 
-        # 1) pull the row for this event
-        row = (
-            self.events
-                .filter(pl.col("_eventId") == event_id)
-                .select(["_timestampUnix", "_objects"])
-                .row(0)
-        )
-        if row is None:
+        event_data = self.event_cache.get(event_id)
+        if event_data is None:
             return None
-        ts_unix, obj_list = row    # obj_list is Python List[str]
 
-        # 2) dispatch on attribute
         if attribute == "event_timestamp":
-            # return a string that mine_totem will parse
-            return datetime.utcfromtimestamp(ts_unix).strftime(DATEFORMAT)
+            # return datetime.utcfromtimestamp(ts_unix).strftime(DATEFORMAT)
+            return event_data["timestamp"]  # just use unix since temporal order is preserved
         elif attribute == "event_activity":
-            # return the activity of the event
-            return self.events.filter(pl.col("_eventId") == event_id)["_activity"].item()
+            return self.events.filter(pl.col("_eventId") == event_id)["_activity"].item()  # name of the event type
         else:
             # otherwise attribute == some object_type → filter
-            return [o for o in obj_list if self.obj_type_map.get(o) == attribute] 
+            return event_data["objects_by_type"].get(attribute, [])
 
     
     
