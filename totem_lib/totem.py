@@ -147,11 +147,13 @@ def totemDiscovery(ocel, tau=0.9):
     # a mapping from type to its objects
     type_to_object = dict()
 
+    print(f"looping through events, start time: {datetime.now()}")
     for px in ocel.process_executions:  #TODO: for ev in all events instead of process_executions
         for ev in px:
-            print(f"Processing event {ev}")
+            # print(f"Processing event {ev}")
             # event infos: objects and timestamps
-            ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)  #TODO: just use unix timestamp?
+            # ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)  #TODO: just use unix timestamp?
+            ev_timestamp = ocel.get_value(ev, 'event_timestamp')  # use unix timestamp directly
 
             objects_of_event = get_all_event_objects(ocel, ev)
             for obj in objects_of_event:
@@ -229,6 +231,7 @@ def totemDiscovery(ocel, tau=0.9):
                         h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
 
     # merge o2o and e2o connected objects
+    print(f"mergeing o2o and e2o, start time: {datetime.now()}")
     # for (source_o, target_o) in ocel.o2o_graph.graph.edges:
     for source_o, target_o in ocel.o2o_graph_edges:  # Toan: use different interface
         # print(f"{source_o} - {target_o}")
@@ -244,6 +247,7 @@ def totemDiscovery(ocel, tau=0.9):
         o2o[source_o][type_of_target_o].update([source_o])
 
     # compute log cardinality
+    print(f"computing log cardinalities, start time: {datetime.now()}")
     for type_source in ocel.object_types:
         for type_target in ocel.object_types:
             h_temporal_relations.setdefault((type_source, type_target), dict())
@@ -301,6 +305,7 @@ def totemDiscovery(ocel, tau=0.9):
                     h_temporal_relations[(type_source, type_target)][TR_PARALLEL] += 1
 
     # setup temporal graph
+    print(f"building the temporal graph, start time: {datetime.now()}")
     tempgraph = {
         'nodes': set(),
         TR_PARALLEL: set(),
@@ -335,6 +340,7 @@ def totemDiscovery(ocel, tau=0.9):
         # print(f"TRi: {tr_i}")
         print("")
 
+    print(f"Finished building the temporal graph, end time: {datetime.now()}")
     return tempgraph
 
 class Totem:
