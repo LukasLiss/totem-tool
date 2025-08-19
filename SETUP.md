@@ -18,6 +18,7 @@ totem-tool/
    python -m venv venv
    source venv/Scripts/activate  # On Windows Git Bash
    # OR: venv\Scripts\activate   # On Windows CMD
+   # OR: source ./venv/bin/activate # On Unix Systems, e.g. Linux or MacOS
    pip install -r requirements.txt
    cd ..
    ```
@@ -36,6 +37,7 @@ totem-tool/
    ```bash
    cd backend
    source venv/Scripts/activate  # Activate virtual environment
+   # source ./venv/bin/activate  # On Unix
    python manage.py runserver 8000
    ```
 
