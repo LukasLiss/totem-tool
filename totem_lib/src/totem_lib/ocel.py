@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from collections import defaultdict
 from functools import cached_property
+
 # DATEFORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # ISO 8601 format with milliseconds
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 

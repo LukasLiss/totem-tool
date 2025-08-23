@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "totem_lib"
+version = "0.0.1"
+authors = [
+  { name="Example Author", email="author@example.com" },
+]
+description = "Library for the TOTeM paper"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "networkx==3.4.2",
+    "polars==1.32.2",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/LukasLiss/totem-tool"
+"Bug Tracker" = "https://github.com/LukasLiss/totem-tool/issues"

@@ -1,5 +1,4 @@
-from ocel import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite
-from totem import totemDiscovery, Totem
+from totem_lib import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite, totemDiscovery, Totem
 from typing import List
 
 import networkx as nx
