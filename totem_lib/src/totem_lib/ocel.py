@@ -149,8 +149,31 @@ class ObjectCentricEventLog:
             # otherwise attribute == some object_type → filter
             return event_data["objects_by_type"].get(attribute, [])
 
-    
-    
+    def get_event(self, event_id: str) -> dict | None:
+        """Returns the event object (as a dictionary) for the given event ID."""
+        return self.event_cache.get(event_id)
+
+    def get_event_timestamp(self, event_id: str) -> int | None:
+        """Returns the timestamp for the given event ID."""
+        event = self.event_cache.get(event_id)
+        return event["timestamp"] if event else None
+
+    def get_event_activity(self, event_id: str) -> str | None:
+        """Returns the activity for the given event ID."""
+        event = self.event_cache.get(event_id)
+        return event["activity"] if event else None
+
+    def get_event_objectIDs(self, event_id: str) -> List[str]:
+        """Returns the list of object IDs for the given event ID."""
+        event = self.event_cache.get(event_id)
+        return event["objects"] if event else []
+
+    def get_event_objects_by_type(self, event_id: str, obj_type: str) -> List[str]:
+        """Returns the list of object IDs of the specified type for the given event ID."""
+        event = self.event_cache.get(event_id)
+        if event:
+            return event["objects_by_type"].get(obj_type, [])
+        return []
 
 
 class OcelFileImporter:
