@@ -86,11 +86,11 @@ class ObjectCentricEventLog:
         """
         ev_cache = {}
         
-        events_data = self.events.select([
+        events_iter = self.events.select([
             "_eventId", "_activity", "_timestampUnix", "_objects"
-        ]).to_dicts()
+        ]).iter_rows(named=True)
         
-        for event in events_data:
+        for event in events_iter:
             event_id = event["_eventId"]
             objects = event["_objects"] or []
             
@@ -142,6 +142,8 @@ class ObjectCentricEventLog:
             return event_data["timestamp"]  # just use unix since temporal order is preserved
         elif attribute == "event_activity":
             return event_data["activity"]
+        elif attribute == "event_objects":
+            return event_data["objects"]
         else:
             # otherwise attribute == some object_type → filter
             return event_data["objects_by_type"].get(attribute, [])
