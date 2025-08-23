@@ -30,10 +30,11 @@ DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 # Help functions for OCEL2.0
 
 def get_all_event_objects(ocel, event_id):
-    obj_ids = []
-    for obj_type in ocel.object_types:
-        obj_ids += ocel.get_value(event_id, obj_type)
-    return obj_ids
+    # obj_ids = []
+    # for obj_type in ocel.object_types:
+    #     obj_ids += ocel.get_value(event_id, obj_type)
+    # return obj_ids
+    return ocel.get_value(event_id, 'event_objects')
 
 def get_most_precise_lc(directed_type_tuple, tau, log_cardinalities):
     total = 0
