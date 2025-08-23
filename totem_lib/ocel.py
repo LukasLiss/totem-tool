@@ -141,7 +141,7 @@ class ObjectCentricEventLog:
             # return datetime.utcfromtimestamp(ts_unix).strftime(DATEFORMAT)
             return event_data["timestamp"]  # just use unix since temporal order is preserved
         elif attribute == "event_activity":
-            return self.events.filter(pl.col("_eventId") == event_id)["_activity"].item()  # name of the event type
+            return event_data["activity"]
         else:
             # otherwise attribute == some object_type → filter
             return event_data["objects_by_type"].get(attribute, [])
