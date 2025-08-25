@@ -6,8 +6,8 @@ totem-tool/
 ├── backend/           # Django REST API
 ├── frontend/         # React application  
 ├── electron/         # Electron wrapper
-├── package.json      # Root package management
-└── scripts/          # Development scripts
+├── totem_lib/        # TOTeM library
+└── package.json      # Root package management
 ```
 
 ## Installation
@@ -19,6 +19,7 @@ totem-tool/
    source venv/Scripts/activate  # On Windows Git Bash
    # OR: venv\Scripts\activate   # On Windows CMD
    pip install -r requirements.txt
+   pip install -e ../totem_lib
    cd ..
    ```
 
