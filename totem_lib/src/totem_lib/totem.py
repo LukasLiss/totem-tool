@@ -154,7 +154,8 @@ def totemDiscovery(ocel, tau=0.9):
             # print(f"Processing event {ev}")
             # event infos: objects and timestamps
             # ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)  #TODO: just use unix timestamp?
-            ev_timestamp = ocel.get_value(ev, 'event_timestamp')  # use unix timestamp directly
+            # ev_timestamp = ocel.get_value(ev, 'event_timestamp')  # use unix timestamp directly
+            ev_timestamp = ocel.get_event_timestamp(ev)  # use unix timestamp directly
 
             objects_of_event = get_all_event_objects(ocel, ev)
             for obj in objects_of_event:
@@ -163,7 +164,8 @@ def totemDiscovery(ocel, tau=0.9):
                 for type in ocel.object_types:
                     o2o[obj].setdefault(type, set())
                     o2o[obj][type].update(
-                        ocel.get_value(ev, type))  # add all objects connected via e2o to each object involved
+                        # ocel.get_value(ev, type))  # add all objects connected via e2o to each object involved
+                        ocel.get_event_objects_by_type(ev, type))  # add all objects connected via e2o to each object involved
                 # update lifespan information
                 o_min_times.setdefault(obj, ev_timestamp)
                 if ev_timestamp < o_min_times[obj]:  # todo check if comparison of datetimes works correctly here
@@ -173,10 +175,12 @@ def totemDiscovery(ocel, tau=0.9):
                     o_max_times[obj] = ev_timestamp
 
             # maintain object type to event type dictionary
-            eventtype = ocel.get_value(ev, 'event_activity')
+            # eventtype = ocel.get_value(ev, 'event_activity')
+            eventtype = ocel.get_event_activity(ev)
             all_event_types.add(eventtype)
             for type in ocel.object_types:
-                if len(ocel.get_value(ev, type)) > 0:
+                # if len(ocel.get_value(ev, type)) > 0:
+                if len(ocel.get_event_objects_by_type(ev, type)) > 0:
                     obj_typ_to_ev_type.setdefault(type, set())
                     obj_typ_to_ev_type[type].add(eventtype)
 
@@ -184,7 +188,8 @@ def totemDiscovery(ocel, tau=0.9):
             involved_types = []
             obj_count_per_type = dict()
             for type in ocel.object_types:
-                obj_list = ocel.get_value(ev, type)
+                # obj_list = ocel.get_value(ev, type)
+                obj_list = ocel.get_event_objects_by_type(ev, type)
                 if not obj_list:
                     continue
                 else:
