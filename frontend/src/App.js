@@ -1,4 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import {BrowserRouter, Routes, Route} from 'react-router-dom'
+import {Login} from "./component/login";
+import {Home} from "./component/home";
+import {Navigation} from './component/navigation';
+import {Logout} from './component/logout';
+
 
 function App() {
   const [message, setMessage] = useState('Hello from Frontend! (Loading backend...)');
@@ -42,53 +48,64 @@ function App() {
   }, []);
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      flexDirection: 'column',
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      height: '100vh',
-      fontFamily: 'Arial, sans-serif',
-      padding: '20px',
-      backgroundColor: '#f5f5f5'
-    }}>
-      <h1 style={{ 
-        fontSize: '32px', 
-        marginBottom: '20px',
-        color: '#333',
-        textAlign: 'center'
+    <BrowserRouter>
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column',
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        fontFamily: 'Arial, sans-serif',
+        padding: '20px',
+        backgroundColor: '#f5f5f5'
       }}>
-        {message}
-      </h1>
-      
-      <div style={{
-        fontSize: '18px',
-        color: '#666',
-        textAlign: 'center',
-        marginBottom: '10px'
-      }}>
-        Backend Status: {backendStatus}
-      </div>
-      
-      {isLoading && (
-        <div style={{
-          fontSize: '16px',
-          color: '#999',
-          fontStyle: 'italic'
+        
+          
+        <h1 style={{ 
+          fontSize: '32px', 
+          marginBottom: '20px',
+          color: '#333',
+          textAlign: 'center'
         }}>
-          Waiting for backend to start...
+          {message}
+        </h1>
+        
+        <Navigation />
+          <Routes>
+            <Route path="/" element={<Home/>}/>
+            <Route path="/login" element={<Login/>}/>
+            <Route path="/logout" element={<Logout/>}/>
+          </Routes>
+        
+        <div style={{
+          fontSize: '18px',
+          color: '#666',
+          textAlign: 'center',
+          marginBottom: '10px'
+        }}>
+          Backend Status: {backendStatus}
         </div>
-      )}
-      
-      <div style={{
-        marginTop: '30px',
-        fontSize: '14px',
-        color: '#888',
-        textAlign: 'center'
-      }}>
-        TOTeM-Tool v1.0 - React + Django + Electron
+        
+        {isLoading && (
+          <div style={{
+            fontSize: '16px',
+            color: '#999',
+            fontStyle: 'italic'
+          }}>
+            Waiting for backend to start...
+          </div>
+        )}
+        
+        <div style={{
+          marginTop: '30px',
+          fontSize: '14px',
+          color: '#888',
+          textAlign: 'center'
+        }}>
+          TOTeM-Tool v1.0 - React + Django + Electron
+        </div>
       </div>
-    </div>
+  </BrowserRouter>
   );
 }
 
