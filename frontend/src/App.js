@@ -50,16 +50,22 @@ function App() {
   return (
     <BrowserRouter>
       <div style={{ 
-        display: 'flex', 
-        flexDirection: 'column',
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        height: '100vh',
+        //display: 'flex', 
+        //flexDirection: 'column',
+        //justifyContent: 'center', 
+        //alignItems: 'center', 
+        //height: '100vh',
         fontFamily: 'Arial, sans-serif',
         padding: '20px',
         backgroundColor: '#f5f5f5'
       }}>
         
+        <Navigation />
+          <Routes>
+            <Route path="/" element={<Home/>}/>
+            <Route path="/login" element={<Login/>}/>
+            <Route path="/logout" element={<Logout/>}/>
+          </Routes>
           
         <h1 style={{ 
           fontSize: '32px', 
@@ -70,12 +76,6 @@ function App() {
           {message}
         </h1>
         
-        <Navigation />
-          <Routes>
-            <Route path="/" element={<Home/>}/>
-            <Route path="/login" element={<Login/>}/>
-            <Route path="/logout" element={<Logout/>}/>
-          </Routes>
         
         <div style={{
           fontSize: '18px',
