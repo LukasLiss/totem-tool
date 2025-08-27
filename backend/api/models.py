@@ -1,10 +1,16 @@
 from django.db import models
 from django.core.files.storage import FileSystemStorage
+from django.contrib.auth.models import User
 # Create your models here.
 
-class UserFiles(models.Model):
-    username =models.CharField(max_length=20)
-    fs = FileSystemStorage(location='/'+str(username)+'/files')
+
+class UserFile(models.Model):
+    user =models.ForeignKey(User, on_delete=models.CASCADE, related_name="files")
+    fs = FileSystemStorage(location='/'+str(user)+'/files')
     file = models.FileField(storage=fs)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} -{self.file.name}"
 
     

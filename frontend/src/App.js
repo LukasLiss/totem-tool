@@ -4,7 +4,8 @@ import {Login} from "./component/login";
 import {Home} from "./component/home";
 import {Navigation} from './component/navigation';
 import {Logout} from './component/logout';
-
+import {FileUploadButton} from './component/fileuploadbutton'
+import { uploadFile } from "./api/fileApi";
 
 function App() {
   const [message, setMessage] = useState('Hello from Frontend! (Loading backend...)');
@@ -45,7 +46,23 @@ function App() {
     const retryTimeout = setTimeout(fetchBackendMessage, 3000);
     
     return () => clearTimeout(retryTimeout);
+
+
+
   }, []);
+  //handleFileSelect function for fileuploadbutton; placed here to improve reuseability
+  const [files, setFiles] = useState([]);
+
+  const handleFileSelect = async (file) => {
+      const token = localStorage.getItem("access_token");
+      try {
+        const response = await uploadFile(file, token);
+        setFiles((prev) => [...prev, response]); // add uploaded file to state
+      } catch (err) {
+        console.error("Upload failed:", err);
+      }
+  };
+
 
   return (
     <BrowserRouter>
@@ -104,6 +121,7 @@ function App() {
         }}>
           TOTeM-Tool v1.0 - React + Django + Electron
         </div>
+        <FileUploadButton onFileSelect={handleFileSelect}/>
       </div>
   </BrowserRouter>
   );
