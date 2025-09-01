@@ -21,6 +21,7 @@ export function FileUploadButton({ onFileSelect }) {
       </button>
       <input
         type="file"
+        accept=".json,.xml,.sqlite"
         ref={fileInputRef}
         style={{ display: "none" }}
         onChange={handleFileChange}

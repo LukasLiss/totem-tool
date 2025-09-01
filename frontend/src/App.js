@@ -4,8 +4,10 @@ import {Login} from "./component/login";
 import {Home} from "./component/home";
 import {Navigation} from './component/navigation';
 import {Logout} from './component/logout';
-import {FileUploadButton} from './component/fileuploadbutton'
+import {FileUploadButton} from './component/fileuploadbutton';
+import {FileUploadValidator} from './component/fileuploadvalidator';
 import { uploadFile } from "./api/fileApi";
+import { FileLoader } from './component/fileloader';
 
 function App() {
   const [message, setMessage] = useState('Hello from Frontend! (Loading backend...)');
@@ -54,14 +56,24 @@ function App() {
   const [files, setFiles] = useState([]);
 
   const handleFileSelect = async (file) => {
-      const token = localStorage.getItem("access_token");
-      try {
-        const response = await uploadFile(file, token);
-        setFiles((prev) => [...prev, response]); // add uploaded file to state
-      } catch (err) {
-        console.error("Upload failed:", err);
-      }
-  };
+  try {
+    const text = await file.text();       // read file as text
+    const data = JSON.parse(text);        // parse JSON
+
+    // Example: check required fields
+    if (!data.name || !data.age) {
+      alert("Invalid format: missing 'name' or 'age'");
+      return;
+    }
+
+    console.log("Valid file:", data);
+    // continue with upload or state update
+
+  } catch (err) {
+    console.error("Invalid JSON file:", err);
+    alert("Please upload a valid JSON file");
+  }
+};
 
 
   return (
@@ -121,7 +133,10 @@ function App() {
         }}>
           TOTeM-Tool v1.0 - React + Django + Electron
         </div>
-        <FileUploadButton onFileSelect={handleFileSelect}/>
+        
+        <FileUploadValidator/>
+
+        <FileLoader/>
       </div>
   </BrowserRouter>
   );
