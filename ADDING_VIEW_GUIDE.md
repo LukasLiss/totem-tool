@@ -1,13 +1,14 @@
 ### Adding a new view
 
 The general idea is to add a view in the backend/api folder (or create a new folder for bigger projects like authentification). You then need to reference your new view in view.py in the same folder, which will automatically be referenced by the main url.py file.
-The next step is to create a corresponding file and then function for your functionality in frontend/api. Here the actions provided by the view model are used for viewset.ModelViewSet, these are
--list → GET /files/
--create → POST /files/
--retrieve → GET /files/<id>/
--update → PUT /files/<id>/
--partial_update → PATCH /files/<id>/
--destroy → DELETE /files/<id>/
+The next step is to create a corresponding file and then function for your functionality in frontend/api. Here the actions provided by the view model are used for viewset.ModelViewSet, these are:
+
+- `list` → GET /files/
+- `create` → POST /files/
+- `retrieve` → GET /files/<id>/
+- `update` → PUT /files/<id>/
+- `partial_update` → PATCH /files/<id>/
+- `destroy` → DELETE /files/<id>/
 
 and they are generally accessed by using the corresponding URLs, e.g. "http://localhost:8000/api/files/" to add or fetch any files.
 
@@ -26,17 +27,19 @@ uploadFile -> upload a file for a user
 ### User Authentification
 
 This should work automatically now. If you add a viewset please include
-'''serializer_class = UserFileSerializer
-permission_classes = [IsAuthenticated]
 
-'''
+```bash
+serializer_class = UserFileSerializer
+permission_classes = [IsAuthenticated]
+```
 and on the fronend side include 
-'''headers: {
+```bash
+headers: {
       Authorization: `Bearer ${token}`, 
     },
-'''
+```
 in fetch request for an api and load tokens in a function using
-'''
+```bash
 const token = localStorage.getItem("access_token")
-'''
+```
 
