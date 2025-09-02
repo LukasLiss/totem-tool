@@ -1,36 +1,39 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
-
+import Dropzone from 'react-dropzone'
+import {useDropzone} from 'react-dropzone';
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
     //Right now JSON with OR logic
 
     const [file, setFile] = useState(null);
+    const hiddenInputRef = useRef(null);
 
+    const {getRootProps, getInputProps, open, acceptedFiles} = useDropzone({
+      onDrop: (incomingFiles) => {
+        if (hiddenInputRef.current) {
+          const dataTransfer = new DataTransfer();
+          incomingFiles.forEach((v) => {
+            dataTransfer.items.add(v);
+          });
+          hiddenInputRef.current.files = dataTransfer.files;
+        }
+        setFile(incomingFiles[0]);
+      },
+      multiple: false,
+    });
     
-    const handleFileChange = (e) => {
-        const selectedFile = e.target.files[0];
-        setFile(selectedFile);
-    };
-
-
-    const handleFileUpload = async (file) => {
-        const token = localStorage.getItem("access_token");
-        try {
-        const response = await uploadFile(file, token);
-        setFile(response);
-        } catch (err) {
-        console.error("Upload failed:", err);}
-    };
-
+    //Validation
 
     const validateFile = async () => {
     if (!file) {
       alert("Please select a file first");
       return false;
     }
+
+     
 
     const type = await fileTypeFromBlob(file);
     console.log("Detected type:", type); // { ext, mime }
@@ -52,22 +55,59 @@ export function FileUploadValidator() {
     return true;
   };
 
-  const handleSubmit = async (e) => {
+  // Upload
+
+  const handleFileUpload = async () => {
+    const token = localStorage.getItem("access_token");
+    try {
+      const response = await uploadFile(file, token);
+      console.log("Upload success:", response);
+      alert("Upload successful!");
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Upload failed");
+    }
+  };
+
+
+ const handleSubmit = async (e) => {
     e.preventDefault();
     const isValid = await validateFile();
     if (isValid) {
-      console.log("Proceed with upload...");
-      await handleFileUpload(file);
+      await handleFileUpload();
     }
-  };
-  
+ };
+
+  const files = acceptedFiles.map(file => (
+    <li key={file.path}>
+      {file.path} - {file.size} bytes
+    </li>
+  ));
+
+
+
   return (
     <form onSubmit={handleSubmit}>
-      <input
-        type="file"
-        accept=".json,.xml,.sqlite"
-        onChange={handleFileChange}
-      />
+      <div {...getRootProps({ className: "dropzone" })}>
+        {/* hidden input so FormData works if needed */}
+        <input
+          type="file"
+          name="my-file"
+          ref={hiddenInputRef}
+          style={{ opacity: 0 }}
+        />
+        <input {...getInputProps()} />
+        <p>Drag 'n' drop a file here, or click to select one</p>
+        <button type="button" onClick={open}>
+          Open File Dialog
+        </button>
+      </div>
+
+      <aside>
+        <h4>Selected File</h4>
+        <ul>{files}</ul>
+      </aside>
+
       <button type="submit">Validate & Upload</button>
     </form>
   );

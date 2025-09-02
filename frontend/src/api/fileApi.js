@@ -36,7 +36,7 @@ export async function getUserFiles(token) {
 
 
 export async function processFile(token, fileId) {
-  const response = await fetch(`http://localhost:8000/api/files/${fileId}/process/`, {
+  const response = await fetch(`http://localhost:8000/api/files/${fileId}/NoE/`, {
     method: "GET", // since our Django @action uses GET
     headers: {
       Authorization: `Bearer ${token}`,

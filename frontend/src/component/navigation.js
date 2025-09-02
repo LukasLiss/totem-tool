@@ -17,7 +17,8 @@ export function Navigation() {
         <Navbar.Brand href="/">JWT Authentification</Navbar.Brand>
 
         <Nav className="me-auto">
-          {isAuth ? <Nav.Link href="/">Home</Nav.Link> : null}
+          {isAuth ? <Nav.Link href="/home">Home</Nav.Link> : null}
+          {isAuth ? <Nav.Link href="/upload">Upload</Nav.Link> : null}
         </Nav>
 
         <Nav>

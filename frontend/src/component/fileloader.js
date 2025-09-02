@@ -5,7 +5,7 @@ import { getUserFiles, processFile } from "../api/fileApi";
 export function FileLoader() {
   const [files, setFiles] = useState([]); // initialize as empty array
   const [showDropdown, setShowDropdown] = useState(false); // control dropdown visibility
-  const [selectedFiles, setSelectedFiles] = useState(null);
+  const [selectedFileId, setSelectedFileId] = useState(""); 
   const [processedResult, setProcessedResult] = useState(null);
 
   const handleFileLoad = async () => {
@@ -14,22 +14,26 @@ export function FileLoader() {
       const response = await getUserFiles(token); // fetch user files
       setFiles(response);
       setShowDropdown(true); // show dropdown after loading
+      console.log('Successfully loaded user files')
+      console.log('file_length',files.length)
     } catch (err) {
       console.error("Loading user files failed:", err);
     }
   };
 
   const handleSelectChange = (e) => {
-      const fileId = e.target.value; // value will be the file id
-      const fileObj = files.find((f) => String(f.id) === fileId);
-      setSelectedFile(fileObj);
+    setSelectedFileId(e.target.value);
+    console.log('handleSelectChange')
     };
-  
-   const handleProcessFile = async () => {
+
+  const handleProcessFile = async () => {
+    console.log('handleProcessFile')
     if (!selectedFileId) {
       alert("Please select a file first");
       return;
     }
+
+    const token = localStorage.getItem("access_token");
 
     try {
       const result = await processFile(token, selectedFileId);
@@ -38,7 +42,6 @@ export function FileLoader() {
       console.error("Failed to process file:", err);
     }
   };
-
   return (
     
        <div style={{ padding: "1rem" }}>
@@ -46,14 +49,11 @@ export function FileLoader() {
 
       {files.length > 0 && (
         <div style={{ marginTop: "1rem" }}>
-          <select
-            value={selectedFileId}
-            onChange={(e) => setSelectedFileId(e.target.value)}
-          >
+          <select value={selectedFileId} onChange={handleSelectChange}>
             <option value="">-- Select a file --</option>
             {files.map((file) => (
               <option key={file.id} value={file.id}>
-                {file.file_name || file.file} {/* depending on your backend */}
+                {file.file_name || file.file}
               </option>
             ))}
           </select>
@@ -66,7 +66,7 @@ export function FileLoader() {
 
       {processedResult && (
         <div style={{ marginTop: "1rem", padding: "0.5rem", border: "1px solid #ccc" }}>
-          <h4>Processed Result:</h4>
+          <h4>Number of Events:</h4>
           <pre>{JSON.stringify(processedResult, null, 2)}</pre>
         </div>
       )}
