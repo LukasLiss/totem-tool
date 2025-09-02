@@ -1,4 +1,4 @@
-from totem_lib import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite, totemDiscovery, Totem
+from totem_lib import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite, totemDiscovery, Totem, mlpaDiscovery
 from typing import List
 import networkx as nx
 import polars as pl
@@ -26,5 +26,6 @@ print(ocel.get_event_objects_by_type("book_vehs_td1", "Vehicle"))  # get objects
 print(ocel.get_event_objectIDs("book_vehs_td1"))  # get objects related to event "book_vehs_td1"
 # print(ocel.o2o_graph_edges)  # new interface for ocel.o2o_graph.graph.edges
 
-graph = totemDiscovery(ocel)
-print(graph)
+# graph = totemDiscovery(ocel)
+# print(graph)
+mlpaDiscovery(ocel)
