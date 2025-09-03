@@ -29,10 +29,15 @@ uploadFile -> upload a file for a user
 This should work automatically now. If you add a viewset please include
 
 ```bash
-serializer_class = UserFileSerializer
 permission_classes = [IsAuthenticated]
 ```
-and on the fronend side include 
+if you have a class and
+```bash
+@permission_classes([IsAuthenticated])
+```
+if you want to add a function.
+
+On the fronend side include 
 ```bash
 headers: {
       Authorization: `Bearer ${token}`, 

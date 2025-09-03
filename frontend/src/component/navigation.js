@@ -1,15 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar, Nav } from 'react-bootstrap';
-
+import axios from 'axios';
 
 export function Navigation() {
   const [isAuth, setIsAuth] = useState(false);
 
   useEffect(() => {
-    if (localStorage.getItem('access_token') !== null) {
-      setIsAuth(true);
+  const verifyToken = async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      setIsAuth(false);
+      return;
     }
-  }, [isAuth]);
+
+    try {
+      await axios.get('http://localhost:8000/api/greeting/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setIsAuth(true); // token is valid
+    } catch (error) {
+      console.log('Token invalid or expired:', error);
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      setIsAuth(false);
+    }
+  };
+
+  verifyToken();
+}, []);
+
 
   return (
     <div>

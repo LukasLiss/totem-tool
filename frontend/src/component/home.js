@@ -9,30 +9,20 @@ export const Home = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const fetchBackendMessage = async () => {
-      try {
-        console.log('Attempting to fetch from backend...');
-        setBackendStatus('Fetching...');
-        
-        const response = await fetch('http://localhost:8000/api/greeting/');
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+    const fetchBackendMessage = async () => {        
+        try {
+          const { data } = await axios.get('http://localhost:8000/api/greeting/');
+          console.log('Backend response:', data);
+
+          setMessage(data.message || 'Hello from Frontend + Backend!');
+          setBackendStatus('✅ Connected');
+          setIsLoading(false);
+          } catch (error) {
+          console.error('Backend connection error:', error);
+          setMessage('Hello from Frontend! (Backend not available)');
+          setBackendStatus(`❌ Error: ${error.message}`);
+          setIsLoading(false);
         }
-        
-        const data = await response.json();
-        console.log('Backend response:', data);
-        
-        setMessage(data.message || 'Hello from Frontend + Backend!');
-        setBackendStatus('✅ Connected');
-        setIsLoading(false);
-        
-      } catch (error) {
-        console.error('Backend connection error:', error);
-        setMessage('Hello from Frontend! (Backend not available)');
-        setBackendStatus(`❌ Error: ${error.message}`);
-        setIsLoading(false);
-      }
     };
 
     // Try to connect immediately

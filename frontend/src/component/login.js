@@ -23,7 +23,6 @@ export const Login = () => {
         user,
         {
           headers: { 'Content-Type': 'application/json' },
-          withCredentials: true,
         }
       );
 

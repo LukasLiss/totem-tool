@@ -2,6 +2,12 @@ import axios from "axios";
 
 let refresh = false;
 
+// Load token from localStorage on startup
+const token = localStorage.getItem("access_token");
+if (token) {
+  axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+}
+
 axios.interceptors.response.use(
   (resp) => resp,
   async (error) => {

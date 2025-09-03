@@ -5,10 +5,7 @@ import {Home} from "./component/home";
 import {Navigation} from './component/navigation';
 import {Logout} from './component/logout';
 import {UploadView} from './UploadView';
-import {FileUploadButton} from './component/fileuploadbutton';
-import {FileUploadValidator} from './component/fileuploadvalidator';
-import { uploadFile } from "./api/fileApi";
-import { FileLoader } from './component/fileloader';
+
 
 
 function App() {
