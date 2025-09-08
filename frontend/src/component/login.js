@@ -33,7 +33,7 @@ export const Login = () => {
       axios.defaults.headers.common['Authorization'] = `Bearer ${data['access']}`;
 
       // Redirect to home
-      window.location.href = '/';
+      window.history.back();
     } catch (error) {
       console.error("Login failed:", error);
       alert("Invalid credentials or server error.");

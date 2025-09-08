@@ -10,7 +10,10 @@ export async function uploadFile(file, token) {
     },
     body: formData,
   });
-
+  if (response.status === 401) {
+    window.location.href = '/login';
+    return;
+  }
   if (!response.ok) {
     throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
   }
@@ -26,6 +29,11 @@ export async function getUserFiles(token) {
       "Content-Type": "application/json",
     },
   });
+   if (response.status === 401) {
+    console.log('401: authentification')
+    window.location.href = '/login';
+    return;
+  }
 
   if (!response.ok) {
     throw new Error(`Fetching files failed: ${response.status} ${response.statusText}`);
@@ -43,7 +51,10 @@ export async function processFile(token, fileId) {
       "Content-Type": "application/json",
     },
   });
-
+  if (response.status === 401) {
+    window.location.href = '/login';
+    return;
+  }
   if (!response.ok) {
     throw new Error(`Processing file failed: ${response.status} ${response.statusText}`);
   }

@@ -31,8 +31,11 @@ class UserFileViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except UserFile.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        OCEL = load_events_from_sqlite(user_file.file.path)
-        processed= len(OCEL.unique(subset='_eventId'))
+        if user_file.file.path.split('.')[-1] == 'sqlite':
+            OCEL = load_events_from_sqlite(user_file.file.path)
+            processed= len(OCEL.unique(subset='_eventId'))
+        else:
+            processed= "Filetype not yet supported"
         return Response(processed, status=status.HTTP_200_OK)
     
 

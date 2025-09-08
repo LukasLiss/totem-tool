@@ -1,0 +1,18 @@
+:root {
+  /* Actor Colors */
+  --actor-primary: #2563EB;
+  --actor-secondary: #10B981;
+  --actor-tertiary: #F59E0B;
+  --actor-quaternary: #8B5CF6;
+  --actor-quinary: #F43F5E;
+
+  /* UI Colors */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F8FAFC;
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+
+  /* Fonts */
+  --font-primary: 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}

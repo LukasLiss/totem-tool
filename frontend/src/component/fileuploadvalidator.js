@@ -3,6 +3,7 @@ import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
 import Dropzone from 'react-dropzone'
 import {useDropzone} from 'react-dropzone';
+import "./component_styles/fileuploadvalidator.css";
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
@@ -87,28 +88,30 @@ export function FileUploadValidator() {
 
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form className="drag_drop" onSubmit={handleSubmit}>
       <div {...getRootProps({ className: "dropzone" })}>
         {/* hidden input so FormData works if needed */}
-        <input
+        <input className="hidden_input"
           type="file"
           name="my-file"
           ref={hiddenInputRef}
           style={{ opacity: 0 }}
         />
-        <input {...getInputProps()} />
-        <p>Drag 'n' drop a file here, or click to select one</p>
-        <button type="button" onClick={open}>
+        <input className="hidden_input" {...getInputProps()} />
+        <p className="dd_text">Click or drag and drop an OCEL file here to start a new project</p>
+        {/*  <button type="button" onClick={open}>
           Open File Dialog
-        </button>
+        </button> */}
       </div>
 
-      <aside>
-        <h4>Selected File</h4>
-        <ul>{files}</ul>
-      </aside>
+      <div className="file_validation">    
+        <div className="display_selected_file">
+            <span>{file?.name}</span>
+        </div>
 
-      <button type="submit">Validate & Upload</button>
+        <button className="btn btn-secondary" type="submit">Validate & Upload</button>
+      </div>
+
     </form>
   );
 }

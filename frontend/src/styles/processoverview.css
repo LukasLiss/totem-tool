@@ -1,0 +1,61 @@
+.overview_main_div {
+    display: flex;
+    flex-direction: column;
+    
+}
+
+.header_bar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+
+    background-color: aquamarine;
+}
+
+.ov_fs {
+    display: flex;
+    flex: 1.5;
+    background-color: yellow;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.tabs {
+    flex: 3;
+    background-color: beige;
+}
+
+.filter_bar{
+    display: flex;
+    flex-direction: row;
+    background-color: seagreen;
+    justify-content: space-between;
+}
+
+.ov_filter{
+    background-color: chocolate;
+}
+
+.ov_exp_log{
+    background-color: honeydew;
+}
+
+.oceldisplay{
+    display: flex;
+    flex-direction: row;
+    min-height: 60vh;
+    height: 70vh;
+    max-height: 60vw;
+    background-color: darkgoldenrod;
+}
+
+.ov_ocelwindow{
+    flex: 5;
+    background-color: thistle;
+}
+
+.ov_ocelparams{
+    flex: 1;
+    background-color: rosybrown;
+}
