@@ -1,6 +1,8 @@
 .overview_main_div {
     display: flex;
     flex-direction: column;
+    font-family: var(--font-primary);
+    font-size: 20px;
     
 }
 
@@ -24,6 +26,16 @@
 .tabs {
     flex: 3;
     background-color: beige;
+
+    display: flex;
+    flex-direction: row;
+}
+
+.tab {
+    background-color: chartreuse;
+    margin-left: 30px;
+    
+
 }
 
 .filter_bar{

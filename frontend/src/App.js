@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {BrowserRouter, Routes, Route} from 'react-router-dom';
-import {Login} from "./component/login";
-import {Home} from "./component/home";
-import {Navigation} from './component/navigation';
-import {Logout} from './component/logout';
+import {Login} from "./react_component/login";
+import {Home} from "./react_component/home";
+import {Logout} from './react_component/logout';
 import {UploadView} from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';

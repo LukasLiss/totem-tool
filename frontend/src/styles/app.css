@@ -1,8 +1,7 @@
 .website-background{
-    display: flex;
+  display: flex;
   flex-direction: column;
-  font-family: Arial, sans-serif;
   padding: 20px;
-    min-height: 100vh;
+  min-height: 100vh;
   background-color: #f5f5f5;
 }

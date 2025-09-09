@@ -1,8 +1,9 @@
 import React, { useState, useContext, useEffect } from 'react';
-import FileSelect from './component/fileselect';
+import FileSelect from './react_component/fileselect';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
-import { NumberofEvents } from './component/numberofevents';
+import { NumberofEvents } from './react_component/numberofevents';
 import './styles/processoverview.css';
+import { Button } from "./components/ui/button"
 
 export function ProcessOverview(){
     
@@ -16,22 +17,30 @@ export function ProcessOverview(){
                     <FileSelect/>
                 </div>
                 <div className="tabs">
-                    TabsTabsTabs
+                    <div className="tab">
+                        TOTeM
+                    </div>
+                    <div className="tab">
+                        Dashboard 1
+                    </div>   
+                    <div className="tab">
+                        +
+                    </div>
                 </div>
             </div>
             <div className="filter_bar">
                 <div className="ov_filter">
-                    Filterfilter
+                    Filter
                 </div>
                 <div className="ov_exp_log">
-                    <button className="exp_log_button">
+                    <Button variant="outline">
                         Export Log
-                    </button>
+                    </Button>
                 </div>
             </div>
             <div className="oceldisplay">
                 <div className="ov_ocelwindow">
-                    Das ist der Overview
+                    
                     {selectedFile ? (
                         <p>Currently selected: {selectedFile.file.split("/").pop()}</p>
                             ) : (
