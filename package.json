@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "TOTeM-Tool - React + Django + Electron Desktop App",
   "scripts": {
-    "install-all": "cd backend && python -m venv venv && source venv/Scripts/activate && pip install -r requirements.txt && cd ../frontend && npm install && cd ../electron && npm install",
+    "install-all": "cd backend && python -m venv venv && source venv/Scripts/activate && pip install -r requirements.txt && pip install -e ../totem_lib && cd ../frontend && npm install && cd ../electron && npm install",
     "start-backend": "cd backend && source venv/Scripts/activate && python manage.py runserver 8000",
     "start-backend-mac": "cd backend && source ./venv/bin/activate && python manage.py runserver 8000",
     "start-frontend": "cd frontend && npm start",
@@ -11,7 +11,7 @@
     "build-frontend": "cd frontend && npm run build",
     "build-electron": "cd electron && npm run build",
     "build-electron-win": "cd electron && npm run build-win",
-    "package-win": "npm run build-frontend && cd electron && cp -r ../frontend/build resources/frontend-build && cp -r ../backend resources/backend && rm -rf resources/backend/venv resources/backend/__pycache__ && npm run package-win",
+    "package-win": "npm run build-frontend && cd electron && shx mkdir -p resources && shx cp -r ../frontend/build resources/frontend-build && shx cp -r ../backend resources/backend && shx cp -r ../totem_lib resources/totem_lib && shx rm -rf resources/backend/venv resources/backend/__pycache__ && shx rm -rf resources/totem_lib/src/totem_lib.egg-info resources/totem_lib/__pycache__ && npm run package-win",
     "build-all": "npm run package-win",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
     "electron-dev": "concurrently \"npm run start-backend\" \"wait-on http://localhost:8000 && npm run start-frontend\" \"wait-on http://localhost:3000 && npm run start-electron\"",
@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "shx": "^0.4.0",
     "wait-on": "^7.2.0"
   },
   "author": "",
