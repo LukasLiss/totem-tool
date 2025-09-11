@@ -50,6 +50,11 @@ __pycache__/
 # Virtual environments
 backend/venv/
 backend/env/
+backend/user_files/*
+!backend/user_files/guest/
+!backend/user_files/guest/ContainerLogistics.json
+!backend/user_files/guest/ContainerLogistics.sqlite
+!backend/user_files/guest/ContainerLogistics.xml
 .venv/
 .env/
 
