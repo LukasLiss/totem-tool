@@ -89,17 +89,18 @@ export function FileUploadValidator() {
 
 
   return (
-    <form className="drag_drop" onSubmit={handleSubmit}>
-      <div {...getRootProps({ className: "dropzone" })}>
+    <form className=" m-6 flex flex-col" onSubmit={handleSubmit}>
+      <div {...getRootProps({ className: 
+        "dropzone border flex flex-col items-center justify-center max-h-[55vh] min-h-[40vw] min-w-[65vw] rounded-xl p-6 text-center cursor-pointer transition hover:shadow-lg mx-14" })}>
         {/* hidden input so FormData works if needed */}
-        <input className="hidden_input"
+        <input 
           type="file"
           name="my-file"
           ref={hiddenInputRef}
           style={{ opacity: 0 }}
         />
-        <input className="hidden_input" {...getInputProps()} />
-        <p className="dd_text">Click or drag and drop an OCEL file here to start a new project</p>
+        <input  {...getInputProps()} />
+        <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
         {/*  <button type="button" onClick={open}>
           Open File Dialog
         </button> */}
@@ -109,8 +110,8 @@ export function FileUploadValidator() {
         <div className="display_selected_file">
             <span>{file?.name}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-2 md:flex-row">
-          <Button className="bg-white" type="submit">Validate & Upload</Button>
+        <div className="flex flex-wrap items-center gap-2 md:flex-row mr-[5vh]">
+          <Button  type="submit">Validate & Upload</Button>
         </div>
         
       </div>

@@ -2,6 +2,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import FileSelect from './react_component/fileselect';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import { NumberofEvents } from './react_component/numberofevents';
+import { Button } from "@/components/ui/button";
 import './styles/processoverview.css';
 
 export function ProcessOverview(){
@@ -24,9 +25,9 @@ export function ProcessOverview(){
                     Filterfilter
                 </div>
                 <div className="ov_exp_log">
-                    <button className="exp_log_button">
+                    <Button className="exp_log_button">
                         Export Log
-                    </button>
+                    </Button>
                 </div>
             </div>
             <div className="oceldisplay">

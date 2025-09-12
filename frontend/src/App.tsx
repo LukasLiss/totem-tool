@@ -15,6 +15,7 @@ function App() {
     
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
+      <body className="debug-grid">
       <div className="website-background" style={{ 
          }}>
         
@@ -30,6 +31,7 @@ function App() {
         
         
       </div>
+      </body>
     </SelectedFileContext.Provider>  
   );
 }

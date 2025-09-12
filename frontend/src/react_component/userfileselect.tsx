@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import './component_styles/userfileselect.css';
+import { Button } from "@/components/ui/button";
+
 
 
 function UserFileSelect() {
@@ -48,8 +50,8 @@ function UserFileSelect() {
     };
     
     return(
-        <div className="main_div">
-            <select className="file_select" onChange={handleSelectChange} value={selectedFileId}>
+        <div className="flex flex-row mx-6 mt-6">
+            <select className="rounded-md border bg-background px-2 py-2" onChange={handleSelectChange} value={selectedFileId}>
                 <option value="">Select OCEL File</option>
                 {files.map((file) => (
                     <option key={file.id} value={file.id} placeholder="Select File" >
@@ -61,9 +63,9 @@ function UserFileSelect() {
                 ))}
             </select>
 
-            <button className="open_file_button" onClick={handleSubmit}>
+            <Button onClick={handleSubmit}>
                 Open File
-            </button>
+            </Button>
 
         </div>
         

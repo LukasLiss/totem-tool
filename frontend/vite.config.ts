@@ -13,6 +13,6 @@ export default defineConfig({
   },
   server: {
     port: 3000, // 👈 sets dev server to localhost:3000
-    open: true, // 👈 optional: auto-open browser
+    open: '/upload', // 👈 optional: auto-open browser
   },
 })
