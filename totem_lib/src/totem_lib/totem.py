@@ -621,9 +621,9 @@ def mlpaDiscovery(ocel, tau=0.9):
 
     # Define the decision variables
     level = {i: LpVariable(name=f"level-{i}", lowBound=0, cat='Integer') for i in tempGraph['nodes']}
-    z_parallel = {to_string((t1, t2)): LpVariable(name=f"hp-{to_string((t1, t2))}") for (t1, t2) in
+    z_parallel = {str((t1, t2)): LpVariable(name=f"hp-{str((t1, t2))}") for (t1, t2) in
                   tempGraph[TR_PARALLEL]}
-    z_initiating = {to_string((t1, t2)): LpVariable(name=f"hi-{to_string((t1, t2))}") for (t1, t2) in
+    z_initiating = {str((t1, t2)): LpVariable(name=f"hi-{str((t1, t2))}") for (t1, t2) in
                     tempGraph[TR_INITIATING]}
 
     # constraints
@@ -633,23 +633,23 @@ def mlpaDiscovery(ocel, tau=0.9):
 
     # for parallel we want to minimize the absolute distance. For absolute values one needs an additional constraint
     for (t1, t2) in tempGraph[TR_PARALLEL]:
-        c1 = level[t1] - level[t2] - z_parallel[to_string((t1, t2))] <= 0
-        c2 = level[t2] - level[t1] - z_parallel[to_string((t1, t2))] <= 0
+        c1 = level[t1] - level[t2] - z_parallel[str((t1, t2))] <= 0
+        c2 = level[t2] - level[t1] - z_parallel[str((t1, t2))] <= 0
         model += c1
         model += c2
 
     # for initiating we want to minimize the absolute distance. For absolute values one needs an additional constraint
     for (t1, t2) in tempGraph[TR_INITIATING]:
-        c1 = level[t1] - level[t2] - z_initiating[to_string((t1, t2))] <= 0
-        c2 = level[t2] - level[t1] - z_initiating[to_string((t1, t2))] <= 0
+        c1 = level[t1] - level[t2] - z_initiating[str((t1, t2))] <= 0
+        c2 = level[t2] - level[t1] - z_initiating[str((t1, t2))] <= 0
         model += c1
         model += c2
 
     # objective Function
     obj_func = pulp.lpSum(
-        [level[t2] - level[t1] for (t1, t2) in tempGraph[TR_DEPENDENT]] + [z_parallel[to_string((t1, t2))] for (t1, t2)
+        [level[t2] - level[t1] for (t1, t2) in tempGraph[TR_DEPENDENT]] + [z_parallel[str((t1, t2))] for (t1, t2)
                                                                            in tempGraph[TR_PARALLEL]] + [
-            z_initiating[to_string((t1, t2))] for (t1, t2) in tempGraph[TR_INITIATING]])
+            z_initiating[str((t1, t2))] for (t1, t2) in tempGraph[TR_INITIATING]])
     model += obj_func
 
     # solve the model
