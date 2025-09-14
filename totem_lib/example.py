@@ -2,6 +2,7 @@ from totem_lib import ObjectCentricEventLog, load_events_from_sqlite, load_objec
 from typing import List
 import networkx as nx
 import polars as pl
+import cProfile
 
 ocel = ObjectCentricEventLog()
 events = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
@@ -28,4 +29,6 @@ print(ocel.get_event_objectIDs("book_vehs_td1"))  # get objects related to event
 
 # graph = totemDiscovery(ocel)
 # print(graph)
-mlpaDiscovery(ocel)
+cProfile.run('mlpaDiscovery(ocel)')
+
+
