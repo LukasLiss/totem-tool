@@ -152,10 +152,10 @@ class ObjectCentricEventLog:
             self._build_obj_type_map()
         return self._obj_type_map
 
-    @property
+    @cached_property
     def object_types(self) -> list[str]:
         """
-        Returns a list of all unique object types present in the log.
+        Returns a (cached) list of all unique object types present in the log.
         """
         # list of all known object‐type names
         # return list(set(self._obj_type_map.values()))
