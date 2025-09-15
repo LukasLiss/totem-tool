@@ -1,7 +1,5 @@
 import polars as pl
 from typing import List, Tuple, Dict
-from types import SimpleNamespace
-import networkx as nx
 import sqlite3
 import json
 import xml.etree.ElementTree as ET
@@ -222,6 +220,7 @@ class OcelFileImporter:
     Class to import OCEL 2.0 files into the ObjectCentricEventLog structure.
     Supports SQLite, JSON, and XML formats.
     Docs: www.ocel-standard.org
+    (Deprecated, use import_ocel function instead)
     """
     def __init__(self, file_path: str, file_format: str = None):
         """
@@ -239,6 +238,7 @@ class OcelFileImporter:
     def import_file(self) -> ObjectCentricEventLog:
         """
         Imports the OCEL file based on its format and returns an ObjectCentricEventLog.
+        (Deprecated, use import_ocel function instead)
 
         Returns:
             ObjectCentricEventLog: The imported object-centric event log.
@@ -246,6 +246,7 @@ class OcelFileImporter:
         Raises:
             ValueError: If the specified file format is not supported.
         """
+        print("Warning: OcelFileImporter is deprecated, use import_ocel function instead.")
         if self.file_format is None:
             path=self.file_path
             ending=os.path.basename(path).split('.')[-1]
@@ -296,7 +297,47 @@ class OcelFileImporter:
         self.event_log.events = load_events_from_xml(self.file_path)
         self.event_log.objects = load_objects_from_xml(self.file_path)
         return self.event_log
+
+def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
+    """
+    Imports an OCEL 2.0 file and returns an ObjectCentricEventLog.
+
+    Args:
+        file_path (str): The path to the OCEL file.
+        file_format (str, optional): The format of the OCEL file. Must be one of "sqlite", "json", or "xml".
+
+    Returns:
+        ObjectCentricEventLog: The imported object-centric event log.
+    """
+    if file_format is None:
+        extension_map = {
+            ".sqlite": "sqlite",
+            ".json": "json",
+            ".xml": "xml"
+        }
+        _, ext = os.path.splitext(file_path)
+        file_format = extension_map.get(ext.lower())
+        if file_format is None:
+            raise ValueError(
+                f"Could not infer file format from extension '{ext}'."
+                f"Please specify the file_format parameter, or use one of {list(extension_map.values())}."
+            )
+
+    loaders = {
+        "sqlite" : (load_events_from_sqlite, load_objects_from_sqlite),
+        "json" : (load_events_from_json, load_objects_from_json),
+        "xml" : (load_events_from_xml, load_objects_from_xml),
+    }
+
+    if file_format not in loaders:
+        raise ValueError(f"Unsupported file format: {file_format}")
+
+    events_loader, objects_loader = loaders[file_format]
+    events_df = events_loader(file_path)
+    objects_df = objects_loader(file_path)
     
+    return ObjectCentricEventLog(events=events_df, objects=objects_df)
+
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     """
     Loads event data from an SQLite OCEL file into a Polars DataFrame.
@@ -500,7 +541,7 @@ def load_objects_from_json(json_path: str) -> pl.DataFrame:
         ],
         "_qualifiers": [
             [rel["qualifier"] for rel in o.get("relationships", [])]
-            for e in objects
+            for o in objects
         ]
     })
     return df
@@ -627,7 +668,7 @@ if __name__ == "__main__":
 
     # Testing SQLite
     print("Importing from SQLite...")
-    events_df_sqlite = load_events_from_sqlite("../../example_data/ContainerLogistics.sqlite")
+    events_df_sqlite = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
     print(events_df_sqlite)
     print("example row with no objects:")
     print(events_df_sqlite.filter(pl.col("_eventId") == "collect_hu10533"))
