@@ -91,7 +91,7 @@ export function FileUploadValidator() {
   return (
     <form className=" m-6 flex flex-col" onSubmit={handleSubmit}>
       <div {...getRootProps({ className: 
-        "dropzone border flex flex-col items-center justify-center max-h-[55vh] min-h-[40vw] min-w-[65vw] rounded-xl p-6 text-center cursor-pointer transition hover:shadow-lg mx-14" })}>
+        "dropzone font-sans border flex flex-col items-center justify-center max-h-[40vh] min-h-[32vw] min-w-[55vw] max-w-[70vw] rounded-xl p-6 text-center cursor-pointer transition hover:shadow-lg mx-14" })}>
         {/* hidden input so FormData works if needed */}
         <input 
           type="file"
@@ -110,8 +110,8 @@ export function FileUploadValidator() {
         <div className="display_selected_file">
             <span>{file?.name}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-2 md:flex-row mr-[5vh]">
-          <Button  type="submit">Validate & Upload</Button>
+        <div >
+          <Button className="flex flex-wrap items-center gap-2 md:flex-row mr-[5vh] cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
         </div>
         
       </div>
