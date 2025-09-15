@@ -6,12 +6,23 @@ import sqlite3
 import json
 import xml.etree.ElementTree as ET
 import os
-from datetime import datetime
 from collections import defaultdict
 from functools import cached_property
 
-# DATEFORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # ISO 8601 format with milliseconds
-DATEFORMAT = "%Y-%m-%d %H:%M:%S"
+EVENTS_SCHEMA = {
+    "_eventId": pl.Utf8,
+    "_activity": pl.Utf8,
+    "_timestampUnix": pl.Int64,
+    "_objects": pl.List(pl.Utf8),
+    "_qualifiers": pl.List(pl.Utf8)
+}
+
+OBJECTS_SCHEMA = {
+    "_objId": pl.Utf8,
+    "_objType": pl.Utf8,
+    "_targetObjects": pl.List(pl.Utf8),
+    "_qualifiers": pl.List(pl.Utf8)
+}
 
 class ObjectCentricEventLog:
     """
@@ -21,91 +32,28 @@ class ObjectCentricEventLog:
     methods for adding data, accessing event and object attributes, and
     managing the object-to-object graph.
     """
-    def __init__(self):
+    def __init__(self, events: pl.DataFrame, objects: pl.DataFrame):
         """
-        Initializes an empty ObjectCentricEventLog.
+        Initializes the ObjectCentricEventLog with events and objects DataFrames.
 
-        Sets up the schema for events and objects DataFrames, and initializes
-        data structures for event and object attributes, and the object-to-object graph.
+        Args:
+            events (pl.DataFrame): A DataFrame containing event data.
+            objects (pl.DataFrame): A DataFrame containing object data.
         """
-        # Main events dataframe
-        self.events = pl.DataFrame(schema={
-            "_eventId": pl.Utf8,
-            "_activity": pl.Utf8,
-            "_timestampUnix": pl.Int64,
-            "_objects": pl.List(pl.Utf8),
-            "_qualifiers": pl.List(pl.Utf8)
-        })
-        
-        # Object types dataframe
-        self.object_df = pl.DataFrame(schema={
-            "_objId": pl.Utf8,
-            "_objType": pl.Utf8,
-            "_targetObjects": pl.List(pl.Utf8),
-            "_qualifiers": pl.List(pl.Utf8)
-        })
+        self.events = events
+        self.objects = objects
         
         # Store additional attributes
-        self.event_attributes: Dict[str, pl.DataFrame] = {}
-        self.object_attributes: Dict[str, Dict[str, List[Tuple[int, str]]]] = {}
+        self.event_attributes: Dict[str, pl.DataFrame] = {}  # TODO: implement importer
+        self.object_attributes: Dict[str, Dict[str, List[Tuple[int, str]]]] = {}  #TODO: implement importer
 
-        # cache for the object type mappings
-        self._obj_type_map: dict[str,str] | None = None
-
-        # empty object‐to‐object graph
-        self.o2o_graph = SimpleNamespace(graph=nx.DiGraph())
-
-    def add_event(self, event_id: str, activity: str, timestamp: int, objects: List[str]) -> None:
-        """
-        Adds a new event to the event log.
-
-        Args:
-            event_id (str): The unique identifier of the event.
-            activity (str): The activity name of the event.
-            timestamp (int): The Unix timestamp of the event.
-            objects (List[str]): A list of object IDs associated with the event.
-        """
-        new_event = pl.DataFrame([{
-            "_eventId": event_id,
-            "_activity": activity,
-            "_timestampUnix": timestamp,
-            "_objects": objects
-        }])
-        self.events = pl.concat([self.events, new_event])
-
-    def add_object(self, obj_id: str, obj_type: str) -> None:
-        """
-        Adds a new object to the event log.
-
-        Args:
-            obj_id (str): The unique identifier of the object.
-            obj_type (str): The type of the object.
-        """
-        new_object = pl.DataFrame([{
-            "_objId": obj_id,
-            "_objType": obj_type
-        }])
-        self.object_df = pl.concat([self.object_df, new_object])
-
-    def _build_obj_type_map(self):
-        """
-        Builds a cached mapping from object ID to object type.
-        This method is called once when `obj_type_map` is first accessed.
-        """
-        self._obj_type_map = dict(
-            zip(
-              self.object_df["_objId"].to_list(),
-              self.object_df["_objType"].to_list()
-            )
-        )
-    
     @cached_property
     def o2o_graph_edges(self) -> List[Tuple[str, str]]:
         """
         Returns the object-to-object graph edges.
         Each edge is a tuple (source_object_id, target_object_id).
         """
-        objects_ungrouped_df = self.object_df.explode(["_targetObjects", "_qualifiers"]).select(
+        objects_ungrouped_df = self.objects.explode(["_targetObjects", "_qualifiers"]).select(
             pl.col("_objId").alias("source"),
             pl.col("_targetObjects").alias("target"),
         ).drop_nulls()
@@ -143,34 +91,29 @@ class ObjectCentricEventLog:
         return ev_cache
 
 
-    @property
+    @cached_property
     def obj_type_map(self) -> dict[str,str]:
         """
         Returns a dictionary mapping object IDs to their types.
         The map is built and cached on first access.
         """
-        if self._obj_type_map is None:
-            self._build_obj_type_map()
-        return self._obj_type_map
+        return dict(self.objects.select(["_objId", "_objType"]).iter_rows())       
 
     @cached_property
     def object_types(self) -> list[str]:
         """
         Returns a (cached) list of all unique object types present in the log.
         """
-        # list of all known object‐type names
-        # return list(set(self._obj_type_map.values()))
-        return list(set(self.object_df["_objType"]))
+        return self.objects["_objType"].unique().to_list()
 
     @property
     def process_executions(self) -> list[list[str]]:
         """
         Returns a list of process executions.
-        For compatibility, it currently returns a single list containing all event IDs.
+        For compatibility with the totem miner, it currently returns a single list containing all event IDs.
         """
-        # just return one case containing all events
         # for compatibility with the original interface
-        return [ self.events["_eventId"].to_list() ]
+        return [self.events["_eventId"].to_list()]
 
     def get_value(self, event_id: str, attribute: str):
         """
@@ -329,7 +272,7 @@ class OcelFileImporter:
             ObjectCentricEventLog: The populated object-centric event log.
         """
         self.event_log.events = load_events_from_sqlite(self.file_path)
-        self.event_log.object_df = load_objects_from_sqlite(self.file_path)
+        self.event_log.objects = load_objects_from_sqlite(self.file_path)
         return self.event_log             
 
     def _import_json(self) -> ObjectCentricEventLog:
@@ -340,7 +283,7 @@ class OcelFileImporter:
             ObjectCentricEventLog: The populated object-centric event log.
         """
         self.event_log.events = load_events_from_json(self.file_path)
-        self.event_log.object_df = load_objects_from_json(self.file_path)
+        self.event_log.objects = load_objects_from_json(self.file_path)
         return self.event_log
 
     def _import_xml(self) -> ObjectCentricEventLog:
@@ -351,7 +294,7 @@ class OcelFileImporter:
             ObjectCentricEventLog: The populated object-centric event log.
         """
         self.event_log.events = load_events_from_xml(self.file_path)
-        self.event_log.object_df = load_objects_from_xml(self.file_path)
+        self.event_log.objects = load_objects_from_xml(self.file_path)
         return self.event_log
     
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
