@@ -1,16 +1,8 @@
-from totem_lib import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite, totemDiscovery, Totem, mlpaDiscovery
-from typing import List
-import networkx as nx
-import polars as pl
+from totem_lib import import_ocel, mlpaDiscovery
 import cProfile
 
-ocel = ObjectCentricEventLog()
-events = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
-obj = load_objects_from_sqlite("example_data/ContainerLogistics.sqlite")
 
-#TODO: best practice is to validate or use setters
-ocel.events = events
-ocel.object_df = obj
+ocel = import_ocel("example_data/ContainerLogistics.sqlite")
 
 # testing the main hooks exposed to the mine_totem algo
 print(ocel.object_types)
