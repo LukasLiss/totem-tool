@@ -6,7 +6,7 @@ import {Logout} from './react_component/logout';
 import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
-import { ProcessOverview } from './ProcessOverview';
+import { ProcessOverview } from './ProcessOverview_new';
 
 
 

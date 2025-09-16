@@ -19,6 +19,7 @@ function UserFileSelect() {
             try {
             const response = await getUserFiles(token);
             setFiles(response);
+            console.log(files)
             } catch (err) {
             console.error(err);
             }
@@ -51,7 +52,7 @@ function UserFileSelect() {
     
     return(
         <div className="flex flex-row justify-between mx-6 mt-6">
-            <select className="rounded-md border bg-background px-2 py-2" onChange={handleSelectChange} value={selectedFileId}>
+            <select className="rounded-md border bg-background px-2 py-2 ml-[6vw]" onChange={handleSelectChange} value={selectedFileId}>
                 <option value="">Select OCEL File</option>
                 {files.map((file) => (
                     <option key={file.id} value={file.id} placeholder="Select File" >
@@ -63,7 +64,7 @@ function UserFileSelect() {
                 ))}
             </select>
 
-            <Button className="flex flex-wrap items-center gap-2 md:flex-row mr-[5vh] cursor-pointer transition hover:shadow-lg" onClick={handleSubmit}>
+            <Button className="flex flex-wrap items-center gap-2 md:flex-row mr-[6vw] cursor-pointer transition hover:shadow-lg" onClick={handleSubmit}>
                 Open File
             </Button>
 
