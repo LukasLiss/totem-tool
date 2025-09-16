@@ -29,7 +29,17 @@ LC_ZERO_MANY = "0...*"
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
 class Totem:
+    """
+    A class to represent the temporal graph and related information mined from an Object Centric Event Log using the totemDiscovery algorithm.
+    """
     def __init__(self, tempgraph: Dict, type_relations: Set[Set[str]], all_event_types: Set[str], object_type_to_event_types: Dict[str, Set[str]]):
+        """
+        Initialize the Totem object with the temporal graph and related information.
+        :param tempgraph: A dictionary representing the temporal graph with nodes and edges categorized by temporal relations.
+        :param type_relations: A set of sets representing all connected object type pairs.
+        :param all_event_types: A set of all event types present in the Object Centric Event Log.
+        :param object_type_to_event_types: A dictionary mapping each object type to the set of event types associated with it.
+        """
         # Attributes output by totemDiscovery and used by mlpaDiscovery
         self.tempgraph = tempgraph
         self.type_relations = type_relations
@@ -178,6 +188,12 @@ def connected_components_undirected(used_nodes, edges):
     return connected_components
 
 def totemDiscovery(ocel, tau=0.9):
+    """
+    Given an Object Centric Event Log, compute the temporal graph and related information.
+    :param ocel: The Object Centric Event Log to analyze.
+    :param tau: The threshold for determining strong relations (default is 0.9).
+    :return: A Totem object containing the temporal graph and related information.
+    """
     # object type to event type dict
     obj_typ_to_ev_type: dict[str, set[str]] = dict()
     all_event_types = set()
@@ -411,6 +427,12 @@ def totemDiscovery(ocel, tau=0.9):
     return totem
 
 def mlpaDiscovery(totem: Totem):
+    """
+    Given a totem object (output of totemDiscovery), compute a process view using the MLPA algorithm.
+
+    :param totem: The totem object containing the temporal graph and related information.
+    :return: A dictionary representing the process view with layers and their associated object types and event types.
+    """
 
     # object type to event type dict
     obj_typ_to_ev_type = totem.object_type_to_event_types
