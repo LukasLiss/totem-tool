@@ -1,4 +1,4 @@
-from totem_lib import import_ocel, mlpaDiscovery
+from totem_lib import import_ocel, totemDiscovery, mlpaDiscovery
 import cProfile
 
 
@@ -19,8 +19,11 @@ print(ocel.get_event_objects_by_type("book_vehs_td1", "Vehicle"))  # get objects
 print(ocel.get_event_objectIDs("book_vehs_td1"))  # get objects related to event "book_vehs_td1"
 # print(ocel.o2o_graph_edges)  # new interface for ocel.o2o_graph.graph.edges
 
-# graph = totemDiscovery(ocel)
-# print(graph)
-cProfile.run('mlpaDiscovery(ocel)')
+print("\n\n\n-------------------- Totem Discovery --------------------")
+totem = totemDiscovery(ocel)
+print(totem.tempgraph)
+print("\n\n\n-------------------- MLPA Discovery --------------------")
+view = mlpaDiscovery(totem)
+# cProfile.run('mlpaDiscovery(ocel)')
 
 
