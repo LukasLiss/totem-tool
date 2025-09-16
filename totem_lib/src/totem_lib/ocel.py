@@ -5,6 +5,7 @@ import networkx as nx
 import sqlite3
 import json
 import xml.etree.ElementTree as ET
+import os
 from datetime import datetime
 from collections import defaultdict
 from functools import cached_property
@@ -182,13 +183,22 @@ class OcelFileImporter:
     Supports SQLite, JSON, and XML formats.
     Docs: www.ocel-standard.org
     """
-    def __init__(self, file_path: str, file_format: str = "sqlite"):
+    def __init__(self, file_path: str, file_format: str = None):
         self.file_path = file_path
         self.file_format = file_format
         self.event_log = ObjectCentricEventLog()
     
     def import_file(self) -> ObjectCentricEventLog:
-        if self.file_format == "sqlite":
+        if self.file_format is None:
+            path=self.file_path
+            ending=os.path.basename(path).split('.')[-1]
+            if ending == "sqlite":
+                return self._import_sqlite()
+            elif ending == "json":
+                return self._import_json()
+            elif ending == "xml":
+                return self._import_xml()
+        elif self.file_format == "sqlite":
             return self._import_sqlite()
         elif self.file_format == "json":
             return self._import_json()
@@ -480,7 +490,7 @@ if __name__ == "__main__":
 
     # Testing SQLite
     print("Importing from SQLite...")
-    events_df_sqlite = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
+    events_df_sqlite = load_events_from_sqlite("../../example_data/ContainerLogistics.sqlite")
     print(events_df_sqlite)
     print("example row with no objects:")
     print(events_df_sqlite.filter(pl.col("_eventId") == "collect_hu10533"))

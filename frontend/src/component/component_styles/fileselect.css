@@ -1,0 +1,14 @@
+.main_div_fs{
+    margin-right: 40px;
+    font-family: var(--font-primary);
+    display: flex;
+    flex-direction: row;
+    justify-content: start;
+    
+
+}
+
+.file_select_plain{
+    min-width: 150px;
+}
+
