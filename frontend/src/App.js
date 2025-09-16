@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {BrowserRouter, Routes, Route} from 'react-router-dom';
+import {BrowserRouter, Routes, Route, Navigate} from 'react-router-dom';
 import {Login} from "./component/login";
 import {Home} from "./component/home";
 import {Navigation} from './component/navigation';
@@ -21,6 +21,7 @@ function App() {
         
         {/* <Navigation /> */}
           <Routes>
+            <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/home" element={<Home/>}/>
             <Route path="/login" element={<Login/>}/>
             <Route path="/logout" element={<Logout/>}/>

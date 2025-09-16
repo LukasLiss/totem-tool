@@ -19,6 +19,7 @@
     "dropdown": "^0.2.0",
     "dropzone": "^6.0.0-beta.2",
     "file-type": "^21.0.0",
+    "lucide-react": "^0.544.0",
     "navigation": "^6.3.0",
     "react": "^19.1.0",
     "react-bootstrap": "^2.10.10",
