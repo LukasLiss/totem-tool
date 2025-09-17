@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 function UserFileSelect() {
     const [files, setFiles] = useState([])
     const [selectedFileId, setSelectedFileId] = useState(""); 
-    const { setSelectedFile } = useContext(SelectedFileContext);
+    const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
     const navigate = useNavigate()
 
     useEffect(() => {
@@ -26,7 +26,7 @@ function UserFileSelect() {
         };
 
         fetchFiles(); 
-        }, []);
+        }, [selectedFile]);
     
 
 

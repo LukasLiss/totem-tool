@@ -1,15 +1,18 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
 import Dropzone from 'react-dropzone';
 import {useDropzone} from 'react-dropzone';
 import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
+
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
     //Right now JSON with OR logic
-
+    const { setSelectedFile } = useContext(SelectedFileContext);
+    
     const [file, setFile] = useState(null);
     const hiddenInputRef = useRef(null);
 
@@ -65,6 +68,7 @@ export function FileUploadValidator() {
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
       alert("Upload successful!");
+      setSelectedFile(file)
     } catch (err) {
       console.error("Upload failed:", err);
       alert("Upload failed");
