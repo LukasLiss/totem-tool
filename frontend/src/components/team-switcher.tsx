@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useContext } from "react";
-import { ChevronsUpDown, Plus } from "lucide-react"
+import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
 
 import {
   DropdownMenu,
@@ -37,8 +37,9 @@ export function Switcher(){
   const [files, setFiles] = useState<any[]>([]);
   const [selectedFileId, setSelectedFileId] = useState("");
   // find active project by id, fallback to first
-  const displayName = selectedFile?.name ?? "No file selected";
-  const displayInitial = selectedFile?.file?.name?.charAt(0) ?? "?";
+const displayName = selectedFile?.file
+  ? selectedFile.file.split("/").pop()
+  : "No file selected";
 
   useEffect(() => {
       const fetchFiles = async () => {
@@ -54,16 +55,6 @@ export function Switcher(){
       fetchFiles();
     }, []);
   
-  const handleSelectChange = (e) => {
-        const fileId = Number(e.target.value);
-        setSelectedFileId(fileId);
-
-        const file = files.find((f) => f.id === fileId);
-        if (file) {
-            setSelectedFile(file); // save into context
-            console.log("Saved to context:", file);
-        }
-    };
   
   
   
@@ -76,8 +67,8 @@ export function Switcher(){
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <div className="bg-sidebar-primary flex items-center justify-center rounded-lg">
-                <span className="text-xs font-bold">{displayInitial}</span>
+              <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
+                <BookOpen className="size-4" />
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{displayName}</span>
@@ -88,7 +79,7 @@ export function Switcher(){
           </DropdownMenuTrigger>
 
           <DropdownMenuContent
-            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-80 rounded-lg"
             align="start"
             side={isMobile ? "bottom" : "right"}
             sideOffset={4}
@@ -100,16 +91,20 @@ export function Switcher(){
             {files.map((project, index) => (
               <DropdownMenuItem
                 key={project.id}
-                onClick={handleSelectChange}
+                onClick={() => {
+                  setSelectedFile(project); // put entire file into context
+                  console.log("Saved to context:", project);
+                }}
                 className="gap-2 p-2"
               >
                 <div className="flex size-6 items-center justify-center rounded-md border">
-                    <span className="text-xs">{project.file.charAt(0)}</span>
+                  <BookOpen className="size-3.5 shrink-0" />
                 </div>
                 {project.file.split("/").pop()}
                 <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>
               </DropdownMenuItem>
             ))}
+
 
             <DropdownMenuSeparator />
             <DropdownMenuItem className="gap-2 p-2">

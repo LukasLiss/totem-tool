@@ -3,10 +3,11 @@
 import React, { useState, useEffect, useContext } from "react";
 import {
   AudioWaveform, BookOpen, Bot, Command, Frame, GalleryVerticalEnd,
-  Map, PieChart, Settings2, SquareTerminal,
+  Map, PieChart, Settings2, SquareTerminal, FileStack, ArrowUp01
 } from "lucide-react"
 
 import { NavMain } from "@/components/nav-main"
+import { NavMain2 } from "@/components/nav-main 2"
 import { NavProjects } from "@/components/nav-projects"
 import { Switcher } from "@/components/team-switcher"
 import {
@@ -43,106 +44,65 @@ const data = {
       plan: "Free",
     },
   ],
-  navMain: [
+  dashboards: [
     {
-      title: "Playground",
+      title: "Dashboards",
       url: "#",
-      icon: SquareTerminal,
+      icon: FileStack,
       isActive: true,
       items: [
         {
-          title: "History",
+          title: "Dashboard #1",
           url: "#",
         },
         {
-          title: "Starred",
+          title: "Dashboard #2",
           url: "#",
         },
         {
-          title: "Settings",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Models",
-      url: "#",
-      icon: Bot,
-      items: [
-        {
-          title: "Genesis",
-          url: "#",
-        },
-        {
-          title: "Explorer",
-          url: "#",
-        },
-        {
-          title: "Quantum",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Documentation",
-      url: "#",
-      icon: BookOpen,
-      items: [
-        {
-          title: "Introduction",
-          url: "#",
-        },
-        {
-          title: "Get Started",
-          url: "#",
-        },
-        {
-          title: "Tutorials",
-          url: "#",
-        },
-        {
-          title: "Changelog",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Settings",
-      url: "#",
-      icon: Settings2,
-      items: [
-        {
-          title: "General",
-          url: "#",
-        },
-        {
-          title: "Dashboard",
-          url: "#",
-        },
-        {
-          title: "Billing",
-          url: "#",
-        },
-        {
-          title: "Limits",
+          title: "+ Add New Dashboard",
           url: "#",
         },
       ],
     },
   ],
-  projects: [
+  filter: [
+    
     {
-      name: "Design Engineering",
+      title: "Filter",
       url: "#",
-      icon: Frame,
+      icon: ArrowUp01,
+      isActive: true,
+      items: [
+        {
+          title: "Filter #1",
+          url: "#",
+        },
+        {
+          title: "Filter #2",
+          url: "#",
+        },
+        {
+          title: "+ Add Custom Filter",
+          url: "#",
+        },
+      ],
+    },
+    
+  ],
+  parameters: [
+    {
+      name: "Token replay",
+      url: "#",
+      icon: Settings2,
     },
     {
-      name: "Sales & Marketing",
+      name: "τ",
       url: "#",
       icon: PieChart,
     },
     {
-      name: "Travel",
+      name: "Frequency",
       url: "#",
       icon: Map,
     },
@@ -184,8 +144,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         )}
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
-        <NavProjects projects={data.projects} />
+        <NavMain2 items={data.dashboards} />
+        <NavMain items={data.filter} />
+        <NavProjects projects={data.parameters} />
       </SidebarContent>
       <SidebarRail />
     </Sidebar>
