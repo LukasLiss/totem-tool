@@ -1,6 +1,7 @@
 from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
+from pulp import *
 
 TR_TOTAL = "total"
 TR_DEPENDENT = "D"
@@ -26,6 +27,43 @@ LC_MANY = "1..*"
 LC_ZERO_MANY = "0...*"
 
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
+
+class Totem:
+    """
+    A class to represent the temporal graph and related information mined from an Object Centric Event Log using the totemDiscovery algorithm.
+    """
+    def __init__(self, tempgraph: Dict, type_relations: Set[Set[str]], all_event_types: Set[str], object_type_to_event_types: Dict[str, Set[str]]):
+        """
+        Initialize the Totem object with the temporal graph and related information.
+        :param tempgraph: A dictionary representing the temporal graph with nodes and edges categorized by temporal relations.
+        :param type_relations: A set of sets representing all connected object type pairs.
+        :param all_event_types: A set of all event types present in the Object Centric Event Log.
+        :param object_type_to_event_types: A dictionary mapping each object type to the set of event types associated with it.
+        """
+        # Attributes output by totemDiscovery and used by mlpaDiscovery
+        self.tempgraph = tempgraph
+        self.type_relations = type_relations
+        self.all_event_types = all_event_types
+        self.object_type_to_event_types = object_type_to_event_types
+
+        # TODO: implement networkx representation
+    #     self.graph = nx.DiGraph()
+    #     self.cardinality_types = ["0", "0..1", "1", "1..", "0.."]
+    #     self.temporal_types = ["paral", "prec", "prec_inv", "dur", "dur_inv"]
+
+    # def add_object_type(self, obj_type: str) -> None:
+    #     self.graph.add_node(obj_type)
+
+    # def add_relation(self, source: str, target: str,
+    #                 log_cardinalities: Dict[str, float],
+    #                 event_cardinalities: Dict[str, float],
+    #                 temporal_relations: Dict[str, float]) -> None:
+    #     # use additional attributes to store cardinalities and temporal relations
+    #     self.graph.add_edge(source, target, 
+    #                        log_cardinalities=log_cardinalities,
+    #                        event_cardinalities=event_cardinalities,
+    #                        temporal_relations=temporal_relations)
+
 
 # Help functions for OCEL2.0
 
@@ -117,7 +155,45 @@ def get_most_precise_tr(directed_type_tuple, tau, temporal_relation):
 
     return "None"
 
+def connected_components_undirected(used_nodes, edges):
+    graph = {}
+    for relation in edges:
+        for node in relation:
+            if node in used_nodes:  # Only add nodes that are in the types_of_level list
+                if node not in graph:
+                    graph[node] = set()
+                for other in relation:
+                    if other != node and other in used_nodes:
+                        graph[node].add(other)
+
+    # Step 2: DFS to find connected components
+    def dfs(node, visited, component):
+        # Adding node to visited set and current component list
+        visited.add(node)
+        component.append(node)
+        for neighbor in graph.get(node, []):
+            if neighbor not in visited:
+                dfs(neighbor, visited, component)
+
+    # Step 3: Find all connected components
+    visited = set()
+    connected_components = []
+
+    for node in used_nodes:
+        if node not in visited:
+            component = []
+            dfs(node, visited, component)
+            connected_components.append(component)
+
+    return connected_components
+
 def totemDiscovery(ocel, tau=0.9):
+    """
+    Given an Object Centric Event Log, compute the temporal graph and related information.
+    :param ocel: The Object Centric Event Log to analyze.
+    :param tau: The threshold for determining strong relations (default is 0.9).
+    :return: A Totem object containing the temporal graph and related information.
+    """
     # object type to event type dict
     obj_typ_to_ev_type: dict[str, set[str]] = dict()
     all_event_types = set()
@@ -347,23 +423,112 @@ def totemDiscovery(ocel, tau=0.9):
         print("")
 
     print(f"Finished building the temporal graph, end time: {datetime.now()}")
-    return tempgraph
+    totem = Totem(tempgraph, type_relations, all_event_types, obj_typ_to_ev_type)
+    return totem
 
-class Totem:
-    def __init__(self):
-        self.graph = nx.DiGraph()
-        self.cardinality_types = ["0", "0..1", "1", "1..", "0.."]
-        self.temporal_types = ["paral", "prec", "prec_inv", "dur", "dur_inv"]
+def mlpaDiscovery(totem: Totem):
+    """
+    Given a totem object (output of totemDiscovery), compute a process view using the MLPA algorithm.
 
-    def add_object_type(self, obj_type: str) -> None:
-        self.graph.add_node(obj_type)
+    :param totem: The totem object containing the temporal graph and related information.
+    :return: A dictionary representing the process view with layers and their associated object types and event types.
+    """
 
-    def add_relation(self, source: str, target: str,
-                    log_cardinalities: Dict[str, float],
-                    event_cardinalities: Dict[str, float],
-                    temporal_relations: Dict[str, float]) -> None:
-        # use additional attributes to store cardinalities and temporal relations
-        self.graph.add_edge(source, target, 
-                           log_cardinalities=log_cardinalities,
-                           event_cardinalities=event_cardinalities,
-                           temporal_relations=temporal_relations)
+    # object type to event type dict
+    obj_typ_to_ev_type = totem.object_type_to_event_types
+    all_event_types = totem.all_event_types
+
+
+    # get a list of all object types (or variable that is filled while passing through the process executions)
+    type_relations = totem.type_relations  # stores all connected types
+
+    tempGraph = totem.tempgraph
+
+    # print(f"Starting MLPA, start time: {datetime.now()}")
+    # transform tempGraph to ILP
+    model = LpProblem(name="layer-assignment")
+
+    # Define the decision variables
+    level = {i: LpVariable(name=f"level-{i}", lowBound=0, cat='Integer') for i in tempGraph['nodes']}
+    z_parallel = {str((t1, t2)): LpVariable(name=f"hp-{str((t1, t2))}") for (t1, t2) in
+                  tempGraph[TR_PARALLEL]}
+    z_initiating = {str((t1, t2)): LpVariable(name=f"hi-{str((t1, t2))}") for (t1, t2) in
+                    tempGraph[TR_INITIATING]}
+
+    # constraints
+    for (t1, t2) in tempGraph[TR_DEPENDENT]:
+        c = level[t2] - level[t1] >= 1
+        model += c
+
+    # for parallel we want to minimize the absolute distance. For absolute values one needs an additional constraint
+    for (t1, t2) in tempGraph[TR_PARALLEL]:
+        c1 = level[t1] - level[t2] - z_parallel[str((t1, t2))] <= 0
+        c2 = level[t2] - level[t1] - z_parallel[str((t1, t2))] <= 0
+        model += c1
+        model += c2
+
+    # for initiating we want to minimize the absolute distance. For absolute values one needs an additional constraint
+    for (t1, t2) in tempGraph[TR_INITIATING]:
+        c1 = level[t1] - level[t2] - z_initiating[str((t1, t2))] <= 0
+        c2 = level[t2] - level[t1] - z_initiating[str((t1, t2))] <= 0
+        model += c1
+        model += c2
+
+    # objective Function
+    obj_func = pulp.lpSum(
+        [level[t2] - level[t1] for (t1, t2) in tempGraph[TR_DEPENDENT]] + [z_parallel[str((t1, t2))] for (t1, t2)
+                                                                           in tempGraph[TR_PARALLEL]] + [
+            z_initiating[str((t1, t2))] for (t1, t2) in tempGraph[TR_INITIATING]])
+    model += obj_func
+
+    # solve the model
+    status = model.solve()
+
+    #print
+    for var in level.values():
+        print(f"{var.name}: {var.value()}")
+
+    levels_dict = dict()
+    for type in tempGraph['nodes']:
+        # print(f"{level[type].name}: {level[type].value()}")
+        levels_dict.setdefault(level[type].value(), set())
+        levels_dict[level[type].value()].add(type)
+
+    resulting_process_view = {}
+    print("Assignment of object types to layers:")
+    print(levels_dict)
+    print("")
+    sorted_levels = [float(k) for k in levels_dict.keys()]
+    sorted_levels.sort()  # starting from the lowest level to the highest level
+    for l in sorted_levels:
+        types_of_level = list(levels_dict[l])
+        connected_components_undirected(types_of_level, type_relations)
+        resulting_process_view[l] = connected_components_undirected(types_of_level, type_relations)
+
+    print("Process View (without matching event types):")
+    print(resulting_process_view)
+    print("")
+
+    resulting_process_view_with_events = {}
+    # starting from the lowest to the highest level assign the eventtypes to the object groups
+    remaining_ev_types = set(list(all_event_types))
+    for l in sorted_levels:
+        ccs_with_event_types = []
+        for cc in resulting_process_view[l]:
+            requested_event_types = set()
+            for type in cc:
+                requested_event_types = requested_event_types.union(obj_typ_to_ev_type[type])
+                # print(f"{type} requests: {requested_event_types}")
+
+            assigned_event_types = requested_event_types.intersection(remaining_ev_types)
+            # add cc and event types to result
+            ccs_with_event_types.append((cc, assigned_event_types))
+            # upadate remaining eventtypes
+            remaining_ev_types = remaining_ev_types - assigned_event_types
+
+        resulting_process_view_with_events[l] = ccs_with_event_types
+
+    print("Resulting Process Views with matching Eventtypes:")
+    print(resulting_process_view_with_events)
+    # print(f"Finished MLPA, end time: {datetime.now()}")
+    return resulting_process_view_with_events

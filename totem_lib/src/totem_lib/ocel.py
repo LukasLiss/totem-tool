@@ -1,79 +1,57 @@
 import polars as pl
 from typing import List, Tuple, Dict
-from types import SimpleNamespace
-import networkx as nx
 import sqlite3
 import json
 import xml.etree.ElementTree as ET
 import os
-from datetime import datetime
 from collections import defaultdict
 from functools import cached_property
 
-# DATEFORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"  # ISO 8601 format with milliseconds
-DATEFORMAT = "%Y-%m-%d %H:%M:%S"
+EVENTS_SCHEMA = {
+    "_eventId": pl.Utf8,
+    "_activity": pl.Utf8,
+    "_timestampUnix": pl.Int64,
+    "_objects": pl.List(pl.Utf8),
+    "_qualifiers": pl.List(pl.Utf8)
+}
+
+OBJECTS_SCHEMA = {
+    "_objId": pl.Utf8,
+    "_objType": pl.Utf8,
+    "_targetObjects": pl.List(pl.Utf8),
+    "_qualifiers": pl.List(pl.Utf8)
+}
 
 class ObjectCentricEventLog:
-    def __init__(self):
-        # Main events dataframe
-        self.events = pl.DataFrame(schema={
-            "_eventId": pl.Utf8,
-            "_activity": pl.Utf8,
-            "_timestampUnix": pl.Int64,
-            "_objects": pl.List(pl.Utf8),
-            "_qualifiers": pl.List(pl.Utf8)
-        })
-        
-        # Object types dataframe
-        self.object_df = pl.DataFrame(schema={
-            "_objId": pl.Utf8,
-            "_objType": pl.Utf8,
-            "_targetObjects": pl.List(pl.Utf8),
-            "_qualifiers": pl.List(pl.Utf8)
-        })
+    """
+    Represents an Object-Centric Event Log (OCEL).
+
+    This class stores events and objects in Polars DataFrames and provides
+    methods for adding data, accessing event and object attributes, and
+    managing the object-to-object graph.
+    """
+    def __init__(self, events: pl.DataFrame, objects: pl.DataFrame):
+        """
+        Initializes the ObjectCentricEventLog with events and objects DataFrames.
+
+        Args:
+            events (pl.DataFrame): A DataFrame containing event data.
+            objects (pl.DataFrame): A DataFrame containing object data.
+        """
+        self.events = events
+        self.objects = objects
         
         # Store additional attributes
-        self.event_attributes: Dict[str, pl.DataFrame] = {}
-        self.object_attributes: Dict[str, Dict[str, List[Tuple[int, str]]]] = {}
+        self.event_attributes: Dict[str, pl.DataFrame] = {}  # TODO: implement importer
+        self.object_attributes: Dict[str, Dict[str, List[Tuple[int, str]]]] = {}  #TODO: implement importer
 
-        # cache for the object type mappings
-        self._obj_type_map: dict[str,str] | None = None
-
-        # empty object‐to‐object graph
-        self.o2o_graph = SimpleNamespace(graph=nx.DiGraph())
-
-    def add_event(self, event_id: str, activity: str, timestamp: int, objects: List[str]) -> None:
-        new_event = pl.DataFrame([{
-            "_eventId": event_id,
-            "_activity": activity,
-            "_timestampUnix": timestamp,
-            "_objects": objects
-        }])
-        self.events = pl.concat([self.events, new_event])
-
-    def add_object(self, obj_id: str, obj_type: str) -> None:
-        new_object = pl.DataFrame([{
-            "_objId": obj_id,
-            "_objType": obj_type
-        }])
-        self.object_df = pl.concat([self.object_df, new_object])
-
-    def _build_obj_type_map(self):
-        # only called once
-        self._obj_type_map = dict(
-            zip(
-              self.object_df["_objId"].to_list(),
-              self.object_df["_objType"].to_list()
-            )
-        )
-    
     @cached_property
     def o2o_graph_edges(self) -> List[Tuple[str, str]]:
         """
         Returns the object-to-object graph edges.
         Each edge is a tuple (source_object_id, target_object_id).
         """
-        objects_ungrouped_df = self.object_df.explode(["_targetObjects", "_qualifiers"]).select(
+        objects_ungrouped_df = self.objects.explode(["_targetObjects", "_qualifiers"]).select(
             pl.col("_objId").alias("source"),
             pl.col("_targetObjects").alias("target"),
         ).drop_nulls()
@@ -83,7 +61,7 @@ class ObjectCentricEventLog:
     @cached_property
     def event_cache(self) -> Dict[str, dict]:
         """
-        Returns a cache of events attributes
+        Returns a cache of events attributes.
         The keys are event IDs and the values are dictionaries of attributes.
         """
         ev_cache = {}
@@ -111,28 +89,45 @@ class ObjectCentricEventLog:
         return ev_cache
 
 
-    @property
+    @cached_property
     def obj_type_map(self) -> dict[str,str]:
-        if self._obj_type_map is None:
-            self._build_obj_type_map()
-        return self._obj_type_map
+        """
+        Returns a dictionary mapping object IDs to their types.
+        The map is built and cached on first access.
+        """
+        return dict(self.objects.select(["_objId", "_objType"]).iter_rows())       
 
-    @property
+    @cached_property
     def object_types(self) -> list[str]:
-        # list of all known object‐type names
-        # return list(set(self._obj_type_map.values()))
-        return list(set(self.object_df["_objType"]))
+        """
+        Returns a (cached) list of all unique object types present in the log.
+        """
+        return self.objects["_objType"].unique().to_list()
 
     @property
     def process_executions(self) -> list[list[str]]:
-        # just return one case containing all events
+        """
+        Returns a list of process executions.
+        For compatibility with the totem miner, it currently returns a single list containing all event IDs.
+        """
         # for compatibility with the original interface
-        return [ self.events["_eventId"].to_list() ]
+        return [self.events["_eventId"].to_list()]
 
     def get_value(self, event_id: str, attribute: str):
         """
-        Optimized interface for the totem miner.
+        Optimized interface for the totem miner to retrieve event attributes.
         Uses cached data for fast lookups.
+
+        Args:
+            event_id (str): The ID of the event.
+            attribute (str): The name of the attribute to retrieve (e.g., "event_timestamp",
+                             "event_activity", "event_objects", or an object type).
+
+        Returns:
+            Union[int, str, List[str], None]: The value of the attribute, or an empty list
+                                              if the attribute is an object type with no
+                                              matching objects, or None if the event or
+                                              attribute is not found.
         """
 
         event_data = self.event_cache.get(event_id)
@@ -151,26 +146,69 @@ class ObjectCentricEventLog:
             return event_data["objects_by_type"].get(attribute, [])
 
     def get_event(self, event_id: str) -> dict | None:
-        """Returns the event object (as a dictionary) for the given event ID."""
+        """
+        Returns the event object (as a dictionary) for the given event ID.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            dict | None: A dictionary representing the event, or None if not found.
+        """
         return self.event_cache.get(event_id)
 
     def get_event_timestamp(self, event_id: str) -> int | None:
-        """Returns the timestamp for the given event ID."""
+        """
+        Returns the timestamp for the given event ID.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            int | None: The Unix timestamp of the event, or None if the event is not found.
+        """
         event = self.event_cache.get(event_id)
         return event["timestamp"] if event else None
 
     def get_event_activity(self, event_id: str) -> str | None:
-        """Returns the activity for the given event ID."""
+        """
+        Returns the activity for the given event ID.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            str | None: The activity name of the event, or None if the event is not found.
+        """
         event = self.event_cache.get(event_id)
         return event["activity"] if event else None
 
     def get_event_objectIDs(self, event_id: str) -> List[str]:
-        """Returns the list of object IDs for the given event ID."""
+        """
+        Returns the list of object IDs for the given event ID.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            List[str]: A list of object IDs associated with the event, or an empty list if
+                       the event is not found.
+        """
         event = self.event_cache.get(event_id)
         return event["objects"] if event else []
 
     def get_event_objects_by_type(self, event_id: str, obj_type: str) -> List[str]:
-        """Returns the list of object IDs of the specified type for the given event ID."""
+        """
+        Returns the list of object IDs of the specified type for the given event ID.
+
+        Args:
+            event_id (str): The ID of the event.
+            obj_type (str): The type of objects to filter by.
+
+        Returns:
+            List[str]: A list of object IDs of the specified type, or an empty list if
+                       the event or object type is not found.
+        """
         event = self.event_cache.get(event_id)
         if event:
             return event["objects_by_type"].get(obj_type, [])
@@ -182,13 +220,33 @@ class OcelFileImporter:
     Class to import OCEL 2.0 files into the ObjectCentricEventLog structure.
     Supports SQLite, JSON, and XML formats.
     Docs: www.ocel-standard.org
+    (Deprecated, use import_ocel function instead)
     """
     def __init__(self, file_path: str, file_format: str = None):
+        """
+        Initializes the OcelFileImporter.
+
+        Args:
+            file_path (str): The path to the OCEL file.
+            file_format (str, optional): The format of the OCEL file ("sqlite", "json", or "xml").
+                                         Defaults to "sqlite".
+        """
         self.file_path = file_path
         self.file_format = file_format
         self.event_log = ObjectCentricEventLog()
     
     def import_file(self) -> ObjectCentricEventLog:
+        """
+        Imports the OCEL file based on its format and returns an ObjectCentricEventLog.
+        (Deprecated, use import_ocel function instead)
+
+        Returns:
+            ObjectCentricEventLog: The imported object-centric event log.
+
+        Raises:
+            ValueError: If the specified file format is not supported.
+        """
+        print("Warning: OcelFileImporter is deprecated, use import_ocel function instead.")
         if self.file_format is None:
             path=self.file_path
             ending=os.path.basename(path).split('.')[-1]
@@ -208,19 +266,89 @@ class OcelFileImporter:
             raise ValueError(f"Unsupported file format: {self.file_format}. Please use 'sqlite', 'json', or 'xml'.")
 
     def _import_sqlite(self) -> ObjectCentricEventLog:
-        # Todo
+        """
+        Imports events and objects from an SQLite OCEL file.
+
+        Returns:
+            ObjectCentricEventLog: The populated object-centric event log.
+        """
+        self.event_log.events = load_events_from_sqlite(self.file_path)
+        self.event_log.objects = load_objects_from_sqlite(self.file_path)
         return self.event_log             
 
     def _import_json(self) -> ObjectCentricEventLog:
-        # Placeholder for JSON import logic
+        """
+        Imports events and objects from a JSON OCEL file.
+
+        Returns:
+            ObjectCentricEventLog: The populated object-centric event log.
+        """
+        self.event_log.events = load_events_from_json(self.file_path)
+        self.event_log.objects = load_objects_from_json(self.file_path)
         return self.event_log
 
     def _import_xml(self) -> ObjectCentricEventLog:
-        # Placeholder for XML import logic   
+        """
+        Imports events and objects from an XML OCEL file.
+
+        Returns:
+            ObjectCentricEventLog: The populated object-centric event log.
+        """
+        self.event_log.events = load_events_from_xml(self.file_path)
+        self.event_log.objects = load_objects_from_xml(self.file_path)
         return self.event_log
+
+def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
+    """
+    Imports an OCEL 2.0 file and returns an ObjectCentricEventLog.
+
+    Args:
+        file_path (str): The path to the OCEL file.
+        file_format (str, optional): The format of the OCEL file. Must be one of "sqlite", "json", or "xml".
+
+    Returns:
+        ObjectCentricEventLog: The imported object-centric event log.
+    """
+    if file_format is None:
+        extension_map = {
+            ".sqlite": "sqlite",
+            ".json": "json",
+            ".xml": "xml"
+        }
+        _, ext = os.path.splitext(file_path)
+        file_format = extension_map.get(ext.lower())
+        if file_format is None:
+            raise ValueError(
+                f"Could not infer file format from extension '{ext}'."
+                f"Please specify the file_format parameter, or use one of {list(extension_map.values())}."
+            )
+
+    loaders = {
+        "sqlite" : (load_events_from_sqlite, load_objects_from_sqlite),
+        "json" : (load_events_from_json, load_objects_from_json),
+        "xml" : (load_events_from_xml, load_objects_from_xml),
+    }
+
+    if file_format not in loaders:
+        raise ValueError(f"Unsupported file format: {file_format}")
+
+    events_loader, objects_loader = loaders[file_format]
+    events_df = events_loader(file_path)
+    objects_df = objects_loader(file_path)
     
+    return ObjectCentricEventLog(events=events_df, objects=objects_df)
+
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
-    
+    """
+    Loads event data from an SQLite OCEL file into a Polars DataFrame.
+
+    Args:
+        file_path (str): The path to the SQLite OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing event data with columns
+                      _eventId, _activity, _timestampUnix, _objects, and _qualifiers.
+    """
     con = sqlite3.connect(file_path)
     cursor = con.cursor()
 
@@ -281,6 +409,16 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     return df
 
 def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
+    """
+    Loads object data from an SQLite OCEL file into a Polars DataFrame.
+
+    Args:
+        file_path (str): The path to the SQLite OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing object data with columns
+                      _objId, _objType, _targetObjects, and _qualifiers.
+    """
     con = sqlite3.connect(file_path)
 
     df_objs = pl.read_database(
@@ -339,6 +477,16 @@ def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
 
 
 def load_events_from_json(json_path: str) -> pl.DataFrame:
+    """
+    Loads event data from a JSON OCEL file into a Polars DataFrame.
+
+    Args:
+        json_path (str): The path to the JSON OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing event data with columns
+                      _eventId, _activity, _timestampUnix, _objects, and _qualifiers.
+    """
     # Reads the file into a dict
     with open(json_path, "r") as f:
         data = json.load(f)
@@ -371,6 +519,16 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
     return df
 
 def load_objects_from_json(json_path: str) -> pl.DataFrame:
+    """
+    Loads object data from a JSON OCEL file into a Polars DataFrame.
+
+    Args:
+        json_path (str): The path to the JSON OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing object data with columns
+                      _objId, _objType, _targetObjects, and _qualifiers.
+    """
     with open(json_path, "r") as f:
         data = json.load(f)
     objects = data.get("objects", [])
@@ -389,6 +547,16 @@ def load_objects_from_json(json_path: str) -> pl.DataFrame:
     return df
 
 def load_events_from_xml(xml_path: str) -> pl.DataFrame:
+    """
+    Loads event data from an XML OCEL file into a Polars DataFrame.
+
+    Args:
+        xml_path (str): The path to the XML OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing event data with columns
+                      _eventId, _activity, _timestampUnix, _objects, and _qualifiers.
+    """
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
@@ -445,6 +613,16 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
 
 
 def load_objects_from_xml(xml_path: str) -> pl.DataFrame:
+    """
+    Loads object data from an XML OCEL file into a Polars DataFrame.
+
+    Args:
+        xml_path (str): The path to the XML OCEL file.
+
+    Returns:
+        pl.DataFrame: A DataFrame containing object data with columns
+                      _objId, _objType, _targetObjects, and _qualifiers.
+    """
     root = ET.parse(xml_path).getroot()
 
     rels = defaultdict(lambda: {"objType": None,
@@ -490,7 +668,7 @@ if __name__ == "__main__":
 
     # Testing SQLite
     print("Importing from SQLite...")
-    events_df_sqlite = load_events_from_sqlite("../../example_data/ContainerLogistics.sqlite")
+    events_df_sqlite = load_events_from_sqlite("example_data/ContainerLogistics.sqlite")
     print(events_df_sqlite)
     print("example row with no objects:")
     print(events_df_sqlite.filter(pl.col("_eventId") == "collect_hu10533"))
