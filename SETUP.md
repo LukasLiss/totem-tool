@@ -21,6 +21,9 @@ totem-tool/
    # OR: source ./venv/bin/activate # On Unix Systems, e.g. Linux or MacOS
    pip install -r requirements.txt
    pip install -e ../totem_lib
+   python manage.py migrate #create db.sqlite3 file (the database)
+   python manage.py loaddata initial_user.json #Loads a Guest User
+
    cd ..
    ```
 
