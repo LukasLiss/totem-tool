@@ -2,6 +2,8 @@ from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
 from pulp import *
+import graphviz
+import os
 
 TR_TOTAL = "total"
 TR_DEPENDENT = "D"
@@ -63,7 +65,43 @@ class Totem:
     #                        log_cardinalities=log_cardinalities,
     #                        event_cardinalities=event_cardinalities,
     #                        temporal_relations=temporal_relations)
+    def visualize(self, output_filename: str = 'totem_visualization', view: bool = True):
+        """
+        Generates a visualization of the temporal graph using Graphviz.
+        Requires Graphviz to be installed on the system PATH.
 
+        :param output_filename: The name of the output file (without extension).
+        :param view: If True, automatically opens the generated PDF.
+        """
+        dot = graphviz.Digraph('Totem', comment='Temporal Object Type Model')
+        dot.attr('graph', label='TOTeM Visualization', fontsize='20', rankdir='LR')
+
+        # 1. Get object types (nodes) and assign colors
+        object_types = self.tempgraph.get('nodes', [])
+        # A simple way to generate distinct colors for visualization
+        ot_to_hex_color = {ot: f'#{i*255//len(object_types):02x}{i*255//len(object_types):02x}{255-i*255//len(object_types):02x}' for i, ot in enumerate(object_types)}
+
+        # 2. Add nodes for each object type
+        for ot in object_types:
+            dot.node(ot, ot, shape='box', style='filled', fillcolor=ot_to_hex_color.get(ot, '#dddddd'))
+
+        # 3. Add edges based on the new tempgraph structure
+        # 'P' relations (solid lines)
+        for ot1, ot2 in self.tempgraph.get('P', []):
+            dot.edge(ot1, ot2, label='P', style='solid')
+
+        # 'I' relations (dashed lines)
+        for ot1, ot2 in self.tempgraph.get('I', []):
+            dot.edge(ot1, ot2, label='I', style='dashed')
+
+        # 'D' relations (dotted lines)
+        for ot1, ot2 in self.tempgraph.get('D', []):
+            dot.edge(ot1, ot2, label='D', style='dotted')
+
+        # 4. Render the graph
+        output_path = os.path.join(os.getcwd(), output_filename)
+        dot.render(output_path, view=view, cleanup=True, format='pdf')
+        print(f"TOTeM graph saved as {output_path}.pdf")
 
 # Help functions for OCEL2.0
 

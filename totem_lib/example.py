@@ -22,6 +22,7 @@ print(ocel.get_event_objectIDs("book_vehs_td1"))  # get objects related to event
 print("\n\n\n-------------------- Totem Discovery --------------------")
 totem = totemDiscovery(ocel)
 print(totem.tempgraph)
+totem.visualize("example_totem_visualization")
 print("\n\n\n-------------------- MLPA Discovery --------------------")
 view = mlpaDiscovery(totem)
 # cProfile.run('mlpaDiscovery(ocel)')
