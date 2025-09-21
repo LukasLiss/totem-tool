@@ -12,7 +12,7 @@ def user_directory_path(instance, filename):
     return os.path.join("legacy", filename)
 
 def project_directory_path(instance, filename):
-    return os.path.join(instance.project.name, "files", filename)
+    return os.path.join(instance.project.name, filename)
 
 
 class Project(models.Model):
@@ -25,7 +25,7 @@ class Project(models.Model):
 
 class EventLog(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
-    file = models.FileField(upload_to=project_directory_path)
+    file = models.FileField()
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

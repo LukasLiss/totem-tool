@@ -7,7 +7,7 @@ import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
 import { ProcessOverview } from './ProcessOverview_new';
-
+import { DashboardProvider } from "./contexts/DashboardContext";
 
 
 function App() {
@@ -15,23 +15,23 @@ function App() {
     
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
-      
-      <div className="website-background" style={{ 
-         }}>
-        
-        {/* <Navigation /> */}
-          <Routes>
-            <Route path="/home" element={<Home/>}/>
-            <Route path="/login" element={<Login/>}/>
-            <Route path="/logout" element={<Logout/>}/>
-            <Route path="/upload" element={<UploadView/>}/>
-            <Route path="/overview" element={<ProcessOverview/>}/>
-          </Routes>
-            
-        
-        
-      </div>
-
+      <DashboardProvider>
+        <div className="website-background" style={{ 
+          }}>
+          
+          {/* <Navigation /> */}
+            <Routes>
+              <Route path="/home" element={<Home/>}/>
+              <Route path="/login" element={<Login/>}/>
+              <Route path="/logout" element={<Logout/>}/>
+              <Route path="/upload" element={<UploadView/>}/>
+              <Route path="/overview" element={<ProcessOverview/>}/>
+            </Routes>
+              
+          
+          
+        </div>
+      </DashboardProvider>
     </SelectedFileContext.Provider>  
   );
 }

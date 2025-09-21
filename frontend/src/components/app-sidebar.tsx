@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
+import { DevDash } from "./nav-dev-dash";
 
 // sample data
 // This is sample data.
@@ -144,6 +145,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         )}
       </SidebarHeader>
       <SidebarContent>
+        <DevDash />
         <NavMain2 items={data.dashboards} />
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
