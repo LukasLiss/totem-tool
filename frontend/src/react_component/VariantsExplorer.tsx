@@ -465,7 +465,14 @@ function VariantRow({
 
             {/* canvas */}
             <div
-              style={{ position: "relative", border: `1px solid ${UI.border}`, borderRadius: 8, overflow: "auto", width: "100%" }}
+              style={{
+                  position: "relative",
+                  border: `1px solid ${UI.border}`,
+                  borderRadius: 8,
+                  overflow: "auto",
+                  width: "100%",
+                  marginTop: 25   // ⬅️ aligns with "Object types" label
+              }}
               aria-label={`Variant ${v.id} visualization`}
             >
               <div style={{ minWidth: "100%", height: visibleRowCount * laneHeight + GUTTER }}>
