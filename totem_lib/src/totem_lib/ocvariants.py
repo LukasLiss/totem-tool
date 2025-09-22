@@ -1,10 +1,14 @@
 from __future__ import annotations
 from collections import defaultdict
-from typing import Dict, List, Iterator
+from typing import Dict, List, Iterator, Tuple, Optional, Set
 import networkx as nx
-
-from .ocel import ObjectCentricEventLog
-
+import polars as pl
+import os
+import networkx as nx
+from typing import Dict
+from collections import defaultdict
+import itertools
+import time
 
 EventId = str
 ExecIdx = int
@@ -21,7 +25,6 @@ class Variant:
         self.graph = graph  # representative graph
 
     def __iter__(self) -> Iterator[List[EventId]]:
-        """Iterate over executions (each is a list of event ids)."""
         return iter(self.executions)
 
     def __repr__(self):
@@ -47,124 +50,215 @@ class Variants:
         return f"<Variants n={len(self)}>"
 
 
-##################################################
-# Functions to create Variants from ocel data
-##################################################
-
-
-def find_variants(ocel: ObjectCentricEventLog) -> Variants:
+def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
     """
-    One-phase variant discovery on an ObjectCentricEventLog.
-    Returns a Variants object, iterable over Variant instances.
+    The provided naive implementation, now with performance timers for each step.
+    Uses a slow, direct isomorphism check for variant grouping.
     """
-    # -------------------------
-    # STEP 0: indices
-    # -------------------------
-    cols = ["_eventId", "_activity", "_timestampUnix", "_objects"]
-    sub = ocel.events.select(cols)
+    total_start_time = time.time()
+    print("--- Starting Naive Variant Discovery ---")
+    
+    t0 = time.time()
+    eog = ocel.eog
+    object_graph = nx.Graph()
+    for row in ocel.events.iter_rows(named=True):
+        objects_in_event = row["_objects"]
+        if objects_in_event and len(objects_in_event) > 1:
+            for u, v in itertools.combinations(objects_in_event, 2):
+                object_graph.add_edge(u, v)
 
-    ev_activity, ev_ts, ev_objs = {}, {}, {}
-    obj_events: Dict[str, List[str]] = defaultdict(list)
+    object_to_events = defaultdict(list)
+    for row in ocel.events.iter_rows(named=True):
+        if row["_objects"]:
+            for obj_id in row["_objects"]:
+                object_to_events[obj_id].append(row["_eventId"])
 
-    for row in sub.iter_rows(named=True):
-        e = row["_eventId"]
-        ev_activity[e] = row["_activity"]
-        ev_ts[e] = int(row["_timestampUnix"]) if row["_timestampUnix"] is not None else 0
-        objs = row["_objects"] or []
-        ev_objs[e] = objs
-        for o in objs:
-            obj_events[o].append(e)
+    leading_object_ids = ocel.object_df.filter(
+        ocel.object_df["_objType"] == leading_type
+    )["_objId"].to_list()
+    
+    print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
 
-    all_events = list(ev_activity.keys())
-    if not all_events:
+    if not leading_object_ids:
+        print(f"WARNING: No objects found for leading type '{leading_type}'.")
         return Variants([])
 
-    # -------------------------
-    # STEP 1: executions via connected components (union–find)
-    # -------------------------
-    parent = {e: e for e in all_events}
+    t1 = time.time()
+    process_instances: List[nx.DiGraph] = []
+    for leading_id in leading_object_ids:
+        case_objects = {leading_id}
+        if leading_id in object_graph:
+            for neighbor in object_graph.neighbors(leading_id):
+                case_objects.add(neighbor)
+        
+        case_event_ids = set()
+        for obj_id in case_objects:
+            case_event_ids.update(object_to_events[obj_id])
+        
+        if case_event_ids:
+            instance_graph = eog.subgraph(case_event_ids).copy()
+            if instance_graph.number_of_edges() > 0:
+                process_instances.append(instance_graph)
+    print(f"✅ [Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds")
 
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
+    t2 = time.time()
+    variants_dict: Dict[int, Dict] = {}
+    variant_counter = 0
 
-    def union(a: str, b: str):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    for evs in obj_events.values():
-        if len(evs) > 1:
-            base = evs[0]
-            for e in evs[1:]:
-                union(base, e)
-
-    comps: Dict[str, List[str]] = defaultdict(list)
-    for e in all_events:
-        comps[find(e)].append(e)
-
-    executions: List[List[EventId]] = []
-    for evs in comps.values():
-        evs.sort(key=lambda x: (ev_ts[x], x))
-        executions.append(evs)
-
-    # -------------------------
-    # STEP 2: build event graphs
-    # -------------------------
-    def build_exec_graph(evs: List[EventId]) -> nx.DiGraph:
-        g = nx.DiGraph()
-        for e in evs:
-            g.add_node(e, activity=ev_activity[e])
-        objs_in_exec: Dict[str, List[str]] = defaultdict(list)
-        for e in evs:
-            for o in ev_objs[e]:
-                objs_in_exec[o].append(e)
-        for o, o_events in objs_in_exec.items():
-            if len(o_events) > 1:
-                o_events.sort(key=lambda x: (ev_ts[x], x))
-                for i in range(len(o_events) - 1):
-                    g.add_edge(o_events[i], o_events[i + 1])
-        return g
-
-    exec_graphs = [build_exec_graph(evs) for evs in executions]
-
-    # -------------------------
-    # STEP 3: group by isomorphism
-    # -------------------------
-    rep_graphs, rep_ids = [], []
-    variants_dict: Dict[VariantId, List[ExecIdx]] = defaultdict(list)
-
-    def node_match(a, b) -> bool:
-        return a.get("activity") == b.get("activity")
-
-    for i, g in enumerate(exec_graphs):
-        assigned = False
-        for rep_idx, rep_g in enumerate(rep_graphs):
-            if nx.is_isomorphic(rep_g, g, node_match=node_match):
-                vid = rep_ids[rep_idx]
-                variants_dict[vid].append(i)
-                assigned = True
+    for instance_graph in process_instances:
+        found_match = False
+        for vid, variant_data in variants_dict.items():
+            variant_graph = variant_data['graph']
+            if nx.is_isomorphic(instance_graph, variant_graph, 
+                               node_match=lambda n1, n2: n1.get('label') == n2.get('label'),
+                               edge_match=lambda e1, e2: e1.get('type') == e2.get('type')):
+                variant_data['support'] += 1
+                variant_data['executions'].append(list(instance_graph.nodes()))
+                found_match = True
                 break
-        if not assigned:
-            vid = f"V{len(rep_graphs) + 1:03d}"
-            rep_graphs.append(g)
-            rep_ids.append(vid)
-            variants_dict[vid].append(i)
+        
+        if not found_match:
+            instance_graph.graph['sequence'] = [d['label'] for _, d in sorted(instance_graph.nodes(data=True), key=lambda x: x[1]['timestamp'])]
+            variants_dict[variant_counter] = {
+                'graph': instance_graph, 'support': 1, 'executions': [list(instance_graph.nodes())]
+            }
+            variant_counter += 1
+    print(f"✅ [Step 3/4] Grouped into {len(variants_dict)} unique variants in: {time.time() - t2:.2f} seconds")
+    
+    t3 = time.time()
+    variant_list = []
+    for vid, data in variants_dict.items():
+        variant = Variant(
+            vid=f"variant_{vid}", support=data['support'], executions=data['executions'], graph=data['graph']
+        )
+        variant_list.append(variant)
 
-    # -------------------------
-    # STEP 4: build Variants object
-    # -------------------------
-    variants: List[Variant] = []
-    for vid in rep_ids:
-        idxs = variants_dict[vid]
-        exs = [executions[j] for j in idxs]
-        graph = rep_graphs[rep_ids.index(vid)]
-        v = Variant(vid, len(exs), exs, graph)
-        variants.append(v)
+    variant_list.sort(key=lambda v: v.support, reverse=True)
+    print(f"✅ [Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
+    print(f"--- Naive Variant Discovery Complete ---")
+    print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
 
-    # Sort by support desc, then id
-    variants.sort(key=lambda v: (-v.support, v.id))
+    return Variants(variant_list)
 
-    return Variants(variants)
+def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
+    """
+    Finds variants using an optimized approach that normalizes activity labels
+    before creating graph signatures to ensure correct grouping.
+    """
+    total_start_time = time.time()
+    print("--- Starting Variant Discovery ---")
+
+    # STEP 1: Build Object Co-occurrence Graph & Lookup Maps
+    t0 = time.time()
+    eog = ocel.eog
+    object_graph = nx.Graph()
+    for row in ocel.events.iter_rows(named=True):
+        objects_in_event = row["_objects"]
+        if objects_in_event and len(objects_in_event) > 1:
+            for u, v in itertools.combinations(objects_in_event, 2):
+                object_graph.add_edge(u, v)
+
+    object_to_events = defaultdict(list)
+    for row in ocel.events.iter_rows(named=True):
+        if row["_objects"]:
+            for obj_id in row["_objects"]:
+                object_to_events[obj_id].append(row["_eventId"])
+
+    leading_object_ids = ocel.object_df.filter(
+        ocel.object_df["_objType"] == leading_type
+    )["_objId"].to_list()
+    
+    print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
+    
+    if not leading_object_ids:
+        print(f"WARNING: No objects found for leading type '{leading_type}'.")
+        return Variants([])
+
+
+    # STEP 2: Discover Process Instances (Cases)
+    t1 = time.time()
+    process_instances: List[nx.DiGraph] = []
+    for leading_id in leading_object_ids:
+        case_objects = {leading_id}
+        if leading_id in object_graph:
+            for neighbor in object_graph.neighbors(leading_id):
+                case_objects.add(neighbor)
+        
+        case_event_ids = set()
+        for obj_id in case_objects:
+            case_event_ids.update(object_to_events[obj_id])
+        
+        if case_event_ids:
+            instance_graph = eog.subgraph(case_event_ids).copy()
+            if instance_graph.number_of_edges() > 0:
+                process_instances.append(instance_graph)
+    print(f"✅ [Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds")
+
+    # STEP 3: Group Variants Using Normalized Signatures
+    t2 = time.time()
+    variants_by_signature: Dict[str, Dict] = {}
+    
+    # Define a simple function to clean the activity labels
+    normalize_label = lambda label: label.split('_')[0]
+
+    for instance_graph in process_instances:
+        # Create a canonical signature using the NORMALIZED labels
+        node_labels = sorted([normalize_label(d['label']) for _, d in instance_graph.nodes(data=True)])
+        
+        edge_tuples = sorted([
+            (normalize_label(instance_graph.nodes[u]['label']), 
+             normalize_label(instance_graph.nodes[v]['label']), 
+             d['type']) 
+            for u, v, d in instance_graph.edges(data=True)
+        ])
+        
+        signature = f"nodes:{'|'.join(node_labels)};edges:{'|'.join(map(str, edge_tuples))}"
+
+        if signature not in variants_by_signature:
+            # First time seeing this signature, create a new variant entry.
+            instance_graph.graph['sequence'] = [d['label'] for _, d in sorted(instance_graph.nodes(data=True), key=lambda x: x[1]['timestamp'])]
+            variants_by_signature[signature] = {
+                'graph': instance_graph, 'support': 1, 'executions': [list(instance_graph.nodes())]
+            }
+        else:
+            # Signature already exists, just increment support.
+            variants_by_signature[signature]['support'] += 1
+            variants_by_signature[signature]['executions'].append(list(instance_graph.nodes()))
+    print(f"✅ [Step 3/4] Grouped into {len(variants_by_signature)} unique variants in: {time.time() - t2:.2f} seconds")
+
+
+    # STEP 4: Final Formatting and Sorting
+    t3 = time.time()
+    variant_list = []
+    for i, data in enumerate(variants_by_signature.values()):
+        variant_list.append(Variant(
+            vid=f"variant_{i}", support=data['support'], executions=data['executions'], graph=data['graph']
+        ))
+
+    variant_list.sort(key=lambda v: v.support, reverse=True)
+    print(f"✅ [Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
+    print(f"--- Variant Discovery Complete ---")
+    print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
+    
+    return Variants(variant_list)
+
+if __name__ == "__main__":
+    import polars as pl
+    from totem_lib.ocel import ObjectCentricEventLog
+    from hashlib import sha1
+    import json
+    from totem_lib.ocel import load_events_from_json, load_objects_from_json
+
+    # load a sample OCEL
+    path = "/Users/arbeitiv/Desktop/PADS HiWi/totem-tool/backend/totem_backend/Variants/example_data/ContainerLogistics.json"
+
+    events_df = load_events_from_json(path)
+    objects_df = load_objects_from_json(path)
+
+    json_ocel = ObjectCentricEventLog()
+    json_ocel.events = events_df
+    json_ocel.object_df = objects_df
+    
+
+    mined = find_variants(json_ocel, leading_type="Container")
+    print(json.dumps(mined, indent=2))
