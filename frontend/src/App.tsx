@@ -7,6 +7,7 @@ import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
 import { ProcessOverview } from './ProcessOverview';
+import { VariantsOverview } from './VariantsOverview';
 
 
 
@@ -25,6 +26,7 @@ function App() {
             <Route path="/logout" element={<Logout/>}/>
             <Route path="/upload" element={<UploadView/>}/>
             <Route path="/overview" element={<ProcessOverview/>}/>
+            <Route path="/variantsview" element={<VariantsOverview/>}/>
           </Routes>
             
         

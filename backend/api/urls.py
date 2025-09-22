@@ -10,5 +10,5 @@ router.register(r'files', UserFileViewSet, basename="userfile")
 urlpatterns = [
     path('greeting/', greeting, name='greeting'),
     path("", include(router.urls)),
-    path("variants", variants),
+    path("variants/", variants, name="variants"),
 ]

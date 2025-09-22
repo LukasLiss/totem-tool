@@ -1,6 +1,9 @@
 # xavier personal
 totem-tool/backend/totem_backend/Variants
 tests
+*.ipynb
+totem_lib/src/totem_lib/old_ocvariants.py
+totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 
 # TOTeM-Tool .gitignore
 # Comprehensive ignore file for React + Django + Electron project
