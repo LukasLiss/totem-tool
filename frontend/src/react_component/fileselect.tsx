@@ -41,7 +41,7 @@ function FileSelect() {
         if (file) {
             setSelectedFile(file); // save into context
             console.log("Saved to context:", file);
-            navigate("/overview");
+            navigate("/variantsview");
         }
     };
 
@@ -50,7 +50,7 @@ function FileSelect() {
         if (file) {
         setSelectedFile(file); // save into context
         console.log("Saved to context:", file);
-        navigate("/overview");
+        navigate("/variantsview");
         }
     };
     
