@@ -2,6 +2,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import FileSelect from './react_component/fileselect';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import { NumberofEvents } from './react_component/numberofevents';
+import { Button } from "@/components/ui/button";
 import './styles/processoverview.css';
 
 export function ProcessOverview(){
@@ -10,27 +11,27 @@ export function ProcessOverview(){
 
 
     return (
-        <div className="overview_main_div">
-            <div className="header_bar">
-                <div className="ov_fs">
+        <div className="flex flex-col">
+            <div className="flex flex-row items-center justify-between">
+                <div className="flex flex-1.5 items-center justify-between">
                     <FileSelect/>
                 </div>
-                <div className="tabs">
+                <div className="flex-3">
                     TabsTabsTabs
                 </div>
             </div>
-            <div className="filter_bar">
-                <div className="ov_filter">
+            <div className="flex flex-row justify-between">
+                <div className="">
                     Filterfilter
                 </div>
-                <div className="ov_exp_log">
-                    <button className="exp_log_button">
+                <div className="">
+                    <Button className="flex flex-wrap items-center gap-2 md:flex-row cursor-pointer transition hover:shadow-lg">
                         Export Log
-                    </button>
+                    </Button>
                 </div>
             </div>
-            <div className="oceldisplay">
-                <div className="ov_ocelwindow">
+            <div className="flex flex-row  min-h-[60vh] h-[70vh] max-h-[60vw] ">
+                <div className="flex-5">
                     Das ist der Overview
                     {selectedFile ? (
                         <p>Currently selected: {selectedFile.file.split("/").pop()}</p>
@@ -39,7 +40,7 @@ export function ProcessOverview(){
                             )}
                         <NumberofEvents/>
                 </div>
-                <div className="ov_ocelparams">
+                <div className="flex-1">
                             Mmhh parameter
                 </div>
             </div>

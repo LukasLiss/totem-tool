@@ -6,7 +6,7 @@ import {Logout} from './react_component/logout';
 import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
-import { ProcessOverview } from './ProcessOverview';
+import { ProcessOverview } from './ProcessOverview_new';
 import { VariantsOverview } from './VariantsOverview';
 
 
@@ -16,6 +16,7 @@ function App() {
     
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
+      
       <div className="website-background" style={{ 
          }}>
         
@@ -32,6 +33,7 @@ function App() {
         
         
       </div>
+
     </SelectedFileContext.Provider>  
   );
 }

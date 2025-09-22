@@ -1,3 +1,11 @@
 import { createContext } from "react";
 
-export const SelectedFileContext = createContext(null);
+type SelectedFileContextType = {
+  selectedFile: any; // Replace `any` with your actual file type
+  setSelectedFile: (file: any) => void;
+};
+
+export const SelectedFileContext = createContext<SelectedFileContextType>({
+  selectedFile: null,
+  setSelectedFile: () => {},
+});
