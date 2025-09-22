@@ -471,7 +471,7 @@ function VariantRow({
                   borderRadius: 8,
                   overflow: "auto",
                   width: "100%",
-                  marginTop: 25   // ⬅️ aligns with "Object types" label
+                  marginTop: 25   
               }}
               aria-label={`Variant ${v.id} visualization`}
             >
