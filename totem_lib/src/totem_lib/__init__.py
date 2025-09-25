@@ -11,6 +11,5 @@ __all__ = [
     "load_objects_from_xml",
     "totemDiscovery",
     "Totem",
-    "mlpaDiscovery",
-    "import_ocel"
+    "calculate_layout",
 ]

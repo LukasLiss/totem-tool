@@ -1,15 +1,18 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
 import Dropzone from 'react-dropzone';
 import {useDropzone} from 'react-dropzone';
 import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
+
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
     //Right now JSON with OR logic
-
+    const { setSelectedFile } = useContext(SelectedFileContext);
+    
     const [file, setFile] = useState(null);
     const hiddenInputRef = useRef(null);
 
@@ -64,7 +67,7 @@ export function FileUploadValidator() {
     try {
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
-      alert("Upload successful!");
+      setSelectedFile(file)
     } catch (err) {
       console.error("Upload failed:", err);
       alert("Upload failed");
@@ -89,28 +92,29 @@ export function FileUploadValidator() {
 
 
   return (
-    <form className="drag_drop" onSubmit={handleSubmit}>
-      <div {...getRootProps({ className: "dropzone" })}>
+    <form className=" m-6 flex flex-col" onSubmit={handleSubmit}>
+      <div {...getRootProps({ className: 
+        "dropzone font-sans border flex flex-col items-center justify-center max-h-[40vh] min-h-[32vw] min-w-[65vw] max-w-[70vw] rounded-xl p-6 text-center cursor-pointer transition hover:shadow-lg mx-14" })}>
         {/* hidden input so FormData works if needed */}
-        <input className="hidden_input"
+        <input 
           type="file"
           name="my-file"
           ref={hiddenInputRef}
           style={{ opacity: 0 }}
         />
-        <input className="hidden_input" {...getInputProps()} />
-        <p className="dd_text">Click or drag and drop an OCEL file here to start a new project</p>
+        <input  {...getInputProps()} />
+        <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
         {/*  <button type="button" onClick={open}>
           Open File Dialog
         </button> */}
       </div>
 
-      <div className="file_validation">    
-        <div className="display_selected_file">
+      <div className="flex flex-row items-center mt-5 mx-[6vw] ">    
+        <div className="flex-1 px-2">
             <span>{file?.name}</span>
         </div>
-        <div className="flex flex-wrap items-center gap-2 md:flex-row">
-          <Button className="bg-white" type="submit">Validate & Upload</Button>
+        <div >
+          <Button className="flex flex-wrap items-center gap-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
         </div>
         
       </div>

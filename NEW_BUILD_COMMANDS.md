@@ -11,8 +11,8 @@ edit another files
 npx shadcn@latest init
 
 IMPORTANT 
-npm run dev
-#instead of npm start
+npm start
+#or npm run dev
 
 npm install react-router-dom
 -> automatically in dependencies
