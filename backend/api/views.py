@@ -4,12 +4,17 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project
-from .serializers import EventLogSerializer
+from .models import EventLog, Project, Dashboard
+from .serializers import EventLogSerializer, DashboardSerializer
+from django.db.models import Max
 
 
 
 from totem_lib.ocel import load_events_from_sqlite
+
+@api_view(['OPTIONS'])
+def debug_options(request):
+    return Response({"headers": dict(request.headers)})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -51,4 +56,22 @@ class EventLogViewSet(viewsets.ModelViewSet):
             processed= "Filetype not yet supported"
         return Response(processed, status=status.HTTP_200_OK)
     
+class DashboardViewSet(viewsets.ModelViewSet):
+    serializer_class = DashboardSerializer
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        qs = Dashboard.objects.filter(project__users=self.request.user)
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        return qs
+    
+    def perform_create(self, serializer):
+        project_id = self.request.data.get("project")
+        project = Project.objects.get(id=project_id, users=self.request.user)
+
+        
+        serializer.save(project=project)
+
+        

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Badge } from "./ui/badge";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { processFile } from "@/api/fileApi";
 
 export function DevDashboard() {
   const [files, setFiles] = useState([]);

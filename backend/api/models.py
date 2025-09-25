@@ -17,7 +17,8 @@ def project_directory_path(instance, filename):
 
 class Project(models.Model):
     users = models.ManyToManyField(User)
-    name = models.CharField(max_length=30) 
+    name = models.CharField(max_length=30)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.name}"
@@ -33,7 +34,10 @@ class EventLog(models.Model):
 
 class Dashboard(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    name = models.CharField(max_length=30)
     order_in_project = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
 
 class DashboardComponent(models.Model):
     x = models.FloatField(
