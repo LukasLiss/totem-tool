@@ -6,8 +6,8 @@ totem-tool/
 ├── backend/           # Django REST API
 ├── frontend/         # React application  
 ├── electron/         # Electron wrapper
-├── package.json      # Root package management
-└── scripts/          # Development scripts
+├── totem_lib/        # TOTeM library
+└── package.json      # Root package management
 ```
 
 ## Installation
@@ -20,6 +20,10 @@ totem-tool/
    # OR: venv\Scripts\activate   # On Windows CMD
    # OR: source ./venv/bin/activate # On Unix Systems, e.g. Linux or MacOS
    pip install -r requirements.txt
+   pip install -e ../totem_lib
+   python manage.py migrate #create db.sqlite3 file (the database)
+   python manage.py loaddata initial_user.json #Loads a Guest User
+
    cd ..
    ```
 

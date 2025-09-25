@@ -27,7 +27,9 @@ npm run build-frontend
 cd electron
 cp -r ../frontend/build resources/frontend-build
 cp -r ../backend resources/backend
+cp -r ../totem_lib resources/totem_lib
 rm -rf resources/backend/venv resources/backend/__pycache__
+rm -rf resources/totem_lib/src/totem_lib.egg-info resources/totem_lib/__pycache__
 npm run package-win
 ```
 
@@ -37,6 +39,7 @@ The packaged app includes:
 - ✅ **Electron runtime** - The desktop app wrapper
 - ✅ **React frontend** - Built and optimized for production
 - ✅ **Django backend** - Complete Python backend with dependencies
+- ✅ **TOTeM Library** - The `totem_lib` Python library
 - ✅ **Database** - SQLite database file
 - ✅ **API endpoints** - All backend functionality
 

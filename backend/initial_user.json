@@ -1,0 +1,20 @@
+[
+{
+  "model": "auth.user",
+  "pk": 1,
+  "fields": {
+    "password": "pbkdf2_sha256$600000$mqBZnw8yuTp6nXx5yI5tSA$P7N6/v+rk2HqrHIqclKuXxWELt5cirJQntYMWcQi02Y=",
+    "last_login": null,
+    "is_superuser": true,
+    "username": "Guest",
+    "first_name": "",
+    "last_name": "",
+    "email": "Guest@guest.com",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2025-09-11T13:43:57.746Z",
+    "groups": [],
+    "user_permissions": []
+  }
+}
+]
