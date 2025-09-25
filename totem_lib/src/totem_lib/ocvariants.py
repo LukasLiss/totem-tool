@@ -50,6 +50,85 @@ class Variants:
         return f"<Variants n={len(self)}>"
 
 
+def _calculate_x_positions(G):
+    """
+    Correctly calculates the x-coordinate for each node in a DAG.
+    The x-coordinate is the length of the longest path from a source node.
+    """
+    distances = {node: 0 for node in G.nodes()}
+    # Process nodes in topological order to ensure predecessors are calculated first
+    for node in nx.topological_sort(G):
+        for successor in G.successors(node):
+            # The distance to a successor is the max of its current distance
+            # or the distance to the current node + 1
+            distances[successor] = max(distances[successor], distances[node] + 1)
+    return distances
+
+def calculate_layout(variant, ocel):
+    """
+    Calculates the (x, y) layout for a variant graph to create a chevron diagram.
+    """
+    G = variant.graph
+    
+    # Y-Mapping (Lanes): Assign a unique y-coordinate to each object instance.
+    y_mappings = {}
+    lane_info = {}
+    y_counter = 0
+
+    variant_objects = set()
+    for _, _, edge_data in G.edges(data=True):
+        for obj_id in edge_data.get('objects', []):
+            variant_objects.add(obj_id)
+
+    obj_details = []
+    for obj_id in variant_objects:
+        obj_type = ocel.obj_type_map.get(obj_id)
+        if obj_type:
+            obj_details.append({'id': obj_id, 'type': obj_type})
+    
+    obj_details.sort(key=lambda o: (o['type'], o['id']))
+
+    for obj in obj_details:
+        y_mappings[obj['id']] = y_counter
+        lane_info[y_counter] = {"id": f"type::{obj['type']}", "type": obj['type'], "label": obj['type']}
+        y_counter += 1
+
+    # X-Mapping (Sequence): Use the corrected algorithm.
+    node_x_coords = _calculate_x_positions(G)
+
+    # Final Serialization: Build the lists for the JSON response.
+    nodes = []
+    unique_lanes = []
+    seen_lane_ids = set()
+    for lane in lane_info.values():
+        if lane['id'] not in seen_lane_ids:
+            unique_lanes.append(lane)
+            seen_lane_ids.add(lane['id'])
+    objects_for_lanes = unique_lanes
+
+    for node_id, data in G.nodes(data=True):
+        object_ids_for_node = set()
+        for u, v, edge_data in G.in_edges(node_id, data=True):
+            object_ids_for_node.update(edge_data.get('objects', []))
+        for u, v, edge_data in G.out_edges(node_id, data=True):
+            object_ids_for_node.update(edge_data.get('objects', []))
+        
+        y_coords = sorted([y_mappings[oid] for oid in object_ids_for_node if oid in y_mappings])
+
+        nodes.append({
+            "id": node_id,
+            "activity": data.get("label", str(node_id)),
+            "x": node_x_coords.get(node_id, 0),
+            "y_lane": y_coords[0] if y_coords else 0,
+            "y_lanes": y_coords,
+            "types": sorted({lane_info[y]['type'] for y in y_coords})
+        })
+        
+    edges = [{ "from": u, "to": v, "label": data.get("type", "") } for u, v, data in G.edges(data=True)]
+
+    return {"nodes": nodes, "edges": edges, "objects": objects_for_lanes}
+  
+
 def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
     """
     The provided naive implementation, now with performance timers for each step.
