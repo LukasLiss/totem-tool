@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard
+from .models import EventLog, Project, Dashboard, EventLog
 from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
 
@@ -127,14 +127,14 @@ def variants(request):
     if not ocel:
         print(f"CACHE MISS for file_id: {file_id}. Building OCEL from scratch...")
         try:
-            uf = UserFile.objects.get(pk=file_id)
+            uf = EventLog.objects.get(pk=file_id)
             path = uf.file.path
             if not os.path.exists(path):
                 return Response({"error": f"Path does not exist: {path}"}, status=status.HTTP_400_BAD_REQUEST)
             
             ocel = _build_ocel_from_path(path)
             cache.set(cache_key, ocel, timeout=3600)
-        except UserFile.DoesNotExist:
+        except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
