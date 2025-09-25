@@ -67,7 +67,6 @@ export function FileUploadValidator() {
     try {
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
-      alert("Upload successful!");
       setSelectedFile(file)
     } catch (err) {
       console.error("Upload failed:", err);

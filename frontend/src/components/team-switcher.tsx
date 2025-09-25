@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
+import { useNavigate } from "react-router-dom";
 
 
 // extend type to allow optional logo component
@@ -36,6 +37,8 @@ export function Switcher(){
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
   const [selectedFileId, setSelectedFileId] = useState("");
+  const navigate = useNavigate();
+  
   // find active project by id, fallback to first
 const displayName = selectedFile?.file
   ? selectedFile.file.split("/").pop()
@@ -107,7 +110,7 @@ const displayName = selectedFile?.file
 
 
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="gap-2 p-2">
+            <DropdownMenuItem className="gap-2 p-2" onClick={() => navigate("/upload")}>
               <div className="flex size-6 items-center justify-center rounded-md border bg-transparent">
                 <Plus className="size-4" />
               </div>

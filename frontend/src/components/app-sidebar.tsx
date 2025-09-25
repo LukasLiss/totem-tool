@@ -7,7 +7,7 @@ import {
 } from "lucide-react"
 
 import { NavMain } from "@/components/nav-main"
-import { NavMain2 } from "@/components/nav-main 2"
+import { NavDashboard } from "@/components/nav-dashboard"
 import { NavProjects } from "@/components/nav-projects"
 import { Switcher } from "@/components/team-switcher"
 import {
@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
+import { DevDash } from "./nav-dev-dash";
+import { getDashboards, testOptions } from "@/api/dashboardApi";
 
 // sample data
 // This is sample data.
@@ -114,6 +116,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
   const [selectedFileId, setSelectedFileId] = useState("");
+  const [dashboards, setDashboards] = useState([])
+
+  console.log("Current selectedFile:", selectedFile);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -127,6 +132,23 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     };
     fetchFiles();
   }, []);
+
+  
+
+  useEffect(() => {
+  const fetchDashboards = async () => {
+    if (!selectedFile?.project) return; // nothing selected
+    const token = localStorage.getItem("access_token");
+    try {
+      const response = await getDashboards(token, selectedFile.project);
+      setDashboards(response);
+      console.log('loaded dashboards', response)
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  fetchDashboards();
+}, [selectedFile]);
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -144,7 +166,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         )}
       </SidebarHeader>
       <SidebarContent>
-        <NavMain2 items={data.dashboards} />
+        <DevDash />
+        <NavDashboard dashboards={dashboards} />
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>

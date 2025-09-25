@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+from corsheaders.defaults import default_headers
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -43,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_extensions',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
@@ -136,6 +139,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOW_CREDENTIALS= True
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "authorization",
+    "content-type",
+]
 
 REST_FRAMEWORK = {
      'DEFAULT_AUTHENTICATION_CLASSES': [
