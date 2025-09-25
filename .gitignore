@@ -1,3 +1,12 @@
+# xavier personal
+totem-tool/backend/totem_backend/Variants
+tests
+*.ipynb
+totem_lib/src/totem_lib/old_ocvariants.py
+totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
+frontend/src/react_component/oldVariantsExplorer.tsx
+
+
 # TOTeM-Tool .gitignore
 # Comprehensive ignore file for React + Django + Electron project
 
@@ -50,6 +59,11 @@ __pycache__/
 # Virtual environments
 backend/venv/
 backend/env/
+backend/user_files/*
+!backend/user_files/guest/
+!backend/user_files/guest/ContainerLogistics.json
+!backend/user_files/guest/ContainerLogistics.sqlite
+!backend/user_files/guest/ContainerLogistics.xml
 .venv/
 .env/
 
@@ -71,7 +85,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+
 lib64/
 parts/
 sdist/
@@ -223,7 +237,3 @@ test-*.md
 
 # Batch files (uncomment if you don't want to track them)
 # *.bat
-
-# Development notes (uncomment if you don't want to track them)
-# NOTES.md
-# TODO.md
