@@ -274,6 +274,38 @@ class ObjectCentricEventLog:
         return G
 
 
+    ### TODO check pls @Toan
+    def filter_by_object_type(self, object_type: str) -> 'ObjectCentricEventLog':
+        """
+        Filters the event log to include only a single object type and its related events.
+
+        This method performs two main steps:
+        1. Filters the objects DataFrame to keep only those matching the specified object_type.
+        2. Filters the events DataFrame to keep only the events that are associated with
+           at least one of the objects from the filtered set.
+
+        Args:
+            object_type (str): The object type to keep in the log (e.g., "container").
+
+        Returns:
+            ObjectCentricEventLog: A new, filtered instance of the ObjectCentricEventLog.
+        """
+        # 1. Filter the objects DataFrame to get only the relevant objects
+        filtered_objects = self.objects.filter(pl.col("_objType") == object_type)
+        
+        # 2. Get the set of IDs for these relevant objects
+        relevant_object_ids = filtered_objects.get_column("_objId")
+
+        # 3. Filter the events DataFrame
+        # Keep an event if its list of objects has a non-empty intersection
+        # with our set of relevant object IDs.
+        filtered_events = self.events.filter(
+            pl.col("_objects").list.eval(pl.element().is_in(relevant_object_ids)).list.any()
+        )
+
+        # 4. Return a new event log instance with the filtered DataFrames
+        return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
+
 class OcelFileImporter:
     """
     Class to import OCEL 2.0 files into the ObjectCentricEventLog structure.
