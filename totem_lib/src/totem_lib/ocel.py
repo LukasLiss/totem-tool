@@ -282,7 +282,7 @@ class ObjectCentricEventLog:
         This method performs two main steps:
         1. Filters the objects DataFrame to keep only those matching the specified object_type.
         2. Filters the events DataFrame to keep only the events that are associated with
-           at least one of the objects from the filtered set.
+        at least one of the objects from the filtered set.
 
         Args:
             object_type (str): The object type to keep in the log (e.g., "container").

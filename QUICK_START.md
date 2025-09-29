@@ -26,8 +26,6 @@ npm run electron-dev
 ```bash
 cd backend
 source venv/Scripts/activate
-python manage.py migrate
-python manage.py loaddata initial_user.json
 python manage.py runserver 8000
 ```
 
