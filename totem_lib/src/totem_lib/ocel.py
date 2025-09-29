@@ -305,6 +305,17 @@ class ObjectCentricEventLog:
 
         # 4. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
+    
+    def get_object_ids_by_type(self, object_type: str) -> List[str]:
+        """
+        Returns a list of object IDs for a given object type.
+        """
+        return (
+            self.objects
+            .filter(pl.col("_objType") == object_type)
+            .get_column("_objId")
+            .to_list()
+        )
 
 class OcelFileImporter:
     """

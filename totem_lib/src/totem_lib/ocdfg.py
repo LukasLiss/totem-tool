@@ -1,151 +1,107 @@
-from ocel import ObjectCentricEventLog as OCEL
-# from ocel import import_ocel 
-
 import polars as pl
 import networkx as nx
 from typing import Dict, List, Optional
+from ocel import ObjectCentricEventLog as OCEL 
 
-
-class OCDFG(nx.DiGraph):
-    
-    def __init__(self):
-        
-        super().__init__()
-        self.object_types = []
-        self.node_coloring = {}
-        self.edge_coloring = {}
-    
-    def add_variant(self, variant):
-        pass
-    
 class CCDFG(nx.DiGraph):
-    
-    def __init__(self):
+    """
+    Represents a Case-Centric Directly-Follows Graph for a single object type.
+    Nodes are activities, and edges represent the directly-follows relation,
+    weighted by frequency.
+    """
+    def __init__(self, obj_type: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.object_type = obj_type
+
+    @classmethod
+    def from_ocel(cls, ocel: OCEL, object_type: str, base_df: pl.DataFrame) -> 'CCDFG':
+        """Factory method to build a CCDFG for a specific object type from an OCEL."""
         
-        super().__init__()
-        self.object_type = None
-    
-    def add_variant(self, variant):
-        pass
-
-
-def build_case_centric_dfgs(
-    ocel,                       
-    object_types: Optional[List[str]] = None,
-    weight_attr: str = "weight"
-) -> Dict[str, nx.DiGraph]:
-    """
-    Return {obj_type -> nx.DiGraph} where nodes are activities and edges (A->B)
-    count directly-follows within each object's ordered event sequence.
-    Self-loops are kept. Edge attribute 'weight' holds the count.
-    """
-
-    # obj_type -> [obj_id]
-    type_to_ids: Dict[str, List[str]] = {}
-    for oid, otype in ocel.obj_type_map.items():
-        type_to_ids.setdefault(otype, []).append(oid)
-
-    # explode events to per-object rows, sort deterministically
-    base = (
-        ocel.events
-        .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
-        .explode("_objects")
-        .rename({"_objects": "_objId"})
-        .sort(["_objId", "_timestampUnix", "_eventId"])
-    )
-
-    if object_types is None:
-        object_types = sorted(type_to_ids.keys())
-
-    out: Dict[str, nx.DiGraph] = {}
-
-    for otype in object_types:
-        obj_ids = type_to_ids.get(otype, [])
+        # 1. Get relevant object IDs using the new helper method
+        obj_ids = ocel.get_object_ids_by_type(object_type)
         if not obj_ids:
-            out[otype] = nx.DiGraph(obj_type=otype)
-            continue
+            return cls(obj_type=object_type) # Return an empty graph
 
-        per_type = base.filter(pl.col("_objId").is_in(obj_ids))
-        if per_type.is_empty():
-            out[otype] = nx.DiGraph(obj_type=otype)
-            continue
+        per_type_df = base_df.filter(pl.col("_objId").is_in(obj_ids))
+        if per_type_df.is_empty():
+            return cls(obj_type=object_type)
 
-        # compute next activity per case (object id)
+        # 2. Compute directly-follows pairs and their weights
         pairs = (
-            per_type
-            .with_columns([
-                pl.col("_activity").shift(-1).over("_objId").alias("_next"),
-            ])
+            per_type_df
+            .with_columns(pl.col("_activity").shift(-1).over("_objId").alias("_next"))
             .filter(pl.col("_next").is_not_null())
             .group_by(["_activity", "_next"])
-            .agg(pl.len().alias(weight_attr))
-            .sort([weight_attr, "_activity", "_next"], descending=[True, False, False])
+            .agg(pl.len().alias("weight"))
         )
 
-        # optional: activity frequency (for node weights)
-        act_freq = (
-            per_type
-            .group_by("_activity")
-            .agg(pl.len().alias("count"))
+        # 3. Compute activity frequencies for node weights
+        act_freq = per_type_df.group_by("_activity").agg(pl.len().alias("count"))
+        
+        # 4. Build the graph
+        graph = cls(obj_type=object_type)
+        for row in act_freq.iter_rows(named=True):
+            graph.add_node(row["_activity"], label=row["_activity"], count=row["count"])
+
+        for row in pairs.iter_rows(named=True):
+            graph.add_edge(row["_activity"], row["_next"], weight=row["weight"])
+            
+        return graph
+
+class OCDFG(nx.DiGraph):
+    """
+    Represents an Object-Centric Directly-Follows Graph, aggregating
+    all case-centric DFGs from an OCEL.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.graph['kind'] = 'ocdfg'
+
+    def merge_graph(self, other_graph: nx.DiGraph, otype: str):
+        """Merges nodes and edges from another graph (like a CCDFG)."""
+        # Merge nodes
+        for node, data in other_graph.nodes(data=True):
+            if not self.has_node(node):
+                self.add_node(node, label=data.get('label', node), types=set())
+            self.nodes[node]['types'].add(otype)
+        
+        # Merge edges
+        for u, v, data in other_graph.edges(data=True):
+            w = data.get("weight", 1)
+            if self.has_edge(u, v):
+                self.edges[u, v]["weights"][otype] = self.edges[u, v]["weights"].get(otype, 0) + w
+                self.edges[u, v]["weight"] += w
+            else:
+                self.add_edge(u, v, weights={otype: w}, weight=w, owners=set())
+            self.edges[u, v]['owners'].add(otype)
+
+    @classmethod
+    def from_ocel(cls, ocel: OCEL, object_types: Optional[List[str]] = None) -> 'OCDFG':
+        """Factory method to build the entire OCDFG from an OCEL."""
+        
+        # 1. Prepare a single, sorted base DataFrame from the ocel.events property
+        base_df = (
+            ocel.events
+            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
+            .explode("_objects")
+            .rename({"_objects": "_objId"})
+            .sort(["_objId", "_timestampUnix", "_eventId"])
         )
-        act_cnt = dict(zip(act_freq["_activity"].to_list(), act_freq["count"].to_list()))
 
-        # build graph
-        G = nx.DiGraph(obj_type=otype)
-        for a, cnt in act_cnt.items():
-            G.add_node(a, label=a, obj_type=otype, count=int(cnt))
+        # Use the ocel.object_types property if no specific types are given
+        if object_types is None:
+            object_types = ocel.object_types
 
-        for a, b, w in pairs.iter_rows():
-            a = str(a); b = str(b); w = int(w)
-            if G.has_edge(a, b):
-                G[a][b][weight_attr] += w
-            else:
-                G.add_edge(a, b, **{weight_attr: w}, obj_type=otype)
+        # 2. Build the aggregated graph
+        graph = cls()
+        for otype in sorted(object_types):
+            ccdfg = CCDFG.from_ocel(ocel, otype, base_df)
+            graph.merge_graph(ccdfg, otype)
 
-        out[otype] = G
-
-    return out
-
-
-
-def build_ocdfg(ocel) -> nx.DiGraph:
-    """
-    Object-Centric DFG:
-      - Nodes = activities. node['types'] = set of object-types where the activity occurs.
-      - Edges A->B exist if any object of some type has A directly followed by B.
-        Edge attributes:
-          owners  : sorted list of object types contributing this edge
-          weights : {obj_type: count}
-          weight  : total count across types
-    """
-    per_type = build_case_centric_dfgs(ocel)
-
-    G = nx.DiGraph(kind="ocdfg")
-
-    # merge nodes
-    for otype, dfg in per_type.items():
-        for a in dfg.nodes():
-            if not G.has_node(a):
-                G.add_node(a, label=a, types=set([otype]))
-            else:
-                G.nodes[a]["types"].add(otype)
-
-    # merge edges
-    for otype, dfg in per_type.items():
-        for u, v, d in dfg.edges(data=True):
-            w = int(d.get("weight", 1))
-            if G.has_edge(u, v):
-                G[u][v]["weights"][otype] = G[u][v]["weights"].get(otype, 0) + w
-                G[u][v]["weight"] = G[u][v]["weight"] + w
-                G[u][v]["owners"] = sorted(set(G[u][v]["owners"]) | {otype})
-            else:
-                G.add_edge(u, v,
-                           owners=[otype],
-                           weights={otype: w},
-                           weight=w)
-
-    # finalize: turn node type-sets into sorted lists for JSON-friendliness
-    for n in G.nodes():
-        G.nodes[n]["types"] = sorted(G.nodes[n].get("types", []))
-
-    return G
+        # 3. Finalize attributes for clean output (e.g., for JSON)
+        for node in graph.nodes():
+            graph.nodes[node]['types'] = sorted(list(graph.nodes[node].get('types', [])))
+        for u, v in graph.edges():
+            graph.edges[u, v]['owners'] = sorted(list(graph.edges[u, v].get('owners', [])))
+            
+        return graph
