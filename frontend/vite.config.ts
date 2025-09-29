@@ -1,7 +1,7 @@
-import path from "path"
-import tailwindcss from "@tailwindcss/vite"
-import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
+import path from "node:path";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -12,7 +12,15 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000, // 👈 sets dev server to localhost:3000
-    open: true, // 👈 optional: auto-open browser
+    port: 3000,
+    open: true,
+    proxy: {
+      // forward all /api/* to Django on :8000
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
-})
+});

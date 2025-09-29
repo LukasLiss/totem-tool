@@ -1,3 +1,12 @@
+# xavier personal
+totem-tool/backend/totem_backend/Variants
+tests
+*.ipynb
+totem_lib/src/totem_lib/old_ocvariants.py
+totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
+frontend/src/react_component/oldVariantsExplorer.tsx
+
+
 # TOTeM-Tool .gitignore
 # Comprehensive ignore file for React + Django + Electron project
 
@@ -229,6 +238,3 @@ test-*.md
 # Batch files (uncomment if you don't want to track them)
 # *.bat
 
-# Development notes (uncomment if you don't want to track them)
-# NOTES.md
-# TODO.md

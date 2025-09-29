@@ -213,6 +213,65 @@ class ObjectCentricEventLog:
         if event:
             return event["objects_by_type"].get(obj_type, [])
         return []
+    
+    
+    ### NEW X sonntag ###
+    
+    from collections import defaultdict
+    import networkx as nx
+    from functools import cached_property
+
+    @cached_property
+    def eog(self) -> nx.DiGraph:
+        """
+        Event–Object Graph (EOG).
+        Nodes: event ids with attributes:
+        - 'label'     -> activity name
+        - 'timestamp' -> _timestampUnix
+        Edges: for each object, connect its consecutive events (by time).
+        - 'type'    -> pipe-joined inducing object type(s)
+        - 'objects' -> sorted list of inducing object IDs
+        """
+        G = nx.DiGraph()
+
+        # 1) Add nodes
+        for row in self.events.select(["_eventId", "_activity", "_timestampUnix"]).iter_rows(named=True):
+            G.add_node(
+                row["_eventId"],
+                label=row["_activity"],
+                timestamp=int(row["_timestampUnix"]) if row["_timestampUnix"] is not None else 0,
+            )
+
+        # 2) Prepare per-object event sequences
+        obj_to_seq = defaultdict(list)          # oid -> [(ts, eid), ...]
+        for row in self.events.select(["_eventId", "_timestampUnix", "_objects"]).iter_rows(named=True):
+            eid = row["_eventId"]
+            ts = int(row["_timestampUnix"]) if row["_timestampUnix"] is not None else 0
+            for oid in (row["_objects"] or []):
+                obj_to_seq[oid].append((ts, eid))
+
+        # 3) Collect edge labels (may aggregate across objects/types)
+        edge_types = defaultdict(set)           # (u,v) -> {otype, ...}
+        edge_objs  = defaultdict(set)           # (u,v) -> {oid, ...}
+
+        for oid, seq in obj_to_seq.items():
+            if len(seq) < 2:
+                continue
+            seq.sort(key=lambda t: (t[0], t[1]))   # stable by (timestamp, event_id)
+            otype = self.obj_type_map.get(oid, "UNKNOWN")
+            for (_, u), (_, v) in zip(seq, seq[1:]):
+                edge_types[(u, v)].add(otype)
+                edge_objs[(u, v)].add(oid)
+
+        # 4) Materialize edges with canonical attributes
+        for (u, v), types in edge_types.items():
+            G.add_edge(
+                u, v,
+                type="|".join(sorted(types)),
+                objects=sorted(edge_objs[(u, v)]),
+            )
+
+        return G
 
 
 class OcelFileImporter:

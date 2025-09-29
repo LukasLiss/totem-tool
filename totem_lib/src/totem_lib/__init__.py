@@ -13,4 +13,5 @@ __all__ = [
     "Totem",
     "mlpaDiscovery",
     "import_ocel"
+    "calculate_layout",
 ]
