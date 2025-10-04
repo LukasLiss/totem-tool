@@ -1,7 +1,7 @@
 import polars as pl
 import networkx as nx
 from typing import Dict, List, Optional
-from ocel import ObjectCentricEventLog as OCEL 
+from .ocel import ObjectCentricEventLog as OCEL 
 
 class CCDFG(nx.DiGraph):
     """

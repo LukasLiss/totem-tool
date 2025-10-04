@@ -22,7 +22,7 @@ from totem_lib.ocel import (
     load_events_from_json,   load_objects_from_json,
     load_events_from_xml,    load_objects_from_xml,
 )
-
+import json
 
 @api_view(['OPTIONS'])
 def debug_options(request):
@@ -117,6 +117,538 @@ def OCDFGViewSet(request):
     Args:
         request (_type_): _description_
     """
+    
+    mockup = ({
+        "directed": True,
+        "multigraph": False,
+        "graph": {
+            "kind": "ocdfg"
+        },
+        "nodes": [
+            {
+                "label": "Load Truck",
+                "types": [
+                    "Container",
+                    "Handling Unit",
+                    "Truck"
+                ],
+                "id": "Load Truck"
+            },
+            {
+                "label": "Weigh",
+                "types": [
+                    "Container",
+                    "Forklift"
+                ],
+                "id": "Weigh"
+            },
+            {
+                "label": "Drive to Terminal",
+                "types": [
+                    "Container",
+                    "Truck"
+                ],
+                "id": "Drive to Terminal"
+            },
+            {
+                "label": "Reschedule Container",
+                "types": [
+                    "Container",
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "id": "Reschedule Container"
+            },
+            {
+                "label": "Pick Up Empty Container",
+                "types": [
+                    "Container"
+                ],
+                "id": "Pick Up Empty Container"
+            },
+            {
+                "label": "Depart",
+                "types": [
+                    "Container",
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "id": "Depart"
+            },
+            {
+                "label": "Load to Vehicle",
+                "types": [
+                    "Container",
+                    "Forklift",
+                    "Vehicle"
+                ],
+                "id": "Load to Vehicle"
+            },
+            {
+                "label": "Order Empty Containers",
+                "types": [
+                    "Container",
+                    "Transport Document"
+                ],
+                "id": "Order Empty Containers"
+            },
+            {
+                "label": "Bring to Loading Bay",
+                "types": [
+                    "Container",
+                    "Forklift"
+                ],
+                "id": "Bring to Loading Bay"
+            },
+            {
+                "label": "Place in Stock",
+                "types": [
+                    "Container",
+                    "Forklift"
+                ],
+                "id": "Place in Stock"
+            },
+            {
+                "label": "Create Transport Document",
+                "types": [
+                    "Customer Order",
+                    "Transport Document"
+                ],
+                "id": "Create Transport Document"
+            },
+            {
+                "label": "Register Customer Order",
+                "types": [
+                    "Customer Order"
+                ],
+                "id": "Register Customer Order"
+            },
+            {
+                "label": "Collect Goods",
+                "types": [
+                    "Handling Unit"
+                ],
+                "id": "Collect Goods"
+            },
+            {
+                "label": "Book Vehicles",
+                "types": [
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "id": "Book Vehicles"
+            }
+        ],
+        "links": [
+            {
+                "weights": {
+                    "Container": 1989,
+                    "Truck": 1989
+                },
+                "weight": 3978,
+                "owners": [
+                    "Container",
+                    "Truck"
+                ],
+                "source": "Load Truck",
+                "target": "Drive to Terminal"
+            },
+            {
+                "weights": {
+                    "Container": 8559,
+                    "Truck": 8559
+                },
+                "weight": 17118,
+                "owners": [
+                    "Container",
+                    "Truck"
+                ],
+                "source": "Load Truck",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Container": 1814,
+                    "Forklift": 1814
+                },
+                "weight": 3628,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Weigh",
+                "target": "Place in Stock"
+            },
+            {
+                "weights": {
+                    "Container": 175,
+                    "Forklift": 175
+                },
+                "weight": 350,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Weigh",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Container": 1989
+                },
+                "weight": 1989,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Drive to Terminal",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Truck": 1988
+                },
+                "weight": 1988,
+                "owners": [
+                    "Truck"
+                ],
+                "source": "Drive to Terminal",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Container": 35,
+                    "Vehicle": 7
+                },
+                "weight": 42,
+                "owners": [
+                    "Container",
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Transport Document": 2,
+                    "Vehicle": 16
+                },
+                "weight": 18,
+                "owners": [
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 33
+                },
+                "weight": 33,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Reschedule Container",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Vehicle": 12
+                },
+                "weight": 12,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
+                "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Container": 1994
+                },
+                "weight": 1994,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Pick Up Empty Container",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Transport Document": 160
+                },
+                "weight": 160,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Depart",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Transport Document": 21
+                },
+                "weight": 21,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Depart",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Container": 1956,
+                    "Vehicle": 127
+                },
+                "weight": 2083,
+                "owners": [
+                    "Container",
+                    "Vehicle"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Forklift": 1352
+                },
+                "weight": 1352,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Forklift": 604
+                },
+                "weight": 604,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Forklift": 9,
+                    "Vehicle": 1827
+                },
+                "weight": 1836,
+                "owners": [
+                    "Forklift",
+                    "Vehicle"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Vehicle": 2
+                },
+                "weight": 2,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Container": 1995
+                },
+                "weight": 1995,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Pick Up Empty Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 13
+                },
+                "weight": 13,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 561
+                },
+                "weight": 561,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Container": 1931,
+                    "Forklift": 1933
+                },
+                "weight": 3864,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Container": 36
+                },
+                "weight": 36,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Forklift": 30
+                },
+                "weight": 30,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Forklift": 4
+                },
+                "weight": 4,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Container": 1794,
+                    "Forklift": 438
+                },
+                "weight": 2232,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Place in Stock",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Forklift": 1352
+                },
+                "weight": 1352,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Place in Stock",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Forklift": 24
+                },
+                "weight": 24,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Place in Stock",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Transport Document": 594
+                },
+                "weight": 594,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Create Transport Document",
+                "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Customer Order": 594
+                },
+                "weight": 594,
+                "owners": [
+                    "Customer Order"
+                ],
+                "source": "Register Customer Order",
+                "target": "Create Transport Document"
+            },
+            {
+                "weights": {
+                    "Handling Unit": 10553
+                },
+                "weight": 10553,
+                "owners": [
+                    "Handling Unit"
+                ],
+                "source": "Collect Goods",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Transport Document": 593
+                },
+                "weight": 593,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Book Vehicles",
+                "target": "Order Empty Containers"
+            },
+            {
+                "weights": {
+                    "Vehicle": 596
+                },
+                "weight": 596,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Book Vehicles",
+                "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Vehicle": 19
+                },
+                "weight": 19,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Book Vehicles",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Vehicle": 122
+                },
+                "weight": 122,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Book Vehicles",
+                "target": "Load to Vehicle"
+            }
+        ]
+    })
+    
+    return Response({"dfg": mockup}, status=status.HTTP_200_OK)
     
     file_id = request.query.get("file_id")
     if not file_id:
