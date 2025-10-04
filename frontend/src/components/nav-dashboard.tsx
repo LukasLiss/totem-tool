@@ -34,32 +34,33 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 
 export function NavDashboard({
   dashboards,
+  refreshDashboards,
 }: {
-  dashboards: {
-    id: number
-    project: number
-    name: string
-    order_in_project: number
-    created_at: string
-  }[]
+  dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
+  refreshDashboards: () => Promise<void> | void;
 }) {
   const [ dashboardname, setDashboardname] = useState("");
+  const [ open, setOpen] = useState(false);
   const { selectedFile } = useContext(SelectedFileContext);
   console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
-      const token = localStorage.getItem("access_token");
-      try {
-        const projectId = selectedFile?.project;
-        const response = await addDashboard(dashboardname, projectId,  token);
-        console.log("Successfully added Dashboard:", response);
-      } catch (err) {
-        console.error("Upload failed:", err);
-        alert("Upload failed");
-      }
-    };
+    const token = localStorage.getItem("access_token");
+    if (!selectedFile?.project) return;
+    try {
+      await addDashboard(dashboardname, selectedFile.project, token);
+      await refreshDashboards();   // ✅ ask parent to reload dashboards
+      setOpen(false);              // ✅ close dialog
+      setDashboardname("");        // ✅ reset input field
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Upload failed");
+    }
+  };
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     await handleAddDashboard();
+    await fetchDashboards();
  };
   return (
     <SidebarGroup>
@@ -90,40 +91,48 @@ export function NavDashboard({
                 {/* Add new dashboard button */}
                 <SidebarMenuSubItem>
                   <SidebarMenuSubButton asChild>
-                    <Dialog>
-                        <DialogTrigger>
-                          Add Dashboard +
-                        </DialogTrigger>
-                          
-                            <DialogContent className="sm:max-w-[425px]">
-                              <form onSubmit={handleSubmit}>
-                                <DialogHeader>
-                                  <DialogTitle>Create new Dashboard</DialogTitle>
-                                  <DialogDescription>
-                                    Add a new Dashboard to your project.
-                                  </DialogDescription>
-                                </DialogHeader>
-                                <div className="grid gap-4 py-4"> {/* Added py-4 for spacing */}
-                                  <div className="grid gap-3">
-                                    <Label htmlFor="name-1">Name</Label>
-                                    <Input
-                                      id="name-1"
-                                      name="name"
-                                      value={dashboardname}
-                                      onChange={(e) => setDashboardname(e.target.value)}
-                                      placeholder="My Awesome Dashboard"
-                                    />
-                                  </div>
-                                </div>
-                                <DialogFooter>
-                                  <DialogClose asChild>
-                                    {/* Added type="button" to prevent this from submitting the form */}
-                                    <Button type="button" variant="outline">Cancel</Button>
-                                  </DialogClose>
-                                  <Button type="submit">Save changes</Button>
-                                </DialogFooter>
-                              </form>
-                            </DialogContent>
+                    <Dialog open={open} onOpenChange={setOpen}>
+                      <DialogTrigger>
+                        Add Dashboard +
+                      </DialogTrigger>
+                      <DialogContent className="sm:max-w-[425px]">
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            try {
+                              await handleAddDashboard();
+                              setOpen(false); // ✅ close only after success
+                            } catch (err) {
+                              console.error("Upload failed:", err);
+                            }
+                          }}
+                        >
+                          <DialogHeader>
+                            <DialogTitle>Create new Dashboard</DialogTitle>
+                            <DialogDescription>
+                              Add a new Dashboard to your project.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="grid gap-4 py-4">
+                            <div className="grid gap-3">
+                              <Label htmlFor="name-1">Name</Label>
+                              <Input
+                                id="name-1"
+                                name="name"
+                                value={dashboardname}
+                                onChange={(e) => setDashboardname(e.target.value)}
+                                placeholder="Dashboard Name"
+                              />
+                            </div>
+                          </div>
+                          <DialogFooter>
+                            <DialogClose asChild>
+                              <Button type="button" variant="outline">Cancel</Button>
+                            </DialogClose>
+                            <Button type="submit">Save changes</Button>
+                          </DialogFooter>
+                        </form>
+                      </DialogContent>
                     </Dialog>
                   </SidebarMenuSubButton>
                 </SidebarMenuSubItem>

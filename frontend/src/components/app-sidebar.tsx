@@ -167,7 +167,14 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <DevDash />
-        <NavDashboard dashboards={dashboards} />
+        <NavDashboard 
+          dashboards={dashboards} 
+          refreshDashboards={() => {
+            if (!selectedFile?.project) return;
+            const token = localStorage.getItem("access_token");
+            getDashboards(token, selectedFile.project).then(setDashboards);
+          }} 
+        />
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>
