@@ -149,6 +149,8 @@ class Totem:
 
         os.makedirs(output_dir, exist_ok=True)
         temp_file_path = output_dir + '/tmp_graph'
+        # TODO: handle exceptions if graphviz is not installed
+        # TODO: handle bug when output_file is not a .pdf
         G.render(filename=str(temp_file_path), cleanup=True, format='pdf')
         os.replace(f'{temp_file_path}.pdf', output_dir + '/' + output_file)
         print(f"Graph successfully saved to {output_dir + '/' + output_file}")
