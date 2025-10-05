@@ -19,7 +19,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { DevDash } from "./nav-dev-dash";
-import { getDashboards, testOptions } from "@/api/dashboardApi";
+import { getDashboards } from "@/api/dashboardApi";
 
 // sample data
 // This is sample data.

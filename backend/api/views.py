@@ -87,6 +87,21 @@ class DashboardViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         project_id = self.request.data.get("project")
         project = Project.objects.get(id=project_id, users=self.request.user)
+        serializer.save(project=project)
+    
+    @action(detail=True, methods=["PATCH"])
+    def rename(self, request, pk=None):
+        """
+        Rename a dashboard. Only accepts `name` in the body.
+        """
+        dashboard = self.get_object()
+        new_name = request.data.get("name")
+        if not new_name:
+            return Response({"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        dashboard.name = new_name
+        dashboard.save()
+        return Response(self.get_serializer(dashboard).data)
 
         
         serializer.save(project=project)
@@ -180,3 +195,23 @@ def variants(request):
         })
 
     return Response({"variants": out}, status=status.HTTP_200_OK)        
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_user_data(request):
+    confirm = request.data.get("confirm")
+    if confirm != "DELETE":
+        return Response(
+            {"error": "Please confirm by sending {'confirm': 'DELETE'}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user = request.user
+    projects = Project.objects.filter(users=user)
+    deleted_count = projects.count()
+    projects.delete()
+
+    return Response(
+        {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
+        status=status.HTTP_200_OK
+    )
