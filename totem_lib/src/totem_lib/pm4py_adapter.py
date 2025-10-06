@@ -3,7 +3,7 @@ import polars as pl
 from functools import cached_property
 from typing import Dict, List, Tuple
 
-# Your existing classes and schemas would be here
+# TODO: add schemas
 # (EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEventLog)
 
 class PolarsOCELAdapter:
@@ -11,6 +11,7 @@ class PolarsOCELAdapter:
     An adapter class to make the Polars-based ObjectCentricEventLog compatible
     with the pm4py library, which expects a Pandas-based interface.
     """
+    # TODO: proofread and test this class
     def __init__(self, ocel: "ObjectCentricEventLog"):
         self._ocel = ocel
         self._event_col_mapping = {
@@ -56,7 +57,7 @@ class PolarsOCELAdapter:
         Constructs the 'relations' DataFrame, ensuring that all objects
         in the relations exist in the main objects table.
         """
-        # == FIX v4: Filter relations to ensure data consistency ==
+        # Filter relations to ensure data consistency
         valid_oids = set(self._ocel.objects["_objId"].to_list())
         
         relations_data = []
@@ -71,7 +72,7 @@ class PolarsOCELAdapter:
                         "ocel:oid": obj_id,
                         "ocel:type": self._ocel.obj_type_map.get(obj_id)
                     })
-        # =========================================================
+
         return pd.DataFrame(relations_data)
 
     @property
