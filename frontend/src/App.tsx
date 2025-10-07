@@ -7,7 +7,8 @@ import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
 import { ProcessOverview } from './ProcessOverview_new';
-import { DashboardProvider } from "./contexts/DashboardContext";import { VariantsOverview } from './VariantsOverview';
+import { DashboardProvider } from "./contexts/DashboardContext";
+import { VariantsOverview } from './VariantsOverview_new';
 
 
 
