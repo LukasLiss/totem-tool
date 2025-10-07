@@ -29,9 +29,6 @@ import re
 from django.core.cache import cache
 
 
-@api_view(['OPTIONS'])
-def debug_options(request):
-    return Response({"headers": dict(request.headers)})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

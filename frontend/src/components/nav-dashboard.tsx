@@ -39,7 +39,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { addDashboard, deleteDashboard, getDashboards, renameDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
-
+import { DashboardContext } from "@/contexts/DashboardContext";
 
 export function NavDashboard({
   dashboards,
@@ -48,6 +48,7 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
+  const { setSelectedDashboard } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
@@ -133,11 +134,13 @@ export function NavDashboard({
                 <SidebarMenuSub>
                   {dashboards.map((dashboard) => (
                     <SidebarMenuSubItem key={dashboard.id}>
-                      <SidebarMenuSubButton className="flex w-full items-center justify-between">
-                        {/* Dashboard name (fills left side) */}
+                      <SidebarMenuSubButton className="flex w-full items-center justify-between"
+                      onClick={() => {
+                        console.log("Dashboard clicked:", dashboard);
+                        setSelectedDashboard(dashboard);
+                      }}>
                         <span>{dashboard.name}</span>
 
-                        {/* Settings dropdown (right side) */}
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <button
