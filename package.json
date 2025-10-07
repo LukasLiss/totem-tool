@@ -23,5 +23,8 @@
     "wait-on": "^7.2.0"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@radix-ui/react-switch": "^1.2.6"
+  }
 }

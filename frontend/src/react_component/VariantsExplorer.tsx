@@ -4,6 +4,8 @@ import {
   AlignLeft, Download, Filter, MinusCircle, PlusCircle
 } from "lucide-react";
 
+import { Switch } from "@/components/ui/switch";
+
 /* =========================
    Types shared with callers
    ========================= */
@@ -13,15 +15,14 @@ export type VariantObject = {
   label?: string;
 };
 
-// MODIFIED: Added new properties from the backend layout calculation
 export type VariantEventNode = {
   id: string;
   activity: string;
   objectIds: string[];
-  types: string[];      
-  x: number;            
-  y_lane: number;       
-  y_lanes: number[];    
+  types: string[];
+  x: number;
+  y_lane: number;
+  y_lanes: number[];
 };
 
 export type VariantGraph = {
@@ -146,8 +147,6 @@ function abbreviateFirstLetters(label?: string): string | undefined {
 }
 
 /* ========== shapes ========== */
-/** Returns a CSS polygon that clips a rectangle into a chevron.
- * tipPx controls how pointy the right tip is (12–20 looks good). */
 const chevronClip = (tipPx: number = 16): string =>
   `polygon(0 0,
            calc(100% - ${tipPx}px) 0,
@@ -155,11 +154,6 @@ const chevronClip = (tipPx: number = 16): string =>
            calc(100% - ${tipPx}px) 100%,
            0 100%,
            ${tipPx}px 50%)`;
-
-/*
-  REMOVED: The computePositions function is no longer needed
-  as the layout is now calculated by the backend.
-*/
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
@@ -209,11 +203,24 @@ export default function VariantsExplorer({
             </div>
 
             {/* Label mode toggle */}
-            <div style={{ display: "flex", gap: 6, background: UI.mutedBG, border: `1px solid ${UI.border}`, borderRadius: 8, padding: 2 }}>
-              <Button variant="ghost" onClick={() => setLabelMode("compact")} title="Compact labels">
-                <AlignLeft size={14} /> <span style={{ marginLeft: 4 }}>Compact</span>
-              </Button>
-              <Button variant="ghost" onClick={() => setLabelMode("full")} title="Full labels">Full</Button>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                background: UI.mutedBG,
+                border: `1px solid ${UI.border}`,
+                borderRadius: 8,
+                padding: "6px 10px",
+              }}
+            >
+              <span style={{ fontSize: 12, color: UI.textSecondary }}>Compact</span>
+              <Switch
+                checked={labelMode === "full"}
+                onCheckedChange={(val) => setLabelMode(val ? "full" : "compact")}
+                aria-label="Toggle label mode"
+              />
+              <span style={{ fontSize: 12, color: UI.textSecondary }}>Full</span>
             </div>
 
             {/* Search */}
@@ -292,9 +299,10 @@ function VariantRow({
   const [expanded, setExpanded] = useState<boolean>(false);
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
 
-  const GUTTER = 16;
+  const GUTTER = 16;         // padding inside canvas box
+  const ROW_GAP = 6;         // px space between lanes (canvas + legend)
 
-  // MODIFIED: This now creates a compatible 'pos' object from the pre-calculated node data.
+  // create positioned events from precomputed nodes
   const pos = useMemo(() => {
     const positionedEvents: Record<string, PositionedEvent> = {};
     for (const node of v.graph.nodes) {
@@ -303,13 +311,12 @@ function VariantRow({
         activity: node.activity,
         objectIds: node.objectIds,
         xStart: node.x,
-        // Set end to start for a consistent 1-column width. This could be enhanced later.
-        xEnd: node.x, 
+        xEnd: node.x,
       };
     }
     return positionedEvents;
   }, [v.graph.nodes]);
-  
+
   const objects = v.graph.objects;
 
   const objectTypes = useMemo(
@@ -327,7 +334,7 @@ function VariantRow({
       if (!map.has(o.type)) map.set(o.type, []);
       map.get(o.type)!.push(o);
     }
-    for (const [t, arr] of map) arr.sort((a, b) => a.id.localeCompare(b.id));
+    for (const [, arr] of map) arr.sort((a, b) => a.id.localeCompare(b.id));
     return Array.from(map.entries()); // [type, objects[]][]
   }, [objects]);
 
@@ -365,8 +372,18 @@ function VariantRow({
   });
 
   const colsCount = cols;
-  const visibleRowCount = lanesByType.reduce((acc, [t, objs]) =>
-    acc + (collapsedTypes.has(t) ? 1 : objs.length) + 1, 0);
+
+  // Count only actual lanes (no fake gap rows)
+  const visibleRowCount = lanesByType.reduce(
+    (acc, [t, objs]) => acc + (collapsedTypes.has(t) ? 1 : objs.length),
+    0
+  );
+
+  // Compute real canvas height: lanes + small gaps + padding
+  const canvasHeight =
+    visibleRowCount * laneHeight +
+    Math.max(0, visibleRowCount - 1) * ROW_GAP +
+    GUTTER;
 
   return (
     <div style={{ border: `1px solid ${UI.border}`, borderRadius: 8 }}>
@@ -415,49 +432,66 @@ function VariantRow({
         </div>
       </CardHeader>
 
-      {expanded && (
+            {expanded && (
         <CardContent className="pt-0">
           <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
             {/* legend */}
             <div style={{ width: 256, flexShrink: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: UI.textSecondary }}>Object types</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {lanesByType.map(([type, objs]) => {
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: UI.textSecondary }}>
+                Object types
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {lanesByType.map(([type, objs], index) => {
                   const collapsed = collapsedTypes.has(type);
                   const tColor = typeColor[type];
+
+                  // lanes in this group (respect collapse)
+                  const lanes = collapsed ? 1 : objs.length;
+                  // height of the group's lanes INCLUDING the internal gaps between those lanes
+                  const groupHeight =
+                    lanes * laneHeight + Math.max(0, lanes - 1) * ROW_GAP;
+                  // one extra gap AFTER the group (except after the last group)
+                  const afterGap = index < lanesByType.length - 1 ? ROW_GAP : 0;
+
                   return (
-                    <div key={type} style={{ border: `1px solid ${UI.border}`, borderRadius: 8, padding: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ height: 12, width: 12, borderRadius: 3, background: tColor }} />
-                          <div style={{ fontSize: 14, fontWeight: 600, color: UI.textPrimary }}>{type}</div>
-                        </div>
-                        <Button
-                          size="sm" variant="ghost" onClick={() => toggleType(type)}
-                          title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
+                    <React.Fragment key={type}>
+                      {/* Card matches exactly the group's height */}
+                      <div
+                        style={{
+                          height: groupHeight,
+                          border: `1px solid ${UI.border}`,
+                          borderRadius: 8,
+                          padding: 8,
+                          boxSizing: "border-box", // keep padding/border inside height
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            width: "100%",
+                          }}
                         >
-                          {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
-                        </Button>
-                      </div>
-                      {!collapsed && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 20 }}>
-                          {objs.map((o, i) => (
-                            <div key={o.id} style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ height: 8, width: 16, borderRadius: 3, background: shade(tColor, 0.15 * (i % 5)) }} />
-                              <span
-                                title={o.label || o.id}
-                                style={{
-                                  color: UI.textSecondary, maxWidth: 160,
-                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                                }}
-                              >
-                                {o.label || o.id}
-                              </span>
-                            </div>
-                          ))}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ height: 12, width: 12, borderRadius: 3, background: tColor }} />
+                            <div style={{ fontSize: 14, fontWeight: 600, color: UI.textPrimary }}>{type}</div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => toggleType(type)}
+                            title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
+                          >
+                            {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
+                          </Button>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                      {/* spacer between groups matches canvas rowGap */}
+                      {afterGap > 0 && <div style={{ height: afterGap }} />}
+                    </React.Fragment>
                   );
                 })}
               </div>
@@ -466,16 +500,16 @@ function VariantRow({
             {/* canvas */}
             <div
               style={{
-                  position: "relative",
-                  border: `1px solid ${UI.border}`,
-                  borderRadius: 8,
-                  overflow: "auto",
-                  width: "100%",
-                  marginTop: 25   
+                position: "relative",
+                border: `1px solid ${UI.border}`,
+                borderRadius: 8,
+                overflow: "auto",
+                width: "100%",
+                marginTop: 26,
               }}
               aria-label={`Variant ${v.id} visualization`}
             >
-              <div style={{ minWidth: "100%", height: visibleRowCount * laneHeight + GUTTER }}>
+              <div style={{ minWidth: "100%", height: canvasHeight }}>
                 <div
                   style={{
                     position: "absolute",
@@ -487,6 +521,7 @@ function VariantRow({
                     gridTemplateColumns: gridTemplateCols,
                     gridAutoRows: `${laneHeight}px`,
                     columnGap: "12px",
+                    rowGap: `${ROW_GAP}px`,
                   }}
                 >
                   {/* lane lines */}
@@ -503,19 +538,21 @@ function VariantRow({
                               style={{
                                 gridColumn: `1 / span ${colsCount}`,
                                 gridRow: `${acc.row}`,
-                                borderBottom: `1px dashed ${UI.border}`
+                                borderBottom: `1px dashed ${UI.border}`,
                               }}
                             />
                           );
                         }
-                        acc.row += 1;
-                        acc.els.push(<div key={`gap-${type}`} style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}` }} />);
                       } else {
                         acc.row += 1;
                         acc.els.push(
                           <div
                             key={`sep-${type}`}
-                            style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}`, borderBottom: `1px solid ${UI.border}` }}
+                            style={{
+                              gridColumn: `1 / span ${colsCount}`,
+                              gridRow: `${acc.row}`,
+                              borderBottom: `1px solid ${UI.border}`,
+                            }}
                           />
                         );
                       }
@@ -527,22 +564,32 @@ function VariantRow({
                   {(() => {
                     const acc: { row: number; els: React.ReactNode[] } = { row: 0, els: [] };
                     for (const [type, objs] of lanesByType) {
-                      if (collapsedTypes.has(type)) { acc.row += 1; continue; }
+                      if (collapsedTypes.has(type)) {
+                        acc.row += 1;
+                        continue;
+                      }
                       for (const o of objs) {
                         acc.row += 1;
-                        const events = (laneEvents.get(o.id) || []).slice().sort((a, b) => a.xStart - b.xStart);
+                        const events = (laneEvents.get(o.id) || [])
+                          .slice()
+                          .sort((a, b) => a.xStart - b.xStart);
                         for (let i = 0; i < events.length; i++) {
                           const ev = events[i];
                           const colStart = ev.xStart + 1;
                           const span = Math.max(1, ev.xEnd - ev.xStart + 1);
                           const isShared = ev.objectIds.length > 1;
-                          const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
+                          const label =
+                            labelMode === "compact"
+                              ? abbreviateFirstLetters(ev.activity)!
+                              : ev.activity;
                           const background = gradientFor(objects, typeColor, ev.objectIds);
-                          const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nPos: [${ev.xStart}..${ev.xEnd}]`;
-
-                          // compute once per event — OUTSIDE JSX
-                          const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
-
+                          const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(
+                            ", "
+                          )}\nPos: [${ev.xStart}..${ev.xEnd}]`;
+                          const tipPx = Math.max(
+                            12,
+                            Math.min(20, Math.round(colWidth * zoom * 0.18))
+                          );
                           acc.els.push(
                             <div
                               key={`${o.id}-${ev.id}-${i}`}
@@ -572,13 +619,13 @@ function VariantRow({
                                     position: "absolute",
                                     inset: 0,
                                     opacity: 0.25,
-                                    backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
+                                    backgroundImage:
+                                      "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
                                     clipPath: chevronClip(tipPx),
                                     WebkitClipPath: chevronClip(tipPx),
                                   }}
                                 />
                               )}
-
                               <span
                                 style={{
                                   padding: "2px 8px",
@@ -589,12 +636,11 @@ function VariantRow({
                               >
                                 {label}
                               </span>
-
                               {isShared && (
                                 <div
                                   style={{
                                     position: "absolute",
-                                    right: Math.max(4, Math.round(tipPx * 0.8)), // nudge away from the chevron tip
+                                    right: Math.max(4, Math.round(tipPx * 0.8)),
                                     top: 4,
                                     fontSize: 10,
                                     opacity: 0.8,
@@ -608,7 +654,6 @@ function VariantRow({
                           );
                         }
                       }
-                      acc.row += 1;
                     }
                     return acc.els;
                   })()}
