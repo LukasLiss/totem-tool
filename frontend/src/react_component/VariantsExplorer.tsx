@@ -146,6 +146,61 @@ function abbreviateFirstLetters(label?: string): string | undefined {
   return words.map((w) => w[0]).join("");
 }
 
+function consecutiveDedup(list: string[]): string[] {
+  const out: string[] = [];
+  for (const s of list) if (!out.length || out[out.length - 1] !== s) out.push(s);
+  return out;
+}
+
+function modeOf(arr: string[]): string | undefined {
+  if (!arr.length) return undefined;
+  const m = new Map<string, number>();
+  for (const a of arr) m.set(a, (m.get(a) ?? 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+}
+
+function activitiesFromSignature(sig?: string): string[] {
+  if (!sig) return [];
+  if (sig.includes("->") || sig.includes("→")) {
+    return sig.split(/(?:->|→)/).map(s => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function activitiesFromGraph(g: VariantGraph): string[] {
+  // representative activity per x-column (mode)
+  const byX = new Map<number, string[]>();
+  for (const n of g.nodes) {
+    if (!byX.has(n.x)) byX.set(n.x, []);
+    byX.get(n.x)!.push(n.activity);
+  }
+  const xs = [...byX.keys()].sort((a, b) => a - b);
+  const seq: string[] = [];
+  for (const x of xs) {
+    const m = modeOf(byX.get(x)!);
+    if (m) seq.push(m);
+  }
+  return seq;
+}
+
+/** Closed-summary rule:
+ * - ≤3: show all
+ * - =4: show first two, third, last (all four)
+ * - ≥5: first two, …, last
+ */
+function summarizeClosedVariant(v: Variant): string {
+  let seq = activitiesFromSignature(v.signature);
+  if (!seq.length) seq = activitiesFromGraph(v.graph);
+  seq = consecutiveDedup(seq);
+
+  const n = seq.length;
+  if (n === 0) return "";
+  if (n <= 3) return seq.join(" → ");
+  if (n === 4) return [seq[0], seq[1], seq[2], seq[3]].join(" → ");
+  return [seq[0], seq[1], "…", seq[n - 1]].join(" → ");
+}
+
+
 /* ========== shapes ========== */
 const chevronClip = (tipPx: number = 16): string =>
   `polygon(0 0,
@@ -367,10 +422,10 @@ function VariantRow({
   }, [pos]);
 
   const supportPct = totalSupport ? (v.support / totalSupport) : 0;
+  const closedSummary = useMemo(() => summarizeClosedVariant(v) || "—", [v]);
   const toggleType = (t: string) => setCollapsedTypes(prev => {
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
   });
-
   const colsCount = cols;
 
   // Count only actual lanes (no fake gap rows)
@@ -416,20 +471,33 @@ function VariantRow({
           </div>
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {expanded ? (
             <div
               style={{
-                fontSize: 12, color: UI.textSecondary, maxWidth: 350,
+                fontSize: 12, color: UI.textSecondary, maxWidth: 420,
                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
               }}
               title={v.signature}
             >
               signature: {v.signature}
             </div>
-            <Button variant="ghost" size="icon" title="Export (stub)">
-              <Download size={16} />
-            </Button>
-          </div>
+          ) : (
+            <div
+              style={{
+                fontSize: 12, color: UI.textSecondary, maxWidth: 420,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+              }}
+              title={closedSummary}
+            >
+              {closedSummary}
+            </div>
+          )}
+
+          <Button variant="ghost" size="icon" title="Export (stub)">
+            <Download size={16} />
+          </Button>
         </div>
+          </div>
       </CardHeader>
 
             {expanded && (
@@ -683,3 +751,4 @@ function gradientFor(
   const step = 100 / (colors.length - 1);
   return `linear-gradient(90deg, ${colors.map((c, i) => `${c} ${i * step}%`).join(", ")})`;
 }
+
