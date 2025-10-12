@@ -88,6 +88,24 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(totem, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @action(detail=True, methods=["get"])
+    def discover_mlpa(self, request, pk=None):
+        """API endpoint to perform MLPA discovery on a given event log.
+        It applies totem discovery first, then MLPA discovery."""
+        # the address would be like /api/eventlogs/{id}/discover_mlpa/ ?
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+            totem = totemDiscovery(ocel)
+            process_view = mlpaDiscovery(totem)
+            return Response(process_view, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
