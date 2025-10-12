@@ -20,9 +20,15 @@ dependencies = [
     "graphviz==0.21",
     "networkx==3.4.2",
     "polars==1.32.2",
-    "PuLP"==3.2.2,
+    "PuLP==3.2.2",
+    "pm4py==2.7.17.1",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/LukasLiss/totem-tool"
 "Bug Tracker" = "https://github.com/LukasLiss/totem-tool/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
