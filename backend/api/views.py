@@ -4,10 +4,10 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent
 from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
-
+from .serializers import DashboardComponentPolymorphicSerializer
 
 from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.ocvariants import find_variants, calculate_layout
