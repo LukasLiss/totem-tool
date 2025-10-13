@@ -1,5 +1,4 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -13,17 +12,18 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+import {
+  layoutOCDFG,
+  type DfgNode,
+  type DfgLink,
+} from '../utils/GraphLayouter';
+import {
+  backgroundForTypes,
+  mapTypesToColors,
+} from '../utils/objectColors';
+import OcdfgEdge from './OcdfgEdge';
+
 // Define specific types for the data we expect from the backend
-interface DfgNode {
-  id: string;
-  label: string;
-}
-
-interface DfgLink {
-  source: string;
-  target: string;
-}
-
 interface DfgData {
   dfg: {
     nodes: DfgNode[];
@@ -31,107 +31,12 @@ interface DfgData {
   };
 }
 
-const elk = new ELK();
-
-/**
- * Calculates the rank of each node based on its longest path from a source node.
- * This determines the horizontal layer for the layout.
- * @param nodes The list of nodes from the DFG.
- * @param links The list of links from the DFG.
- * @returns A Map where keys are node IDs and values are their calculated ranks.
- */
-function calculateNodeRanks(nodes: DfgNode[], links: DfgLink[]): Map<string, number> {
-  const ranks = new Map<string, number>();
-  const adj = new Map<string, string[]>();
-  const inDegree = new Map<string, number>();
-
-  // Initialize data structures for graph traversal
-  for (const node of nodes) {
-    adj.set(node.id, []);
-    inDegree.set(node.id, 0);
-  }
-
-  for (const link of links) {
-    adj.get(link.source)?.push(link.target);
-    inDegree.set(link.target, (inDegree.get(link.target) || 0) + 1);
-  }
-
-  // Find all source nodes (those with no incoming edges) to start the ranking
-  const queue = nodes.filter(node => inDegree.get(node.id) === 0);
-  for (const node of queue) {
-    ranks.set(node.id, 0); // Source nodes are rank 0
-  }
-  
-  // Process nodes in topological order to determine ranks
-  let head = 0;
-  while(head < queue.length) {
-    const u = queue[head++];
-    const uRank = ranks.get(u.id)!;
-
-    for (const v_id of adj.get(u.id) || []) {
-      const vRank = ranks.get(v_id) || 0;
-      // The rank of a node is the maximum rank of its predecessors plus one
-      ranks.set(v_id, Math.max(vRank, uRank + 1));
-
-      const vInDegree = inDegree.get(v_id)! - 1;
-      inDegree.set(v_id, vInDegree);
-      if (vInDegree === 0) {
-          const vNode = nodes.find(n => n.id === v_id);
-          if (vNode) queue.push(vNode);
-      }
-    }
-  }
-
-  // Handle any nodes that might be part of a cycle and were not reached
-  nodes.forEach(node => {
-    if (!ranks.has(node.id)) {
-      let maxPredecessorRank = -1;
-      links.forEach(link => {
-        if (link.target === node.id && ranks.has(link.source)) {
-          maxPredecessorRank = Math.max(maxPredecessorRank, ranks.get(link.source)!);
-        }
-      });
-      ranks.set(node.id, maxPredecessorRank + 1);
-    }
-  });
-
-  return ranks;
-}
-
-// --- Updated ELK Layout Function ---
-const getLayoutedElements = (nodes: Node[], edges: Edge[], ranks: Map<string, number>) => {
-  // Configure ELK for a layered, top-to-bottom layout
-  const elkOptions = {
-    'elk.algorithm': 'layered',
-    'elk.direction': 'DOWN',
-    'elk.layered.spacing.nodeNodeBetweenLayers': '120',
-    'elk.spacing.nodeNode': '100',
-  };
-
-  const graph = {
-    id: 'root',
-    layoutOptions: elkOptions,
-    children: nodes.map(node => ({
-      ...node,
-      width: 150,
-      height: 50,
-      // This is the key: assign each node to a horizontal "partition" based on its rank
-      'elk.partition': ranks.get(node.id) || 0,
-    })),
-    edges: edges,
-  };
-
-  return elk.layout(graph).then(g => ({
-    nodes: g.children!.map(n => ({ ...n, position: { x: n.x, y: n.y } })),
-    edges: g.edges || [],
-  })).catch(console.error);
-};
-
-
 function OCDFGVisualizer() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [typeColors, setTypeColors] = useState<Record<string, string>>({});
   const { fitView } = useReactFlow();
+  const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge }), []);
 
   const onNodesChange = useCallback((c) => setNodes((nds) => applyNodeChanges(c, nds)), []);
   const onEdgesChange = useCallback((c) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
@@ -142,55 +47,106 @@ function OCDFGVisualizer() {
       .then((data: DfgData) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
 
-        // 1. Calculate ranks before creating the visual nodes
-        const ranks = calculateNodeRanks(dfgNodes, dfgLinks);
+        const allTypes = Array.from(
+          new Set(dfgNodes.flatMap(node => node.types ?? [])),
+        );
+        const colors = mapTypesToColors(allTypes);
+        setTypeColors(colors);
+        const groupCounts: Record<string, number> = {};
+        dfgLinks.forEach(link => {
+          const key = `${link.source}->${link.target}`;
+          groupCounts[key] = (groupCounts[key] ?? 0) + 1;
+        });
+        const groupIndex: Record<string, number> = {};
 
         // Create standard React Flow nodes (no custom types)
         const initialNodes: Node[] = dfgNodes.map((node) => ({
           id: node.id,
-          data: { label: node.label || node.id },
-          position: { x: 0, y: 0 }, // Position will be set by ELK
+          data: { label: node.label || node.id, types: node.types ?? [], colors },
+          position: { x: 0, y: 0 }, // Position will be set by the layout manager
+          style: {
+            background: backgroundForTypes(node.types ?? [], colors),
+            color: '#0F172A',
+            border: '1px solid #E2E8F0',
+            borderRadius: 12,
+            padding: 14,
+            fontFamily: 'var(--font-primary, Inter, sans-serif)',
+            fontWeight: 500,
+            letterSpacing: '-0.01em',
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
+            minWidth: 180,
+          },
         }));
 
-        const initialEdges: Edge[] = dfgLinks.map((link, index) => ({
-          id: `e${index}-${link.source}-${link.target}`,
-          source: link.source,
-          target: link.target,
-          markerEnd: { type: 'arrowclosed', width: 20, height: 20, color: '#b1b1b7' },
-          style: { strokeWidth: 2, stroke: '#b1b1b7' },
-        }));
+        const initialEdges: Edge[] = dfgLinks.map((link, index) => {
+          const key = `${link.source}->${link.target}`;
+          const currentIndex = groupIndex[key] ?? 0;
+          groupIndex[key] = currentIndex + 1;
+          return {
+            id: `e${index}-${link.source}-${link.target}`,
+            source: link.source,
+            target: link.target,
+            type: 'ocdfg',
+            data: {
+              owners: link.owners ?? [],
+              colors,
+              parallelIndex: currentIndex,
+              parallelCount: groupCounts[key],
+            },
+          } as Edge;
+        });
 
-        // 2. Pass the ranks to the layout function to generate positions
-        getLayoutedElements(initialNodes, initialEdges, ranks).then(({ nodes, edges }) => {
+        // Pass the elements to the layout manager to generate positions
+        layoutOCDFG({
+          renderNodes: initialNodes,
+          renderEdges: initialEdges,
+          dfgNodes,
+          dfgLinks,
+        }).then(({ nodes, edges }) => {
           setNodes(nodes);
           setEdges(edges);
           window.requestAnimationFrame(() => fitView());
-        });
+        }).catch(console.error);
       })
       .catch(console.error);
   }, [fitView]);
   
-  // The relayout button also needs to calculate ranks
+  // The relayout button reuses the central layout manager
   const onLayout = useCallback(() => {
-    const currentDfgNodes = nodes.map(n => ({ id: n.id, label: n.data.label }));
-    const currentDfgLinks = edges.map(e => ({ source: e.source!, target: e.target! }));
-    const ranks = calculateNodeRanks(currentDfgNodes, currentDfgLinks);
-
-    getLayoutedElements(nodes, edges, ranks).then(({ nodes, edges }) => {
+    const currentDfgNodes: DfgNode[] = nodes.map(n => ({
+      id: n.id,
+      label: (n.data as { label?: string }).label ?? n.id,
+      types: (n.data as { types?: string[] }).types ?? [],
+    }));
+    const currentDfgLinks: DfgLink[] = edges.map(e => ({
+      source: e.source!,
+      target: e.target!,
+      owners: (e.data as { owners?: string[] })?.owners ?? [],
+    }));
+    layoutOCDFG({
+      renderNodes: nodes,
+      renderEdges: edges,
+      dfgNodes: currentDfgNodes,
+      dfgLinks: currentDfgLinks,
+    }).then(({ nodes, edges }) => {
         setNodes(nodes);
         setEdges(edges);
         window.requestAnimationFrame(() => fitView());
-    });
+    }).catch(console.error);
   }, [nodes, edges, fitView]);
 
   return (
-    <div style={{ height: 'calc(100vh - 50px)', width: '100%' }}>
+    <div style={{ height: 'calc(100vh - 50px)', width: '100%', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        edgeTypes={edgeTypes}
         fitView
+        proOptions={{ hideAttribution: true }}
+        minZoom={0.25}
+        maxZoom={2.5}
       >
         <Controls />
         <Background />
@@ -198,9 +154,51 @@ function OCDFGVisualizer() {
           <button onClick={onLayout}>Relayout</button>
         </Panel>
       </ReactFlow>
+
+      {Object.keys(typeColors).length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            background: 'rgba(255,255,255,0.87)',
+            border: '1px solid #E2E8F0',
+            borderRadius: 12,
+            padding: '12px 16px',
+            boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
+            backdropFilter: 'blur(12px)',
+            fontFamily: 'var(--font-primary, Inter, sans-serif)',
+            maxHeight: '50%',
+            overflowY: 'auto',
+            minWidth: 240,
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: 14, color: '#0F172A', marginBottom: 8 }}>
+            Object Types
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {Object.entries(typeColors).map(([type, color]) => (
+              <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span
+                  aria-hidden
+                  style={{
+                    display: 'inline-block',
+                    width: 18,
+                    height: 18,
+                    borderRadius: '50%',
+                    background: color,
+                    border: '1px solid rgba(15, 23, 42, 0.12)',
+                    boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                  }}
+                />
+                <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 export default OCDFGVisualizer;
-
