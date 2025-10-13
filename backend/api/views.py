@@ -132,48 +132,9 @@ def OCDFGViewSet(request):
                     "Handling Unit",
                     "Truck"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Load Truck"
-            },
-            {
-                "label": "Weigh",
-                "types": [
-                    "Container",
-                    "Forklift"
-                ],
-                "id": "Weigh"
-            },
-            {
-                "label": "Drive to Terminal",
-                "types": [
-                    "Container",
-                    "Truck"
-                ],
-                "id": "Drive to Terminal"
-            },
-            {
-                "label": "Reschedule Container",
-                "types": [
-                    "Container",
-                    "Transport Document",
-                    "Vehicle"
-                ],
-                "id": "Reschedule Container"
-            },
-            {
-                "label": "Pick Up Empty Container",
-                "types": [
-                    "Container"
-                ],
-                "id": "Pick Up Empty Container"
-            },
-            {
-                "label": "Depart",
-                "types": [
-                    "Container",
-                    "Transport Document",
-                    "Vehicle"
-                ],
-                "id": "Depart"
             },
             {
                 "label": "Load to Vehicle",
@@ -182,23 +143,9 @@ def OCDFGViewSet(request):
                     "Forklift",
                     "Vehicle"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Load to Vehicle"
-            },
-            {
-                "label": "Order Empty Containers",
-                "types": [
-                    "Container",
-                    "Transport Document"
-                ],
-                "id": "Order Empty Containers"
-            },
-            {
-                "label": "Bring to Loading Bay",
-                "types": [
-                    "Container",
-                    "Forklift"
-                ],
-                "id": "Bring to Loading Bay"
             },
             {
                 "label": "Place in Stock",
@@ -206,7 +153,107 @@ def OCDFGViewSet(request):
                     "Container",
                     "Forklift"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Place in Stock"
+            },
+            {
+                "label": "Depart",
+                "types": [
+                    "Container",
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Depart"
+            },
+            {
+                "label": "Bring to Loading Bay",
+                "types": [
+                    "Container",
+                    "Forklift"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Bring to Loading Bay"
+            },
+            {
+                "label": "Reschedule Container",
+                "types": [
+                    "Container",
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Reschedule Container"
+            },
+            {
+                "label": "Pick Up Empty Container",
+                "types": [
+                    "Container"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Pick Up Empty Container"
+            },
+            {
+                "label": "Drive to Terminal",
+                "types": [
+                    "Container",
+                    "Truck"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Drive to Terminal"
+            },
+            {
+                "label": "Order Empty Containers",
+                "types": [
+                    "Container",
+                    "Transport Document"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Order Empty Containers"
+            },
+            {
+                "label": "Weigh",
+                "types": [
+                    "Container",
+                    "Forklift"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Weigh"
+            },
+            {
+                "label": "Container start",
+                "types": [
+                    "Container"
+                ],
+                "role": "start",
+                "object_type": "Container",
+                "id": "__start__:Container"
+            },
+            {
+                "label": "Container end",
+                "types": [
+                    "Container"
+                ],
+                "role": "end",
+                "object_type": "Container",
+                "id": "__end__:Container"
+            },
+            {
+                "label": "Register Customer Order",
+                "types": [
+                    "Customer Order"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Register Customer Order"
             },
             {
                 "label": "Create Transport Document",
@@ -214,21 +261,72 @@ def OCDFGViewSet(request):
                     "Customer Order",
                     "Transport Document"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Create Transport Document"
             },
             {
-                "label": "Register Customer Order",
+                "label": "Customer Order start",
                 "types": [
                     "Customer Order"
                 ],
-                "id": "Register Customer Order"
+                "role": "start",
+                "object_type": "Customer Order",
+                "id": "__start__:Customer Order"
+            },
+            {
+                "label": "Customer Order end",
+                "types": [
+                    "Customer Order"
+                ],
+                "role": "end",
+                "object_type": "Customer Order",
+                "id": "__end__:Customer Order"
+            },
+            {
+                "label": "Forklift start",
+                "types": [
+                    "Forklift"
+                ],
+                "role": "start",
+                "object_type": "Forklift",
+                "id": "__start__:Forklift"
+            },
+            {
+                "label": "Forklift end",
+                "types": [
+                    "Forklift"
+                ],
+                "role": "end",
+                "object_type": "Forklift",
+                "id": "__end__:Forklift"
             },
             {
                 "label": "Collect Goods",
                 "types": [
                     "Handling Unit"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Collect Goods"
+            },
+            {
+                "label": "Handling Unit start",
+                "types": [
+                    "Handling Unit"
+                ],
+                "role": "start",
+                "object_type": "Handling Unit",
+                "id": "__start__:Handling Unit"
+            },
+            {
+                "label": "Handling Unit end",
+                "types": [
+                    "Handling Unit"
+                ],
+                "role": "end",
+                "object_type": "Handling Unit",
+                "id": "__end__:Handling Unit"
             },
             {
                 "label": "Book Vehicles",
@@ -236,7 +334,63 @@ def OCDFGViewSet(request):
                     "Transport Document",
                     "Vehicle"
                 ],
+                "role": None,
+                "object_type": None,
                 "id": "Book Vehicles"
+            },
+            {
+                "label": "Transport Document start",
+                "types": [
+                    "Transport Document"
+                ],
+                "role": "start",
+                "object_type": "Transport Document",
+                "id": "__start__:Transport Document"
+            },
+            {
+                "label": "Transport Document end",
+                "types": [
+                    "Transport Document"
+                ],
+                "role": "end",
+                "object_type": "Transport Document",
+                "id": "__end__:Transport Document"
+            },
+            {
+                "label": "Truck start",
+                "types": [
+                    "Truck"
+                ],
+                "role": "start",
+                "object_type": "Truck",
+                "id": "__start__:Truck"
+            },
+            {
+                "label": "Truck end",
+                "types": [
+                    "Truck"
+                ],
+                "role": "end",
+                "object_type": "Truck",
+                "id": "__end__:Truck"
+            },
+            {
+                "label": "Vehicle start",
+                "types": [
+                    "Vehicle"
+                ],
+                "role": "start",
+                "object_type": "Vehicle",
+                "id": "__start__:Vehicle"
+            },
+            {
+                "label": "Vehicle end",
+                "types": [
+                    "Vehicle"
+                ],
+                "role": "end",
+                "object_type": "Vehicle",
+                "id": "__end__:Vehicle"
             }
         ],
         "links": [
@@ -268,132 +422,39 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
-                    "Container": 1814,
-                    "Forklift": 1814
+                    "Container": 5
                 },
-                "weight": 3628,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
-                "source": "Weigh",
-                "target": "Place in Stock"
-            },
-            {
-                "weights": {
-                    "Container": 175,
-                    "Forklift": 175
-                },
-                "weight": 350,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
-                "source": "Weigh",
-                "target": "Bring to Loading Bay"
-            },
-            {
-                "weights": {
-                    "Container": 1989
-                },
-                "weight": 1989,
+                "weight": 5,
                 "owners": [
                     "Container"
                 ],
-                "source": "Drive to Terminal",
-                "target": "Weigh"
+                "role": "end",
+                "source": "Load Truck",
+                "target": "__end__:Container"
             },
             {
                 "weights": {
-                    "Truck": 1988
+                    "Handling Unit": 10553
                 },
-                "weight": 1988,
+                "weight": 10553,
+                "owners": [
+                    "Handling Unit"
+                ],
+                "role": "end",
+                "source": "Load Truck",
+                "target": "__end__:Handling Unit"
+            },
+            {
+                "weights": {
+                    "Truck": 5
+                },
+                "weight": 5,
                 "owners": [
                     "Truck"
                 ],
-                "source": "Drive to Terminal",
-                "target": "Load Truck"
-            },
-            {
-                "weights": {
-                    "Container": 35,
-                    "Vehicle": 7
-                },
-                "weight": 42,
-                "owners": [
-                    "Container",
-                    "Vehicle"
-                ],
-                "source": "Reschedule Container",
-                "target": "Load to Vehicle"
-            },
-            {
-                "weights": {
-                    "Transport Document": 2,
-                    "Vehicle": 16
-                },
-                "weight": 18,
-                "owners": [
-                    "Transport Document",
-                    "Vehicle"
-                ],
-                "source": "Reschedule Container",
-                "target": "Reschedule Container"
-            },
-            {
-                "weights": {
-                    "Transport Document": 33
-                },
-                "weight": 33,
-                "owners": [
-                    "Transport Document"
-                ],
-                "source": "Reschedule Container",
-                "target": "Depart"
-            },
-            {
-                "weights": {
-                    "Vehicle": 12
-                },
-                "weight": 12,
-                "owners": [
-                    "Vehicle"
-                ],
-                "source": "Reschedule Container",
-                "target": "Book Vehicles"
-            },
-            {
-                "weights": {
-                    "Container": 1994
-                },
-                "weight": 1994,
-                "owners": [
-                    "Container"
-                ],
-                "source": "Pick Up Empty Container",
-                "target": "Load Truck"
-            },
-            {
-                "weights": {
-                    "Transport Document": 160
-                },
-                "weight": 160,
-                "owners": [
-                    "Transport Document"
-                ],
-                "source": "Depart",
-                "target": "Depart"
-            },
-            {
-                "weights": {
-                    "Transport Document": 21
-                },
-                "weight": 21,
-                "owners": [
-                    "Transport Document"
-                ],
-                "source": "Depart",
-                "target": "Reschedule Container"
+                "role": "end",
+                "source": "Load Truck",
+                "target": "__end__:Truck"
             },
             {
                 "weights": {
@@ -410,14 +471,15 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
-                    "Forklift": 1352
+                    "Container": 10
                 },
-                "weight": 1352,
+                "weight": 10,
                 "owners": [
-                    "Forklift"
+                    "Container"
                 ],
+                "role": "end",
                 "source": "Load to Vehicle",
-                "target": "Bring to Loading Bay"
+                "target": "__end__:Container"
             },
             {
                 "weights": {
@@ -445,6 +507,29 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
+                    "Forklift": 1352
+                },
+                "weight": 1352,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Load to Vehicle",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Forklift": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Forklift"
+                ],
+                "role": "end",
+                "source": "Load to Vehicle",
+                "target": "__end__:Forklift"
+            },
+            {
+                "weights": {
                     "Vehicle": 2
                 },
                 "weight": 2,
@@ -453,85 +538,6 @@ def OCDFGViewSet(request):
                 ],
                 "source": "Load to Vehicle",
                 "target": "Book Vehicles"
-            },
-            {
-                "weights": {
-                    "Container": 1995
-                },
-                "weight": 1995,
-                "owners": [
-                    "Container"
-                ],
-                "source": "Order Empty Containers",
-                "target": "Pick Up Empty Container"
-            },
-            {
-                "weights": {
-                    "Transport Document": 13
-                },
-                "weight": 13,
-                "owners": [
-                    "Transport Document"
-                ],
-                "source": "Order Empty Containers",
-                "target": "Reschedule Container"
-            },
-            {
-                "weights": {
-                    "Transport Document": 561
-                },
-                "weight": 561,
-                "owners": [
-                    "Transport Document"
-                ],
-                "source": "Order Empty Containers",
-                "target": "Depart"
-            },
-            {
-                "weights": {
-                    "Container": 1931,
-                    "Forklift": 1933
-                },
-                "weight": 3864,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
-                "source": "Bring to Loading Bay",
-                "target": "Load to Vehicle"
-            },
-            {
-                "weights": {
-                    "Container": 36
-                },
-                "weight": 36,
-                "owners": [
-                    "Container"
-                ],
-                "source": "Bring to Loading Bay",
-                "target": "Reschedule Container"
-            },
-            {
-                "weights": {
-                    "Forklift": 30
-                },
-                "weight": 30,
-                "owners": [
-                    "Forklift"
-                ],
-                "source": "Bring to Loading Bay",
-                "target": "Weigh"
-            },
-            {
-                "weights": {
-                    "Forklift": 4
-                },
-                "weight": 4,
-                "owners": [
-                    "Forklift"
-                ],
-                "source": "Bring to Loading Bay",
-                "target": "Bring to Loading Bay"
             },
             {
                 "weights": {
@@ -545,6 +551,18 @@ def OCDFGViewSet(request):
                 ],
                 "source": "Place in Stock",
                 "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Container": 20
+                },
+                "weight": 20,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Place in Stock",
+                "target": "__end__:Container"
             },
             {
                 "weights": {
@@ -570,14 +588,355 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
-                    "Transport Document": 594
+                    "Container": 1956
                 },
-                "weight": 594,
+                "weight": 1956,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Depart",
+                "target": "__end__:Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 21
+                },
+                "weight": 21,
                 "owners": [
                     "Transport Document"
                 ],
-                "source": "Create Transport Document",
+                "source": "Depart",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 160
+                },
+                "weight": 160,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Depart",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Transport Document": 573
+                },
+                "weight": 573,
+                "owners": [
+                    "Transport Document"
+                ],
+                "role": "end",
+                "source": "Depart",
+                "target": "__end__:Transport Document"
+            },
+            {
+                "weights": {
+                    "Vehicle": 127
+                },
+                "weight": 127,
+                "owners": [
+                    "Vehicle"
+                ],
+                "role": "end",
+                "source": "Depart",
+                "target": "__end__:Vehicle"
+            },
+            {
+                "weights": {
+                    "Container": 36
+                },
+                "weight": 36,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Container": 1931,
+                    "Forklift": 1933
+                },
+                "weight": 3864,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Container": 2
+                },
+                "weight": 2,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Bring to Loading Bay",
+                "target": "__end__:Container"
+            },
+            {
+                "weights": {
+                    "Forklift": 4
+                },
+                "weight": 4,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Forklift": 30
+                },
+                "weight": 30,
+                "owners": [
+                    "Forklift"
+                ],
+                "source": "Bring to Loading Bay",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Forklift": 2
+                },
+                "weight": 2,
+                "owners": [
+                    "Forklift"
+                ],
+                "role": "end",
+                "source": "Bring to Loading Bay",
+                "target": "__end__:Forklift"
+            },
+            {
+                "weights": {
+                    "Container": 35,
+                    "Vehicle": 7
+                },
+                "weight": 42,
+                "owners": [
+                    "Container",
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
+                "target": "Load to Vehicle"
+            },
+            {
+                "weights": {
+                    "Container": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Reschedule Container",
+                "target": "__end__:Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 33
+                },
+                "weight": 33,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Reschedule Container",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Transport Document": 2,
+                    "Vehicle": 16
+                },
+                "weight": 18,
+                "owners": [
+                    "Transport Document",
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Transport Document"
+                ],
+                "role": "end",
+                "source": "Reschedule Container",
+                "target": "__end__:Transport Document"
+            },
+            {
+                "weights": {
+                    "Vehicle": 12
+                },
+                "weight": 12,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Reschedule Container",
                 "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Container": 1994
+                },
+                "weight": 1994,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Pick Up Empty Container",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Container": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Pick Up Empty Container",
+                "target": "__end__:Container"
+            },
+            {
+                "weights": {
+                    "Container": 1989
+                },
+                "weight": 1989,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Drive to Terminal",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
+                    "Truck": 1988
+                },
+                "weight": 1988,
+                "owners": [
+                    "Truck"
+                ],
+                "source": "Drive to Terminal",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Truck": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Truck"
+                ],
+                "role": "end",
+                "source": "Drive to Terminal",
+                "target": "__end__:Truck"
+            },
+            {
+                "weights": {
+                    "Container": 1995
+                },
+                "weight": 1995,
+                "owners": [
+                    "Container"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Pick Up Empty Container"
+            },
+            {
+                "weights": {
+                    "Container": 4
+                },
+                "weight": 4,
+                "owners": [
+                    "Container"
+                ],
+                "role": "end",
+                "source": "Order Empty Containers",
+                "target": "__end__:Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 13
+                },
+                "weight": 13,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Reschedule Container"
+            },
+            {
+                "weights": {
+                    "Transport Document": 561
+                },
+                "weight": 561,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Order Empty Containers",
+                "target": "Depart"
+            },
+            {
+                "weights": {
+                    "Transport Document": 19
+                },
+                "weight": 19,
+                "owners": [
+                    "Transport Document"
+                ],
+                "role": "end",
+                "source": "Order Empty Containers",
+                "target": "__end__:Transport Document"
+            },
+            {
+                "weights": {
+                    "Container": 1814,
+                    "Forklift": 1814
+                },
+                "weight": 3628,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Weigh",
+                "target": "Place in Stock"
+            },
+            {
+                "weights": {
+                    "Container": 175,
+                    "Forklift": 175
+                },
+                "weight": 350,
+                "owners": [
+                    "Container",
+                    "Forklift"
+                ],
+                "source": "Weigh",
+                "target": "Bring to Loading Bay"
+            },
+            {
+                "weights": {
+                    "Container": 1999
+                },
+                "weight": 1999,
+                "owners": [
+                    "Container"
+                ],
+                "role": "start",
+                "source": "__start__:Container",
+                "target": "Order Empty Containers"
             },
             {
                 "weights": {
@@ -592,6 +951,65 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
+                    "Customer Order": 6
+                },
+                "weight": 6,
+                "owners": [
+                    "Customer Order"
+                ],
+                "role": "end",
+                "source": "Register Customer Order",
+                "target": "__end__:Customer Order"
+            },
+            {
+                "weights": {
+                    "Customer Order": 594
+                },
+                "weight": 594,
+                "owners": [
+                    "Customer Order"
+                ],
+                "role": "end",
+                "source": "Create Transport Document",
+                "target": "__end__:Customer Order"
+            },
+            {
+                "weights": {
+                    "Transport Document": 594
+                },
+                "weight": 594,
+                "owners": [
+                    "Transport Document"
+                ],
+                "source": "Create Transport Document",
+                "target": "Book Vehicles"
+            },
+            {
+                "weights": {
+                    "Customer Order": 600
+                },
+                "weight": 600,
+                "owners": [
+                    "Customer Order"
+                ],
+                "role": "start",
+                "source": "__start__:Customer Order",
+                "target": "Register Customer Order"
+            },
+            {
+                "weights": {
+                    "Forklift": 3
+                },
+                "weight": 3,
+                "owners": [
+                    "Forklift"
+                ],
+                "role": "start",
+                "source": "__start__:Forklift",
+                "target": "Weigh"
+            },
+            {
+                "weights": {
                     "Handling Unit": 10553
                 },
                 "weight": 10553,
@@ -603,6 +1021,18 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
+                    "Handling Unit": 10553
+                },
+                "weight": 10553,
+                "owners": [
+                    "Handling Unit"
+                ],
+                "role": "start",
+                "source": "__start__:Handling Unit",
+                "target": "Collect Goods"
+            },
+            {
+                "weights": {
                     "Transport Document": 593
                 },
                 "weight": 593,
@@ -611,6 +1041,29 @@ def OCDFGViewSet(request):
                 ],
                 "source": "Book Vehicles",
                 "target": "Order Empty Containers"
+            },
+            {
+                "weights": {
+                    "Transport Document": 1
+                },
+                "weight": 1,
+                "owners": [
+                    "Transport Document"
+                ],
+                "role": "end",
+                "source": "Book Vehicles",
+                "target": "__end__:Transport Document"
+            },
+            {
+                "weights": {
+                    "Vehicle": 122
+                },
+                "weight": 122,
+                "owners": [
+                    "Vehicle"
+                ],
+                "source": "Book Vehicles",
+                "target": "Load to Vehicle"
             },
             {
                 "weights": {
@@ -636,14 +1089,39 @@ def OCDFGViewSet(request):
             },
             {
                 "weights": {
-                    "Vehicle": 122
+                    "Transport Document": 594
                 },
-                "weight": 122,
+                "weight": 594,
+                "owners": [
+                    "Transport Document"
+                ],
+                "role": "start",
+                "source": "__start__:Transport Document",
+                "target": "Create Transport Document"
+            },
+            {
+                "weights": {
+                    "Truck": 6
+                },
+                "weight": 6,
+                "owners": [
+                    "Truck"
+                ],
+                "role": "start",
+                "source": "__start__:Truck",
+                "target": "Load Truck"
+            },
+            {
+                "weights": {
+                    "Vehicle": 127
+                },
+                "weight": 127,
                 "owners": [
                     "Vehicle"
                 ],
-                "source": "Book Vehicles",
-                "target": "Load to Vehicle"
+                "role": "start",
+                "source": "__start__:Vehicle",
+                "target": "Book Vehicles"
             }
         ]
     })
@@ -678,4 +1156,3 @@ def OCDFGViewSet(request):
     
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-

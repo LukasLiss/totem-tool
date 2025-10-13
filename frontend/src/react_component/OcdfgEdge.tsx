@@ -55,49 +55,40 @@ const OcdfgEdge = memo(function OcdfgEdge({
 
   const path = useMemo(() => roundedPath(polyline, 30), [polyline]);
   const strokeBase = Math.max(6, owners.length * 3);
-  const arrowColor = owners[owners.length - 1] === 'default'
-    ? DEFAULT_COLOR
-    : (colorMap[owners[owners.length - 1]] ?? DEFAULT_COLOR);
-  const markerId = `ocdfg-arrow-${id}`;
-  const markerStartId = `ocdfg-arrow-start-${id}`;
+  const tailOwner = owners[0];
+  const headOwner = owners[owners.length - 1];
+  const tailColor = tailOwner && tailOwner !== 'default'
+    ? (colorMap[tailOwner] ?? '#2563EB')
+    : '#2563EB';
+  const headColor = headOwner && headOwner !== 'default'
+    ? (colorMap[headOwner] ?? '#2563EB')
+    : '#2563EB';
+  const sanitizedId = useMemo(
+    () => id.replace(/[^a-zA-Z0-9_-]/g, '_'),
+    [id],
+  );
+  const markerId = `ocdfg-arrow-${sanitizedId}`;
+  const markerScale = Math.min(2.2, (strokeBase + 6) / 8);
 
   return (
     <g className="ocdfg-edge">
       <defs>
         <marker
           id={markerId}
-          viewBox="0 0 24 24"
-          refX={20}
-          refY={12}
-          markerWidth={22}
-          markerHeight={22}
+          viewBox="0 0 20 20"
+          refX={16}
+          refY={10}
+          markerWidth={20 * markerScale}
+          markerHeight={20 * markerScale}
           orient="auto"
           markerUnits="userSpaceOnUse"
         >
           <path
-            d="M2,4 L20,12 L2,20 z"
-            fill={arrowColor}
+            d="M2,3 L16,10 L2,17 z"
+            fill={headColor}
             stroke="#F8FAFC"
-            strokeWidth={2}
+            strokeWidth={Math.max(1.2, markerScale)}
             opacity={0.95}
-          />
-        </marker>
-        <marker
-          id={markerStartId}
-          viewBox="0 0 24 24"
-          refX={4}
-          refY={12}
-          markerWidth={18}
-          markerHeight={18}
-          orient="auto"
-          markerUnits="userSpaceOnUse"
-        >
-          <path
-            d="M22,4 L4,12 L22,20 z"
-            fill={arrowColor}
-            stroke="#F1F5F9"
-            strokeWidth={1.5}
-            opacity={0.45}
           />
         </marker>
       </defs>
@@ -113,7 +104,9 @@ const OcdfgEdge = memo(function OcdfgEdge({
       />
 
       {owners.map((owner, index) => {
-        const color = owner === 'default' ? DEFAULT_COLOR : (colorMap[owner] ?? DEFAULT_COLOR);
+        const color = owner === 'default'
+          ? (index === owners.length - 1 ? headColor : tailColor)
+          : (colorMap[owner] ?? headColor);
         const width = Math.max(2.5, strokeBase / owners.length);
         const dash = owners.length > 1 ? '10 7' : undefined;
         const dashOffset = owners.length > 1 ? index * 6 : undefined;
@@ -128,7 +121,6 @@ const OcdfgEdge = memo(function OcdfgEdge({
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
             strokeLinejoin="round"
-            markerStart={index === 0 ? `url(#${markerStartId})` : undefined}
             markerEnd={`url(#${markerId})`}
           />
         );
