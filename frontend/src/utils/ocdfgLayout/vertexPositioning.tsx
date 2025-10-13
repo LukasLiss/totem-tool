@@ -4,6 +4,7 @@ import type { LayoutConfig } from './LayoutState';
 type CoordMap = { [key: string]: number | undefined };
 
 export function positionVertices(layout: OCDFGLayout, config: LayoutConfig) {
+  layout.direction = config.direction;
   markType1Conflicts(layout);
   const candidateLayouts: CoordMap[] = [];
 
