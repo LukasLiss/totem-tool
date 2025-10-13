@@ -17,11 +17,7 @@ import {
   type DfgNode,
   type DfgLink,
 } from '../utils/GraphLayouter';
-import {
-  backgroundForTypes,
-  mapTypesToColors,
-  textColorForBackground,
-} from '../utils/objectColors';
+import { mapTypesToColors } from '../utils/objectColors';
 import OcdfgEdge from './OcdfgEdge';
 
 // Define specific types for the data we expect from the backend
@@ -61,32 +57,23 @@ function OCDFGVisualizer() {
         const groupIndex: Record<string, number> = {};
 
         // Create standard React Flow nodes (no custom types)
-        const initialNodes: Node[] = dfgNodes.map((node) => {
-          const background = backgroundForTypes(node.types ?? [], colors);
-          const textColor = textColorForBackground(background);
-          const textShadow = textColor.toLowerCase() === '#ffffff'
-            ? '0 1px 2px rgba(15, 23, 42, 0.4)'
-            : '0 1px 2px rgba(255, 255, 255, 0.18)';
-
-          return {
-            id: node.id,
-            data: { label: node.label || node.id, types: node.types ?? [], colors },
-            position: { x: 0, y: 0 }, // Position will be set by the layout manager
-            style: {
-              background,
-              color: textColor,
-              textShadow,
-              border: '1px solid #E2E8F0',
-              borderRadius: 12,
-              padding: 14,
-              fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              fontWeight: 500,
-              letterSpacing: '-0.01em',
-              boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
-              minWidth: 180,
-            },
-          };
-        });
+        const initialNodes: Node[] = dfgNodes.map((node) => ({
+          id: node.id,
+          data: { label: node.label || node.id, types: node.types ?? [], colors },
+          position: { x: 0, y: 0 }, // Position will be set by the layout manager
+          style: {
+            background: '#FFFFFF',
+            color: '#000000',
+            border: '1px solid #000000',
+            borderRadius: 12,
+            padding: 14,
+            fontFamily: 'var(--font-primary, Inter, sans-serif)',
+            fontWeight: 500,
+            letterSpacing: '-0.01em',
+            boxShadow: 'none',
+            minWidth: 180,
+          },
+        }));
 
         const initialEdges: Edge[] = dfgLinks.map((link, index) => {
           const key = `${link.source}->${link.target}`;
