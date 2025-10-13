@@ -1,5 +1,5 @@
-import { ACTIVITY_TYPE, DUMMY_TYPE, OCDFGLayout } from './LayoutState';
-import type { LayoutConfig } from './LayoutState';
+import { DUMMY_TYPE, OCDFGLayout } from './LayoutState';
+import type { LayoutConfig, LayoutNode } from './LayoutState';
 
 type CoordMap = { [key: string]: number | undefined };
 
@@ -202,10 +202,10 @@ function placeBlock(
         sink[nodeId] = sink[u];
       }
       if (sink[nodeId] !== sink[u]) {
-        const delta = minimalSeparation(layout, config);
+        const delta = minimalSeparation(layout, config, nodeId, u);
         shift[sink[u]] = Math.min(shift[sink[u]], (x[nodeId] ?? 0) - (x[u] ?? 0) - delta);
       } else {
-        const delta = minimalSeparation(layout, config);
+        const delta = minimalSeparation(layout, config, nodeId, u);
         x[nodeId] = Math.max(x[nodeId] ?? 0, (x[u] ?? 0) + delta);
       }
     }
@@ -213,11 +213,103 @@ function placeBlock(
   } while (w !== nodeId);
 }
 
-function minimalSeparation(layout: OCDFGLayout, config: LayoutConfig) {
-  const width = config.direction === 'TB' ? config.activityWidth : config.activityHeight;
-  const dummySize =
-    config.direction === 'TB' ? config.dummyWidth : config.dummyHeight;
-  return config.vertexSep + Math.max(width, dummySize);
+function minimalSeparation(
+  layout: OCDFGLayout,
+  config: LayoutConfig,
+  currentId?: string,
+  previousId?: string,
+) {
+  const currentNode = currentId ? layout.nodes[currentId] : undefined;
+  const previousNode = previousId ? layout.nodes[previousId] : undefined;
+  const currentHalf = nodePrimaryHalf(currentNode, config);
+  const previousHalf = nodePrimaryHalf(previousNode, config);
+  return config.vertexSep + currentHalf + previousHalf;
+}
+
+function fallbackPrimarySize(node: LayoutNode | undefined, config: LayoutConfig) {
+  const isDummy = node?.type === DUMMY_TYPE;
+  if (config.direction === 'TB') {
+    return isDummy ? config.dummyWidth : config.activityWidth;
+  }
+  return isDummy ? config.dummyHeight : config.activityHeight;
+}
+
+function fallbackSecondarySize(node: LayoutNode | undefined, config: LayoutConfig) {
+  const isDummy = node?.type === DUMMY_TYPE;
+  if (config.direction === 'TB') {
+    return isDummy ? config.dummyHeight : config.activityHeight;
+  }
+  return isDummy ? config.dummyWidth : config.activityWidth;
+}
+
+function nodePrimarySize(node: LayoutNode | undefined, config: LayoutConfig) {
+  const fallback = fallbackPrimarySize(node, config);
+  if (!node) return fallback;
+  const rawSize = config.direction === 'TB' ? node.width : node.height;
+  return rawSize && rawSize > 0 ? rawSize : fallback;
+}
+
+function nodeSecondarySize(node: LayoutNode | undefined, config: LayoutConfig) {
+  const fallback = fallbackSecondarySize(node, config);
+  if (!node) return fallback;
+  const rawSize = config.direction === 'TB' ? node.height : node.width;
+  return rawSize && rawSize > 0 ? rawSize : fallback;
+}
+
+function nodePrimaryHalf(node: LayoutNode | undefined, config: LayoutConfig) {
+  return nodePrimarySize(node, config) / 2;
+}
+
+function nodeSecondaryHalf(node: LayoutNode | undefined, config: LayoutConfig) {
+  return nodeSecondarySize(node, config) / 2;
+}
+
+function getPrimaryCoord(node: LayoutNode, config: LayoutConfig): number | undefined {
+  return config.direction === 'TB' ? node.x : node.y;
+}
+
+function setPrimaryCoord(node: LayoutNode, config: LayoutConfig, value: number) {
+  if (config.direction === 'TB') {
+    node.x = value;
+  } else {
+    node.y = value;
+  }
+}
+
+function enforceLayerPrimarySpacing(
+  layout: OCDFGLayout,
+  layerIds: string[],
+  config: LayoutConfig,
+) {
+  const nodes = layerIds
+    .map((id) => layout.nodes[id])
+    .filter((node): node is LayoutNode => Boolean(node))
+    .filter((node) => getPrimaryCoord(node, config) !== undefined);
+
+  nodes.sort((a, b) => {
+    const aCoord = getPrimaryCoord(a, config) ?? 0;
+    const bCoord = getPrimaryCoord(b, config) ?? 0;
+    return aCoord - bCoord;
+  });
+
+  let previousRight = config.borderPadding - config.vertexSep;
+
+  nodes.forEach((node, index) => {
+    const primary = getPrimaryCoord(node, config);
+    if (primary === undefined) return;
+
+    const half = nodePrimaryHalf(node, config);
+    const left = primary - half;
+    const minLeft = index === 0 ? config.borderPadding : previousRight + config.vertexSep;
+
+    if (left < minLeft) {
+      const shiftedCenter = minLeft + half;
+      setPrimaryCoord(node, config, shiftedCenter);
+      previousRight = shiftedCenter + half;
+    } else {
+      previousRight = primary + half;
+    }
+  });
 }
 
 function alignAssignments(layouts: CoordMap[]) {
@@ -258,23 +350,17 @@ function setCoordinates(
   let accumulated = config.borderPadding;
 
   layering.forEach((layer, layerIndex) => {
-    let halfLayerSize = 0;
+    let maxSecondaryHalf = 0;
     layer.forEach((nodeId) => {
       const node = layout.nodes[nodeId];
       if (!node) return;
-      const halfSize =
-        node.type === ACTIVITY_TYPE
-          ? config.direction === 'TB'
-            ? config.activityHeight / 2
-            : config.activityWidth / 2
-          : config.direction === 'TB'
-            ? config.dummyHeight / 2
-            : config.dummyWidth / 2;
-      halfLayerSize = Math.max(halfLayerSize, halfSize);
+      maxSecondaryHalf = Math.max(maxSecondaryHalf, nodeSecondaryHalf(node, config));
     });
-    layerSizes.push({ layer: layerIndex, size: halfLayerSize * 2 });
+    layerSizes.push({ layer: layerIndex, size: maxSecondaryHalf * 2 });
 
-    const baseCoord = accumulated + halfLayerSize;
+    const baseCoord = accumulated + maxSecondaryHalf;
+    let previousPrimaryCenter: number | undefined;
+    let previousPrimaryHalf = 0;
 
     layer.forEach((nodeId) => {
       const candidates = layouts
@@ -292,23 +378,29 @@ function setCoordinates(
       const node = layout.nodes[nodeId];
       if (!node) return;
 
-      const nodeHalf =
-        node.type === ACTIVITY_TYPE
-          ? config.direction === 'TB'
-            ? config.activityHeight / 2
-            : config.activityWidth / 2
-          : config.direction === 'TB'
-            ? config.dummyHeight / 2
-            : config.dummyWidth / 2;
-
+      const primaryHalf = nodePrimaryHalf(node, config);
+      const secondaryHalf = nodeSecondaryHalf(node, config);
       let primary = median + config.borderPadding;
+      const minPrimary = config.borderPadding + primaryHalf;
+      if (primary < minPrimary) {
+        primary = minPrimary;
+      }
+
+      if (previousPrimaryCenter !== undefined) {
+        const requiredSpacing = previousPrimaryHalf + primaryHalf + config.vertexSep;
+        const actualSpacing = primary - previousPrimaryCenter;
+        if (actualSpacing < requiredSpacing) {
+          primary = previousPrimaryCenter + requiredSpacing;
+        }
+      }
+
       let secondary = baseCoord;
 
       if (node.type === DUMMY_TYPE) {
         if (node.upper && layout.nodes[node.upper]?.type !== DUMMY_TYPE) {
-          secondary = baseCoord - halfLayerSize + nodeHalf;
+          secondary = baseCoord - maxSecondaryHalf + secondaryHalf;
         } else if (node.lower && layout.nodes[node.lower]?.type !== DUMMY_TYPE) {
-          secondary = baseCoord + halfLayerSize - nodeHalf;
+          secondary = baseCoord + maxSecondaryHalf - secondaryHalf;
         }
       }
 
@@ -319,9 +411,14 @@ function setCoordinates(
         node.x = secondary;
         node.y = primary;
       }
+
+      previousPrimaryCenter = config.direction === 'TB' ? node.x : node.y;
+      previousPrimaryHalf = primaryHalf;
     });
 
-    accumulated += halfLayerSize * 2 + config.layerSep;
+    enforceLayerPrimarySpacing(layout, layer, config);
+
+    accumulated += maxSecondaryHalf * 2 + config.layerSep;
   });
 
   layout.layerSizes = layerSizes;

@@ -10,7 +10,8 @@ import {
   type LayoutInitData,
   sugiyama,
 } from './ocdfgLayout/sugiyama';
-import { trimPolyline, type Point } from './edgeGeometry';
+import { type Point } from './edgeGeometry';
+import type { LayoutNode } from './ocdfgLayout/LayoutState';
 
 export type { DfgNode, DfgLink } from './NaiveOCDFGLayouting';
 
@@ -38,11 +39,16 @@ const DEFAULT_CONFIG: LayoutConfig = {
   objectAttractionRangeMax: 2,
   preferredSources: [],
   preferredSinks: [],
-  activityWidth: 160,
-  activityHeight: 70,
+  activityWidth: 180,
+  activityHeight: 72,
   dummyWidth: 60,
   dummyHeight: 40,
 };
+
+const DEFAULT_NODE_WIDTH = 180;
+const DEFAULT_NODE_HEIGHT = 72;
+const START_MARGIN = 12;
+const END_MARGIN = 18;
 
 export async function layoutOCDFG({
   renderNodes,
@@ -93,6 +99,8 @@ async function layoutWithSugiyama(
         x: layoutNode.x,
         y: layoutNode.y,
       },
+      width: layoutNode.width ?? node.width,
+      height: layoutNode.height ?? node.height,
     };
   });
 
@@ -101,34 +109,102 @@ async function layoutWithSugiyama(
     if (!layoutEdge) {
       return edge;
     }
-    const pathNodeIds = [layoutEdge.source, ...layoutEdge.path, layoutEdge.target];
-    const polyline: Point[] = pathNodeIds
-      .map(nodeId => {
-        const n = layout.nodes[nodeId];
-        if (!n || n.x === undefined || n.y === undefined) {
-          return null;
-        }
-        return { x: n.x, y: n.y };
-      })
-      .filter((p): p is Point => p !== null);
+    const hasPrecomputedPolyline = Array.isArray(layoutEdge.polyline) && layoutEdge.polyline.length >= 2;
 
-    const trimmed = trimPolyline(polyline, 24, 28);
+    const fallbackPolyline = () => {
+      const pathNodeIds = [layoutEdge.source, ...layoutEdge.path, layoutEdge.target];
+      return pathNodeIds
+        .map(nodeId => {
+          const n = layout.nodes[nodeId];
+          if (!n || n.x === undefined || n.y === undefined) {
+            return null;
+          }
+          return { x: n.x, y: n.y };
+        })
+        .filter((p): p is Point => p !== null);
+    };
+
+    let centerPolyline: Point[] = hasPrecomputedPolyline
+      ? (layoutEdge.polyline ?? [])
+        .map(p => ({ x: p.x, y: p.y }))
+        .filter((p): p is Point => Number.isFinite(p.x) && Number.isFinite(p.y))
+      : fallbackPolyline();
+
+    if (centerPolyline.length < 2) {
+      centerPolyline = fallbackPolyline();
+    }
 
     const owners = layoutEdge.owners && layoutEdge.owners.length > 0
       ? layoutEdge.owners
       : (edge.data as { owners?: string[] } | undefined)?.owners ?? [];
+
+    const finalPolyline = hasPrecomputedPolyline
+      ? centerPolyline
+      : clipPolylineEndpoints(
+        centerPolyline,
+        layout.nodes[layoutEdge.source],
+        layout.nodes[layoutEdge.target],
+      );
 
     return {
       ...edge,
       data: {
         ...edge.data,
         owners,
-        polyline: trimmed,
+        polyline: finalPolyline,
       },
     };
   });
 
   return { nodes: positionedNodes, edges: enhancedEdges };
+}
+
+function clipPolylineEndpoints(
+  points: Point[],
+  sourceNode?: LayoutNode,
+  targetNode?: LayoutNode,
+) {
+  if (points.length < 2) return points;
+  const clipped = points.map(p => ({ ...p }));
+
+  if (sourceNode && clipped.length >= 2) {
+    clipped[0] = projectFromCenter(sourceNode, clipped[1], START_MARGIN);
+  }
+
+  if (targetNode && clipped.length >= 2) {
+    clipped[clipped.length - 1] = projectFromCenter(
+      targetNode,
+      clipped[clipped.length - 2],
+      END_MARGIN,
+    );
+  }
+
+  return clipped;
+}
+
+function projectFromCenter(node: LayoutNode, towards: Point, margin: number): Point {
+  if (node.width === 0 || node.height === 0 || node.x === undefined || node.y === undefined) {
+    return { x: towards.x, y: towards.y };
+  }
+
+  const center = { x: node.x, y: node.y };
+  const dx = center.x - towards.x;
+  const dy = center.y - towards.y;
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+
+  if (absDx < 1e-6 && absDy < 1e-6) {
+    return { x: center.x, y: center.y };
+  }
+
+  const halfWidth = (node.width || DEFAULT_NODE_WIDTH) / 2 + margin;
+  const halfHeight = (node.height || DEFAULT_NODE_HEIGHT) / 2 + margin;
+  const scale = Math.max(absDx / halfWidth, absDy / halfHeight, 1e-3);
+
+  return {
+    x: center.x - dx / scale,
+    y: center.y - dy / scale,
+  };
 }
 
 async function layoutWithNaive(

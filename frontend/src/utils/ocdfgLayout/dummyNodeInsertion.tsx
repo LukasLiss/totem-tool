@@ -37,6 +37,8 @@ export function insertDummyNodes(layout: OCDFGLayout) {
         pos: -1,
         x: undefined,
         y: undefined,
+        width: 0,
+        height: 0,
         belongsTo: edge.id,
         upper: previous,
         lower: undefined,
