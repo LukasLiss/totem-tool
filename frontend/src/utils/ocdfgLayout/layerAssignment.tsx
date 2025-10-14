@@ -247,7 +247,8 @@ async function assignLayersWithIlp(layout: OCDFGLayout) {
       target: edge.target,
       reversed: edge.reversed,
     }))
-    .filter((arc) => vertices.includes(arc.source) && vertices.includes(arc.target));
+    .filter((arc) => vertices.includes(arc.source) && vertices.includes(arc.target))
+    .filter((arc) => arc.source !== arc.target);
 
   if (arcs.length === 0) {
     return [vertices];
@@ -270,7 +271,13 @@ async function assignLayersWithIlp(layout: OCDFGLayout) {
     integers: vertices,
   };
 
-  const result = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF });
+  let result;
+  try {
+    result = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF });
+  } catch (error) {
+    console.warn('[OCDFG] GLPK solve failed, falling back to heuristic.', error);
+    return null;
+  }
   const status = result?.result?.status;
   if (status !== glpk.GLP_OPT && status !== glpk.GLP_FEAS) {
     return null;
