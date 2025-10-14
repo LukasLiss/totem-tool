@@ -94,13 +94,16 @@ function OCDFGVisualizer() {
             nodeVariant: variant,
             isStart,
           };
+          const terminalLabel = (node.types && node.types.length > 0)
+            ? node.types[0]
+            : (cleanLabel.replace(/\s+(start|end)$/i, '').trim() || node.id);
 
           if (isStart) {
             nodeVariantMap[node.id] = 'start';
             return {
               id: node.id,
               type: 'ocdfgStart' as const,
-              data: { ...sharedData, sizePreset: 'terminal' },
+              data: { ...sharedData, label: terminalLabel, sizePreset: 'terminal' },
               width: 80,
               height: 80,
               style: {
@@ -120,7 +123,7 @@ function OCDFGVisualizer() {
             return {
               id: node.id,
               type: 'ocdfgEnd' as const,
-              data: { ...sharedData, sizePreset: 'terminal' },
+              data: { ...sharedData, label: terminalLabel, sizePreset: 'terminal' },
               width: 80,
               height: 80,
               style: {
