@@ -2,40 +2,83 @@ import { ACTIVITY_TYPE, DUMMY_TYPE, OCDFGLayout } from './LayoutState';
 import type { LayoutConfig, LayoutNode } from './LayoutState';
 
 const EPS = 1e-6;
-const EDGE_LENGTH_WEIGHT = 0.12;
+const EDGE_LENGTH_WEIGHT = 12;
 
 export function orderVertices(layout: OCDFGLayout, config: LayoutConfig) {
-  let layering = cloneLayering(layout.layering);
+  const initialLayering = applyObjectCentralityOrdering(
+    cloneLayering(layout.layering),
+    layout,
+    config,
+  );
+  const optimizedLayering = upDownBarycenterBilayerSweep(layout, initialLayering, config);
+  layout.updateLayering(optimizedLayering);
+}
+
+function applyObjectCentralityOrdering(
+  layering: string[][],
+  layout: OCDFGLayout,
+  config: LayoutConfig,
+) {
+  const mapping = config.objectCentrality;
+  if (!mapping) {
+    return layering;
+  }
+
+  const orderLookup = layering.map((layer) => new Map(layer.map((id, idx) => [id, idx])));
+
+  return layering.map((layer, layerIndex) => {
+    return [...layer].sort((a, b) => {
+      const aScore = mapping[getPrimaryObjectType(layout.nodes[a])] ?? Number.POSITIVE_INFINITY;
+      const bScore = mapping[getPrimaryObjectType(layout.nodes[b])] ?? Number.POSITIVE_INFINITY;
+      if (aScore === bScore) {
+        return (orderLookup[layerIndex].get(a) ?? 0) - (orderLookup[layerIndex].get(b) ?? 0);
+      }
+      return aScore - bScore;
+    });
+  });
+}
+
+function getPrimaryObjectType(node: LayoutNode | undefined) {
+  if (!node) return '__default';
+  return node.objectTypes[0] ?? '__default';
+}
+
+function upDownBarycenterBilayerSweep(
+  layout: OCDFGLayout,
+  layering: string[][],
+  config: LayoutConfig,
+) {
+  let currentLayering = cloneLayering(layering);
   let bestLayering = cloneLayering(layering);
   let bestScore = computeLayeringScore(layout, bestLayering, config);
   let noImprovementCounter = 0;
 
   const seen = new Set<string>();
-  seen.add(layeringSignature(layering));
+  seen.add(layeringSignature(currentLayering));
 
   while (noImprovementCounter < config.maxBarycenterIterations) {
-    layering = singleSweep(layout, layering, config);
-    const score = computeLayeringScore(layout, layering, config);
+    currentLayering = singleUpDownSweep(layout, currentLayering, config);
+    const score = computeLayeringScore(layout, currentLayering, config);
     if (score + EPS < bestScore) {
       bestScore = score;
-      bestLayering = cloneLayering(layering);
+      bestLayering = cloneLayering(currentLayering);
       noImprovementCounter = 0;
     } else {
       noImprovementCounter++;
     }
 
-    const signature = layeringSignature(layering);
+    const signature = layeringSignature(currentLayering);
     if (seen.has(signature)) {
       break;
     }
     seen.add(signature);
   }
 
-  layout.updateLayering(bestLayering);
+  return bestLayering;
 }
 
-function singleSweep(layout: OCDFGLayout, layering: string[][], config: LayoutConfig) {
-  let result = cloneLayering(layering);
+function singleUpDownSweep(layout: OCDFGLayout, layering: string[][], config: LayoutConfig) {
+  const result = cloneLayering(layering);
   // Downward sweep
   for (let layer = 1; layer < result.length; layer++) {
     result[layer] = reorderLayer(layout, result, layer, true, config);

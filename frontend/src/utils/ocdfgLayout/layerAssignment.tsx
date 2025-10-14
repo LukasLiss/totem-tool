@@ -1,4 +1,5 @@
-import { OCDFGLayout } from './LayoutState';
+import glpkModule, { type GLPK } from 'glpk.js';
+import { OCDFGLayout, type LayoutConfig } from './LayoutState';
 
 interface ActivityGraph {
   successors: Map<string, Set<string>>;
@@ -36,7 +37,6 @@ function sortQueue(queue: string[], order: Map<string, number>) {
 }
 
 function computeLayers(
-  layout: OCDFGLayout,
   activityIds: string[],
   graph: ActivityGraph,
 ) {
@@ -159,16 +159,151 @@ function buildLayering(
     layering.get(level)!.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0)),
   );
 }
-
-export async function assignLayers(layout: OCDFGLayout) {
+ 
+function assignLayersHeuristic(layout: OCDFGLayout) {
   const activityIds = collectActivityIds(layout);
   if (activityIds.length === 0) {
-    layout.updateLayering([]);
-    return;
+    return [] as string[][];
   }
 
   const graph = buildActivityGraph(layout, activityIds);
-  const layers = computeLayers(layout, activityIds, graph);
-  const layering = buildLayering(layout, activityIds, layers);
+  const layers = computeLayers(activityIds, graph);
+  return buildLayering(layout, activityIds, layers);
+}
+
+interface LayeringArc {
+  source: string;
+  target: string;
+  reversed: boolean;
+}
+
+let glpkInstancePromise: Promise<GLPK> | null = null;
+
+function getGlpkInstance() {
+  if (!glpkInstancePromise) {
+    glpkInstancePromise = glpkModule();
+  }
+  return glpkInstancePromise;
+}
+
+function createIlpObjective(arcs: LayeringArc[]) {
+  const vars = arcs.flatMap((arc) => ([
+    { name: arc.target, coef: 1 },
+    { name: arc.source, coef: -1 },
+  ]));
+  const coefficients = new Map<string, number>();
+  vars.forEach(({ name, coef }) => {
+    coefficients.set(name, (coefficients.get(name) ?? 0) + coef);
+  });
+  return Array.from(coefficients.entries()).map(([name, coef]) => ({ name, coef }));
+}
+
+function createArcSpanConstraints(arcs: LayeringArc[], glpk: GLPK) {
+  return arcs.map((arc) => ({
+    name: `edge_span_${arc.source}_${arc.target}`,
+    vars: [
+      { name: arc.target, coef: 1 },
+      { name: arc.source, coef: -1 },
+    ],
+    bnds: { type: glpk.GLP_LO, lb: 1, ub: Infinity },
+  }));
+}
+
+function createPositiveLayerConstraints(vertices: string[], glpk: GLPK) {
+  return vertices.map((vertex) => ({
+    name: `positive_layer_${vertex}`,
+    vars: [{ name: vertex, coef: 1 }],
+    bnds: { type: glpk.GLP_LO, lb: 0, ub: Infinity },
+  }));
+}
+
+function collectLayeringFromSolution(solution: Record<string, number>) {
+  const layering = new Map<number, string[]>();
+  Object.entries(solution).forEach(([vertex, value]) => {
+    const layerIndex = Math.max(0, Math.floor(value));
+    if (!layering.has(layerIndex)) {
+      layering.set(layerIndex, []);
+    }
+    layering.get(layerIndex)!.push(vertex);
+  });
+  const sortedLayers = Array.from(layering.keys()).sort((a, b) => a - b);
+  return sortedLayers.map((idx) => layering.get(idx) ?? []);
+}
+
+async function assignLayersWithIlp(layout: OCDFGLayout) {
+  const glpk = await getGlpkInstance();
+  const vertices = Object.values(layout.nodes)
+    .filter((node) => node.type === OCDFGLayout.ACTIVITY_TYPE)
+    .map((node) => node.id);
+
+  if (vertices.length === 0) {
+    return [] as string[][];
+  }
+
+  const arcs: LayeringArc[] = Object.values(layout.edges)
+    .filter((edge) => edge.original)
+    .map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      reversed: edge.reversed,
+    }))
+    .filter((arc) => vertices.includes(arc.source) && vertices.includes(arc.target));
+
+  if (arcs.length === 0) {
+    return [vertices];
+  }
+
+  const objectiveVars = createIlpObjective(arcs);
+  const constraints = [
+    ...createArcSpanConstraints(arcs, glpk),
+    ...createPositiveLayerConstraints(vertices, glpk),
+  ];
+
+  const lp = {
+    name: 'ocdfg-layering',
+    objective: {
+      direction: glpk.GLP_MIN,
+      name: 'min_total_span',
+      vars: objectiveVars,
+    },
+    subjectTo: constraints,
+    integers: vertices,
+  };
+
+  const result = glpk.solve(lp, { msglev: glpk.GLP_MSG_OFF });
+  const status = result?.result?.status;
+  if (status !== glpk.GLP_OPT && status !== glpk.GLP_FEAS) {
+    return null;
+  }
+
+  const vars = result.result?.vars as Record<string, number> | undefined;
+  if (!vars) {
+    return null;
+  }
+
+  return collectLayeringFromSolution(vars);
+}
+
+export async function assignLayers(layout: OCDFGLayout, config: LayoutConfig) {
+  const strategy = config.layeringStrategy ?? 'auto';
+  if (strategy !== 'heuristic') {
+    try {
+      const ilpLayering = await assignLayersWithIlp(layout);
+      if (ilpLayering) {
+        layout.updateLayering(ilpLayering);
+        return;
+      }
+      if (strategy === 'ilp') {
+        throw new Error('ILP layering failed to produce a solution');
+      }
+    } catch (error) {
+      if (strategy === 'ilp') {
+        throw error;
+      }
+      console.warn('[OCDFG] ILP layering failed, falling back to heuristic.', error);
+    }
+  }
+
+  const layering = assignLayersHeuristic(layout);
   layout.updateLayering(layering);
 }

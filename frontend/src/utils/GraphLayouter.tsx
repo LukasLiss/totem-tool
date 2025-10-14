@@ -32,7 +32,7 @@ const DEFAULT_CONFIG: LayoutConfig = {
   direction: 'TB',
   layerSep: 140,
   vertexSep: 140,
-  borderPadding: 36,
+  borderPadding: 1000,
   maxBarycenterIterations: 12,
   objectAttraction: 3,
   objectAttractionRangeMin: 1,
@@ -43,6 +43,9 @@ const DEFAULT_CONFIG: LayoutConfig = {
   activityHeight: 72,
   dummyWidth: 48,
   dummyHeight: 32,
+  layeringStrategy: 'auto',
+  seeAlignmentType: false,
+  alignmentType: 'downLeft',
 };
 
 const DEFAULT_NODE_WIDTH = 180;

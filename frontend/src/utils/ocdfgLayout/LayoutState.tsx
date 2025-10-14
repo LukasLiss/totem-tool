@@ -159,6 +159,11 @@ export interface LayoutConfig {
   activityHeight: number;
   dummyWidth: number;
   dummyHeight: number;
+  objectCentrality?: Record<string, number>;
+  includedObjectTypes?: string[];
+  seeAlignmentType?: boolean;
+  alignmentType?: 'downLeft' | 'downRight' | 'upLeft' | 'upRight';
+  layeringStrategy?: 'auto' | 'heuristic' | 'ilp';
 }
 
 export interface LayoutNode {
@@ -245,6 +250,12 @@ export interface LayoutInitData {
 interface Segment {
   source: string;
   target: string;
+  layer: number;
+}
+
+interface DetachedTerminals {
+  nodes: Record<string, LayoutNode>;
+  edges: Record<string, LayoutEdge>;
 }
 
 export class OCDFGLayout {
@@ -301,7 +312,7 @@ export class OCDFGLayout {
       this.nodes[node.id] = {
         id: node.id,
         label,
-        objectTypes: [...new Set(types)],
+        objectTypes: Array.from(new Set(types)),
         type: ACTIVITY_TYPE,
         layer: 0,
         pos: 0,
@@ -349,7 +360,100 @@ export class OCDFGLayout {
       owners.forEach((o) => objectTypes.add(o));
     });
 
-    this.objectTypes = [...objectTypes];
+    this.objectTypes = Array.from(objectTypes);
+  }
+
+  detachTerminalNodes(): DetachedTerminals | null {
+    const terminalEntries = Object.entries(this.nodes).filter(([, node]) => isTerminalNode(node));
+    if (terminalEntries.length === 0) {
+      return null;
+    }
+
+    const detachedNodes: Record<string, LayoutNode> = {};
+    terminalEntries.forEach(([id, node]) => {
+      detachedNodes[id] = cloneLayoutNode(node);
+      delete this.nodes[id];
+    });
+
+    const detachedEdges: Record<string, LayoutEdge> = {};
+    Object.entries(this.edges).forEach(([edgeId, edge]) => {
+      if (detachedNodes[edge.source] || detachedNodes[edge.target]) {
+        detachedEdges[edgeId] = cloneLayoutEdge(edge);
+        delete this.edges[edgeId];
+      }
+    });
+
+    this.layering = this.layering
+      .map((layer) => layer.filter((id) => !detachedNodes[id]))
+      .filter((layer) => layer.length > 0);
+    this.layerSizes = [];
+    this.invalidateSegments();
+
+    return { nodes: detachedNodes, edges: detachedEdges };
+  }
+
+  attachTerminalNodes(detached: DetachedTerminals | null, config: LayoutConfig) {
+    if (!detached) return;
+    const nodeEntries = Object.entries(detached.nodes);
+    if (nodeEntries.length === 0) {
+      return;
+    }
+
+    const startNodes: LayoutNode[] = [];
+    const endNodes: LayoutNode[] = [];
+
+    nodeEntries.forEach(([id, saved]) => {
+      const restored = cloneLayoutNode(saved);
+      this.nodes[id] = restored;
+      if (restored.variant === 'start') {
+        startNodes.push(restored);
+      } else if (restored.variant === 'end') {
+        endNodes.push(restored);
+      }
+    });
+
+    const updatedLayering = this.layering.map((layer) => [...layer]);
+    if (startNodes.length > 0) {
+      updatedLayering.unshift(startNodes.map((node) => node.id));
+    }
+    if (endNodes.length > 0) {
+      updatedLayering.push(endNodes.map((node) => node.id));
+    }
+    this.updateLayering(updatedLayering);
+
+    Object.entries(detached.edges).forEach(([id, saved]) => {
+      const restored = cloneLayoutEdge(saved);
+      const sourceLayer = this.nodes[restored.source]?.layer ?? 0;
+      const targetLayer = this.nodes[restored.target]?.layer ?? 0;
+      restored.minLayer = Math.min(sourceLayer, targetLayer);
+      restored.maxLayer = Math.max(sourceLayer, targetLayer);
+      restored.path = [];
+      this.edges[id] = restored;
+    });
+
+    this.recalculateLayerSizes(config);
+
+    positionTerminalGroup(this, startNodes, config, -1);
+    positionTerminalGroup(this, endNodes, config, 1);
+
+    this.invalidateSegments();
+  }
+
+  recalculateLayerSizes(config: LayoutConfig) {
+    this.layerSizes = this.layering.map((layer, index) => {
+      let halfSize = 0;
+      layer.forEach((nodeId) => {
+        const node = this.nodes[nodeId];
+        if (!node) return;
+        const dimension = this.direction === 'TB'
+          ? (node.height ?? config.activityHeight) / 2
+          : (node.width ?? config.activityWidth) / 2;
+        if (dimension > halfSize) {
+          halfSize = dimension;
+        }
+      });
+      return { layer: index, size: halfSize * 2 };
+    });
   }
 
   invalidateSegments() {
@@ -380,7 +484,6 @@ export class OCDFGLayout {
 
   getAllEdgesBetweenRanks(lowerRank: number) {
     if (lowerRank + 1 >= this.layering.length) return [];
-    const upperRank = lowerRank + 1;
     const segments = this.collectSegments();
     return segments.filter((segment) => segment.layer === lowerRank).map((segment) => ({
       source: segment.source,
@@ -492,4 +595,99 @@ export class OCDFGLayout {
     });
     this.invalidateSegments();
   }
+}
+
+function isTerminalNode(node: LayoutNode | undefined) {
+  return node?.variant === 'start' || node?.variant === 'end';
+}
+
+function cloneLayoutNode(node: LayoutNode): LayoutNode {
+  return { ...node };
+}
+
+function cloneLayoutEdge(edge: LayoutEdge): LayoutEdge {
+  return {
+    ...edge,
+    owners: [...edge.owners],
+    path: [...edge.path],
+    polyline: edge.polyline ? edge.polyline.map((point) => ({ ...point })) : undefined,
+  };
+}
+
+function positionTerminalGroup(
+  layout: OCDFGLayout,
+  nodes: LayoutNode[],
+  config: LayoutConfig,
+  directionFactor: -1 | 1,
+) {
+  nodes.forEach((node) => positionTerminalNode(layout, node, config, directionFactor));
+}
+
+function positionTerminalNode(
+  layout: OCDFGLayout,
+  node: LayoutNode,
+  config: LayoutConfig,
+  directionFactor: -1 | 1,
+) {
+  const isVertical = config.direction === 'TB';
+  const neighbors = collectNeighborNodes(layout, node.id);
+
+  const crossValues = neighbors
+    .map((neighbor) => (isVertical ? neighbor.x : neighbor.y))
+    .filter(isFiniteNumber);
+  const crossCoordinate = crossValues.length > 0 ? average(crossValues) : 0;
+
+  const axisValues = neighbors
+    .map((neighbor) => (isVertical ? neighbor.y : neighbor.x))
+    .filter(isFiniteNumber);
+
+  const axisReference = axisValues.length > 0
+    ? (directionFactor < 0 ? Math.min(...axisValues) : Math.max(...axisValues))
+    : directionFactor < 0
+      ? -config.borderPadding
+      : config.borderPadding;
+
+  const nodeHalf = isVertical
+    ? (node.height ?? config.activityHeight) / 2
+    : (node.width ?? config.activityWidth) / 2;
+
+  const axisCoordinate = axisReference + directionFactor * (config.layerSep + nodeHalf);
+
+  if (isVertical) {
+    node.x = crossCoordinate;
+    node.y = axisCoordinate;
+  } else {
+    node.x = axisCoordinate;
+    node.y = crossCoordinate;
+  }
+}
+
+function collectNeighborNodes(layout: OCDFGLayout, nodeId: string) {
+  const neighbors: LayoutNode[] = [];
+  Object.values(layout.edges).forEach((edge) => {
+    if (!edge.original) return;
+    if (edge.source === nodeId) {
+      const target = layout.nodes[edge.target];
+      if (target) {
+        neighbors.push(target);
+      }
+    } else if (edge.target === nodeId) {
+      const source = layout.nodes[edge.source];
+      if (source) {
+        neighbors.push(source);
+      }
+    }
+  });
+  return neighbors;
+}
+
+function average(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }

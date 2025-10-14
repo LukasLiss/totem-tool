@@ -23,5 +23,8 @@
     "wait-on": "^7.2.0"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "glpk.js": "^4.0.2"
+  }
 }

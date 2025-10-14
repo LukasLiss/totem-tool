@@ -10,8 +10,10 @@ export function positionVertices(layout: OCDFGLayout, config: LayoutConfig) {
 
   const clones = () => layout.layering.map((layer) => [...layer]);
 
-  for (const verticalDir of [0, 1]) {
-    for (const horizontalDir of [0, 1]) {
+  const alignment = normalizeAlignmentConfig(config);
+
+  for (const verticalDir of alignment.vertical) {
+    for (const horizontalDir of alignment.horizontal) {
       const [currentLayering, pos] = transformLayering(clones(), verticalDir, horizontalDir);
       const [roots, aligns] = verticalAlignment(layout, currentLayering, pos, verticalDir === 0);
       const [coords, maxCoord] = horizontalCompaction(
@@ -35,6 +37,25 @@ export function positionVertices(layout: OCDFGLayout, config: LayoutConfig) {
 
   alignAssignments(candidateLayouts);
   setCoordinates(layout, layout.layering, candidateLayouts, config);
+}
+
+function normalizeAlignmentConfig(config: LayoutConfig) {
+  if (!config.seeAlignmentType || !config.alignmentType) {
+    return { vertical: [0, 1], horizontal: [0, 1] };
+  }
+
+  switch (config.alignmentType) {
+    case 'downLeft':
+      return { vertical: [0], horizontal: [0] };
+    case 'downRight':
+      return { vertical: [0], horizontal: [1] };
+    case 'upLeft':
+      return { vertical: [1], horizontal: [0] };
+    case 'upRight':
+      return { vertical: [1], horizontal: [1] };
+    default:
+      return { vertical: [0, 1], horizontal: [0, 1] };
+  }
 }
 
 function markType1Conflicts(layout: OCDFGLayout) {

@@ -3,7 +3,6 @@ import {
   ReactFlow,
   Controls,
   Background,
-  Panel,
   useReactFlow,
   applyNodeChanges,
   applyEdgeChanges,
@@ -21,6 +20,8 @@ import { mapTypesToColors } from '../utils/objectColors';
 import OcdfgEdge from './OcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
 import OcdfgDefaultNode from './OcdfgDefaultNode';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 
 // Define specific types for the data we expect from the backend
 interface DfgData {
@@ -34,6 +35,11 @@ function OCDFGVisualizer() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
+  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
+  const [layoutMode, setLayoutMode] = useState<'advanced' | 'naive'>('advanced');
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [optionsCollapsed, setOptionsCollapsed] = useState(false);
   const { fitView } = useReactFlow();
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge }), []);
   const nodeTypes = useMemo(
@@ -53,6 +59,7 @@ function OCDFGVisualizer() {
       .then((response) => response.json())
       .then((data: DfgData) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
+        setDfgData({ nodes: dfgNodes, links: dfgLinks });
 
         const allTypes = Array.from(
           new Set(dfgNodes.flatMap(node => node.types ?? [])),
@@ -196,6 +203,10 @@ function OCDFGVisualizer() {
           renderEdges: initialEdges,
           dfgNodes,
           dfgLinks,
+          mode: layoutMode,
+          config: {
+            direction: layoutDirection,
+          },
         }).then(({ nodes, edges }) => {
           setNodes(nodes);
           setEdges(edges);
@@ -207,27 +218,35 @@ function OCDFGVisualizer() {
   
   // The relayout button reuses the central layout manager
   const onLayout = useCallback(() => {
-    const currentDfgNodes: DfgNode[] = nodes.map(n => ({
-      id: n.id,
-      label: (n.data as { label?: string }).label ?? n.id,
-      types: (n.data as { types?: string[] }).types ?? [],
-    }));
-    const currentDfgLinks: DfgLink[] = edges.map(e => ({
-      source: e.source!,
-      target: e.target!,
-      owners: (e.data as { owners?: string[] })?.owners ?? [],
-    }));
+    if (!dfgData) return;
     layoutOCDFG({
       renderNodes: nodes,
       renderEdges: edges,
-      dfgNodes: currentDfgNodes,
-      dfgLinks: currentDfgLinks,
-    }).then(({ nodes, edges }) => {
+      dfgNodes: dfgData.nodes,
+      dfgLinks: dfgData.links,
+      mode: layoutMode,
+      config: {
+        direction: layoutDirection,
+      },
+    })
+      .then(({ nodes, edges }) => {
         setNodes(nodes);
         setEdges(edges);
         window.requestAnimationFrame(() => fitView());
-    }).catch(console.error);
-  }, [nodes, edges, fitView]);
+      })
+      .catch(console.error);
+  }, [nodes, edges, fitView, dfgData, layoutMode, layoutDirection]);
+
+  const handleLayoutModeChange = useCallback((checked: boolean) => {
+    setLayoutMode(checked ? 'advanced' : 'naive');
+  }, []);
+
+  useEffect(() => {
+    if (!dfgData) return;
+    if (nodes.length === 0 && edges.length === 0) return;
+    onLayout();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutMode, layoutDirection]);
 
   return (
     <div style={{ height: 'calc(100vh - 50px)', width: '100%', position: 'relative' }}>
@@ -245,17 +264,87 @@ function OCDFGVisualizer() {
       >
         <Controls />
         <Background />
-        <Panel position="top-right">
-          <button onClick={onLayout}>Relayout</button>
-        </Panel>
       </ReactFlow>
 
-      {Object.keys(typeColors).length > 0 && (
+      <div
+        style={{
+          position: 'absolute',
+          top: 16,
+          left: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          maxHeight: 'calc(100% - 32px)',
+        }}
+      >
+        {Object.keys(typeColors).length > 0 && (
+          <div
+            style={{
+              background: 'rgba(255,255,255,0.87)',
+              border: '1px solid #E2E8F0',
+              borderRadius: 12,
+              padding: '12px 16px',
+              boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
+              backdropFilter: 'blur(12px)',
+              fontFamily: 'var(--font-primary, Inter, sans-serif)',
+              maxHeight: '50vh',
+              overflowY: 'auto',
+              minWidth: 240,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: legendCollapsed ? 0 : 8,
+                fontWeight: 600,
+                fontSize: 14,
+                color: '#0F172A',
+              }}
+            >
+              <span>Object Types</span>
+              <button
+                type="button"
+                onClick={() => setLegendCollapsed((prev) => !prev)}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#64748B',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                {legendCollapsed ? 'Show' : 'Hide'}
+              </button>
+            </div>
+            {!legendCollapsed && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Object.entries(typeColors).map(([type, color]) => (
+                  <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span
+                      aria-hidden
+                      style={{
+                        display: 'inline-block',
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        background: color,
+                        border: '1px solid rgba(15, 23, 42, 0.12)',
+                        boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                      }}
+                    />
+                    <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div
           style={{
-            position: 'absolute',
-            top: 16,
-            left: 16,
             background: 'rgba(255,255,255,0.87)',
             border: '1px solid #E2E8F0',
             borderRadius: 12,
@@ -263,35 +352,61 @@ function OCDFGVisualizer() {
             boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
             backdropFilter: 'blur(12px)',
             fontFamily: 'var(--font-primary, Inter, sans-serif)',
-            maxHeight: '50%',
-            overflowY: 'auto',
             minWidth: 240,
           }}
         >
-          <div style={{ fontWeight: 600, fontSize: 14, color: '#0F172A', marginBottom: 8 }}>
-            Object Types
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              marginBottom: optionsCollapsed ? 0 : 12,
+              fontWeight: 600,
+              fontSize: 14,
+              color: '#0F172A',
+            }}
+          >
+            <span>Layout Options</span>
+            <button
+              type="button"
+              onClick={() => setOptionsCollapsed((prev) => !prev)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: '#64748B',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              {optionsCollapsed ? 'Show' : 'Hide'}
+            </button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {Object.entries(typeColors).map(([type, color]) => (
-              <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span
-                  aria-hidden
-                  style={{
-                    display: 'inline-block',
-                    width: 18,
-                    height: 18,
-                    borderRadius: '50%',
-                    background: color,
-                    border: '1px solid rgba(15, 23, 42, 0.12)',
-                    boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
-                  }}
+          {!optionsCollapsed && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Advanced layout</span>
+                <Switch
+                  checked={layoutMode === 'advanced'}
+                  onCheckedChange={handleLayoutModeChange}
+                  aria-label="Toggle advanced layout"
                 />
-                <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
               </div>
-            ))}
-          </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Left-to-right layout</span>
+                <Switch
+                  checked={layoutDirection === 'LR'}
+                  onCheckedChange={(checked) => setLayoutDirection(checked ? 'LR' : 'TB')}
+                  aria-label="Toggle horizontal layout"
+                />
+              </div>
+              <Button variant="secondary" size="sm" onClick={onLayout} className="w-full justify-center">
+                Relayout
+              </Button>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

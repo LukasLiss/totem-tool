@@ -12,15 +12,22 @@ export async function sugiyama(init: LayoutInitData, config: LayoutConfig) {
   resetIdCounters();
   const layout = new OCDFGLayout(init);
 
+  const detachedTerminals = layout.detachTerminalNodes();
+
   reverseCycles(layout, {
     preferredSources: config.preferredSources,
     preferredSinks: config.preferredSinks,
   });
 
-  await assignLayers(layout);
+  await assignLayers(layout, config);
   orderVertices(layout, config);
   positionVertices(layout, config);
-  routeEdges(layout);
+  routeEdges(layout, config);
+
+  layout.attachTerminalNodes(detachedTerminals, config);
+  if (detachedTerminals) {
+    routeEdges(layout, config);
+  }
 
   return layout;
 }
