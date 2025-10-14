@@ -19,6 +19,8 @@ import {
 } from '../utils/GraphLayouter';
 import { mapTypesToColors } from '../utils/objectColors';
 import OcdfgEdge from './OcdfgEdge';
+import OcdfgTerminalNode from './OcdfgTerminalNode';
+import OcdfgDefaultNode from './OcdfgDefaultNode';
 
 // Define specific types for the data we expect from the backend
 interface DfgData {
@@ -34,6 +36,14 @@ function OCDFGVisualizer() {
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
   const { fitView } = useReactFlow();
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge }), []);
+  const nodeTypes = useMemo(
+    () => ({
+      ocdfgStart: OcdfgTerminalNode,
+      ocdfgEnd: OcdfgTerminalNode,
+      ocdfgDefault: OcdfgDefaultNode,
+    }),
+    [],
+  );
 
   const onNodesChange = useCallback((c) => setNodes((nds) => applyNodeChanges(c, nds)), []);
   const onEdgesChange = useCallback((c) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
@@ -55,25 +65,107 @@ function OCDFGVisualizer() {
           groupCounts[key] = (groupCounts[key] ?? 0) + 1;
         });
         const groupIndex: Record<string, number> = {};
+        const incomingCounts: Record<string, number> = {};
+        const outgoingCounts: Record<string, number> = {};
+        dfgLinks.forEach(link => {
+          incomingCounts[link.target] = (incomingCounts[link.target] ?? 0) + 1;
+          outgoingCounts[link.source] = (outgoingCounts[link.source] ?? 0) + 1;
+        });
+
+        const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
 
         // Create standard React Flow nodes (no custom types)
-        const initialNodes: Node[] = dfgNodes.map((node) => ({
-          id: node.id,
-          data: { label: node.label || node.id, types: node.types ?? [], colors },
-          position: { x: 0, y: 0 }, // Position will be set by the layout manager
-          style: {
-            background: '#FFFFFF',
-            color: '#000000',
-            border: '1px solid #000000',
-            borderRadius: 12,
-            padding: 14,
-            fontFamily: 'var(--font-primary, Inter, sans-serif)',
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-            boxShadow: 'none',
-            minWidth: 180,
-          },
-        }));
+        const initialNodes: Node[] = dfgNodes.map((node) => {
+          const isStart = (incomingCounts[node.id] ?? 0) === 0;
+          const isEnd = !isStart && (outgoingCounts[node.id] ?? 0) === 0;
+          const fillColor = (node.types?.[0] && colors[node.types[0]]) || '#2563EB';
+          const variant: 'start' | 'end' | 'center' = isStart ? 'start' : (isEnd ? 'end' : 'center');
+          const cleanLabel = (node.label || node.id || '').trim();
+          const approxLines = cleanLabel.length === 0
+            ? 1
+            : Math.max(1, Math.ceil(cleanLabel.length / 22));
+          const baseHeight = Math.max(60, approxLines * 22);
+          const minHeight = baseHeight + 0; // include vertical padding allowance
+          const sharedData = {
+            label: node.label || node.id,
+            types: node.types ?? [],
+            colors,
+            fillColor,
+            nodeVariant: variant,
+            isStart,
+          };
+
+          if (isStart) {
+            nodeVariantMap[node.id] = 'start';
+            return {
+              id: node.id,
+              type: 'ocdfgStart' as const,
+              data: { ...sharedData, sizePreset: 'terminal' },
+              width: 80,
+              height: 80,
+              style: {
+                width: 80,
+                height: 80,
+                padding: 0,
+                border: 'none',
+                boxShadow: 'none',
+                background: 'transparent',
+              },
+              position: { x: 0, y: 0 }, // Position set by layout manager
+            };
+          }
+
+          if (isEnd) {
+            nodeVariantMap[node.id] = 'end';
+            return {
+              id: node.id,
+              type: 'ocdfgEnd' as const,
+              data: { ...sharedData, sizePreset: 'terminal' },
+              width: 80,
+              height: 80,
+              style: {
+                width: 80,
+                height: 80,
+                padding: 0,
+                border: 'none',
+                boxShadow: 'none',
+                background: 'transparent',
+              },
+              position: { x: 0, y: 0 },
+            };
+          }
+
+          nodeVariantMap[node.id] = 'center';
+          return {
+            id: node.id,
+            type: 'ocdfgDefault' as const,
+            data: sharedData,
+            position: { x: 0, y: 0 }, // Position will be set by the layout manager
+            style: {
+              background: '#FFFFFF',
+              color: '#000000',
+              border: '1px solid #000000',
+              borderRadius: 12,
+              padding: 14,
+              minHeight,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'var(--font-primary, Inter, sans-serif)',
+              fontWeight: 500,
+              letterSpacing: '-0.01em',
+              boxShadow: 'none',
+              minWidth: 180,
+            },
+          };
+        });
+
+        initialNodes.forEach((node) => {
+          const variant = (node.data as { nodeVariant?: 'start' | 'end' | 'center' } | undefined)?.nodeVariant;
+          if (variant === 'start' || variant === 'end' || variant === 'center') {
+            nodeVariantMap[node.id] = variant;
+          }
+        });
 
         const initialEdges: Edge[] = dfgLinks.map((link, index) => {
           const key = `${link.source}->${link.target}`;
@@ -89,6 +181,8 @@ function OCDFGVisualizer() {
               colors,
               parallelIndex: currentIndex,
               parallelCount: groupCounts[key],
+              sourceVariant: nodeVariantMap[link.source],
+              targetVariant: nodeVariantMap[link.target],
             },
           } as Edge;
         });
@@ -140,6 +234,7 @@ function OCDFGVisualizer() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         edgeTypes={edgeTypes}
+        nodeTypes={nodeTypes}
         fitView
         proOptions={{ hideAttribution: true }}
         minZoom={0.25}

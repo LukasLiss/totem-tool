@@ -2,6 +2,7 @@ import { ACTIVITY_TYPE, DUMMY_TYPE, OCDFGLayout } from './LayoutState';
 import type { LayoutConfig, LayoutNode } from './LayoutState';
 
 const EPS = 1e-6;
+const EDGE_LENGTH_WEIGHT = 0.12;
 
 export function orderVertices(layout: OCDFGLayout, config: LayoutConfig) {
   let layering = cloneLayering(layout.layering);
@@ -176,7 +177,8 @@ function computeLayeringScore(
 ) {
   const crossings = countCrossings(layout, layering);
   const attraction = measureObjectGrouping(layout, layering, config);
-  return crossings + attraction;
+  const edgeLengthPenalty = measureEdgeLength(layout, layering, config);
+  return crossings + attraction + EDGE_LENGTH_WEIGHT * edgeLengthPenalty;
 }
 
 function countCrossings(layout: OCDFGLayout, layering: string[][]) {
@@ -202,6 +204,8 @@ function countCrossings(layout: OCDFGLayout, layering: string[][]) {
   }
   return crossings;
 }
+
+const OBJECT_GROUPING_MULTIPLIER = 1.8;
 
 function measureObjectGrouping(
   layout: OCDFGLayout,
@@ -233,12 +237,48 @@ function measureObjectGrouping(
     }
   });
 
-  return deviation * config.objectAttraction;
+  return deviation * config.objectAttraction * OBJECT_GROUPING_MULTIPLIER;
 }
 
 function positionInLayer(layer: string[], nodeId: string) {
   const index = layer.indexOf(nodeId);
   return index >= 0 ? index : layer.length;
+}
+
+function measureEdgeLength(
+  layout: OCDFGLayout,
+  layering: string[][],
+  config: LayoutConfig,
+) {
+  const indexLookup = new Map<string, { layer: number; order: number }>();
+  layering.forEach((layer, layerIndex) => {
+    layer.forEach((nodeId, order) => {
+      indexLookup.set(nodeId, { layer: layerIndex, order });
+    });
+  });
+
+  let total = 0;
+  let count = 0;
+  Object.values(layout.edges).forEach((edge) => {
+    if (!edge.original) return;
+    const sourceIndex = indexLookup.get(edge.source);
+    const targetIndex = indexLookup.get(edge.target);
+    if (!sourceIndex || !targetIndex) return;
+
+    const layerDiff = Math.abs(sourceIndex.layer - targetIndex.layer);
+    const orderDiff = Math.abs(sourceIndex.order - targetIndex.order);
+
+    const sourceWidth = layout.nodes[edge.source]?.width ?? config.activityWidth;
+    const targetWidth = layout.nodes[edge.target]?.width ?? config.activityWidth;
+    const averageWidth = (sourceWidth + targetWidth) / 2;
+
+    const verticalComponent = layerDiff * config.layerSep;
+    const horizontalComponent = orderDiff * (averageWidth + config.vertexSep);
+    total += verticalComponent + horizontalComponent;
+    count++;
+  });
+
+  return count === 0 ? 0 : total / count;
 }
 
 function cloneLayering(layering: string[][]) {

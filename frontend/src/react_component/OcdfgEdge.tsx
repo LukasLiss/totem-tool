@@ -2,12 +2,16 @@ import { memo, useMemo } from 'react';
 import type { EdgeProps } from '@xyflow/react';
 import { roundedPath, offsetPolyline, type Point } from '../utils/edgeGeometry';
 
+type NodeVariant = 'start' | 'end' | 'center';
+
 type EdgeData = {
   polyline?: Point[];
   owners?: string[];
   colors?: Record<string, string>;
   parallelIndex?: number;
   parallelCount?: number;
+  sourceVariant?: NodeVariant;
+  targetVariant?: NodeVariant;
 };
 
 const DEFAULT_COLOR = '#2563EB';
@@ -33,6 +37,48 @@ function buildFallbackPolyline(
   ];
 }
 
+function clampPolylineToEndpoints(points: Point[], source: Point, target: Point): Point[] {
+  if (points.length === 0) return [];
+  if (points.length === 1) return [{ ...source }];
+  if (points.length === 2) return [{ ...source }, { ...target }];
+
+  const start = points[0];
+  const end = points[points.length - 1];
+  const startDx = source.x - start.x;
+  const startDy = source.y - start.y;
+  const endDx = target.x - end.x;
+  const endDy = target.y - end.y;
+
+  const cumulative: number[] = new Array(points.length).fill(0);
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    total += Math.hypot(dx, dy);
+    cumulative[i] = total;
+  }
+  if (!Number.isFinite(total) || total <= 0) {
+    total = points.length - 1;
+    for (let i = 1; i < points.length; i++) {
+      cumulative[i] = i;
+    }
+  }
+
+  return points.map((point, index) => {
+    if (index === 0) {
+      return { ...source };
+    }
+    if (index === points.length - 1) {
+      return { ...target };
+    }
+    const t = total > 0 ? cumulative[index] / total : index / (points.length - 1);
+    return {
+      x: point.x + startDx * (1 - t) + endDx * t,
+      y: point.y + startDy * (1 - t) + endDy * t,
+    };
+  });
+}
+
 const OcdfgEdge = memo(function OcdfgEdge({
   id,
   data,
@@ -47,10 +93,14 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const offset = computeOffset(data?.parallelIndex ?? 0, data?.parallelCount ?? 1);
 
   const polyline = useMemo(() => {
-    if (data?.polyline && data.polyline.length >= 2) {
-      return offsetPolyline(data.polyline, offset);
-    }
-    return offsetPolyline(buildFallbackPolyline(sourceX, sourceY, targetX, targetY), offset);
+    const anchored = data?.polyline && data.polyline.length >= 2
+      ? clampPolylineToEndpoints(
+        data.polyline,
+        { x: sourceX, y: sourceY },
+        { x: targetX, y: targetY },
+      )
+      : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
+    return offsetPolyline(anchored, offset);
   }, [data?.polyline, offset, sourceX, sourceY, targetX, targetY]);
 
   const path = useMemo(() => roundedPath(polyline, 30), [polyline]);
@@ -67,7 +117,9 @@ const OcdfgEdge = memo(function OcdfgEdge({
     () => id.replace(/[^a-zA-Z0-9_-]/g, '_'),
     [id],
   );
-  const markerId = `ocdfg-arrow-${sanitizedId}`;
+  const markerVariant = data?.targetVariant ?? 'default';
+  const markerId = `ocdfg-arrow-${sanitizedId}-${markerVariant}`;
+  const markerRefX = data?.targetVariant ? 9 : 16;
   const markerScale = Math.min(2.2, (strokeBase + 6) / 8);
 
   return (
@@ -76,7 +128,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
         <marker
           id={markerId}
           viewBox="0 0 20 20"
-          refX={16}
+          refX={markerRefX}
           refY={10}
           markerWidth={20 * markerScale}
           markerHeight={20 * markerScale}

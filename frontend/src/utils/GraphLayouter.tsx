@@ -30,25 +30,26 @@ export type LayoutResult = Promise<{ nodes: Node[]; edges: Edge[] }>;
 
 const DEFAULT_CONFIG: LayoutConfig = {
   direction: 'TB',
-  layerSep: 180,
-  vertexSep: 180,
-  borderPadding: 48,
+  layerSep: 140,
+  vertexSep: 140,
+  borderPadding: 36,
   maxBarycenterIterations: 12,
-  objectAttraction: 0.35,
+  objectAttraction: 3,
   objectAttractionRangeMin: 1,
-  objectAttractionRangeMax: 2,
+  objectAttractionRangeMax: 2.5,
   preferredSources: [],
   preferredSinks: [],
   activityWidth: 180,
   activityHeight: 72,
-  dummyWidth: 60,
-  dummyHeight: 40,
+  dummyWidth: 48,
+  dummyHeight: 32,
 };
 
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 72;
 const START_MARGIN = 12;
 const END_MARGIN = 18;
+const CENTER_MARGIN = 12;
 
 export async function layoutOCDFG({
   renderNodes,
@@ -59,6 +60,7 @@ export async function layoutOCDFG({
   config,
 }: LayoutRequest): LayoutResult {
   if (mode === 'naive') {
+    console.info('[OCDFG] using naive');
     return layoutWithNaive(renderNodes, renderEdges, dfgNodes, dfgLinks);
   }
 
@@ -138,13 +140,11 @@ async function layoutWithSugiyama(
       ? layoutEdge.owners
       : (edge.data as { owners?: string[] } | undefined)?.owners ?? [];
 
-    const finalPolyline = hasPrecomputedPolyline
-      ? centerPolyline
-      : clipPolylineEndpoints(
-        centerPolyline,
-        layout.nodes[layoutEdge.source],
-        layout.nodes[layoutEdge.target],
-      );
+    const finalPolyline = clipPolylineEndpoints(
+      centerPolyline,
+      layout.nodes[layoutEdge.source],
+      layout.nodes[layoutEdge.target],
+    );
 
     return {
       ...edge,
@@ -168,18 +168,27 @@ function clipPolylineEndpoints(
   const clipped = points.map(p => ({ ...p }));
 
   if (sourceNode && clipped.length >= 2) {
-    clipped[0] = projectFromCenter(sourceNode, clipped[1], START_MARGIN);
+    const margin = getEndpointMargin(sourceNode, true);
+    clipped[0] = projectFromCenter(sourceNode, clipped[1], margin);
   }
 
   if (targetNode && clipped.length >= 2) {
+    const margin = getEndpointMargin(targetNode, false);
     clipped[clipped.length - 1] = projectFromCenter(
       targetNode,
       clipped[clipped.length - 2],
-      END_MARGIN,
+      margin,
     );
   }
 
   return clipped;
+}
+
+function getEndpointMargin(node: LayoutNode, isSource: boolean) {
+  if (node.variant === 'start' || node.variant === 'end' || node.variant === 'center') {
+    return CENTER_MARGIN;
+  }
+  return isSource ? START_MARGIN : END_MARGIN;
 }
 
 function projectFromCenter(node: LayoutNode, towards: Point, margin: number): Point {

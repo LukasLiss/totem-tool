@@ -1,5 +1,149 @@
 import type { Edge, Node } from '@xyflow/react';
 
+const DEFAULT_NODE_WIDTH = 180;
+const DEFAULT_NODE_HEIGHT = 72;
+const DEFAULT_HORIZONTAL_PADDING = 32;
+const DEFAULT_VERTICAL_PADDING = 28;
+const TERMINAL_NODE_WIDTH = 80;
+const TERMINAL_NODE_HEIGHT = 80;
+const TERMINAL_HORIZONTAL_PADDING = 16;
+const TERMINAL_VERTICAL_PADDING = 16;
+const AVG_CHAR_WIDTH = 7.6;
+const AVG_LONG_CHAR_WIDTH = 8.6;
+const APPROX_CHARS_PER_LINE = 22;
+
+type StyleRecord = Record<string, unknown>;
+
+type NodeWithMeasurements = Node & {
+  width?: number;
+  height?: number;
+  measured?: {
+    width?: number;
+    height?: number;
+  };
+  style?: StyleRecord;
+};
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = parseFloat(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  return undefined;
+}
+
+function extractPadding(
+  style: StyleRecord | undefined,
+  defaults: { horizontal: number; vertical: number },
+) {
+  if (!style) {
+    return defaults;
+  }
+  const basePadding = toNumber(style.padding);
+  const paddingLeft = toNumber(style.paddingLeft) ?? basePadding ?? 0;
+  const paddingRight = toNumber(style.paddingRight) ?? basePadding ?? 0;
+  const paddingTop = toNumber(style.paddingTop) ?? basePadding ?? 0;
+  const paddingBottom = toNumber(style.paddingBottom) ?? basePadding ?? 0;
+  const hasHorizontal =
+    style.padding !== undefined || style.paddingLeft !== undefined || style.paddingRight !== undefined;
+  const hasVertical =
+    style.padding !== undefined || style.paddingTop !== undefined || style.paddingBottom !== undefined;
+  const horizontalValue = paddingLeft + paddingRight;
+  const verticalValue = paddingTop + paddingBottom;
+  const horizontal = hasHorizontal ? horizontalValue : defaults.horizontal;
+  const vertical = hasVertical ? verticalValue : defaults.vertical;
+  return { horizontal, vertical };
+}
+
+function estimateLabelWidth(label: string, horizontalPadding: number) {
+  const clean = label.trim();
+  if (!clean) {
+    return DEFAULT_NODE_WIDTH + horizontalPadding;
+  }
+  const words = clean.split(/\s+/);
+  const totalChars = clean.length;
+  const longestWord = words.reduce((acc, word) => Math.max(acc, word.length), 0);
+  const wordEstimate = longestWord * AVG_LONG_CHAR_WIDTH;
+  const totalEstimate = totalChars * AVG_CHAR_WIDTH;
+  const contentEstimate = Math.max(DEFAULT_NODE_WIDTH, wordEstimate, totalEstimate * 0.92);
+  return contentEstimate + horizontalPadding;
+}
+
+function estimateLabelHeight(label: string, verticalPadding: number) {
+  const clean = label.trim();
+  if (!clean) {
+    return DEFAULT_NODE_HEIGHT + verticalPadding;
+  }
+  const lines = Math.max(1, Math.ceil(clean.length / APPROX_CHARS_PER_LINE));
+  const lineHeight = 22;
+  const contentEstimate = Math.max(DEFAULT_NODE_HEIGHT, lines * lineHeight);
+  return contentEstimate + verticalPadding;
+}
+
+function resolveNodeDimensions(renderNode: Node | undefined, label: string) {
+  const extended = renderNode as NodeWithMeasurements | undefined;
+  const style = (extended?.style && typeof extended.style === 'object')
+    ? (extended.style as StyleRecord)
+    : undefined;
+  const dataRecord = (extended?.data && typeof extended.data === 'object')
+    ? (extended.data as Record<string, unknown>)
+    : undefined;
+  const variantRaw = dataRecord ? dataRecord.nodeVariant : undefined;
+  const sizePresetRaw = dataRecord ? dataRecord.sizePreset : undefined;
+  const fallbackStart = dataRecord ? Boolean(dataRecord.isStart === true) : false;
+  const variant = typeof variantRaw === 'string' ? variantRaw : undefined;
+  const sizePreset = typeof sizePresetRaw === 'string' ? sizePresetRaw : undefined;
+  const useCompactSizing =
+    fallbackStart ||
+    variant === 'start' ||
+    variant === 'end' ||
+    sizePreset === 'terminal';
+  const defaultPadding = useCompactSizing
+    ? { horizontal: TERMINAL_HORIZONTAL_PADDING, vertical: TERMINAL_VERTICAL_PADDING }
+    : { horizontal: DEFAULT_HORIZONTAL_PADDING, vertical: DEFAULT_VERTICAL_PADDING };
+  const defaultWidth = useCompactSizing ? TERMINAL_NODE_WIDTH : DEFAULT_NODE_WIDTH;
+  const defaultHeight = useCompactSizing ? TERMINAL_NODE_HEIGHT : DEFAULT_NODE_HEIGHT;
+  const { horizontal, vertical } = extractPadding(style, defaultPadding);
+
+  const measuredWidth =
+    toNumber(extended?.width) ??
+    toNumber(extended?.measured?.width);
+  const measuredHeight =
+    toNumber(extended?.height) ??
+    toNumber(extended?.measured?.height);
+
+  const styleWidth =
+    measuredWidth === undefined
+      ? toNumber(style?.width) ?? toNumber(style?.minWidth) ?? undefined
+      : undefined;
+
+  const styleHeight =
+    measuredHeight === undefined
+      ? toNumber(style?.height) ?? toNumber(style?.minHeight) ?? undefined
+      : undefined;
+
+  let width: number;
+  if (measuredWidth !== undefined && measuredWidth > 0) {
+    width = Math.max(measuredWidth, defaultWidth + horizontal);
+  } else if (styleWidth !== undefined && styleWidth > 0) {
+    width = Math.max(styleWidth + horizontal, defaultWidth + horizontal);
+  } else {
+    width = Math.max(defaultWidth + horizontal, estimateLabelWidth(label, horizontal));
+  }
+
+  let height: number;
+  if (measuredHeight !== undefined && measuredHeight > 0) {
+    height = Math.max(measuredHeight, defaultHeight + vertical);
+  } else if (styleHeight !== undefined && styleHeight > 0) {
+    height = Math.max(styleHeight + vertical, defaultHeight + vertical);
+  } else {
+    height = Math.max(defaultHeight + vertical, estimateLabelHeight(label, vertical));
+  }
+
+  return { width, height };
+}
+
 export interface LayoutConfig {
   direction: 'TB' | 'LR';
   layerSep: number;
@@ -26,9 +170,18 @@ export interface LayoutNode {
   pos: number;
   x: number | undefined;
   y: number | undefined;
+  width: number;
+  height: number;
   belongsTo?: string;
   upper?: string;
   lower?: string;
+  routeVirtual?: boolean;
+  variant?: 'start' | 'end' | 'center';
+}
+
+export interface LayoutPoint {
+  x: number;
+  y: number;
 }
 
 export interface LayoutEdge {
@@ -45,6 +198,7 @@ export interface LayoutEdge {
   maxLayer: number;
   original: boolean;
   type1: boolean;
+  polyline?: LayoutPoint[];
 }
 
 export interface LayerSize {
@@ -96,12 +250,16 @@ interface Segment {
 export class OCDFGLayout {
   static ACTIVITY_TYPE = ACTIVITY_TYPE;
   static DUMMY_TYPE = DUMMY_TYPE;
+  static DEFAULT_WIDTH = DEFAULT_NODE_WIDTH;
+  static DEFAULT_HEIGHT = DEFAULT_NODE_HEIGHT;
 
   nodes: Record<string, LayoutNode>;
   edges: Record<string, LayoutEdge>;
   layering: string[][];
   objectTypes: string[];
   layerSizes: LayerSize[];
+  direction: LayoutConfig['direction'];
+  routingDummies: Record<string, { startId: string; endId: string }>;
 
   private segmentsCache: Segment[] | null = null;
 
@@ -111,13 +269,35 @@ export class OCDFGLayout {
     this.layering = [];
     this.objectTypes = [];
     this.layerSizes = [];
+    this.direction = 'TB';
+    this.routingDummies = {};
 
     const objectTypes = new Set<string>();
+    const renderNodeById = new Map<string, Node>();
+    init.renderNodes.forEach((renderNode) => {
+      if (renderNode?.id) {
+        renderNodeById.set(renderNode.id, renderNode);
+      }
+    });
 
     init.dfgNodes.forEach((node) => {
       const label = node.label ?? node.id;
       const types = node.types ?? [];
       types.forEach((t) => objectTypes.add(t));
+      const renderNode = renderNodeById.get(node.id);
+      const dataRecord = (renderNode?.data && typeof renderNode.data === 'object')
+        ? (renderNode.data as Record<string, unknown>)
+        : undefined;
+      const variantRaw = dataRecord?.nodeVariant;
+      let variant: 'start' | 'end' | 'center' = 'center';
+      if (variantRaw === 'start') {
+        variant = 'start';
+      } else if (variantRaw === 'end') {
+        variant = 'end';
+      } else if (dataRecord?.isStart === true) {
+        variant = 'start';
+      }
+      const { width, height } = resolveNodeDimensions(renderNode, label);
       this.nodes[node.id] = {
         id: node.id,
         label,
@@ -127,6 +307,9 @@ export class OCDFGLayout {
         pos: 0,
         x: undefined,
         y: undefined,
+        width,
+        height,
+        variant,
       };
     });
 
@@ -171,6 +354,14 @@ export class OCDFGLayout {
 
   invalidateSegments() {
     this.segmentsCache = null;
+  }
+
+  clearRoutingDummies() {
+    Object.values(this.routingDummies).forEach(({ startId, endId }) => {
+      delete this.nodes[startId];
+      delete this.nodes[endId];
+    });
+    this.routingDummies = {};
   }
 
   setEdgeDirection(edgeId: string, reversed: boolean) {
@@ -302,4 +493,3 @@ export class OCDFGLayout {
     this.invalidateSegments();
   }
 }
-
