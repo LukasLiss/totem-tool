@@ -1,6 +1,6 @@
 import pm4py
 import os
-from totem_lib import import_ocel, discover_oc_petri_net_polars
+from totem_lib import import_ocel, discover_oc_petri_net_polars, ocpns_are_similar
 from datetime import datetime
 
 # Using pm4py
@@ -18,3 +18,5 @@ ocpn_from_lib = discover_oc_petri_net_polars(ocel)  # uses an adapter internally
 end_lib = datetime.now()
 print(f"totem_lib OCPN discovery took: {end_lib - start_lib}")
 pm4py.save_vis_ocpn(ocpn_from_lib, os.path.join("figures", "ContainerLogistics_ocpn_lib.png"))
+
+print("Are the two OCPNs similar?", ocpns_are_similar(ocpn_from_pm4py, ocpn_from_lib))
