@@ -89,7 +89,7 @@ function UserFileSelect() {
               aria-expanded={open}
               className="w-[300px] justify-between"
             >
-              {selectedFile
+              {selectedFile?.file
                 ? selectedFile.file.split("/").pop()
                 : "Select OCEL File"}
               <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />

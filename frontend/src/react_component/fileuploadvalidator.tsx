@@ -77,7 +77,7 @@ export function FileUploadValidator() {
     try {
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
-      setSelectedFile(file)
+      setSelectedFile(response);
       toast.success(`${file.name} uploaded successfully`);
       setFile(null);
         } catch (err) {
