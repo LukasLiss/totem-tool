@@ -8,9 +8,10 @@ import UserFileSelect from './react_component/userfileselect';
 export function UploadView(){
 
 return (
-    <div className="flex flex-col">
-        <UserFileSelect/>
+    <div className="flex flex-row">
         <FileUploadValidator/>
+        <UserFileSelect/>
+        
         
     </div>
 )
