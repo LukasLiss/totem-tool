@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
-import type { EdgeProps } from '@xyflow/react';
-import { roundedPath, offsetPolyline, type Point } from '../utils/edgeGeometry';
+import { useReactFlow } from '@xyflow/react';
+import type { EdgeProps, Node } from '@xyflow/react';
+import { roundedPath, trimPolyline, type Point } from '../utils/edgeGeometry';
 
 type NodeVariant = 'start' | 'end' | 'center';
 
@@ -15,12 +16,8 @@ type EdgeData = {
 };
 
 const DEFAULT_COLOR = '#2563EB';
-
-function computeOffset(index: number, count: number) {
-  if (count <= 1) return 0;
-  const spacing = 10;
-  return (index - (count - 1) / 2) * spacing;
-}
+const DEFAULT_NODE_WIDTH = 180;
+const DEFAULT_NODE_HEIGHT = 72;
 
 function buildFallbackPolyline(
   sourceX: number,
@@ -79,6 +76,103 @@ function clampPolylineToEndpoints(points: Point[], source: Point, target: Point)
   });
 }
 
+const EPSILON = 1e-6;
+
+function calculateCollisionPoint(tail: Point, head: Point, headWidth: number, headHeight: number): Point {
+  const epsilon = 1e-5;
+  const deltaX = tail.x - head.x;
+  const deltaY = tail.y - head.y;
+
+  const halfWidth = Math.max(headWidth / 2, epsilon);
+  const halfHeight = Math.max(headHeight / 2, epsilon);
+
+  if (Math.abs(deltaX) < epsilon) {
+    return {
+      x: head.x,
+      y: head.y + (deltaY > 0 ? halfHeight : -halfHeight),
+    };
+  }
+
+  if (Math.abs(deltaY) < epsilon) {
+    return {
+      x: head.x + (deltaX > 0 ? halfWidth : -halfWidth),
+      y: head.y,
+    };
+  }
+
+  const tHorizontal = Math.abs(halfHeight / deltaY);
+  const tVertical = Math.abs(halfWidth / deltaX);
+  const t = Math.min(tHorizontal, tVertical);
+
+  return {
+    x: head.x + t * deltaX,
+    y: head.y + t * deltaY,
+  };
+}
+
+type ArrowGeometry = {
+  path: string;
+  length: number;
+};
+
+function buildArrowHead(tip: Point, prev: Point, scale: number): ArrowGeometry | null {
+  const dx = tip.x - prev.x;
+  const dy = tip.y - prev.y;
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length < EPSILON) {
+    return null;
+  }
+
+  const ux = dx / length;
+  const uy = dy / length;
+
+  const desiredLength = 16 * scale;
+  const maxLength = Math.max(length - EPSILON, 0);
+  if (maxLength < EPSILON) {
+    return null;
+  }
+  const arrowLength = Math.min(desiredLength, maxLength);
+  const arrowWidth = Math.min(10 * scale, Math.max(arrowLength * 0.6, 4 * scale));
+  const halfWidth = arrowWidth / 2;
+
+  const baseCenter = {
+    x: tip.x - ux * arrowLength,
+    y: tip.y - uy * arrowLength,
+  };
+  const perpX = -uy;
+  const perpY = ux;
+
+  const left = {
+    x: baseCenter.x + perpX * halfWidth,
+    y: baseCenter.y + perpY * halfWidth,
+  };
+  const right = {
+    x: baseCenter.x - perpX * halfWidth,
+    y: baseCenter.y - perpY * halfWidth,
+  };
+
+  return {
+    path: `M ${left.x} ${left.y} L ${tip.x} ${tip.y} L ${right.x} ${right.y} Z`,
+    length: arrowLength,
+  };
+}
+
+function resolveNodeGeometry(node: Node | undefined) {
+  if (!node) return null;
+  const width = node.width ?? DEFAULT_NODE_WIDTH;
+  const height = node.height ?? DEFAULT_NODE_HEIGHT;
+  const position = node.positionAbsolute ?? node.position;
+  const x = position?.x ?? 0;
+  const y = position?.y ?? 0;
+  return {
+    center: {
+      x: x + width / 2,
+      y: y + height / 2,
+    },
+    size: { width, height },
+  };
+}
+
 const OcdfgEdge = memo(function OcdfgEdge({
   id,
   data,
@@ -87,23 +181,48 @@ const OcdfgEdge = memo(function OcdfgEdge({
   sourceY,
   targetX,
   targetY,
+  target,
 }: EdgeProps<EdgeData>) {
   const owners = data?.owners && data.owners.length > 0 ? data.owners : ['default'];
   const colorMap = data?.colors ?? {};
-  const offset = computeOffset(data?.parallelIndex ?? 0, data?.parallelCount ?? 1);
+  const reactFlow = useReactFlow();
+  const targetGeometry = resolveNodeGeometry(reactFlow.getNode(target));
 
   const polyline = useMemo(() => {
-    const anchored = data?.polyline && data.polyline.length >= 2
-      ? clampPolylineToEndpoints(
+    if (data?.polyline && data.polyline.length >= 2) {
+      return clampPolylineToEndpoints(
         data.polyline,
         { x: sourceX, y: sourceY },
         { x: targetX, y: targetY },
-      )
-      : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
-    return offsetPolyline(anchored, offset);
-  }, [data?.polyline, offset, sourceX, sourceY, targetX, targetY]);
+      );
+    }
+    return buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
+  }, [data?.polyline, sourceX, sourceY, targetX, targetY]);
 
-  const path = useMemo(() => roundedPath(polyline, 30), [polyline]);
+  const headCenter = targetGeometry?.center;
+  const headSize = targetGeometry?.size;
+
+  const headCollision = useMemo(() => {
+    if (!headCenter || !headSize || polyline.length < 2) {
+      return null;
+    }
+    const approachPoint = polyline[polyline.length - 2];
+    return calculateCollisionPoint(approachPoint, headCenter, headSize.width, headSize.height);
+  }, [polyline, headCenter, headSize]);
+
+  const renderPolyline = useMemo(() => {
+    if (!headCollision || polyline.length < 2) {
+      return polyline;
+    }
+    const adjusted = polyline.map((point, index) => {
+      if (index === polyline.length - 1) {
+        return { ...headCollision };
+      }
+      return { ...point };
+    });
+    return adjusted;
+  }, [polyline, headCollision]);
+
   const strokeBase = Math.max(6, owners.length * 3);
   const tailOwner = owners[0];
   const headOwner = owners[owners.length - 1];
@@ -113,37 +232,29 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const headColor = headOwner && headOwner !== 'default'
     ? (colorMap[headOwner] ?? '#2563EB')
     : '#2563EB';
-  const sanitizedId = useMemo(
-    () => id.replace(/[^a-zA-Z0-9_-]/g, '_'),
-    [id],
+  const arrowScale = Math.min(2.2, (strokeBase + 6) / 8);
+  const arrowTip = renderPolyline.length > 0
+    ? (headCollision ?? renderPolyline[renderPolyline.length - 1])
+    : null;
+  const arrowPrev = renderPolyline.length > 1
+    ? renderPolyline[renderPolyline.length - 2]
+    : arrowTip;
+  const arrowGeometry = useMemo(
+    () => (arrowTip && arrowPrev ? buildArrowHead(arrowTip, arrowPrev, arrowScale) : null),
+    [arrowTip, arrowPrev, arrowScale],
   );
-  const markerVariant = data?.targetVariant ?? 'default';
-  const markerId = `ocdfg-arrow-${sanitizedId}-${markerVariant}`;
-  const markerRefX = data?.targetVariant ? 9 : 16;
-  const markerScale = Math.min(2.2, (strokeBase + 6) / 8);
+  const trimmedPolyline = useMemo(() => {
+    if (!arrowGeometry) {
+      return renderPolyline;
+    }
+    const trimAmount = arrowGeometry.length * 0.9;
+    return trimPolyline(renderPolyline, 0, trimAmount);
+  }, [renderPolyline, arrowGeometry]);
+
+  const path = useMemo(() => roundedPath(trimmedPolyline, 30), [trimmedPolyline]);
 
   return (
     <g className="ocdfg-edge">
-      <defs>
-        <marker
-          id={markerId}
-          viewBox="0 0 20 20"
-          refX={markerRefX}
-          refY={10}
-          markerWidth={20 * markerScale}
-          markerHeight={20 * markerScale}
-          orient="auto"
-          markerUnits="userSpaceOnUse"
-        >
-          <path
-            d="M2,3 L16,10 L2,17 z"
-            fill={headColor}
-            stroke="#F8FAFC"
-            strokeWidth={Math.max(1.2, markerScale)}
-            opacity={0.95}
-          />
-        </marker>
-      </defs>
 
       <path
         d={path}
@@ -173,10 +284,22 @@ const OcdfgEdge = memo(function OcdfgEdge({
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
             strokeLinejoin="round"
-            markerEnd={`url(#${markerId})`}
           />
         );
       })}
+
+      {arrowGeometry?.path && (
+        <>
+          <path d={arrowGeometry.path} fill={headColor} opacity={0.95} />
+          <path
+            d={arrowGeometry.path}
+            fill="none"
+            stroke="#F8FAFC"
+            strokeWidth={Math.max(1.2, arrowScale)}
+            opacity={0.95}
+          />
+        </>
+      )}
 
       {selected && (
         <path
