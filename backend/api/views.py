@@ -118,6 +118,80 @@ def OCDFGViewSet(request):
         request (_type_): _description_
     """
     
+    simple_mockup = ({
+        "directed": True,
+        "multigraph": False,
+        "graph": {
+            "kind": "ocdfg"
+        },
+        "nodes": [
+            {
+                "label": "Review Document",
+                "types": [
+                    "Document"
+                ],
+                "role": None,
+                "object_type": None,
+                "id": "Review Document"
+            },
+            {
+                "label": "Document start",
+                "types": [
+                    "Document"
+                ],
+                "role": "start",
+                "object_type": "Document",
+                "id": "__start__:Document"
+            },
+            {
+                "label": "Document end",
+                "types": [
+                    "Document"
+                ],
+                "role": "end",
+                "object_type": "Document",
+                "id": "__end__:Document"
+            }
+        ],
+        "links": [
+            {
+                "weights": {
+                    "Document": 100
+                },
+                "weight": 100,
+                "owners": [
+                    "Document"
+                ],
+                "role": "start",
+                "source": "__start__:Document",
+                "target": "Review Document"
+            },
+            {
+                "weights": {
+                    "Document": 20
+                },
+                "weight": 20,
+                "owners": [
+                    "Document"
+                ],
+                "source": "Review Document",
+                "target": "Review Document"
+            },
+            {
+                "weights": {
+                    "Document": 80
+                },
+                "weight": 80,
+                "owners": [
+                    "Document"
+                ],
+                "role": "end",
+                "source": "Review Document",
+                "target": "__end__:Document"
+            }
+        ]
+    })
+    
     mockup = ({
         "directed": True,
         "multigraph": False,
@@ -1126,7 +1200,7 @@ def OCDFGViewSet(request):
         ]
     })
     
-    return Response({"dfg": mockup}, status=status.HTTP_200_OK)
+    return Response({"dfg": simple_mockup}, status=status.HTTP_200_OK)
     
     file_id = request.query.get("file_id")
     if not file_id:
