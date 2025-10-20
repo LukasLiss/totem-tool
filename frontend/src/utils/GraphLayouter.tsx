@@ -149,12 +149,18 @@ async function layoutWithSugiyama(
       layout.nodes[layoutEdge.target],
     );
 
+    const originalSource = layoutEdge.originalSource ?? layoutEdge.source;
+    const originalTarget = layoutEdge.originalTarget ?? layoutEdge.target;
+    const isSelfLoop = originalSource === originalTarget;
+    const edgeKind = isSelfLoop ? 'selfLoop' : 'normal';
+
     return {
       ...edge,
       data: {
         ...edge.data,
         owners,
         polyline: finalPolyline,
+        edgeKind,
       },
     };
   });
