@@ -3,6 +3,7 @@ import type { LayoutConfig, LayoutNode } from './LayoutState';
 
 const EPS = 1e-6;
 const EDGE_LENGTH_WEIGHT = 12;
+const TERMINAL_EDGE_FACTOR = 0.2;
 
 export function orderVertices(layout: OCDFGLayout, config: LayoutConfig) {
   const initialLayering = applyObjectCentralityOrdering(
@@ -301,7 +302,7 @@ function measureEdgeLength(
   });
 
   let total = 0;
-  let count = 0;
+  let weightSum = 0;
   Object.values(layout.edges).forEach((edge) => {
     if (!edge.original) return;
     const sourceIndex = indexLookup.get(edge.source);
@@ -317,11 +318,19 @@ function measureEdgeLength(
 
     const verticalComponent = layerDiff * config.layerSep;
     const horizontalComponent = orderDiff * (averageWidth + config.vertexSep);
-    total += verticalComponent + horizontalComponent;
-    count++;
+    const sourceVariant = layout.nodes[edge.source]?.variant;
+    const targetVariant = layout.nodes[edge.target]?.variant;
+    const isTerminalEdge =
+      sourceVariant === 'start' ||
+      sourceVariant === 'end' ||
+      targetVariant === 'start' ||
+      targetVariant === 'end';
+    const weight = isTerminalEdge ? TERMINAL_EDGE_FACTOR : 1;
+    total += weight * (verticalComponent + horizontalComponent);
+    weightSum += weight;
   });
 
-  return count === 0 ? 0 : total / count;
+  return weightSum === 0 ? 0 : total / weightSum;
 }
 
 function cloneLayering(layering: string[][]) {

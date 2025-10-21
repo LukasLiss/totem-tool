@@ -1200,7 +1200,7 @@ def OCDFGViewSet(request):
         ]
     })
     
-    return Response({"dfg": simple_mockup}, status=status.HTTP_200_OK)
+    return Response({"dfg": mockup}, status=status.HTTP_200_OK)
     
     file_id = request.query.get("file_id")
     if not file_id:

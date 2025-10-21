@@ -22,11 +22,12 @@ export async function sugiyama(init: LayoutInitData, config: LayoutConfig) {
   await assignLayers(layout, config);
   orderVertices(layout, config);
   positionVertices(layout, config);
-  routeEdges(layout, config);
+  routeEdges(layout);
+  layout.computeCoreMetrics(config);
 
   layout.attachTerminalNodes(detachedTerminals, config);
   if (detachedTerminals) {
-    routeEdges(layout, config);
+    routeEdges(layout);
   }
 
   return layout;

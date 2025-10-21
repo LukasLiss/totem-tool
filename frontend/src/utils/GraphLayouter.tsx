@@ -98,14 +98,21 @@ async function layoutWithSugiyama(
     if (!layoutNode || layoutNode.x === undefined || layoutNode.y === undefined) {
       return node;
     }
+    const renderWidth = node.width ?? layoutNode.width ?? DEFAULT_NODE_WIDTH;
+    const renderHeight = node.height ?? layoutNode.height ?? DEFAULT_NODE_HEIGHT;
+    layoutNode.width = renderWidth;
+    layoutNode.height = renderHeight;
+
+    const topLeftX = layoutNode.x - renderWidth / 2;
+    const topLeftY = layoutNode.y - renderHeight / 2;
     return {
       ...node,
       position: {
-        x: layoutNode.x,
-        y: layoutNode.y,
+        x: topLeftX,
+        y: topLeftY,
       },
-      width: layoutNode.width ?? node.width,
-      height: layoutNode.height ?? node.height,
+      width: renderWidth,
+      height: renderHeight,
     };
   });
 
