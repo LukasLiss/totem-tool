@@ -14,6 +14,8 @@ type EdgeData = {
   sourceVariant?: NodeVariant;
   targetVariant?: NodeVariant;
   edgeKind?: 'normal' | 'selfLoop';
+  frequency?: number;
+  thicknessFactor?: number;
 };
 
 const DEFAULT_COLOR = '#2563EB';
@@ -38,43 +40,10 @@ function buildFallbackPolyline(
 function clampPolylineToEndpoints(points: Point[], source: Point, target: Point): Point[] {
   if (points.length === 0) return [];
   if (points.length === 1) return [{ ...source }];
-  if (points.length === 2) return [{ ...source }, { ...target }];
-
-  const start = points[0];
-  const end = points[points.length - 1];
-  const startDx = source.x - start.x;
-  const startDy = source.y - start.y;
-  const endDx = target.x - end.x;
-  const endDy = target.y - end.y;
-
-  const cumulative: number[] = new Array(points.length).fill(0);
-  let total = 0;
-  for (let i = 1; i < points.length; i++) {
-    const dx = points[i].x - points[i - 1].x;
-    const dy = points[i].y - points[i - 1].y;
-    total += Math.hypot(dx, dy);
-    cumulative[i] = total;
-  }
-  if (!Number.isFinite(total) || total <= 0) {
-    total = points.length - 1;
-    for (let i = 1; i < points.length; i++) {
-      cumulative[i] = i;
-    }
-  }
-
-  return points.map((point, index) => {
-    if (index === 0) {
-      return { ...source };
-    }
-    if (index === points.length - 1) {
-      return { ...target };
-    }
-    const t = total > 0 ? cumulative[index] / total : index / (points.length - 1);
-    return {
-      x: point.x + startDx * (1 - t) + endDx * t,
-      y: point.y + startDy * (1 - t) + endDy * t,
-    };
-  });
+  const result = points.map((point) => ({ ...point }));
+  result[0] = { ...source };
+  result[result.length - 1] = { ...target };
+  return result;
 }
 
 const EPSILON = 1e-6;
@@ -372,7 +341,11 @@ const OcdfgEdge = memo(function OcdfgEdge({
     return renderPolyline;
   }, [isSelfLoop, targetGeometry, renderPolyline]);
 
-  const strokeBase = Math.max(6, owners.length * 3);
+  const thicknessFactorRaw = typeof data?.thicknessFactor === 'number' && Number.isFinite(data.thicknessFactor)
+    ? Math.min(2, Math.max(0.5, data.thicknessFactor))
+    : 1;
+  const baseStroke = Math.max(6, owners.length * 3);
+  const strokeBase = baseStroke * thicknessFactorRaw;
   const tailOwner = owners[0];
   const headOwner = owners[owners.length - 1];
   const tailColor = tailOwner && tailOwner !== 'default'
@@ -381,7 +354,10 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const headColor = headOwner && headOwner !== 'default'
     ? (colorMap[headOwner] ?? '#2563EB')
     : '#2563EB';
-  const arrowScale = Math.min(2.2, (strokeBase + 6) / 8);
+  const backgroundStrokeWidth = strokeBase + 4 * thicknessFactorRaw;
+  const selectionStrokeWidth = strokeBase + 6 * thicknessFactorRaw;
+  const minOwnerWidth = 2.5 * thicknessFactorRaw;
+  const arrowScale = Math.min(2.2, (strokeBase + 6 * thicknessFactorRaw) / 8);
   const arrowTip = basePolyline.length > 0
     ? basePolyline[basePolyline.length - 1]
     : null;
@@ -409,7 +385,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
         d={path}
         fill="none"
         stroke="#CBD5E1"
-        strokeWidth={strokeBase + 4}
+        strokeWidth={backgroundStrokeWidth}
         strokeOpacity={0.55}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -419,7 +395,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
         const color = owner === 'default'
           ? (index === owners.length - 1 ? headColor : tailColor)
           : (colorMap[owner] ?? headColor);
-        const width = Math.max(2.5, strokeBase / owners.length);
+        const width = Math.max(minOwnerWidth, strokeBase / owners.length);
         const dash = owners.length > 1 ? '10 7' : undefined;
         const dashOffset = owners.length > 1 ? index * 6 : undefined;
         return (
@@ -456,7 +432,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
           fill="none"
           stroke={DEFAULT_COLOR}
           strokeOpacity={0.25}
-          strokeWidth={strokeBase + 6}
+          strokeWidth={selectionStrokeWidth}
         />
       )}
     </g>

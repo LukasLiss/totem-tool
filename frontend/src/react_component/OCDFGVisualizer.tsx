@@ -79,6 +79,43 @@ function OCDFGVisualizer() {
           outgoingCounts[link.source] = (outgoingCounts[link.source] ?? 0) + 1;
         });
 
+        const resolveLinkFrequency = (link: DfgLink) => {
+          if (typeof link.weight === 'number' && Number.isFinite(link.weight)) {
+            return Math.max(0, link.weight);
+          }
+          if (link.weights && typeof link.weights === 'object') {
+            const total = Object.values(link.weights).reduce((sum: number, value) => {
+              if (typeof value === 'number' && Number.isFinite(value)) {
+                return sum + value;
+              }
+              return sum;
+            }, 0);
+            if (total > 0) {
+              return total;
+            }
+          }
+          if (Array.isArray(link.owners) && link.owners.length > 0) {
+            return link.owners.length;
+          }
+          return 1;
+        };
+
+        const frequencies = dfgLinks.map(resolveLinkFrequency);
+        const minFrequency = frequencies.length > 0 ? Math.min(...frequencies) : 1;
+        const maxFrequency = frequencies.length > 0 ? Math.max(...frequencies) : minFrequency;
+        const frequencySpan = Math.max(maxFrequency - minFrequency, 0);
+        const thicknessFactors = frequencies.map((frequency) => {
+          if (!Number.isFinite(frequency)) {
+            return 1;
+          }
+          if (frequencySpan < 1e-9) {
+            return 1;
+          }
+          const normalized = (frequency - minFrequency) / frequencySpan;
+          const factor = 0.5 + normalized * 1.5;
+          return Math.min(2, Math.max(0.5, factor));
+        });
+
         const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
 
         // Create standard React Flow nodes (no custom types)
@@ -193,6 +230,8 @@ function OCDFGVisualizer() {
               parallelCount: groupCounts[key],
               sourceVariant: nodeVariantMap[link.source],
               targetVariant: nodeVariantMap[link.target],
+              frequency: frequencies[index],
+              thicknessFactor: thicknessFactors[index],
             },
           } as Edge;
         });
