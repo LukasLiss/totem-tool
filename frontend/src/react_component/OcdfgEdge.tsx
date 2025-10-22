@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { useReactFlow } from '@xyflow/react';
+import { BaseEdge, useReactFlow } from '@xyflow/react';
 import type { EdgeProps, Node } from '@xyflow/react';
 import { roundedPath, trimPolyline, type Point } from '../utils/edgeGeometry';
 
@@ -21,6 +21,7 @@ type EdgeData = {
 const DEFAULT_COLOR = '#2563EB';
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 72;
+const EPSILON = 1e-6;
 
 function buildFallbackPolyline(
   sourceX: number,
@@ -40,13 +41,11 @@ function buildFallbackPolyline(
 function clampPolylineToEndpoints(points: Point[], source: Point, target: Point): Point[] {
   if (points.length === 0) return [];
   if (points.length === 1) return [{ ...source }];
-  const result = points.map((point) => ({ ...point }));
+  const result = points.map(point => ({ ...point }));
   result[0] = { ...source };
   result[result.length - 1] = { ...target };
   return result;
 }
-
-const EPSILON = 1e-6;
 
 function calculateCollisionPoint(tail: Point, head: Point, headWidth: number, headHeight: number): Point {
   const epsilon = 1e-5;
@@ -287,11 +286,13 @@ const OcdfgEdge = memo(function OcdfgEdge({
   id,
   data,
   selected,
+  animated,
   sourceX,
   sourceY,
   targetX,
   targetY,
   target,
+  style,
 }: EdgeProps<EdgeData>) {
   const owners = data?.owners && data.owners.length > 0 ? data.owners : ['default'];
   const colorMap = data?.colors ?? {};
@@ -300,46 +301,35 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const isSelfLoop = data?.edgeKind === 'selfLoop';
 
   const polyline = useMemo(() => {
-    if (data?.polyline && data.polyline.length >= 2) {
-      return clampPolylineToEndpoints(
-        data.polyline,
-        { x: sourceX, y: sourceY },
-        { x: targetX, y: targetY },
-      );
+    if (isSelfLoop && targetGeometry) {
+      return buildSelfLoopPolyline(targetGeometry);
     }
-    return buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
-  }, [data?.polyline, sourceX, sourceY, targetX, targetY]);
-
-  const headCenter = targetGeometry?.center;
-  const headSize = targetGeometry?.size;
-
-  const headCollision = useMemo(() => {
-    if (isSelfLoop || !headCenter || !headSize || polyline.length < 2) {
-      return null;
+    const basePoints = (data?.polyline && data.polyline.length >= 2)
+      ? data.polyline
+      : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
+    const clamped = clampPolylineToEndpoints(
+      basePoints,
+      { x: sourceX, y: sourceY },
+      { x: targetX, y: targetY },
+    );
+    if (!targetGeometry || clamped.length < 2) {
+      return clamped;
     }
-    const approachPoint = polyline[polyline.length - 2];
-    return calculateCollisionPoint(approachPoint, headCenter, headSize.width, headSize.height);
-  }, [isSelfLoop, polyline, headCenter, headSize]);
-
-  const renderPolyline = useMemo(() => {
-    if (!headCollision || polyline.length < 2) {
-      return polyline;
-    }
-    const adjusted = polyline.map((point, index) => {
-      if (index === polyline.length - 1) {
-        return { ...headCollision };
+    const approachPoint = clamped[clamped.length - 2];
+    const collision = calculateCollisionPoint(
+      approachPoint,
+      targetGeometry.center,
+      targetGeometry.size.width,
+      targetGeometry.size.height,
+    );
+    const adjusted = clamped.map((point, index) => {
+      if (index === clamped.length - 1) {
+        return collision;
       }
       return { ...point };
     });
     return adjusted;
-  }, [polyline, headCollision]);
-
-  const basePolyline = useMemo(() => {
-    if (isSelfLoop && targetGeometry) {
-      return buildSelfLoopPolyline(targetGeometry);
-    }
-    return renderPolyline;
-  }, [isSelfLoop, targetGeometry, renderPolyline]);
+  }, [isSelfLoop, data?.polyline, targetGeometry, sourceX, sourceY, targetX, targetY]);
 
   const thicknessFactorRaw = typeof data?.thicknessFactor === 'number' && Number.isFinite(data.thicknessFactor)
     ? Math.min(2, Math.max(0.5, data.thicknessFactor))
@@ -358,11 +348,11 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const selectionStrokeWidth = strokeBase + 6 * thicknessFactorRaw;
   const minOwnerWidth = 2.5 * thicknessFactorRaw;
   const arrowScale = Math.min(2.2, (strokeBase + 6 * thicknessFactorRaw) / 8);
-  const arrowTip = basePolyline.length > 0
-    ? basePolyline[basePolyline.length - 1]
+  const arrowTip = polyline.length > 0
+    ? polyline[polyline.length - 1]
     : null;
-  const arrowPrev = basePolyline.length > 1
-    ? basePolyline[basePolyline.length - 2]
+  const arrowPrev = polyline.length > 1
+    ? polyline[polyline.length - 2]
     : arrowTip;
   const arrowGeometry = useMemo(
     () => (arrowTip && arrowPrev ? buildArrowHead(arrowTip, arrowPrev, arrowScale) : null),
@@ -370,25 +360,33 @@ const OcdfgEdge = memo(function OcdfgEdge({
   );
   const trimmedPolyline = useMemo(() => {
     if (!arrowGeometry) {
-      return basePolyline;
+      return polyline;
     }
     const trimAmount = arrowGeometry.length * 0.9;
-    return trimPolyline(basePolyline, 0, trimAmount);
-  }, [basePolyline, arrowGeometry]);
+    return trimPolyline(polyline, 0, trimAmount);
+  }, [polyline, arrowGeometry]);
 
   const path = useMemo(() => roundedPath(trimmedPolyline, 30), [trimmedPolyline]);
 
-  return (
-    <g className="ocdfg-edge">
+  const baseStyle = useMemo(
+    () => ({
+      ...style,
+      stroke: '#CBD5E1',
+      strokeWidth: backgroundStrokeWidth,
+      strokeOpacity: 0.55,
+      strokeLinecap: 'round' as const,
+      strokeLinejoin: 'round' as const,
+    }),
+    [style, backgroundStrokeWidth],
+  );
 
-      <path
-        d={path}
-        fill="none"
-        stroke="#CBD5E1"
-        strokeWidth={backgroundStrokeWidth}
-        strokeOpacity={0.55}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+  return (
+    <g className={`ocdfg-edge${animated ? ' animated' : ''}`}>
+      <BaseEdge
+        path={path}
+        style={baseStyle}
+        className="ocdfg-edge-base"
+        interactionWidth={Math.max(selectionStrokeWidth, 36)}
       />
 
       {owners.map((owner, index) => {
@@ -403,12 +401,13 @@ const OcdfgEdge = memo(function OcdfgEdge({
             key={`${id}-${owner}-${index}`}
             d={path}
             fill="none"
-            stroke={color}
             strokeWidth={width}
             strokeDasharray={dash}
             strokeDashoffset={dashOffset}
             strokeLinecap="round"
             strokeLinejoin="round"
+            className="ocdfg-edge-stripe"
+            style={{ stroke: color }}
           />
         );
       })}
@@ -430,9 +429,10 @@ const OcdfgEdge = memo(function OcdfgEdge({
         <path
           d={path}
           fill="none"
-          stroke={DEFAULT_COLOR}
           strokeOpacity={0.25}
           strokeWidth={selectionStrokeWidth}
+          className="ocdfg-edge-selection"
+          style={{ stroke: DEFAULT_COLOR }}
         />
       )}
     </g>

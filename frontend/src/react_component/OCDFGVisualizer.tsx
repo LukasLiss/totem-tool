@@ -223,6 +223,7 @@ function OCDFGVisualizer() {
             source: link.source,
             target: link.target,
             type: 'ocdfg',
+            animated: true,
             data: {
               owners: link.owners ?? [],
               colors,
