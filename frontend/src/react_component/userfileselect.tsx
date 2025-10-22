@@ -58,16 +58,10 @@ function UserFileSelect() {
         setFiles(Array.from(e.target.files)); // convert FileList to array
     };
 
-    // Handle button click
-    const handleSelectChange = (e) => {
-        setSelectedFileId(e.target.value);
-        console.log('handleSelectChange')
-        };
-
     const handleSubmit = () => {
         const file = files.find((f) => f.id === Number(selectedFile.id));
         if (file) {
-        setSelectedFile(file); // save into context
+        setSelectedFile(file);
         console.log("Saved to context:", file);
         navigate("/overview");
         }
