@@ -31,7 +31,15 @@ interface DfgData {
   };
 }
 
-function OCDFGVisualizer() {
+interface OCDFGVisualizerProps {
+  height?: string | number;
+}
+
+function resolveHeightValue(height: string | number) {
+  return typeof height === 'number' ? `${height}px` : height;
+}
+
+function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
@@ -289,7 +297,7 @@ function OCDFGVisualizer() {
   }, [layoutMode, layoutDirection]);
 
   return (
-    <div style={{ height: 'calc(100vh - 50px)', width: '100%', position: 'relative' }}>
+    <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -320,12 +328,11 @@ function OCDFGVisualizer() {
         {Object.keys(typeColors).length > 0 && (
           <div
             style={{
-              background: 'rgba(255,255,255,0.87)',
-              border: '1px solid #E2E8F0',
+              background: '#FFFFFF',
+              border: '1px solid #E5E7EB',
               borderRadius: 12,
               padding: '12px 16px',
-              boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
-              backdropFilter: 'blur(12px)',
+              boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
               fontFamily: 'var(--font-primary, Inter, sans-serif)',
               maxHeight: '50vh',
               overflowY: 'auto',
@@ -385,12 +392,11 @@ function OCDFGVisualizer() {
 
         <div
           style={{
-            background: 'rgba(255,255,255,0.87)',
-            border: '1px solid #E2E8F0',
+            background: '#FFFFFF',
+            border: '1px solid #E5E7EB',
             borderRadius: 12,
             padding: '12px 16px',
-            boxShadow: '0 12px 24px rgba(15, 23, 42, 0.12)',
-            backdropFilter: 'blur(12px)',
+            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
             fontFamily: 'var(--font-primary, Inter, sans-serif)',
             minWidth: 240,
           }}

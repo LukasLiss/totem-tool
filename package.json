@@ -25,6 +25,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "glpk.js": "^4.0.2"
+    "glpk.js": "^4.0.2",
+    "gridstack": "^12.3.3"
   }
 }
