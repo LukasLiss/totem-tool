@@ -16,6 +16,7 @@ type EdgeData = {
   edgeKind?: 'normal' | 'selfLoop';
   frequency?: number;
   thicknessFactor?: number;
+  frequencyNormalized?: number;
 };
 
 const DEFAULT_COLOR = '#2563EB';

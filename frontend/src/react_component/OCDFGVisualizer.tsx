@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ReactFlow,
-  Controls,
-  Background,
   useReactFlow,
   applyNodeChanges,
   applyEdgeChanges,
@@ -22,6 +20,13 @@ import OcdfgTerminalNode from './OcdfgTerminalNode';
 import OcdfgDefaultNode from './OcdfgDefaultNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, SaveIcon } from 'lucide-react';
+
+const THICKNESS_MIN_LIMIT = 0.1;
+const THICKNESS_MAX_LIMIT = 5;
+const DEFAULT_THICKNESS_MIN = 0.5;
+const DEFAULT_THICKNESS_MAX = 2;
 
 // Define specific types for the data we expect from the backend
 interface DfgData {
@@ -44,11 +49,16 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
   const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
-  const [layoutMode, setLayoutMode] = useState<'advanced' | 'naive'>('advanced');
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [optionsCollapsed, setOptionsCollapsed] = useState(false);
-  const { fitView } = useReactFlow();
+  const [interactionLocked, setInteractionLocked] = useState(false);
+  const [thicknessEnabled, setThicknessEnabled] = useState(true);
+  const [thicknessMin, setThicknessMin] = useState(DEFAULT_THICKNESS_MIN);
+  const [thicknessMax, setThicknessMax] = useState(DEFAULT_THICKNESS_MAX);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const reactFlow = useReactFlow();
+  const { fitView } = reactFlow;
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge }), []);
   const nodeTypes = useMemo(
     () => ({
@@ -61,6 +71,59 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
 
   const onNodesChange = useCallback((c) => setNodes((nds) => applyNodeChanges(c, nds)), []);
   const onEdgesChange = useCallback((c) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
+
+  const computeThicknessFactor = useCallback(
+    (normalized?: number) => {
+      if (!thicknessEnabled) {
+        return 1;
+      }
+      const safeMin = Math.min(thicknessMin, thicknessMax);
+      const safeMax = Math.max(thicknessMin, thicknessMax);
+      const span = safeMax - safeMin;
+      if (span <= 1e-6) {
+        return safeMax;
+      }
+      const value = typeof normalized === 'number' && Number.isFinite(normalized) ? normalized : 0;
+      const clamped = Math.min(1, Math.max(0, value));
+      return safeMin + clamped * span;
+    },
+    [thicknessEnabled, thicknessMin, thicknessMax],
+  );
+
+  const applyThicknessToEdges = useCallback(
+    (edgeList: Edge[]) =>
+      edgeList.map((edge) => {
+        const data = edge.data as { frequencyNormalized?: number } | undefined;
+        const normalized = data?.frequencyNormalized;
+        const factor = computeThicknessFactor(normalized);
+        return {
+          ...edge,
+          data: {
+            ...edge.data,
+            thicknessFactor: factor,
+          },
+        };
+      }),
+    [computeThicknessFactor],
+  );
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setEdges((prev) => applyThicknessToEdges(prev));
+  }, [applyThicknessToEdges]);
+
+  const handleSaveSettings = useCallback(() => {
+    const presets = {
+      layoutDirection,
+      thicknessEnabled,
+      thicknessMin,
+      thicknessMax,
+      interactionLocked,
+    };
+    localStorage.setItem('ocdfg-visualization-settings', JSON.stringify(presets));
+    setSettingsSaved(true);
+    window.setTimeout(() => setSettingsSaved(false), 1600);
+  }, [interactionLocked, layoutDirection, thicknessEnabled, thicknessMin, thicknessMax]);
 
   useEffect(() => {
     fetch('http://127.0.0.1:8000/api/ocdfg/')
@@ -112,16 +175,17 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         const minFrequency = frequencies.length > 0 ? Math.min(...frequencies) : 1;
         const maxFrequency = frequencies.length > 0 ? Math.max(...frequencies) : minFrequency;
         const frequencySpan = Math.max(maxFrequency - minFrequency, 0);
-        const thicknessFactors = frequencies.map((frequency) => {
-          if (!Number.isFinite(frequency)) {
-            return 1;
+        const normalizedValues = frequencies.map((frequency) => {
+          if (!Number.isFinite(frequency) || frequencySpan < 1e-9) {
+            return 0;
           }
-          if (frequencySpan < 1e-9) {
-            return 1;
-          }
-          const normalized = (frequency - minFrequency) / frequencySpan;
-          const factor = 0.5 + normalized * 1.5;
-          return Math.min(2, Math.max(0.5, factor));
+          return (frequency - minFrequency) / frequencySpan;
+        });
+        const thicknessFactors = normalizedValues.map((normalized) => {
+          const factor = DEFAULT_THICKNESS_MIN +
+            Math.min(1, Math.max(0, normalized)) *
+              (DEFAULT_THICKNESS_MAX - DEFAULT_THICKNESS_MIN);
+          return Math.min(DEFAULT_THICKNESS_MAX, Math.max(DEFAULT_THICKNESS_MIN, factor));
         });
 
         const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
@@ -240,6 +304,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
               sourceVariant: nodeVariantMap[link.source],
               targetVariant: nodeVariantMap[link.target],
               frequency: frequencies[index],
+              frequencyNormalized: normalizedValues[index],
               thicknessFactor: thicknessFactors[index],
             },
           } as Edge;
@@ -251,13 +316,13 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
           renderEdges: initialEdges,
           dfgNodes,
           dfgLinks,
-          mode: layoutMode,
+          mode: 'advanced',
           config: {
             direction: layoutDirection,
           },
         }).then(({ nodes, edges }) => {
           setNodes(nodes);
-          setEdges(edges);
+          setEdges(applyThicknessToEdges(edges));
           window.requestAnimationFrame(() => fitView());
         }).catch(console.error);
       })
@@ -272,29 +337,25 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       renderEdges: edges,
       dfgNodes: dfgData.nodes,
       dfgLinks: dfgData.links,
-      mode: layoutMode,
+      mode: 'advanced',
       config: {
         direction: layoutDirection,
       },
     })
       .then(({ nodes, edges }) => {
         setNodes(nodes);
-        setEdges(edges);
+        setEdges(applyThicknessToEdges(edges));
         window.requestAnimationFrame(() => fitView());
       })
       .catch(console.error);
-  }, [nodes, edges, fitView, dfgData, layoutMode, layoutDirection]);
-
-  const handleLayoutModeChange = useCallback((checked: boolean) => {
-    setLayoutMode(checked ? 'advanced' : 'naive');
-  }, []);
+  }, [nodes, edges, fitView, dfgData, layoutDirection, applyThicknessToEdges]);
 
   useEffect(() => {
     if (!dfgData) return;
     if (nodes.length === 0 && edges.length === 0) return;
     onLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutMode, layoutDirection]);
+  }, [layoutDirection]);
 
   return (
     <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
@@ -309,9 +370,14 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         proOptions={{ hideAttribution: true }}
         minZoom={0.25}
         maxZoom={2.5}
+        nodesDraggable={!interactionLocked}
+        nodesConnectable={!interactionLocked}
+        elementsSelectable={!interactionLocked}
+        panOnDrag={!interactionLocked}
+        panOnScroll={!interactionLocked}
+        zoomOnPinch={!interactionLocked}
+        zoomOnScroll={!interactionLocked}
       >
-        <Controls />
-        <Background />
       </ReactFlow>
 
       <div
@@ -430,14 +496,6 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
           </div>
           {!optionsCollapsed && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Advanced layout</span>
-                <Switch
-                  checked={layoutMode === 'advanced'}
-                  onCheckedChange={handleLayoutModeChange}
-                  aria-label="Toggle advanced layout"
-                />
-              </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Left-to-right layout</span>
                 <Switch
@@ -446,11 +504,131 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
                   aria-label="Toggle horizontal layout"
                 />
               </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Variable edge thickness</span>
+                <Switch
+                  checked={thicknessEnabled}
+                  onCheckedChange={setThicknessEnabled}
+                  aria-label="Toggle variable edge thickness"
+                />
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 12,
+                  paddingLeft: 16,
+                  marginBottom: 16,
+                  opacity: thicknessEnabled ? 1 : 0.45,
+                  pointerEvents: thicknessEnabled ? 'auto' : 'none',
+                }}
+              >
+                <div style={{ fontSize: 12, color: '#475569', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Minimum thickness</span>
+                  <span>{thicknessMin.toFixed(2)}×</span>
+                </div>
+                <Slider
+                  value={[thicknessMin]}
+                  min={THICKNESS_MIN_LIMIT}
+                  max={THICKNESS_MAX_LIMIT}
+                  step={0.05}
+                  onValueChange={(value) => {
+                    const next = value?.[0];
+                    if (typeof next !== 'number') return;
+                    const clamped = Math.min(
+                      Math.max(next, THICKNESS_MIN_LIMIT),
+                      Math.min(thicknessMax, THICKNESS_MAX_LIMIT),
+                    );
+                    setThicknessMin(parseFloat(clamped.toFixed(2)));
+                  }}
+                  disabled={!thicknessEnabled}
+                />
+                <div style={{ fontSize: 12, color: '#475569', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Maximum thickness</span>
+                  <span>{thicknessMax.toFixed(2)}×</span>
+                </div>
+                <Slider
+                  value={[thicknessMax]}
+                  min={THICKNESS_MIN_LIMIT}
+                  max={THICKNESS_MAX_LIMIT}
+                  step={0.05}
+                  onValueChange={(value) => {
+                    const next = value?.[0];
+                    if (typeof next !== 'number') return;
+                    const clamped = Math.max(
+                      Math.min(next, THICKNESS_MAX_LIMIT),
+                      Math.max(thicknessMin, THICKNESS_MIN_LIMIT),
+                    );
+                    setThicknessMax(parseFloat(clamped.toFixed(2)));
+                  }}
+                  disabled={!thicknessEnabled}
+                />
+              </div>
               <Button variant="secondary" size="sm" onClick={onLayout} className="w-full justify-center">
                 Relayout
               </Button>
             </>
           )}
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            background: '#FFFFFF',
+            border: '1px solid #E2E8F0',
+            borderRadius: 9999,
+            padding: '6px 12px',
+            boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
+          }}
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => reactFlow.zoomIn?.()}
+            className="rounded-full h-9 w-9"
+          >
+            <PlusIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => reactFlow.zoomOut?.()}
+            className="rounded-full h-9 w-9"
+          >
+            <MinusIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => fitView()}
+            className="rounded-full h-9 w-9"
+          >
+            <ScanIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={interactionLocked ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setInteractionLocked((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={interactionLocked ? 'Unlock interactions' : 'Lock interactions'}
+          >
+            {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+          </Button>
+          <Button
+            type="button"
+            onClick={handleSaveSettings}
+            variant={settingsSaved ? 'secondary' : 'default'}
+            className="rounded-full h-9 px-4 flex items-center gap-2"
+          >
+            <SaveIcon className="h-4 w-4" />
+            <span className="text-sm font-medium">{settingsSaved ? 'Saved' : 'Save'}</span>
+          </Button>
         </div>
       </div>
     </div>
