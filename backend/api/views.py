@@ -77,6 +77,113 @@ TOTEM_MOCK = {
     },
 }
 
+TOTEM_MOCK_2 = {
+    "tempgraph": {
+        "nodes": ["Company", "Factory", "Warehouse", "HR", "Worker", "Order", "Item"],
+        "D": [
+            ["Order", "HR"],
+            ["Order", "Worker"],
+            ["Item", "Worker"],
+            ["Worker", "Factory"],
+            ["Worker", "Warehouse"],
+            ["Factory", "Company"],
+            ["Warehouse", "Company"],
+        ],
+        "P": [
+            ["Factory", "Warehouse"],
+            ["Warehouse", "Factory"],
+            ["HR", "Worker"],
+            ["Worker", "HR"],
+        ],
+        "I": [
+            ["Order", "Item"],
+            ["Worker", "Item"],
+            ["Company", "Worker"],
+        ],
+    },
+    "cardinalities": [
+        {
+            "from": "Order",
+            "to": "HR",
+            "log_cardinality": "1..1",
+            "event_cardinality": "0..2",
+        },
+        {
+            "from": "Order",
+            "to": "Worker",
+            "log_cardinality": "1..n",
+            "event_cardinality": "1..5",
+        },
+        {
+            "from": "Item",
+            "to": "Worker",
+            "log_cardinality": "0..n",
+            "event_cardinality": "0..3",
+        },
+        {
+            "from": "Worker",
+            "to": "Factory",
+            "log_cardinality": "1..n",
+            "event_cardinality": "1..4",
+        },
+        {
+            "from": "Worker",
+            "to": "Warehouse",
+            "log_cardinality": "1..n",
+            "event_cardinality": "1..3",
+        },
+        {
+            "from": "Factory",
+            "to": "Company",
+            "log_cardinality": "1..1",
+            "event_cardinality": "1..1",
+        },
+        {
+            "from": "Warehouse",
+            "to": "Company",
+            "log_cardinality": "1..1",
+            "event_cardinality": "1..1",
+        },
+    ],
+    "type_relations": [
+        ["Company", "Factory"],
+        ["Company", "Warehouse"],
+        ["Company", "Worker"],
+        ["Factory", "Warehouse"],
+        ["Factory", "Worker"],
+        ["HR", "Order"],
+        ["HR", "Worker"],
+        ["Item", "Worker"],
+        ["Order", "Item"],
+        ["Order", "Worker"],
+    ],
+    "all_event_types": [
+        "Close Company",
+        "Complete Order",
+        "Create Order",
+        "Dispatch Inventory",
+        "Establish Company",
+        "Hire Worker",
+        "Maintain Equipment",
+        "Package Item",
+        "Process Contract",
+        "Relocate Worker",
+        "Ship Item",
+        "Staff Shift",
+        "Start Production",
+        "Store Inventory",
+    ],
+    "object_type_to_event_types": {
+        "Company": ["Establish Company", "Close Company"],
+        "Factory": ["Start Production", "Maintain Equipment"],
+        "Warehouse": ["Store Inventory", "Dispatch Inventory"],
+        "HR": ["Hire Worker", "Process Contract"],
+        "Worker": ["Staff Shift", "Relocate Worker"],
+        "Order": ["Create Order", "Complete Order"],
+        "Item": ["Package Item", "Ship Item"],
+    },
+}
+
 @api_view(['OPTIONS'])
 def debug_options(request):
     return Response({"headers": dict(request.headers)})
@@ -270,7 +377,9 @@ def discover_totem_mock(request, pk: int):
     """
     Temporary mock endpoint for Totem discovery until backend integration is ready.
     """
-    return Response(TOTEM_MOCK, status=status.HTTP_200_OK)
+    variant = request.query_params.get("variant")
+    payload = TOTEM_MOCK_2 if variant == "2" else TOTEM_MOCK
+    return Response(payload, status=status.HTTP_200_OK)
 
 @api_view(["GET"])
 @permission_classes([AllowAny])

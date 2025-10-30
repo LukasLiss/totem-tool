@@ -5,15 +5,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { mapTypesToColors } from '../utils/objectColors';
 
-type RelationKey = 'D' | 'Di' | string;
-
-interface TotemApiResponse {
+type TotemApiResponse = {
   tempgraph: {
     nodes?: string[];
     [relation: string]: string[] | string[][];
   };
   type_relations?: Array<string[]>;
-}
+  all_event_types?: string[];
+  object_type_to_event_types?: Record<string, string[]>;
+};
 
 type ProcessAreaDefinition = {
   id: string;
@@ -396,7 +396,7 @@ function TotemVisualizer({
                     style={{
                       display: 'flex',
                       flexDirection: 'row',
-                      gap: 16,
+                      gap: 14,
                       flexWrap: 'wrap',
                       flex: 1,
                     }}
@@ -405,16 +405,16 @@ function TotemVisualizer({
                       <div
                         key={area.id}
                         style={{
-                          flex: '0 0 320px',
-                          minHeight: 180,
+                          flex: '0 0 280px',
+                          minHeight: 150,
                           borderRadius: 24,
                           background: 'rgba(59, 130, 246, 0.16)',
                           border: '1px solid rgba(37, 99, 235, 0.35)',
                           boxShadow: 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)',
-                          padding: '18px 22px 24px',
+                          padding: '16px 20px 20px',
                           display: 'flex',
                           flexDirection: 'column',
-                          gap: 16,
+                          gap: 14,
                         }}
                       >
                         <div
@@ -517,8 +517,7 @@ function TotemVisualizer({
                 No process areas discovered yet
               </div>
               <p style={{ fontSize: 14, lineHeight: 1.6 }}>
-                Run Totem discovery for the selected event log to populate process layers and object
-                types.
+                Run Totem discovery for the selected event log to populate process layers and object types.
               </p>
             </div>
           )
