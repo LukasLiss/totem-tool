@@ -81,11 +81,12 @@ TOTEM_MOCK_2 = {
     "tempgraph": {
         "nodes": ["Company", "Factory", "Warehouse", "HR", "Worker", "Order", "Item"],
         "D": [
-            ["Order", "HR"],
+            #["Order", "HR"],
             ["Order", "Worker"],
             ["Item", "Worker"],
             ["Worker", "Factory"],
-            ["Worker", "Warehouse"],
+            ["Item", "Warehouse"],
+            ["HR", "Company"],
             ["Factory", "Company"],
             ["Warehouse", "Company"],
         ],
@@ -97,8 +98,6 @@ TOTEM_MOCK_2 = {
         ],
         "I": [
             ["Order", "Item"],
-            ["Worker", "Item"],
-            ["Company", "Worker"],
         ],
     },
     "cardinalities": [
@@ -378,7 +377,7 @@ def discover_totem_mock(request, pk: int):
     Temporary mock endpoint for Totem discovery until backend integration is ready.
     """
     variant = request.query_params.get("variant")
-    payload = TOTEM_MOCK_2 if variant == "2" else TOTEM_MOCK
+    payload = TOTEM_MOCK_2 # if variant == "2" else TOTEM_MOCK
     return Response(payload, status=status.HTTP_200_OK)
 
 @api_view(["GET"])
