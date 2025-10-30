@@ -25,6 +25,58 @@ from totem_lib.ocel import (
     load_events_from_xml,    load_objects_from_xml,
 )
 
+
+TOTEM_MOCK = {
+    "tempgraph": {
+        "nodes": ["Order", "Delivery", "Invoice"],
+        "D": [
+            ["Order", "Delivery"],
+            ["Delivery", "Invoice"],
+        ],
+        "I": [
+            ["Invoice", "Order"],
+        ],
+        "P": [
+            ["Order", "Invoice"],
+        ],
+    },
+    "cardinalities": [
+        {
+            "from": "Order",
+            "to": "Delivery",
+            "log_cardinality": "1..n",
+            "event_cardinality": "1..5",
+        },
+        {
+            "from": "Delivery",
+            "to": "Invoice",
+            "log_cardinality": "0..1",
+            "event_cardinality": "0..3",
+        },
+        {
+            "from": "Order",
+            "to": "Invoice",
+            "log_cardinality": "1..1",
+            "event_cardinality": "1..2",
+        },
+    ],
+    "type_relations": [
+        ["Order", "Delivery", "Invoice"],
+    ],
+    "all_event_types": [
+        "Create Order",
+        "Dispatch Order",
+        "Confirm Delivery",
+        "Issue Invoice",
+        "Receive Payment",
+    ],
+    "object_type_to_event_types": {
+        "Order": ["Create Order", "Dispatch Order"],
+        "Delivery": ["Dispatch Order", "Confirm Delivery"],
+        "Invoice": ["Issue Invoice", "Receive Payment"],
+    },
+}
+
 @api_view(['OPTIONS'])
 def debug_options(request):
     return Response({"headers": dict(request.headers)})
@@ -77,9 +129,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            cache_key = f"totem_discovery_{user_file.pk}"
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
             ocel = _build_ocel_from_path(user_file.file.path)
             totem = totemDiscovery(ocel)
             serialized = _serialize_totem(totem)
+
+            cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -146,10 +205,10 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
 
 def _serialize_totem(totem: Totem) -> dict:
     """
-    Convert a Totem object into a JSON-serializable structure that mirrors the agreed mockup.
+    Convert a Totem object into a JSON-serializable structure matching the frontend contract.
     """
     tempgraph = {}
-    raw_tempgraph = getattr(totem, "tempgraph", {})
+    raw_tempgraph = getattr(totem, "tempgraph", {}) or {}
 
     nodes = raw_tempgraph.get("nodes", [])
     if isinstance(nodes, set):
@@ -203,6 +262,15 @@ def _serialize_totem(totem: Totem) -> dict:
         "all_event_types": all_event_types,
         "object_type_to_event_types": object_type_to_event_types,
     }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def discover_totem_mock(request, pk: int):
+    """
+    Temporary mock endpoint for Totem discovery until backend integration is ready.
+    """
+    return Response(TOTEM_MOCK, status=status.HTTP_200_OK)
 
 @api_view(["GET"])
 @permission_classes([AllowAny])

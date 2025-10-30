@@ -14,6 +14,7 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import TotemVisualizer from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
   const [processedResult, setProcessedResult] = useState(null);
@@ -46,6 +47,19 @@ export function DevDashboard() {
         </div>
       </header>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+        <Card className="@container/card">
+          <CardHeader>
+            <CardTitle>Totem Visualizer</CardTitle>
+            <CardDescription>
+              Explore temporal relations between object types discovered from the selected event log.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="h-[600px] p-0">
+            <ReactFlowProvider>
+              <TotemVisualizer eventLogId={selectedFile?.id} height="100%" backendBaseUrl="http://localhost:8000" />
+            </ReactFlowProvider>
+          </CardContent>
+        </Card>
         <div className="grid auto-rows-min gap-4 *:data-[slot=card]:bg-card dark:*:data-[slot=card]:bg-card *:data-[slot=card]:shadow-xs">
           <Card className="@container/card max-w-sm">
             <CardHeader>
