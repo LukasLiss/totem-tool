@@ -178,20 +178,24 @@ function buildParallelBars({
   unitY: number;
   pathLength: number;
   targetContact?: Point2D;
-}): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+}): {
+  bars: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  innerOffset: number | null;
+} {
   const effectiveLength = Math.max(pathLength, 1);
   if (!Number.isFinite(effectiveLength) || effectiveLength <= 0) {
-    return [];
+    return { bars: [], innerOffset: null };
   }
 
   const tolerance = 0.15;
-  const halfPerp = Math.min(30, Math.max(16, effectiveLength * 0.45)) / 2;
+  const barHeight = Math.min(Math.max(10, effectiveLength * 0.28), 20);
+  const halfPerp = barHeight;
   const perpX = -unitY;
   const perpY = unitX;
   const maxOffset = Math.max(0, effectiveLength - 0.75);
   const outerOffset = 0;
   const minGap = Math.max(6, Math.min(18, effectiveLength * 0.24));
-  const preferredGap = Math.max(minGap, Math.min(26, effectiveLength * 0.36));
+  const preferredGap = Math.max(minGap, Math.min(22, effectiveLength * 0.28));
 
   let innerOffset = outerOffset + preferredGap;
   if (innerOffset > maxOffset) {
@@ -270,16 +274,18 @@ function buildParallelBars({
     addPosition({ x: endX, y: endY });
   }
 
-  if (positions.length > 4) {
-    positions.length = 4;
-  }
+  const innerLimit = uniqueOffsets.length >= 2 ? uniqueOffsets[uniqueOffsets.length - 1] : null;
+  const trimmedPositions = positions.slice(0, 4);
 
-  return positions.map((point) => ({
-    x1: point.x + perpX * halfPerp,
-    y1: point.y + perpY * halfPerp,
-    x2: point.x - perpX * halfPerp,
-    y2: point.y - perpY * halfPerp,
-  }));
+  return {
+    bars: trimmedPositions.map((point) => ({
+      x1: point.x + perpX * halfPerp,
+      y1: point.y + perpY * halfPerp,
+      x2: point.x - perpX * halfPerp,
+      y2: point.y - perpY * halfPerp,
+    })),
+    innerOffset: innerLimit,
+  };
 }
 
 const COLLISION_EPSILON = 1e-5;
@@ -515,20 +521,72 @@ function computeEdgeSegments(
     const unitX = dx / length;
     const unitY = dy / length;
 
+    let parallelInfo: ReturnType<typeof buildParallelBars> | null = null;
+    let curveStartX = startX;
+    let curveStartY = startY;
+    let curveEndX = endX;
+    let curveEndY = endY;
+    let curveDx = dx;
+    let curveDy = dy;
+    let curveUnitX = unitX;
+    let curveUnitY = unitY;
+    let truncatedForParallel = false;
+
+    if (edge.relation === 'P') {
+      parallelInfo = buildParallelBars({
+        startX,
+        startY,
+        endX,
+        endY,
+        unitX,
+        unitY,
+        pathLength: length,
+        targetContact: { x: collisionX, y: collisionY },
+      });
+      const innerOffset = parallelInfo.innerOffset;
+      if (
+        innerOffset !== null &&
+        innerOffset > 0.2 &&
+        innerOffset * 2 < length - 0.2
+      ) {
+        const truncatedStartX = startX + unitX * innerOffset;
+        const truncatedStartY = startY + unitY * innerOffset;
+        const truncatedEndX = endX - unitX * innerOffset;
+        const truncatedEndY = endY - unitY * innerOffset;
+        const truncatedDx = truncatedEndX - truncatedStartX;
+        const truncatedDy = truncatedEndY - truncatedStartY;
+        const truncatedLength = Math.hypot(truncatedDx, truncatedDy);
+        if (Number.isFinite(truncatedLength) && truncatedLength >= 0.5) {
+          curveStartX = truncatedStartX;
+          curveStartY = truncatedStartY;
+          curveEndX = truncatedEndX;
+          curveEndY = truncatedEndY;
+          curveDx = truncatedDx;
+          curveDy = truncatedDy;
+          curveUnitX = truncatedDx / truncatedLength;
+          curveUnitY = truncatedDy / truncatedLength;
+          truncatedForParallel = true;
+        }
+      }
+    }
+
     const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
     if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
       pathSegments.push(`L ${startX} ${startY}`);
     }
+    if (truncatedForParallel) {
+      pathSegments.push(`M ${curveStartX} ${curveStartY}`);
+    }
 
     const curvePath = buildCurvedPath({
-      startX,
-      startY,
-      endX,
-      endY,
-      dx,
-      dy,
-      unitX,
-      unitY,
+      startX: curveStartX,
+      startY: curveStartY,
+      endX: curveEndX,
+      endY: curveEndY,
+      dx: curveDx,
+      dy: curveDy,
+      unitX: curveUnitX,
+      unitY: curveUnitY,
     });
     const curveWithoutMove = curvePath.replace(
       /^M\s*[-+]?[\d.]+(?:e[-+]?\d+)?\s+[-+]?[\d.]+(?:e[-+]?\d+)?\s*/i,
@@ -539,7 +597,6 @@ function computeEdgeSegments(
     }
 
     const path = pathSegments.join(' ');
-    const pathLength = Math.hypot(endX - startX, endY - startY);
 
     const segment: EdgeSegment = {
       id: edge.id,
@@ -548,16 +605,11 @@ function computeEdgeSegments(
     };
 
     if (edge.relation === 'P') {
-      segment.bars = buildParallelBars({
-        startX,
-        startY,
-        endX,
-        endY,
-        unitX,
-        unitY,
-        pathLength,
-        targetContact: { x: collisionX, y: collisionY },
-      });
+      if (parallelInfo && parallelInfo.bars.length > 0) {
+        segment.bars = parallelInfo.bars;
+      } else {
+        segment.bars = [];
+      }
     } else if (edge.relation === 'D' && dependentBase && dependentTip) {
       const cap = buildDependentCap({
         baseX: dependentBase.x,
@@ -1458,6 +1510,7 @@ function TotemVisualizer({
               {edgeSegments.map((edge) => {
                 const strokeWidth =
                   edge.relation === 'D' ? 3.2 : edge.relation === 'P' ? 3 : 2.6;
+                const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
                 return (
                   <g key={edge.id}>
                     <path
@@ -1476,7 +1529,7 @@ function TotemVisualizer({
                         x2={bar.x2}
                         y2={bar.y2}
                         stroke="#0F172A"
-                        strokeWidth={strokeWidth}
+                        strokeWidth={barStrokeWidth}
                         strokeLinecap="butt"
                       />
                     ))}
