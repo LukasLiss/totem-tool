@@ -261,40 +261,56 @@ function calculateNodeCollisionPoint(
   };
 }
 
+function shouldRenderStraightSegment(dx: number, dy: number, lengthOverride?: number): boolean {
+  const length = lengthOverride ?? Math.hypot(dx, dy);
+  if (!Number.isFinite(length)) {
+    return true;
+  }
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+  const straightnessRatio = Math.min(absDx, absDy) / Math.max(absDx, absDy || 1);
+  const isSameLayer = absDy < 12;
+  const isVertical = absDx < 12;
+  return straightnessRatio < 0.08 || isSameLayer || isVertical || length < 36;
+}
+
 function buildDependentCap({
   baseX,
   baseY,
   tipX,
   tipY,
-  unitX,
-  unitY,
+  normalX,
+  normalY,
   effectiveLength,
 }: {
   baseX: number;
   baseY: number;
   tipX: number;
   tipY: number;
-  unitX: number;
-  unitY: number;
+  normalX: number;
+  normalY: number;
   effectiveLength: number;
 }): string | undefined {
   const capLength = Math.hypot(tipX - baseX, tipY - baseY);
   if (!Number.isFinite(capLength) || capLength < 1) {
     return undefined;
   }
+  const normLength = Math.hypot(normalX, normalY) || 1;
+  const unitNormalX = normalX / normLength;
+  const unitNormalY = normalY / normLength;
+  const unitTangentX = -unitNormalY;
+  const unitTangentY = unitNormalX;
   const capWidth = Math.min(Math.max(10, effectiveLength * 0.28), 20);
-  const perpX = -unitY;
-  const perpY = unitX;
   const halfWidth = capWidth / 2;
 
-  const p1x = baseX + perpX * halfWidth;
-  const p1y = baseY + perpY * halfWidth;
-  const p2x = baseX - perpX * halfWidth;
-  const p2y = baseY - perpY * halfWidth;
-  const p3x = tipX - perpX * halfWidth;
-  const p3y = tipY - perpY * halfWidth;
-  const p4x = tipX + perpX * halfWidth;
-  const p4y = tipY + perpY * halfWidth;
+  const p1x = baseX + unitTangentX * halfWidth;
+  const p1y = baseY + unitTangentY * halfWidth;
+  const p2x = baseX - unitTangentX * halfWidth;
+  const p2y = baseY - unitTangentY * halfWidth;
+  const p3x = tipX - unitTangentX * halfWidth;
+  const p3y = tipY - unitTangentY * halfWidth;
+  const p4x = tipX + unitTangentX * halfWidth;
+  const p4y = tipY + unitTangentY * halfWidth;
 
   return `M ${p1x} ${p1y} L ${p2x} ${p2y} L ${p3x} ${p3y} L ${p4x} ${p4y} Z`;
 }
@@ -312,23 +328,61 @@ function computeEdgeSegments(
 
     const sourceCenter: Point2D = { x: source.centerX, y: source.centerY };
     const targetCenter: Point2D = { x: target.centerX, y: target.centerY };
-    const sourceExit = calculateNodeCollisionPoint(
+    const sourceExitDefault = calculateNodeCollisionPoint(
       targetCenter,
       sourceCenter,
       Math.max(source.width, 1),
       Math.max(source.height, 1),
     );
-    const targetEntry = calculateNodeCollisionPoint(
+    const targetEntryDefault = calculateNodeCollisionPoint(
       sourceCenter,
       targetCenter,
       Math.max(target.width, 1),
       Math.max(target.height, 1),
     );
 
-    let startX = sourceExit.x;
-    let startY = sourceExit.y;
-    const collisionX = targetEntry.x;
-    const collisionY = targetEntry.y;
+    let startPoint: Point2D = { ...sourceExitDefault };
+    let collisionPoint: Point2D = { ...targetEntryDefault };
+
+    const centerDx = targetCenter.x - sourceCenter.x;
+    const centerDy = targetCenter.y - sourceCenter.y;
+    const treatAsStraight = shouldRenderStraightSegment(centerDx, centerDy);
+
+    if (!treatAsStraight) {
+      let directionX = centerDx;
+      if (Math.abs(directionX) < 1e-3) {
+        directionX = collisionPoint.x - startPoint.x;
+      }
+      if (Math.abs(directionX) < 1e-3) {
+        directionX = 1;
+      }
+      const horizontalSign = directionX >= 0 ? 1 : -1;
+
+      let directionY = centerDy;
+      if (Math.abs(directionY) < 1e-3) {
+        directionY = collisionPoint.y - startPoint.y;
+      }
+      if (Math.abs(directionY) < 1e-3) {
+        directionY = 1;
+      }
+      const verticalSign = directionY >= 0 ? 1 : -1;
+
+      const sourceHalfHeight = Math.max(source.height, 1) / 2;
+      const targetHalfWidth = Math.max(target.width, 1) / 2;
+      startPoint = {
+        x: sourceCenter.x,
+        y: sourceCenter.y + verticalSign * sourceHalfHeight,
+      };
+      collisionPoint = {
+        x: targetCenter.x - horizontalSign * targetHalfWidth,
+        y: targetCenter.y,
+      };
+    }
+
+    let startX = startPoint.x;
+    let startY = startPoint.y;
+    const collisionX = collisionPoint.x;
+    const collisionY = collisionPoint.y;
 
     const toCollisionDx = collisionX - startX;
     const toCollisionDy = collisionY - startY;
@@ -343,16 +397,45 @@ function computeEdgeSegments(
     let endY = collisionY;
     let dependentBase: Point2D | null = null;
     let dependentTip: Point2D | null = null;
+    let finalLineToTarget: Point2D | null = null;
+
+    const normalVectorX = targetCenter.x - collisionX;
+    const normalVectorY = targetCenter.y - collisionY;
+    const normalMagnitude = Math.hypot(normalVectorX, normalVectorY);
+    const targetNormal =
+      normalMagnitude > 0
+        ? {
+            x: normalVectorX / normalMagnitude,
+            y: normalVectorY / normalMagnitude,
+          }
+        : null;
 
     if (edge.relation === 'D') {
       const rawCap = Math.min(Math.max(12, toCollisionLength * 0.35), 24);
       const maxAvailable = Math.max(toCollisionLength - 8, 0);
       const capLength = Math.min(rawCap, maxAvailable);
       if (capLength > 1) {
-        endX = collisionX - dirToCollisionX * capLength;
-        endY = collisionY - dirToCollisionY * capLength;
-        dependentBase = { x: endX, y: endY };
-        dependentTip = { x: collisionX, y: collisionY };
+        if (targetNormal) {
+          endX = collisionX - targetNormal.x * capLength;
+          endY = collisionY - targetNormal.y * capLength;
+          dependentBase = { x: endX, y: endY };
+          dependentTip = { x: collisionX, y: collisionY };
+        } else {
+          endX = collisionX - dirToCollisionX * capLength;
+          endY = collisionY - dirToCollisionY * capLength;
+          dependentBase = { x: endX, y: endY };
+          dependentTip = { x: collisionX, y: collisionY };
+        }
+      }
+    }
+
+    if (edge.relation === 'I' && targetNormal) {
+      const maxApproach = Math.max(toCollisionLength - 4, 0);
+      const approachDistance = Math.min(Math.max(16, toCollisionLength * 0.3), maxApproach);
+      if (approachDistance > 6) {
+        endX = collisionX - targetNormal.x * approachDistance;
+        endY = collisionY - targetNormal.y * approachDistance;
+        finalLineToTarget = { x: collisionX, y: collisionY };
       }
     }
 
@@ -363,7 +446,7 @@ function computeEdgeSegments(
 
     const unitX = dx / length;
     const unitY = dy / length;
-    const path = buildCurvedPath({
+    let path = buildCurvedPath({
       startX,
       startY,
       endX,
@@ -373,6 +456,9 @@ function computeEdgeSegments(
       unitX,
       unitY,
     });
+    if (finalLineToTarget) {
+      path = `${path} L ${finalLineToTarget.x} ${finalLineToTarget.y}`;
+    }
     const pathLength = Math.hypot(endX - startX, endY - startY);
 
     const segment: EdgeSegment = {
@@ -395,15 +481,18 @@ function computeEdgeSegments(
         targetContact: { x: collisionX, y: collisionY },
       });
     } else if (edge.relation === 'D' && dependentBase && dependentTip) {
-      segment.capPath = buildDependentCap({
+      const cap = buildDependentCap({
         baseX: dependentBase.x,
         baseY: dependentBase.y,
         tipX: dependentTip.x,
         tipY: dependentTip.y,
-        unitX,
-        unitY,
+        normalX: targetNormal?.x ?? unitX,
+        normalY: targetNormal?.y ?? unitY,
         effectiveLength: toCollisionLength,
       });
+      if (cap) {
+        segment.capPath = cap;
+      }
     }
 
     segments.push(segment);
@@ -436,16 +525,12 @@ function buildCurvedPath({
     return `M ${startX} ${startY} L ${endX} ${endY}`;
   }
 
-  const absDx = Math.abs(dx);
-  const absDy = Math.abs(dy);
-  const straightnessRatio = Math.min(absDx, absDy) / Math.max(absDx, absDy || 1);
-  const isSameLayer = absDy < 12;
-  const isVertical = absDx < 12;
-  // Preserve straight segments for vertical connectors or nodes sharing a layer.
-  if (straightnessRatio < 0.08 || isSameLayer || isVertical || length < 36) {
+  if (shouldRenderStraightSegment(dx, dy, length)) {
     return `M ${startX} ${startY} L ${endX} ${endY}`;
   }
 
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
   const midpointX = (startX + endX) / 2;
   const midpointY = (startY + endY) / 2;
 
