@@ -33,13 +33,14 @@ type TotemVisualizerProps = {
   backendBaseUrl?: string;
 };
 
-type RelationType = 'P' | 'D' | 'I';
+type RelationType = 'P' | 'D' | 'I' | 'A';
 
 type EdgeDescriptor = {
   id: string;
   relation: RelationType;
   from: string;
   to: string;
+  color?: string;
 };
 
 type NodePosition = {
@@ -56,6 +57,7 @@ type EdgeSegment = {
   bars?: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   capPath?: string;
   arrowPath?: string;
+  color?: string;
 };
 
 type Point2D = { x: number; y: number };
@@ -86,6 +88,10 @@ const OBJECT_NODE_MIN_HEIGHT = 80;
 const GRID_COLUMN_GAP = 24;
 const GRID_ROW_GAP = 20;
 const COLUMN_WIDTH = OBJECT_NODE_WIDTH + GRID_COLUMN_GAP;
+const PROCESS_AREA_BACKGROUND = 'rgba(59, 130, 246, 0.16)';
+const PROCESS_AREA_BORDER = 'rgba(37, 99, 235, 0.35)';
+const PROCESS_AREA_INSET_SHADOW = 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)';
+const DETAIL_EDGE_STROKE = 'rgba(37, 99, 235, 0.35)';
 
 function resolveHeight(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -383,6 +389,7 @@ function buildDependentCap({
 function computeEdgeSegments(
   edges: EdgeDescriptor[],
   positions: Record<string, NodePosition>,
+  areaAnchorMembers?: Record<string, string[]>,
 ): EdgeSegment[] {
   const segments: EdgeSegment[] = [];
 
@@ -391,6 +398,7 @@ function computeEdgeSegments(
     const target = positions[edge.to];
     if (!source || !target) return;
 
+    const isAreaDetailEdge = edge.relation === 'A';
     const sourceCenter: Point2D = { x: source.centerX, y: source.centerY };
     const targetCenter: Point2D = { x: target.centerX, y: target.centerY };
     const sourceExitDefault = calculateNodeCollisionPoint(
@@ -409,11 +417,41 @@ function computeEdgeSegments(
     let startPoint: Point2D = { ...sourceExitDefault };
     let collisionPoint: Point2D = { ...targetEntryDefault };
 
+    if (isAreaDetailEdge) {
+      const memberIds = areaAnchorMembers?.[edge.from] ?? [];
+      const memberCenters = memberIds
+        .map((member) => positions[member])
+        .filter((value): value is NodePosition => Boolean(value));
+      const averageMemberCenterY =
+        memberCenters.length > 0
+          ? memberCenters.reduce((sum, node) => sum + node.centerY, 0) / memberCenters.length
+          : sourceCenter.y;
+      const sourceHalfHeight = Math.max(source.height / 2 - 6, 1);
+      const clampedSourceY = Math.max(
+        sourceCenter.y - sourceHalfHeight,
+        Math.min(sourceCenter.y + sourceHalfHeight, averageMemberCenterY),
+      );
+      const targetHalfHeight = Math.max(target.height / 2 - 6, 1);
+      const clampedTargetY = Math.max(
+        targetCenter.y - targetHalfHeight,
+        Math.min(targetCenter.y + targetHalfHeight, clampedSourceY),
+      );
+
+      startPoint = {
+        x: sourceCenter.x + Math.max(source.width, 1) / 2,
+        y: clampedSourceY,
+      };
+      collisionPoint = {
+        x: targetCenter.x - Math.max(target.width, 1) / 2,
+        y: clampedTargetY,
+      };
+    }
+
     const centerDx = targetCenter.x - sourceCenter.x;
     const centerDy = targetCenter.y - sourceCenter.y;
-    const treatAsStraight = shouldRenderStraightSegment(centerDx, centerDy);
+    const treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
 
-    if (!treatAsStraight) {
+    if (!treatAsStraight && !isAreaDetailEdge) {
       let directionX = centerDx;
       if (Math.abs(directionX) < 1e-3) {
         directionX = collisionPoint.x - startPoint.x;
@@ -570,38 +608,52 @@ function computeEdgeSegments(
       }
     }
 
-    const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
-    if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
-      pathSegments.push(`L ${startX} ${startY}`);
-    }
-    if (truncatedForParallel) {
-      pathSegments.push(`M ${curveStartX} ${curveStartY}`);
-    }
+    let path: string;
+    if (isAreaDetailEdge) {
+      const deltaX = endX - startX;
+      const horizontalDistance = Math.max(1, Math.abs(deltaX));
+      const arcMagnitude = Math.max(Math.min(horizontalDistance * 0.42, 130), 26);
+      const direction = deltaX >= 0 ? 1 : -1;
+      const c1x = startX + direction * arcMagnitude;
+      const c1y = startY;
+      const c2x = endX - direction * arcMagnitude * 0.65;
+      const c2y = endY;
+      path = `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`;
+    } else {
+      const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
+      if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
+        pathSegments.push(`L ${startX} ${startY}`);
+      }
+      if (truncatedForParallel) {
+        pathSegments.push(`M ${curveStartX} ${curveStartY}`);
+      }
 
-    const curvePath = buildCurvedPath({
-      startX: curveStartX,
-      startY: curveStartY,
-      endX: curveEndX,
-      endY: curveEndY,
-      dx: curveDx,
-      dy: curveDy,
-      unitX: curveUnitX,
-      unitY: curveUnitY,
-    });
-    const curveWithoutMove = curvePath.replace(
-      /^M\s*[-+]?[\d.]+(?:e[-+]?\d+)?\s+[-+]?[\d.]+(?:e[-+]?\d+)?\s*/i,
-      '',
-    );
-    if (curveWithoutMove.trim().length > 0) {
-      pathSegments.push(curveWithoutMove.trimStart());
-    }
+      const curvePath = buildCurvedPath({
+        startX: curveStartX,
+        startY: curveStartY,
+        endX: curveEndX,
+        endY: curveEndY,
+        dx: curveDx,
+        dy: curveDy,
+        unitX: curveUnitX,
+        unitY: curveUnitY,
+      });
+      const curveWithoutMove = curvePath.replace(
+        /^M\s*[-+]?[\d.]+(?:e[-+]?\d+)?\s+[-+]?[\d.]+(?:e[-+]?\d+)?\s*/i,
+        '',
+      );
+      if (curveWithoutMove.trim().length > 0) {
+        pathSegments.push(curveWithoutMove.trimStart());
+      }
 
-    const path = pathSegments.join(' ');
+      path = pathSegments.join(' ');
+    }
 
     const segment: EdgeSegment = {
       id: edge.id,
       relation: edge.relation,
       path,
+      color: edge.color,
     };
 
     if (edge.relation === 'P') {
@@ -1332,32 +1384,81 @@ function TotemVisualizer({
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
-  const nodeRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+  const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
   const [edgeSegments, setEdgeSegments] = useState<EdgeSegment[]>([]);
   const [contentSize, setContentSize] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
   });
 
-  const assignNodeRef = useCallback((type: string, element: HTMLSpanElement | null) => {
+  const assignNodeRef = useCallback((type: string, element: HTMLElement | null) => {
     if (element) {
       nodeRefs.current[type] = element;
     } else {
       delete nodeRefs.current[type];
     }
   }, []);
+  const [expandedAreas, setExpandedAreas] = useState<Record<string, boolean>>({});
+
   const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem) : []), [rawTotem]);
-  const edges = useMemo(() => extractEdges(rawTotem?.tempgraph), [rawTotem?.tempgraph]);
-  const layoutInfo = useMemo(() => prepareGridLayout(layers, edges), [layers, edges]);
   const typeColorMap = useMemo(
     () => mapTypesToColors(rawTotem?.tempgraph?.nodes ?? []),
     [rawTotem?.tempgraph?.nodes],
   );
+  const baseEdges = useMemo(
+    () => extractEdges(rawTotem?.tempgraph),
+    [rawTotem?.tempgraph],
+  );
+  const dynamicAreaEdges = useMemo(() => {
+    const descriptors: EdgeDescriptor[] = [];
+    Object.entries(expandedAreas).forEach(([areaId, expanded]) => {
+      if (!expanded) return;
+      descriptors.push({
+        id: `area-detail-${areaId}`,
+        relation: 'A',
+        from: `${areaId}::anchor`,
+        to: `${areaId}::detail`,
+        color: DETAIL_EDGE_STROKE,
+      });
+    });
+    return descriptors;
+  }, [expandedAreas]);
+  const allEdges = useMemo(
+    () => [...baseEdges, ...dynamicAreaEdges],
+    [baseEdges, dynamicAreaEdges],
+  );
+  const areaAnchorMembers = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    layers.forEach((layer) => {
+      layer.areas.forEach((area) => {
+        map[`${area.id}::anchor`] = area.objectTypes.slice();
+      });
+    });
+    return map;
+  }, [layers]);
+  const layoutInfo = useMemo(() => prepareGridLayout(layers, allEdges), [layers, allEdges]);
   const totalColumns = Math.max(layoutInfo.totalColumns, 1);
   const levelGridTemplate = `repeat(${totalColumns}, ${COLUMN_WIDTH}px)`;
   const levelMinimumWidth = totalColumns * COLUMN_WIDTH;
   const areaPlacements = layoutInfo.areaPlacements;
   const nodeColumns = layoutInfo.nodeColumns;
+  const detailEdgeSegments = useMemo(
+    () => edgeSegments.filter((segment) => segment.relation === 'A'),
+    [edgeSegments],
+  );
+  const primaryEdgeSegments = useMemo(
+    () => edgeSegments.filter((segment) => segment.relation !== 'A'),
+    [edgeSegments],
+  );
+  const toggleAreaDetail = useCallback((areaId: string) => {
+    setExpandedAreas((prev) => {
+      if (prev[areaId]) {
+        const { [areaId]: _removed, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [areaId]: true };
+    });
+  }, []);
 
   const fetchTotem = useCallback(async () => {
     if (!eventLogId) {
@@ -1398,6 +1499,10 @@ function TotemVisualizer({
     fetchTotem();
   }, [fetchTotem]);
 
+  useEffect(() => {
+    setExpandedAreas({});
+  }, [rawTotem?.tempgraph]);
+
   useLayoutEffect(() => {
     const contentEl = contentRef.current;
     if (!contentEl) {
@@ -1428,7 +1533,7 @@ function TotemVisualizer({
           };
         });
 
-        const segments = computeEdgeSegments(edges, positions);
+        const segments = computeEdgeSegments(allEdges, positions, areaAnchorMembers);
         setEdgeSegments(segments);
         setContentSize({
           width: Math.max(
@@ -1460,7 +1565,7 @@ function TotemVisualizer({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [edges, layers, rawTotem]);
+  }, [allEdges, areaAnchorMembers, layers, rawTotem]);
 
   const computedHeight = resolveHeight(height);
   const hasLayers = layers.length > 0;
@@ -1507,37 +1612,48 @@ function TotemVisualizer({
             zIndex: 1,
           }}
         >
-              {edgeSegments.map((edge) => {
-                const strokeWidth =
-                  edge.relation === 'D' ? 3.2 : edge.relation === 'P' ? 3 : 2.6;
-                const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
-                return (
-                  <g key={edge.id}>
-                    <path
-                      d={edge.path}
-                      stroke="#0F172A"
-                      strokeWidth={strokeWidth}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      fill="none"
-                    />
-                    {edge.bars?.map((bar, index) => (
-                      <line
-                        key={`${edge.id}-bar-${index}`}
-                        x1={bar.x1}
-                        y1={bar.y1}
-                        x2={bar.x2}
-                        y2={bar.y2}
-                        stroke="#0F172A"
-                        strokeWidth={barStrokeWidth}
-                        strokeLinecap="butt"
+              {[detailEdgeSegments, primaryEdgeSegments].map((group, groupIndex) =>
+                group.map((edge) => {
+                  const strokeWidth =
+                    edge.relation === 'D'
+                      ? 3.2
+                      : edge.relation === 'P'
+                        ? 3
+                        : edge.relation === 'A'
+                          ? 2.2
+                          : 2.6;
+                  const strokeColor = edge.color ?? '#0F172A';
+                  const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
+                  return (
+                    <g key={`${edge.id}-${groupIndex}`}>
+                      <path
+                        d={edge.path}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        fill="none"
                       />
-                    ))}
-                    {edge.capPath && <path d={edge.capPath} fill="#0F172A" stroke="none" />}
-                    {edge.arrowPath && <path d={edge.arrowPath} fill="#0F172A" stroke="none" />}
-                  </g>
-                );
-              })}
+                      {edge.bars?.map((bar, index) => (
+                        <line
+                          key={`${edge.id}-bar-${groupIndex}-${index}`}
+                          x1={bar.x1}
+                          y1={bar.y1}
+                          x2={bar.x2}
+                          y2={bar.y2}
+                          stroke={strokeColor}
+                          strokeWidth={barStrokeWidth}
+                          strokeLinecap="butt"
+                        />
+                      ))}
+                      {edge.capPath && <path d={edge.capPath} fill={strokeColor} stroke="none" />}
+                      {edge.arrowPath && (
+                        <path d={edge.arrowPath} fill={strokeColor} stroke="none" />
+                      )}
+                    </g>
+                  );
+                }),
+              )}
             </svg>
           )}
 
@@ -1620,6 +1736,15 @@ function TotemVisualizer({
                               return colA - colB;
                             });
                           const templateColumns = `repeat(${spanColumns}, ${OBJECT_NODE_WIDTH}px)`;
+                          const isExpanded = Boolean(expandedAreas[area.id]);
+                          const areaAnchorId = `${area.id}::anchor`;
+                          const detailNodeId = `${area.id}::detail`;
+                          const detailBorder = PROCESS_AREA_BORDER;
+                          const detailBackground = PROCESS_AREA_BACKGROUND;
+                          const detailForeground = textColorForBackground(detailBackground, {
+                            minContrast: 4,
+                            gradientSamples: [],
+                          });
 
                           return (
                             <div
@@ -1642,11 +1767,28 @@ function TotemVisualizer({
                                   position: 'absolute',
                                   inset: 0,
                                   borderRadius: 28,
-                                  background: 'rgba(59, 130, 246, 0.16)',
-                                  border: '1px solid rgba(37, 99, 235, 0.35)',
-                                  boxShadow: 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)',
+                                  background: PROCESS_AREA_BACKGROUND,
+                                  border: `1px solid ${PROCESS_AREA_BORDER}`,
+                                  boxShadow: PROCESS_AREA_INSET_SHADOW,
                                   zIndex: 0,
                                   pointerEvents: 'none',
+                                }}
+                              />
+                              <button
+                                type="button"
+                                ref={(element) => assignNodeRef(areaAnchorId, element)}
+                                onClick={() => toggleAreaDetail(area.id)}
+                                aria-pressed={isExpanded}
+                                aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${area.label}`}
+                                style={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  borderRadius: 28,
+                                  background: 'transparent',
+                                  border: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer',
+                                  zIndex: 2,
                                 }}
                               />
                               {sortedObjectTypes.length > 0 ? (
@@ -1702,6 +1844,30 @@ function TotemVisualizer({
                                 >
                                   No object types assigned yet
                                 </span>
+                              )}
+                              {isExpanded && (
+                                <span
+                                  ref={(element) => assignNodeRef(detailNodeId, element)}
+                                  style={{
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: `calc(100% + ${GRID_COLUMN_GAP * 1.5}px)`,
+                                    transform: 'translateY(-50%)',
+                                    width: OBJECT_NODE_WIDTH,
+                                    minHeight: OBJECT_NODE_MIN_HEIGHT,
+                                    borderRadius: 18,
+                                    border: `1px solid ${detailBorder}`,
+                                    background: detailBackground,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    zIndex: 1,
+                                    boxSizing: 'border-box',
+                                    boxShadow: PROCESS_AREA_INSET_SHADOW,
+                                    color: detailForeground,
+                                    pointerEvents: 'none',
+                                  }}
+                                />
                               )}
                             </div>
                           );
