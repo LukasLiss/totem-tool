@@ -53,9 +53,9 @@ type EdgeSegment = {
   id: string;
   relation: RelationType;
   path: string;
-  marker?: 'arrow';
   bars?: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   capPath?: string;
+  arrowPath?: string;
 };
 
 type Point2D = { x: number; y: number };
@@ -168,7 +168,7 @@ function buildParallelBars({
   unitX,
   unitY,
   pathLength,
-  targetContact,
+  targetContact: _targetContact,
 }: {
   startX: number;
   startY: number;
@@ -180,39 +180,98 @@ function buildParallelBars({
   targetContact?: Point2D;
 }): Array<{ x1: number; y1: number; x2: number; y2: number }> {
   const effectiveLength = Math.max(pathLength, 1);
-  const halfPerp = Math.min(9, Math.max(6, effectiveLength * 0.14)) / 2;
+  if (!Number.isFinite(effectiveLength) || effectiveLength <= 0) {
+    return [];
+  }
+
+  const tolerance = 0.15;
+  const halfPerp = Math.min(30, Math.max(16, effectiveLength * 0.45)) / 2;
   const perpX = -unitY;
   const perpY = unitX;
-  const baseOffset = Math.min(Math.max(14, effectiveLength * 0.22), effectiveLength / 1.5);
-  const gapOffset = Math.min(Math.max(8, effectiveLength * 0.16), effectiveLength / 2);
+  const maxOffset = Math.max(0, effectiveLength - 0.75);
+  const outerOffset = 0;
+  const minGap = Math.max(6, Math.min(18, effectiveLength * 0.24));
+  const preferredGap = Math.max(minGap, Math.min(26, effectiveLength * 0.36));
 
-  const positions: Array<{ x: number; y: number }> = [];
+  let innerOffset = outerOffset + preferredGap;
+  if (innerOffset > maxOffset) {
+    const available = Math.max(0, maxOffset - outerOffset);
+    const fallbackGap = Math.max(minGap, available);
+    innerOffset = outerOffset + fallbackGap;
+  }
+  innerOffset = Math.min(maxOffset, innerOffset);
 
-  const offsets = [baseOffset, baseOffset + gapOffset];
-  offsets.forEach((offset) => {
-    if (offset < effectiveLength - 1) {
-      positions.push({
-        x: startX + unitX * offset,
-        y: startY + unitY * offset,
-      });
-    }
-  });
-  offsets.forEach((offset) => {
-    if (offset < effectiveLength - 1) {
-      positions.push({
-        x: endX - unitX * offset,
-        y: endY - unitY * offset,
-      });
-    }
-  });
+  if (innerOffset - outerOffset < minGap && maxOffset - outerOffset >= minGap) {
+    innerOffset = Math.min(maxOffset, outerOffset + minGap);
+  }
 
-  if (targetContact) {
-    const alreadyPresent = positions.some(
-      (point) => Math.hypot(point.x - targetContact.x, point.y - targetContact.y) < 1,
+  if (innerOffset - outerOffset < tolerance && maxOffset > outerOffset + tolerance) {
+    innerOffset = Math.min(
+      maxOffset,
+      outerOffset + Math.max(minGap * 0.6, tolerance * 2),
     );
-    if (!alreadyPresent) {
-      positions.push({ x: targetContact.x, y: targetContact.y });
+  }
+
+  const offsets: number[] = [outerOffset];
+  if (innerOffset - outerOffset > tolerance) {
+    offsets.push(innerOffset);
+  } else if (maxOffset > outerOffset + minGap * 0.6) {
+    offsets.push(Math.min(maxOffset, outerOffset + Math.max(minGap * 0.6, tolerance * 2)));
+  }
+
+  const uniqueOffsets: number[] = [];
+  offsets.forEach((offset) => {
+    const clamped = Math.max(outerOffset, Math.min(offset, maxOffset));
+    if (!uniqueOffsets.some((existing) => Math.abs(existing - clamped) < tolerance)) {
+      uniqueOffsets.push(clamped);
     }
+  });
+
+  if (uniqueOffsets.length === 1 && maxOffset > outerOffset + minGap * 0.6) {
+    const fallbackInner = Math.min(
+      maxOffset,
+      outerOffset + Math.max(minGap, preferredGap * 0.6),
+    );
+    if (!uniqueOffsets.some((existing) => Math.abs(existing - fallbackInner) < tolerance)) {
+      uniqueOffsets.push(fallbackInner);
+    }
+  }
+
+  uniqueOffsets.sort((a, b) => a - b);
+  if (uniqueOffsets.length > 2) {
+    uniqueOffsets.length = 2;
+  }
+
+  const positions: Array<Point2D> = [];
+  const addPosition = (point: Point2D) => {
+    if (
+      positions.some(
+        (existing) => Math.hypot(existing.x - point.x, existing.y - point.y) <= tolerance,
+      )
+    ) {
+      return;
+    }
+    positions.push(point);
+  };
+
+  uniqueOffsets.forEach((offset) => {
+    addPosition({
+      x: startX + unitX * offset,
+      y: startY + unitY * offset,
+    });
+    addPosition({
+      x: endX - unitX * offset,
+      y: endY - unitY * offset,
+    });
+  });
+
+  if (positions.length === 0) {
+    addPosition({ x: startX, y: startY });
+    addPosition({ x: endX, y: endY });
+  }
+
+  if (positions.length > 4) {
+    positions.length = 4;
   }
 
   return positions.map((point) => ({
@@ -397,7 +456,6 @@ function computeEdgeSegments(
     let endY = collisionY;
     let dependentBase: Point2D | null = null;
     let dependentTip: Point2D | null = null;
-    let finalLineToTarget: Point2D | null = null;
 
     const normalVectorX = targetCenter.x - collisionX;
     const normalVectorY = targetCenter.y - collisionY;
@@ -429,13 +487,23 @@ function computeEdgeSegments(
       }
     }
 
+    let arrowPath: string | null = null;
+
     if (edge.relation === 'I' && targetNormal) {
       const maxApproach = Math.max(toCollisionLength - 4, 0);
-      const approachDistance = Math.min(Math.max(16, toCollisionLength * 0.3), maxApproach);
-      if (approachDistance > 6) {
-        endX = collisionX - targetNormal.x * approachDistance;
-        endY = collisionY - targetNormal.y * approachDistance;
-        finalLineToTarget = { x: collisionX, y: collisionY };
+      const arrowLength = Math.min(Math.max(18, toCollisionLength * 0.45), maxApproach);
+      if (arrowLength > 8) {
+        endX = collisionX - targetNormal.x * arrowLength;
+        endY = collisionY - targetNormal.y * arrowLength;
+        const arrowWidth = Math.min(Math.max(12, arrowLength * 0.62), 26);
+        const unitTangentX = -targetNormal.y;
+        const unitTangentY = targetNormal.x;
+        const halfWidth = arrowWidth / 2;
+        const leftBaseX = endX + unitTangentX * halfWidth;
+        const leftBaseY = endY + unitTangentY * halfWidth;
+        const rightBaseX = endX - unitTangentX * halfWidth;
+        const rightBaseY = endY - unitTangentY * halfWidth;
+        arrowPath = `M ${leftBaseX} ${leftBaseY} L ${collisionX} ${collisionY} L ${rightBaseX} ${rightBaseY} Z`;
       }
     }
 
@@ -446,7 +514,13 @@ function computeEdgeSegments(
 
     const unitX = dx / length;
     const unitY = dy / length;
-    let path = buildCurvedPath({
+
+    const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
+    if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
+      pathSegments.push(`L ${startX} ${startY}`);
+    }
+
+    const curvePath = buildCurvedPath({
       startX,
       startY,
       endX,
@@ -456,9 +530,15 @@ function computeEdgeSegments(
       unitX,
       unitY,
     });
-    if (finalLineToTarget) {
-      path = `${path} L ${finalLineToTarget.x} ${finalLineToTarget.y}`;
+    const curveWithoutMove = curvePath.replace(
+      /^M\s*[-+]?[\d.]+(?:e[-+]?\d+)?\s+[-+]?[\d.]+(?:e[-+]?\d+)?\s*/i,
+      '',
+    );
+    if (curveWithoutMove.trim().length > 0) {
+      pathSegments.push(curveWithoutMove.trimStart());
     }
+
+    const path = pathSegments.join(' ');
     const pathLength = Math.hypot(endX - startX, endY - startY);
 
     const segment: EdgeSegment = {
@@ -467,9 +547,7 @@ function computeEdgeSegments(
       path,
     };
 
-    if (edge.relation === 'I') {
-      segment.marker = 'arrow';
-    } else if (edge.relation === 'P') {
+    if (edge.relation === 'P') {
       segment.bars = buildParallelBars({
         startX,
         startY,
@@ -493,6 +571,8 @@ function computeEdgeSegments(
       if (cap) {
         segment.capPath = cap;
       }
+    } else if (arrowPath) {
+      segment.arrowPath = arrowPath;
     }
 
     segments.push(segment);
@@ -1214,11 +1294,6 @@ function TotemVisualizer({
       delete nodeRefs.current[type];
     }
   }, []);
-  const arrowMarkerId = useMemo(
-    () => `totem-init-arrow-${Math.random().toString(36).slice(2, 9)}`,
-    [],
-  );
-
   const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem) : []), [rawTotem]);
   const edges = useMemo(() => extractEdges(rawTotem?.tempgraph), [rawTotem?.tempgraph]);
   const layoutInfo = useMemo(() => prepareGridLayout(layers, edges), [layers, edges]);
@@ -1380,20 +1455,6 @@ function TotemVisualizer({
             zIndex: 1,
           }}
         >
-              <defs>
-                <marker
-                  id={arrowMarkerId}
-                  markerWidth="14"
-                  markerHeight="12"
-                  refX="12"
-                  refY="6"
-                  orient="auto"
-                  markerUnits="userSpaceOnUse"
-                >
-                  <path d="M2 2 L12 6 L2 10 Z" fill="#0F172A" />
-                </marker>
-              </defs>
-
               {edgeSegments.map((edge) => {
                 const strokeWidth =
                   edge.relation === 'D' ? 3.2 : edge.relation === 'P' ? 3 : 2.6;
@@ -1406,7 +1467,6 @@ function TotemVisualizer({
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       fill="none"
-                      markerEnd={edge.marker === 'arrow' ? `url(#${arrowMarkerId})` : undefined}
                     />
                     {edge.bars?.map((bar, index) => (
                       <line
@@ -1417,10 +1477,11 @@ function TotemVisualizer({
                         y2={bar.y2}
                         stroke="#0F172A"
                         strokeWidth={strokeWidth}
-                        strokeLinecap="round"
+                        strokeLinecap="butt"
                       />
                     ))}
                     {edge.capPath && <path d={edge.capPath} fill="#0F172A" stroke="none" />}
+                    {edge.arrowPath && <path d={edge.arrowPath} fill="#0F172A" stroke="none" />}
                   </g>
                 );
               })}
