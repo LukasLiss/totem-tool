@@ -138,4 +138,3 @@ describe('GridStackRenderProvider', () => {
     expect(containers?.get('3')).toBe(elements[2]);
   });
 });
-

@@ -6,7 +6,7 @@ import {
   useRef,
 } from "react";
 import { useGridStackContext } from "./grid-stack-context";
-import { GridStack, GridStackWidget } from "gridstack";
+import { GridStack, GridStackOptions, GridStackWidget } from "gridstack";
 import { GridStackRenderContext } from "./grid-stack-render-context";
 import isEqual from "react-fast-compare";
 
@@ -21,7 +21,8 @@ export function GridStackRenderProvider({ children }: PropsWithChildren) {
 
   const widgetContainersRef = useRef<Map<string, HTMLElement>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
-  const optionsRef = useRef<GridStack.GridStackOptions>(initialOptions);
+  const optionsRef = useRef<GridStackOptions>(initialOptions);
+
   const renderCBFn = useCallback(
     (element: HTMLElement, widget: GridStackWidget & { grid?: GridStack }) => {
       if (widget.id && widget.grid) {
