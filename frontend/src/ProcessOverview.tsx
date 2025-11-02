@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from 'react';
+import { useContext } from 'react';
 import FileSelect from './react_component/fileselect';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import { NumberofEvents } from './react_component/numberofevents';

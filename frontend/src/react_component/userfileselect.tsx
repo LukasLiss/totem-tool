@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useContext, createContext } from "react";
+import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
@@ -30,10 +30,7 @@ function UserFileSelect() {
     
 
 
-    // Handle file upload
-    const handleFileChange = (e) => {
-        setFiles(Array.from(e.target.files)); // convert FileList to array
-    };
+    
 
     // Handle button click
     const handleSelectChange = (e) => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import axios from "axios";
 //import {RefreshToken} from "rest_framework_simplejwt.tokens";
 
@@ -6,14 +6,6 @@ export const Logout = () => {
   useEffect(() => {
     (async () => {
       try {
-        const { data } = await axios.post(
-          'http://localhost:8000/logout/',
-          {
-            refresh_token: localStorage.getItem('refresh_token')
-          },
-          { headers: { 'Content-Type': 'application/json' } },
-          { withCredentials: true }
-        );
 
         localStorage.clear();
         axios.defaults.headers.common['Authorization'] = null;

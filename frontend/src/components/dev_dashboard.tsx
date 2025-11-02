@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import {
   Card,
   CardAction,
@@ -8,8 +8,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
-  SidebarInset,
-  SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Badge } from "./ui/badge";
@@ -17,7 +15,6 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 
 export function DevDashboard() {
-  const [files, setFiles] = useState([]);
     const [processedResult, setProcessedResult] = useState(null);
 
     const { selectedFile } = useContext(SelectedFileContext);

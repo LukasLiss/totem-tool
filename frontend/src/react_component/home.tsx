@@ -36,29 +36,6 @@ export const Home = () => {
 
 
   }, []);
-  //handleFileSelect function for fileuploadbutton; placed here to improve reuseability
-  const [files, setFiles] = useState([]);
-
-  const handleFileSelect = async (file) => {
-  try {
-    const text = await file.text();       // read file as text
-    const data = JSON.parse(text);        // parse JSON
-
-    // Example: check required fields
-    if (!data.name || !data.age) {
-      alert("Invalid format: missing 'name' or 'age'");
-      return;
-    }
-
-    console.log("Valid file:", data);
-    // continue with upload or state update
-
-  } catch (err) {
-    console.error("Invalid JSON file:", err);
-    alert("Please upload a valid JSON file");
-  }
-};
-
 
   return (
     <div style={{ 

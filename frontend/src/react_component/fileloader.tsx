@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { getUserFiles, processFile } from "../api/fileApi";
 
 
 export function FileLoader() {
   const [files, setFiles] = useState([]); // initialize as empty array
-  const [showDropdown, setShowDropdown] = useState(false); // control dropdown visibility
+  const [ setShowDropdown] = useState(false); // control dropdown visibility
   const [selectedFileId, setSelectedFileId] = useState(""); 
   const [processedResult, setProcessedResult] = useState(null);
 

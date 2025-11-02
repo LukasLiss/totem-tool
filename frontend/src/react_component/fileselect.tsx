@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useContext, createContext } from "react";
+import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
@@ -27,10 +27,7 @@ function FileSelect() {
     
 
 
-    // Handle file upload
-    const handleFileChange = (e) => {
-        setFiles(Array.from(e.target.files)); // convert FileList to array
-    };
+    
 
     // Handle button click
     const handleSelectChange = (e) => {
@@ -45,14 +42,6 @@ function FileSelect() {
         }
     };
 
-    const handleSubmit = () => {
-        const file = files.find((f) => f.id === Number(selectedFileId));
-        if (file) {
-        setSelectedFile(file); // save into context
-        console.log("Saved to context:", file);
-        navigate("/variantsview");
-        }
-    };
     
     return(
         <div className="flex flex-row justify-between">

@@ -1,7 +1,6 @@
-import React, { useState, useRef, useContext } from "react";
+import { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
-import Dropzone from 'react-dropzone';
 import {useDropzone} from 'react-dropzone';
 import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
@@ -16,7 +15,7 @@ export function FileUploadValidator() {
     const [file, setFile] = useState(null);
     const hiddenInputRef = useRef(null);
 
-    const {getRootProps, getInputProps, open, acceptedFiles} = useDropzone({
+    const {getRootProps, getInputProps, acceptedFiles} = useDropzone({
       onDrop: (incomingFiles) => {
         if (hiddenInputRef.current) {
           const dataTransfer = new DataTransfer();
@@ -83,11 +82,7 @@ export function FileUploadValidator() {
     }
  };
 
-  const files = acceptedFiles.map(file => (
-    <li key={file.path}>
-      {file.path} - {file.size} bytes
-    </li>
-  ));
+
 
 
 

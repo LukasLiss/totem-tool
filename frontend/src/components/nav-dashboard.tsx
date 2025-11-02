@@ -1,5 +1,5 @@
-import { ChevronRight, Plus, FileStack } from "lucide-react"
-import React, { useContext, useEffect, useState } from 'react'
+import { ChevronRight, FileStack } from "lucide-react"
+import { useContext, useState } from 'react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -28,7 +28,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { addDashboard, getDashboards } from "@/api/dashboardApi"
+import { addDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 
 

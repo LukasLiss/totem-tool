@@ -24,11 +24,7 @@ import { useNavigate } from "react-router-dom";
 
 
 // extend type to allow optional logo component
-type Project = {
-  id: string | number
-  name: string
-  logo?: React.ComponentType<{ className?: string }>
-}
+
 
 export function Switcher(){
   const { isMobile } = useSidebar()
@@ -36,7 +32,6 @@ export function Switcher(){
   console.log('beginning')
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState("");
   const navigate = useNavigate();
   
   // find active project by id, fallback to first

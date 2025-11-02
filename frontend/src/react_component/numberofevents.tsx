@@ -1,9 +1,8 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { processFile } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 
 export function NumberofEvents() {
-    const [files, setFiles] = useState([]);
     const [processedResult, setProcessedResult] = useState(null);
 
     const { selectedFile } = useContext(SelectedFileContext);

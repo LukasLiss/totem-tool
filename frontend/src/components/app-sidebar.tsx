@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import {
-  AudioWaveform, BookOpen, Bot, Command, Frame, GalleryVerticalEnd,
-  Map, PieChart, Settings2, SquareTerminal, FileStack, ArrowUp01
+  AudioWaveform, Command, GalleryVerticalEnd,
+  Map, PieChart, Settings2, FileStack, ArrowUp01
 } from "lucide-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -19,7 +19,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { DevDash } from "./nav-dev-dash";
-import { getDashboards, testOptions } from "@/api/dashboardApi";
+import { getDashboards } from "@/api/dashboardApi";
 
 // sample data
 // This is sample data.
