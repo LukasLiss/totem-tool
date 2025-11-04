@@ -2,6 +2,7 @@ from .ocel import ObjectCentricEventLog, load_events_from_sqlite, load_objects_f
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import discover_oc_petri_net_polars
 from .utils import ocpns_are_similar
+from .pm4py_adapter import convert_ocel_polars_to_pm4py
 
 __all__ = [
     "ObjectCentricEventLog",
@@ -17,5 +18,6 @@ __all__ = [
     "import_ocel"
     "calculate_layout",
     "discover_oc_petri_net_polars",
-    "ocpns_are_similar"
+    "ocpns_are_similar",
+    convert_ocel_polars_to_pm4py
 ]
