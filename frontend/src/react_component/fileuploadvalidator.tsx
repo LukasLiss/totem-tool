@@ -6,16 +6,23 @@ import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 
+type FileItem = {
+  id: number;
+  project: number;
+  file: string;
+  uploaded_at: string;
+};
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
     //Right now JSON with OR logic
     const { setSelectedFile } = useContext(SelectedFileContext);
     
-    const [file, setFile] = useState(null);
-    const hiddenInputRef = useRef(null);
+    const [file, setFile] = useState<File | null>(null);
+    const hiddenInputRef = useRef<HTMLInputElement | null>(null);
 
-    const {getRootProps, getInputProps, acceptedFiles} = useDropzone({
+
+    const {getRootProps, getInputProps} = useDropzone({
       onDrop: (incomingFiles) => {
         if (hiddenInputRef.current) {
           const dataTransfer = new DataTransfer();
@@ -64,6 +71,10 @@ export function FileUploadValidator() {
   const handleFileUpload = async () => {
     const token = localStorage.getItem("access_token");
     try {
+      if (!token) {
+      console.error("No token found!");
+      return;
+      }
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
       setSelectedFile(file)
@@ -74,7 +85,7 @@ export function FileUploadValidator() {
   };
 
 
- const handleSubmit = async (e) => {
+ const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const isValid = await validateFile();
     if (isValid) {

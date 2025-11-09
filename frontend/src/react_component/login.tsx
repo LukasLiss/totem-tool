@@ -18,7 +18,7 @@ export const Login = () => {
   const [password, setPassword] = useState('');
 
   // Create the submit method.
-  const submit = async (e) => {
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     const user = {

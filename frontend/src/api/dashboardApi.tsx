@@ -52,7 +52,7 @@ export async function getDashboards(token: string, projectId?: number) {
 
 
 // Dummy fetch to test if OPTIONS + Authorization work
-export async function testOptions(token) {
+export async function testOptions(token: string) {
   const response = await fetch("http://localhost:8000/api/dashboard/", {
     method: "OPTIONS",   // 👈 force preflight request
     headers: {

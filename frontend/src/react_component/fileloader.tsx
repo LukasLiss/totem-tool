@@ -1,16 +1,27 @@
 import { useState } from "react";
 import { getUserFiles, processFile } from "../api/fileApi";
 
+type FileItem = {
+  id: number;
+  project: number;
+  file: string;
+  uploaded_at: string;
+};
+
 
 export function FileLoader() {
-  const [files, setFiles] = useState([]); // initialize as empty array
-  const [ setShowDropdown] = useState(false); // control dropdown visibility
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [, setShowDropdown] = useState(false); 
   const [selectedFileId, setSelectedFileId] = useState(""); 
   const [processedResult, setProcessedResult] = useState(null);
 
   const handleFileLoad = async () => {
     const token = localStorage.getItem("access_token")
     try {
+      if (!token) {
+        console.error("No token found!");
+        return;
+      }
       const response = await getUserFiles(token); // fetch user files
       setFiles(response);
       setShowDropdown(true); // show dropdown after loading
@@ -21,7 +32,7 @@ export function FileLoader() {
     }
   };
 
-  const handleSelectChange = (e) => {
+  const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedFileId(e.target.value);
     console.log('handleSelectChange')
     };
@@ -36,6 +47,10 @@ export function FileLoader() {
     const token = localStorage.getItem("access_token");
 
     try {
+      if (!token) {
+        console.error("No token found!");
+        return;
+      }
       const result = await processFile(token, selectedFileId);
       setProcessedResult(result);
     } catch (err) {
@@ -53,7 +68,7 @@ export function FileLoader() {
             <option value="">-- Select a file --</option>
             {files.map((file) => (
               <option key={file.id} value={file.id}>
-                {file.file_name || file.file}
+                {file.file}
               </option>
             ))}
           </select>

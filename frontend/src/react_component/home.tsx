@@ -17,13 +17,23 @@ export const Home = () => {
           setMessage(data.message || 'Hello from Frontend + Backend!');
           setBackendStatus('✅ Connected');
           setIsLoading(false);
-          } catch (error) {
+          } catch (error: unknown) {
+          if (axios.isAxiosError(error)) {
+            // ✅ It's an AxiosError
+            setBackendStatus(`❌ Error: ${error.message}`);
+          } else if (error instanceof Error) {
+            // ✅ It's a general JS Error
+            setBackendStatus(`❌ Error: ${error.message}`);
+          } else {
+            // fallback
+            setBackendStatus('❌ Unknown error');
+          }
+
           console.error('Backend connection error:', error);
           setMessage('Hello from Frontend! (Backend not available)');
-          setBackendStatus(`❌ Error: ${error.message}`);
           setIsLoading(false);
         }
-    };
+            };
 
     // Try to connect immediately
     fetchBackendMessage();

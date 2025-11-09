@@ -50,6 +50,10 @@ export function NavDashboard({
       const token = localStorage.getItem("access_token");
       try {
         const projectId = selectedFile?.project;
+        if (!token) {
+          console.error("No token found!");
+          return;
+        }
         const response = await addDashboard(dashboardname, projectId,  token);
         console.log("Successfully added Dashboard:", response);
       } catch (err) {
@@ -57,7 +61,7 @@ export function NavDashboard({
         alert("Upload failed");
       }
     };
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     await handleAddDashboard();
  };

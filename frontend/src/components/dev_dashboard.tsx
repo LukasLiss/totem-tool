@@ -28,7 +28,10 @@ export function DevDashboard() {
                   }
               
                   const token = localStorage.getItem("access_token");
-      
+                  if (!token) {
+                    console.error("No token found!");
+                    return;
+                  }
                   try {
                   const result = await processFile(token, selectedFile.id);
                   setProcessedResult(result);

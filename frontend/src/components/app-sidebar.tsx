@@ -115,7 +115,7 @@ const data = {
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState("");
+  const [, setSelectedFileId ] = useState<string | null>(null);
   const [dashboards, setDashboards] = useState([])
 
   console.log("Current selectedFile:", selectedFile);
@@ -124,6 +124,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     const fetchFiles = async () => {
       const token = localStorage.getItem("access_token");
       try {
+        if (!token) {
+          console.error("No token found!");
+          return;
+        }
         const response = await getUserFiles(token);
         setFiles(response);
       } catch (err) {
@@ -140,6 +144,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     if (!selectedFile?.project) return; // nothing selected
     const token = localStorage.getItem("access_token");
     try {
+      if (!token) {
+        console.error("No token found!");
+        return;
+      }
       const response = await getDashboards(token, selectedFile.project);
       setDashboards(response);
       console.log('loaded dashboards', response)
@@ -155,9 +163,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         {files.length > 0 && (
           <Switcher
-            projects={files}
-            selectedId={selectedFileId}
-            onSelect={(id) => {
+            onSelect={(id: string) => {
               setSelectedFileId(id);
               const file = files.find((f) => f.id === id);
               if (file) setSelectedFile(file);

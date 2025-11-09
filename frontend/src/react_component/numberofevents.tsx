@@ -19,6 +19,10 @@ export function NumberofEvents() {
             const token = localStorage.getItem("access_token");
 
             try {
+            if (!token) {
+                console.error("No token found!");
+                return;
+                }
             const result = await processFile(token, selectedFile.id);
             setProcessedResult(result);
             console.log(result);
