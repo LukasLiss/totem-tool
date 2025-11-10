@@ -79,8 +79,9 @@ function startBackend() {
       pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python');
     } else {
       // In production, backend is in local resources
-      backendPath = path.join(__dirname, 'resources', 'backend');
-      pythonCommand = 'python'; // Assume python is in PATH for production
+      const appPath = app.getAppPath();
+      backendPath = path.join(appPath, '..', 'backend');
+      pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
     }
     
     console.log('Starting Django backend...');
@@ -104,6 +105,10 @@ function startBackend() {
     backendProcess.on('error', (error) => {
       console.error('Failed to start backend:', error);
       resolve(); // Continue anyway, maybe backend is running elsewhere
+    });
+
+    backendProcess.on('exit', (code) => {
+      console.log(`Backend process exited with code ${code}`);
     });
   });
 }

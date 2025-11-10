@@ -7,7 +7,6 @@
     "start": "electron .",
     "build": "electron-builder",
     "build-win": "electron-builder --win",
-    "package-win": "electron-packager . totem-tool --platform=win32 --arch=x64 --out=dist --overwrite",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -17,11 +16,23 @@
       "output": "dist"
     },
     "files": [
-      "main.js"
+      "main.js",
+      "resources/frontend-build"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/backend",
+        "to": "backend"
+      },
+      {
+        "from": "resources/totem_lib",
+        "to": "totem_lib"
+      }
     ],
     "win": {
       "target": "dir"
-    }
+    },
+    "asar": false
   },
   "keywords": [],
   "author": "",
