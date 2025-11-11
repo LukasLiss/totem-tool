@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "networkx==3.4.2",
     "polars==1.32.2",
-    "PuLP"==3.2.2,
+    "PuLP==3.2.2",
 ]
 
 [project.urls]
