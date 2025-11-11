@@ -25,11 +25,8 @@ import { useNavigate } from "react-router-dom";
 
 // extend type to allow optional logo component
 
-type SwitcherProps = {
-  onSelect?: (id: string) => void;
-};
 
-export function Switcher({ onSelect }: SwitcherProps) {
+export function Switcher() {
   const { isMobile } = useSidebar()
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   console.log('beginning')

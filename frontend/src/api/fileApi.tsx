@@ -1,5 +1,5 @@
 // Upload a file for the logged-in user
-export async function uploadFile(file: string, token: string) {
+export async function uploadFile(file: File, token: string) {
   const formData = new FormData();
   formData.append("file", file);
 

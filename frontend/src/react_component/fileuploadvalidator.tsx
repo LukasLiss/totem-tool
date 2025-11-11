@@ -6,12 +6,6 @@ import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 
-type FileItem = {
-  id: number;
-  project: number;
-  file: string;
-  uploaded_at: string;
-};
 
 export function FileUploadValidator() {
     //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
@@ -74,6 +68,10 @@ export function FileUploadValidator() {
       if (!token) {
       console.error("No token found!");
       return;
+      }
+      if (!file) {
+        console.error("No file selected!");
+        return;
       }
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);

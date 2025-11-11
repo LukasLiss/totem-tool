@@ -113,9 +113,8 @@ const data = {
 
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
-  const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
+  const { selectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
-  const [, setSelectedFileId ] = useState<string | null>(null);
   const [dashboards, setDashboards] = useState([])
 
   console.log("Current selectedFile:", selectedFile);
@@ -162,13 +161,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         {files.length > 0 && (
-          <Switcher
-            onSelect={(id: string) => {
-              setSelectedFileId(id);
-              const file = files.find((f) => f.id === id);
-              if (file) setSelectedFile(file);
-            }}
-          />
+          <Switcher/>
         )}
       </SidebarHeader>
       <SidebarContent>

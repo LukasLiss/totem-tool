@@ -42,7 +42,7 @@ function UserFileSelect() {
     
 
     // Handle button click
-    const handleSelectChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         setSelectedFileId(e.target.value);
         console.log('handleSelectChange')
         };
