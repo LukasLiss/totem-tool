@@ -34,31 +34,35 @@ DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 # For visualization
 # map 'Dependent' to 'during' (box), 'Initiating' to 'precedes' (normal), and 'Parallel' to 'parallel' (teetee).
 YOUR_TR_TO_EDGE_ARROWHEAD = {
-    TR_DEPENDENT: 'box',
-    TR_DEPENDENT_INVERSE: 'obox',
-    TR_INITIATING: 'normal',
-    TR_INITIATING_REVERSE: 'onormal',
-    TR_PARALLEL: 'teetee',
-    None: 'none'
+    TR_DEPENDENT: "box",
+    TR_DEPENDENT_INVERSE: "obox",
+    TR_INITIATING: "normal",
+    TR_INITIATING_REVERSE: "onormal",
+    TR_PARALLEL: "teetee",
+    None: "none",
 }
 
 # Constants used for styling in the visualize method
-GV_FONT = 'Helvetica'
-GV_GRAPH_FONTSIZE = '10'
-GV_NODE_FONTSIZE = '10'
-GV_EDGE_FONTSIZE = '8'
-TR_EDGE_ATTR = {
-    'arrowtail': 'none',
-    'dir': 'both',
-    'decorate': 'false'
-}
+GV_FONT = "Helvetica"
+GV_GRAPH_FONTSIZE = "10"
+GV_NODE_FONTSIZE = "10"
+GV_EDGE_FONTSIZE = "8"
+TR_EDGE_ATTR = {"arrowtail": "none", "dir": "both", "decorate": "false"}
 
 
 class Totem:
     """
     A class to represent the temporal graph and related information mined from an Object Centric Event Log using the totemDiscovery algorithm.
     """
-    def __init__(self, tempgraph: Dict, cardinalities: Dict, type_relations: Set[Set[str]], all_event_types: Set[str], object_type_to_event_types: Dict[str, Set[str]]):
+
+    def __init__(
+        self,
+        tempgraph: Dict,
+        cardinalities: Dict,
+        type_relations: Set[Set[str]],
+        all_event_types: Set[str],
+        object_type_to_event_types: Dict[str, Set[str]],
+    ):
         """
         Initialize the Totem object with the temporal graph and related information.
         :param tempgraph: A dictionary representing the temporal graph with nodes and edges categorized by temporal relations.
@@ -74,6 +78,7 @@ class Totem:
         self.object_type_to_event_types = object_type_to_event_types
 
         # TODO: implement networkx representation
+
     #     self.graph = nx.DiGraph()
     #     self.cardinality_types = ["0", "0..1", "1", "1..", "0.."]
     #     self.temporal_types = ["paral", "prec", "prec_inv", "dur", "dur_inv"]
@@ -86,12 +91,14 @@ class Totem:
     #                 event_cardinalities: Dict[str, float],
     #                 temporal_relations: Dict[str, float]) -> None:
     #     # use additional attributes to store cardinalities and temporal relations
-    #     self.graph.add_edge(source, target, 
+    #     self.graph.add_edge(source, target,
     #                        log_cardinalities=log_cardinalities,
     #                        event_cardinalities=event_cardinalities,
     #                        temporal_relations=temporal_relations)
 
-    def visualize(self, output_dir: Path, output_file: str, ot_to_hex_color: dict) -> None:
+    def visualize(
+        self, output_dir: Path, output_file: str, ot_to_hex_color: dict
+    ) -> None:
         """
         Draws the discovered TOTeM model using graphviz.
         This method is adapted from the implementation by Löseke et al.
@@ -103,90 +110,112 @@ class Totem:
         """
         # --- Corrected Data Transformation Step ---
         # 1. Extract nodes directly from the tempgraph
-        nodes = self.tempgraph.get('nodes', set())
+        nodes = self.tempgraph.get("nodes", set())
 
         # 2. Reconstruct the edges dictionary from your tempgraph structure
         edges = {}
         # Iterate over relation types ('P', 'I', 'D', etc.) in the tempgraph
         for relation_type, relation_set in self.tempgraph.items():
-            if relation_type == 'nodes':
-                continue # Skip the nodes entry
+            if relation_type == "nodes":
+                continue  # Skip the nodes entry
             # Iterate over each pair of object types for the current relation
             if isinstance(relation_set, set):
-                for (ot_a, ot_b) in relation_set:
-                    edges[(ot_a, ot_b)] = {'TR': relation_type}
+                for ot_a, ot_b in relation_set:
+                    edges[(ot_a, ot_b)] = {"TR": relation_type}
 
         # --- Visualization Logic ---
         G = graphviz.Digraph(
             graph_attr={
                 # 'label': f'Filter parameter: tau = {tau}',
-                'fontname': GV_FONT, 'fontsize': GV_GRAPH_FONTSIZE,
-                'margin': '0.1,0.1',
-                'overlap': 'false',
-                'rankdir': 'LR'
+                "fontname": GV_FONT,
+                "fontsize": GV_GRAPH_FONTSIZE,
+                "margin": "0.1,0.1",
+                "overlap": "false",
+                "rankdir": "LR",
             }
         )
 
         for ot in nodes:
-            color = ot_to_hex_color.get(ot, '#000000') # Default to black if not in map
-            G.node(ot, label=ot, shape='box', fontname=GV_FONT, fontsize=GV_NODE_FONTSIZE, color=color)
+            color = ot_to_hex_color.get(ot, "#000000")  # Default to black if not in map
+            G.node(
+                ot,
+                label=ot,
+                shape="box",
+                fontname=GV_FONT,
+                fontsize=GV_NODE_FONTSIZE,
+                color=color,
+            )
 
         for (ot_a, ot_b), edge_dict in edges.items():
-            tr_relation = edge_dict.get('TR')
+            tr_relation = edge_dict.get("TR")
             # prepare label with cardinalities
             card_info = self.cardinalities.get((ot_a, ot_b), {})
-            lc = card_info.get('LC', '')
-            ec = card_info.get('EC', '')
-            
-            edge_label = f"{lc}\n({ec})"
-            arrowhead_shape = YOUR_TR_TO_EDGE_ARROWHEAD.get(tr_relation, 'none')
+            lc = card_info.get("LC", "")
+            ec = card_info.get("EC", "")
 
-            G.edge(ot_a, ot_b,
-                   label=edge_label,
-                   fontname=GV_FONT, fontsize=GV_EDGE_FONTSIZE,
-                   arrowhead=arrowhead_shape,
-                   **TR_EDGE_ATTR)
+            edge_label = f"{lc}\n({ec})"
+            arrowhead_shape = YOUR_TR_TO_EDGE_ARROWHEAD.get(tr_relation, "none")
+
+            G.edge(
+                ot_a,
+                ot_b,
+                label=edge_label,
+                fontname=GV_FONT,
+                fontsize=GV_EDGE_FONTSIZE,
+                arrowhead=arrowhead_shape,
+                **TR_EDGE_ATTR,
+            )
 
         os.makedirs(output_dir, exist_ok=True)
-        temp_file_path = output_dir + '/tmp_graph'
+        temp_file_path = output_dir + "/tmp_graph"
         # TODO: handle exceptions if graphviz is not installed
         # TODO: handle bug when output_file is not a .pdf
-        G.render(filename=str(temp_file_path), cleanup=True, format='pdf')
-        os.replace(f'{temp_file_path}.pdf', output_dir + '/' + output_file)
+        G.render(filename=str(temp_file_path), cleanup=True, format="pdf")
+        os.replace(f"{temp_file_path}.pdf", output_dir + "/" + output_file)
         print(f"Graph successfully saved to {output_dir + '/' + output_file}")
 
 
 # Help functions for OCEL2.0
+
 
 def get_all_event_objects(ocel, event_id):
     # obj_ids = []
     # for obj_type in ocel.object_types:
     #     obj_ids += ocel.get_value(event_id, obj_type)
     # return obj_ids
-    return ocel.get_value(event_id, 'event_objects')
+    return ocel.get_value(event_id, "event_objects")
+
 
 def get_most_precise_lc(directed_type_tuple, tau, log_cardinalities):
     total = 0
-    if directed_type_tuple in log_cardinalities.keys() and LC_TOTAL in log_cardinalities[directed_type_tuple].keys():
+    if (
+        directed_type_tuple in log_cardinalities.keys()
+        and LC_TOTAL in log_cardinalities[directed_type_tuple].keys()
+    ):
         total = log_cardinalities[directed_type_tuple][LC_TOTAL]
 
     if total == 0:
         return "ERROR 0"
 
     if (LC_ZERO in log_cardinalities[directed_type_tuple].keys()) and (
-            (log_cardinalities[directed_type_tuple][LC_ZERO] / total) >= tau):
+        (log_cardinalities[directed_type_tuple][LC_ZERO] / total) >= tau
+    ):
         return LC_ZERO
     if (LC_ONE in log_cardinalities[directed_type_tuple].keys()) and (
-            (log_cardinalities[directed_type_tuple][LC_ONE] / total) >= tau):
+        (log_cardinalities[directed_type_tuple][LC_ONE] / total) >= tau
+    ):
         return LC_ONE
     if (LC_ZERO_ONE in log_cardinalities[directed_type_tuple].keys()) and (
-            (log_cardinalities[directed_type_tuple][LC_ZERO_ONE] / total) >= tau):
+        (log_cardinalities[directed_type_tuple][LC_ZERO_ONE] / total) >= tau
+    ):
         return LC_ZERO_ONE
     if (LC_MANY in log_cardinalities[directed_type_tuple].keys()) and (
-            (log_cardinalities[directed_type_tuple][LC_MANY] / total) >= tau):
+        (log_cardinalities[directed_type_tuple][LC_MANY] / total) >= tau
+    ):
         return LC_MANY
     if (LC_ZERO_MANY in log_cardinalities[directed_type_tuple].keys()) and (
-            (log_cardinalities[directed_type_tuple][LC_ZERO_MANY] / total) >= tau):
+        (log_cardinalities[directed_type_tuple][LC_ZERO_MANY] / total) >= tau
+    ):
         return LC_ZERO_MANY
 
     return "None"
@@ -194,27 +223,34 @@ def get_most_precise_lc(directed_type_tuple, tau, log_cardinalities):
 
 def get_most_precise_ec(directed_type_tuple, tau, event_cardinalities):
     total = 0
-    if directed_type_tuple in event_cardinalities.keys() and EC_TOTAL in event_cardinalities[
-        directed_type_tuple].keys():
+    if (
+        directed_type_tuple in event_cardinalities.keys()
+        and EC_TOTAL in event_cardinalities[directed_type_tuple].keys()
+    ):
         total = event_cardinalities[directed_type_tuple][EC_TOTAL]
 
     if total == 0:
         return "ERROR 0"
 
     if (EC_ZERO in event_cardinalities[directed_type_tuple].keys()) and (
-            (event_cardinalities[directed_type_tuple][EC_ZERO] / total) >= tau):
+        (event_cardinalities[directed_type_tuple][EC_ZERO] / total) >= tau
+    ):
         return EC_ZERO
     if (EC_ONE in event_cardinalities[directed_type_tuple].keys()) and (
-            (event_cardinalities[directed_type_tuple][EC_ONE] / total) >= tau):
+        (event_cardinalities[directed_type_tuple][EC_ONE] / total) >= tau
+    ):
         return EC_ONE
     if (EC_ZERO_ONE in event_cardinalities[directed_type_tuple].keys()) and (
-            (event_cardinalities[directed_type_tuple][EC_ZERO_ONE] / total) >= tau):
+        (event_cardinalities[directed_type_tuple][EC_ZERO_ONE] / total) >= tau
+    ):
         return EC_ZERO_ONE
     if (EC_MANY in event_cardinalities[directed_type_tuple].keys()) and (
-            (event_cardinalities[directed_type_tuple][EC_MANY] / total) >= tau):
+        (event_cardinalities[directed_type_tuple][EC_MANY] / total) >= tau
+    ):
         return EC_MANY
     if (EC_ZERO_MANY in event_cardinalities[directed_type_tuple].keys()) and (
-            (event_cardinalities[directed_type_tuple][EC_ZERO_MANY] / total) >= tau):
+        (event_cardinalities[directed_type_tuple][EC_ZERO_MANY] / total) >= tau
+    ):
         return EC_ZERO_MANY
 
     return "None"
@@ -222,29 +258,38 @@ def get_most_precise_ec(directed_type_tuple, tau, event_cardinalities):
 
 def get_most_precise_tr(directed_type_tuple, tau, temporal_relation):
     total = 0
-    if directed_type_tuple in temporal_relation.keys() and EC_TOTAL in temporal_relation[directed_type_tuple].keys():
+    if (
+        directed_type_tuple in temporal_relation.keys()
+        and EC_TOTAL in temporal_relation[directed_type_tuple].keys()
+    ):
         total = temporal_relation[directed_type_tuple][EC_TOTAL]
 
     if total == 0:
         return "ERROR 0"
 
     if (TR_DEPENDENT in temporal_relation[directed_type_tuple].keys()) and (
-            (temporal_relation[directed_type_tuple][TR_DEPENDENT] / total) >= tau):
+        (temporal_relation[directed_type_tuple][TR_DEPENDENT] / total) >= tau
+    ):
         return TR_DEPENDENT
     if (TR_DEPENDENT_INVERSE in temporal_relation[directed_type_tuple].keys()) and (
-            (temporal_relation[directed_type_tuple][TR_DEPENDENT_INVERSE] / total) >= tau):
+        (temporal_relation[directed_type_tuple][TR_DEPENDENT_INVERSE] / total) >= tau
+    ):
         return TR_DEPENDENT_INVERSE
     if (TR_INITIATING in temporal_relation[directed_type_tuple].keys()) and (
-            (temporal_relation[directed_type_tuple][TR_INITIATING] / total) >= tau):
+        (temporal_relation[directed_type_tuple][TR_INITIATING] / total) >= tau
+    ):
         return TR_INITIATING
     if (TR_INITIATING_REVERSE in temporal_relation[directed_type_tuple].keys()) and (
-            (temporal_relation[directed_type_tuple][TR_INITIATING_REVERSE] / total) >= tau):
+        (temporal_relation[directed_type_tuple][TR_INITIATING_REVERSE] / total) >= tau
+    ):
         return TR_INITIATING_REVERSE
     if (TR_PARALLEL in temporal_relation[directed_type_tuple].keys()) and (
-            (temporal_relation[directed_type_tuple][TR_PARALLEL] / total) >= tau):
+        (temporal_relation[directed_type_tuple][TR_PARALLEL] / total) >= tau
+    ):
         return TR_PARALLEL
 
     return "None"
+
 
 def connected_components_undirected(used_nodes, edges):
     graph = {}
@@ -278,6 +323,7 @@ def connected_components_undirected(used_nodes, edges):
 
     return connected_components
 
+
 def totemDiscovery(ocel, tau=0.9):
     """
     Given an Object Centric Event Log, compute the temporal graph and related information.
@@ -290,24 +336,33 @@ def totemDiscovery(ocel, tau=0.9):
     all_event_types = set()
 
     # temporal relations results
-    h_temporal_relations: dict[tuple[str, str], dict[str, int]] = dict()  # stores all the temporal relations found
+    h_temporal_relations: dict[tuple[str, str], dict[str, int]] = (
+        dict()
+    )  # stores all the temporal relations found
     # event cardinality results
-    h_event_cardinalities: dict[tuple[str, str], dict[str, int]] = dict()  # stores all the temporal cardinalities found
+    h_event_cardinalities: dict[tuple[str, str], dict[str, int]] = (
+        dict()
+    )  # stores all the temporal cardinalities found
     # event cardinality results
-    h_log_cardinalities: dict[tuple[str, str], dict[str, int]] = dict()  # stores all the temporal cardinalities found
+    h_log_cardinalities: dict[tuple[str, str], dict[str, int]] = (
+        dict()
+    )  # stores all the temporal cardinalities found
 
     # object min times (omint_L(o))
-    o_min_times: dict[
-        str, datetime] = dict()  # str identifier of the object maps to the earliest time recorded for that object in the event log
+    o_min_times: dict[str, datetime] = (
+        dict()
+    )  # str identifier of the object maps to the earliest time recorded for that object in the event log
     # object max times (omaxt_L(o))
-    o_max_times: dict[
-        str, datetime] = dict()  # str identifier of the object maps to the last time recorded for that object in the event log
+    o_max_times: dict[str, datetime] = (
+        dict()
+    )  # str identifier of the object maps to the last time recorded for that object in the event log
 
     # get a list of all object types (or variable that is filled while passing through the process executions)
     type_relations: set[set[str, str]] = set()  # stores all connected types
 
-    o2o_o2o: dict[str, dict[str, set[
-        str]]] = dict()  # dict that describes which objects are connected to which types and for each type which object
+    o2o_o2o: dict[str, dict[str, set[str]]] = (
+        dict()
+    )  # dict that describes which objects are connected to which types and for each type which object
     # o2o[obj1][type3] = [obj5, obj6]
     o2o_e2o: dict[str, dict[str, set[str]]] = dict()
     o2o: dict[str, dict[str, set[str]]] = dict()
@@ -316,7 +371,9 @@ def totemDiscovery(ocel, tau=0.9):
     type_to_object = dict()
 
     print(f"looping through events, start time: {datetime.now()}")
-    for px in ocel.process_executions:  #TODO: for ev in all events instead of process_executions
+    for px in (
+        ocel.process_executions
+    ):  # TODO: for ev in all events instead of process_executions
         for ev in px:
             # print(f"Processing event {ev}")
             # event infos: objects and timestamps
@@ -332,13 +389,18 @@ def totemDiscovery(ocel, tau=0.9):
                     o2o[obj].setdefault(type, set())
                     o2o[obj][type].update(
                         # ocel.get_value(ev, type))  # add all objects connected via e2o to each object involved
-                        ocel.get_event_objects_by_type(ev, type))  # add all objects connected via e2o to each object involved
+                        ocel.get_event_objects_by_type(ev, type)
+                    )  # add all objects connected via e2o to each object involved
                 # update lifespan information
                 o_min_times.setdefault(obj, ev_timestamp)
-                if ev_timestamp < o_min_times[obj]:  # todo check if comparison of datetimes works correctly here
+                if (
+                    ev_timestamp < o_min_times[obj]
+                ):  # todo check if comparison of datetimes works correctly here
                     o_min_times[obj] = ev_timestamp
                 o_max_times.setdefault(obj, ev_timestamp)
-                if ev_timestamp > o_max_times[obj]:  # todo check if comparison of datetimes works correctly here
+                if (
+                    ev_timestamp > o_max_times[obj]
+                ):  # todo check if comparison of datetimes works correctly here
                     o_max_times[obj] = ev_timestamp
 
             # maintain object type to event type dictionary
@@ -374,7 +436,9 @@ def totemDiscovery(ocel, tau=0.9):
                 for type_target in ocel.object_types:
                     # add one to total
                     h_event_cardinalities.setdefault((type_source, type_target), dict())
-                    h_event_cardinalities[(type_source, type_target)].setdefault(EC_TOTAL, 0)
+                    h_event_cardinalities[(type_source, type_target)].setdefault(
+                        EC_TOTAL, 0
+                    )
                     h_event_cardinalities[(type_source, type_target)][EC_TOTAL] += 1
                     # determine cardinality
                     cardinality = 0
@@ -382,26 +446,54 @@ def totemDiscovery(ocel, tau=0.9):
                         cardinality = obj_count_per_type[type_target]
                     # add one to matching cardinalities
                     if cardinality == 0:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO, 0)
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO, 0
+                        )
                         h_event_cardinalities[(type_source, type_target)][EC_ZERO] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_ONE, 0)
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO_ONE] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_MANY, 0)
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO_ONE, 0
+                        )
+                        h_event_cardinalities[(type_source, type_target)][
+                            EC_ZERO_ONE
+                        ] += 1
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO_MANY, 0
+                        )
+                        h_event_cardinalities[(type_source, type_target)][
+                            EC_ZERO_MANY
+                        ] += 1
                     elif cardinality == 1:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ONE, 0)
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ONE, 0
+                        )
                         h_event_cardinalities[(type_source, type_target)][EC_ONE] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_ONE, 0)
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO_ONE] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_MANY, 0)
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO_ONE, 0
+                        )
+                        h_event_cardinalities[(type_source, type_target)][
+                            EC_ZERO_ONE
+                        ] += 1
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_MANY, 0
+                        )
                         h_event_cardinalities[(type_source, type_target)][EC_MANY] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_MANY, 0)
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO_MANY, 0
+                        )
+                        h_event_cardinalities[(type_source, type_target)][
+                            EC_ZERO_MANY
+                        ] += 1
                     elif cardinality > 1:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_MANY, 0)
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_MANY, 0
+                        )
                         h_event_cardinalities[(type_source, type_target)][EC_MANY] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_MANY, 0)
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
+                        h_event_cardinalities[(type_source, type_target)].setdefault(
+                            EC_ZERO_MANY, 0
+                        )
+                        h_event_cardinalities[(type_source, type_target)][
+                            EC_ZERO_MANY
+                        ] += 1
 
     # merge o2o and e2o connected objects
     print(f"mergeing o2o and e2o, start time: {datetime.now()}")
@@ -434,53 +526,119 @@ def totemDiscovery(ocel, tau=0.9):
                 #    print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
 
                 if cardinality == 0:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO_ONE, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO_ONE, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO_MANY, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO_MANY, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
                 elif cardinality == 1:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ONE, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ONE, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO_ONE, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO_ONE, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_MANY, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_MANY, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_MANY] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO_MANY, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO_MANY, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
                 elif cardinality > 1:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_MANY, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_MANY, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_MANY] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO_MANY, 0)
+                    h_log_cardinalities[(type_source, type_target)].setdefault(
+                        LC_ZERO_MANY, 0
+                    )
                     h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
 
                 # compute temporal relations
                 for obj_target in o2o[obj][type_target]:
-                    h_temporal_relations[(type_source, type_target)].setdefault(TR_TOTAL, 0)
+                    h_temporal_relations[(type_source, type_target)].setdefault(
+                        TR_TOTAL, 0
+                    )
                     h_temporal_relations[(type_source, type_target)][TR_TOTAL] += 1
-                    if o_min_times[obj_target] <= o_min_times[obj] <= o_max_times[obj] <= o_max_times[obj_target]:
-                        h_temporal_relations[(type_source, type_target)].setdefault(TR_DEPENDENT, 0)
-                        h_temporal_relations[(type_source, type_target)][TR_DEPENDENT] += 1
-                    if o_min_times[obj] <= o_min_times[obj_target] <= o_max_times[obj_target] <= o_max_times[obj]:
-                        h_temporal_relations[(type_source, type_target)].setdefault(TR_DEPENDENT_INVERSE, 0)
-                        h_temporal_relations[(type_source, type_target)][TR_DEPENDENT_INVERSE] += 1
-                    if (o_min_times[obj] <= o_max_times[obj] <= o_min_times[obj_target] <= o_max_times[obj_target]) or (
-                            o_min_times[obj] < o_min_times[obj_target] <= o_max_times[obj] < o_max_times[obj_target]):
-                        h_temporal_relations[(type_source, type_target)].setdefault(TR_INITIATING, 0)
-                        h_temporal_relations[(type_source, type_target)][TR_INITIATING] += 1
-                    if (o_min_times[obj_target] <= o_max_times[obj_target] <= o_min_times[obj] <= o_max_times[obj]) or (
-                            o_min_times[obj_target] < o_min_times[obj] <= o_max_times[obj_target] < o_max_times[obj]):
-                        h_temporal_relations[(type_source, type_target)].setdefault(TR_INITIATING_REVERSE, 0)
-                        h_temporal_relations[(type_source, type_target)][TR_INITIATING_REVERSE] += 1
+                    if (
+                        o_min_times[obj_target]
+                        <= o_min_times[obj]
+                        <= o_max_times[obj]
+                        <= o_max_times[obj_target]
+                    ):
+                        h_temporal_relations[(type_source, type_target)].setdefault(
+                            TR_DEPENDENT, 0
+                        )
+                        h_temporal_relations[(type_source, type_target)][
+                            TR_DEPENDENT
+                        ] += 1
+                    if (
+                        o_min_times[obj]
+                        <= o_min_times[obj_target]
+                        <= o_max_times[obj_target]
+                        <= o_max_times[obj]
+                    ):
+                        h_temporal_relations[(type_source, type_target)].setdefault(
+                            TR_DEPENDENT_INVERSE, 0
+                        )
+                        h_temporal_relations[(type_source, type_target)][
+                            TR_DEPENDENT_INVERSE
+                        ] += 1
+                    if (
+                        o_min_times[obj]
+                        <= o_max_times[obj]
+                        <= o_min_times[obj_target]
+                        <= o_max_times[obj_target]
+                    ) or (
+                        o_min_times[obj]
+                        < o_min_times[obj_target]
+                        <= o_max_times[obj]
+                        < o_max_times[obj_target]
+                    ):
+                        h_temporal_relations[(type_source, type_target)].setdefault(
+                            TR_INITIATING, 0
+                        )
+                        h_temporal_relations[(type_source, type_target)][
+                            TR_INITIATING
+                        ] += 1
+                    if (
+                        o_min_times[obj_target]
+                        <= o_max_times[obj_target]
+                        <= o_min_times[obj]
+                        <= o_max_times[obj]
+                    ) or (
+                        o_min_times[obj_target]
+                        < o_min_times[obj]
+                        <= o_max_times[obj_target]
+                        < o_max_times[obj]
+                    ):
+                        h_temporal_relations[(type_source, type_target)].setdefault(
+                            TR_INITIATING_REVERSE, 0
+                        )
+                        h_temporal_relations[(type_source, type_target)][
+                            TR_INITIATING_REVERSE
+                        ] += 1
                     # allways parallel
-                    h_temporal_relations[(type_source, type_target)].setdefault(TR_PARALLEL, 0)
+                    h_temporal_relations[(type_source, type_target)].setdefault(
+                        TR_PARALLEL, 0
+                    )
                     h_temporal_relations[(type_source, type_target)][TR_PARALLEL] += 1
 
     # setup temporal graph
     print(f"building the temporal graph, start time: {datetime.now()}")
     tempgraph = {
-        'nodes': set(),
+        "nodes": set(),
         TR_PARALLEL: set(),
         TR_INITIATING: set(),
         TR_DEPENDENT: set(),
@@ -491,8 +649,8 @@ def totemDiscovery(ocel, tau=0.9):
     # for each connection give the 6 relations
     for connected_types in type_relations:
         t1, t2 = connected_types
-        tempgraph['nodes'].add(t1)
-        tempgraph['nodes'].add(t2)
+        tempgraph["nodes"].add(t1)
+        tempgraph["nodes"].add(t2)
         print(f"{t1} -> {t2}")
 
         # get log cardinality
@@ -515,12 +673,15 @@ def totemDiscovery(ocel, tau=0.9):
         # print(f"TRi: {tr_i}")
         print("")
 
-        cardinalities[(t1, t2)] = {'LC': lc, 'EC': ec}
-        cardinalities[(t2, t1)] = {'LC': lc_i, 'EC': ec_i}
+        cardinalities[(t1, t2)] = {"LC": lc, "EC": ec}
+        cardinalities[(t2, t1)] = {"LC": lc_i, "EC": ec_i}
 
     print(f"Finished building the temporal graph, end time: {datetime.now()}")
-    totem = Totem(tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type)
+    totem = Totem(
+        tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type
+    )
     return totem
+
 
 def mlpaDiscovery(totem: Totem):
     """
@@ -534,7 +695,6 @@ def mlpaDiscovery(totem: Totem):
     obj_typ_to_ev_type = totem.object_type_to_event_types
     all_event_types = totem.all_event_types
 
-
     # get a list of all object types (or variable that is filled while passing through the process executions)
     type_relations = totem.type_relations  # stores all connected types
 
@@ -545,26 +705,33 @@ def mlpaDiscovery(totem: Totem):
     model = LpProblem(name="layer-assignment")
 
     # Define the decision variables
-    level = {i: LpVariable(name=f"level-{i}", lowBound=0, cat='Integer') for i in tempGraph['nodes']}
-    z_parallel = {str((t1, t2)): LpVariable(name=f"hp-{str((t1, t2))}") for (t1, t2) in
-                  tempGraph[TR_PARALLEL]}
-    z_initiating = {str((t1, t2)): LpVariable(name=f"hi-{str((t1, t2))}") for (t1, t2) in
-                    tempGraph[TR_INITIATING]}
+    level = {
+        i: LpVariable(name=f"level-{i}", lowBound=0, cat="Integer")
+        for i in tempGraph["nodes"]
+    }
+    z_parallel = {
+        str((t1, t2)): LpVariable(name=f"hp-{str((t1, t2))}")
+        for (t1, t2) in tempGraph[TR_PARALLEL]
+    }
+    z_initiating = {
+        str((t1, t2)): LpVariable(name=f"hi-{str((t1, t2))}")
+        for (t1, t2) in tempGraph[TR_INITIATING]
+    }
 
     # constraints
-    for (t1, t2) in tempGraph[TR_DEPENDENT]:
+    for t1, t2 in tempGraph[TR_DEPENDENT]:
         c = level[t2] - level[t1] >= 1
         model += c
 
     # for parallel we want to minimize the absolute distance. For absolute values one needs an additional constraint
-    for (t1, t2) in tempGraph[TR_PARALLEL]:
+    for t1, t2 in tempGraph[TR_PARALLEL]:
         c1 = level[t1] - level[t2] - z_parallel[str((t1, t2))] <= 0
         c2 = level[t2] - level[t1] - z_parallel[str((t1, t2))] <= 0
         model += c1
         model += c2
 
     # for initiating we want to minimize the absolute distance. For absolute values one needs an additional constraint
-    for (t1, t2) in tempGraph[TR_INITIATING]:
+    for t1, t2 in tempGraph[TR_INITIATING]:
         c1 = level[t1] - level[t2] - z_initiating[str((t1, t2))] <= 0
         c2 = level[t2] - level[t1] - z_initiating[str((t1, t2))] <= 0
         model += c1
@@ -572,20 +739,21 @@ def mlpaDiscovery(totem: Totem):
 
     # objective Function
     obj_func = pulp.lpSum(
-        [level[t2] - level[t1] for (t1, t2) in tempGraph[TR_DEPENDENT]] + [z_parallel[str((t1, t2))] for (t1, t2)
-                                                                           in tempGraph[TR_PARALLEL]] + [
-            z_initiating[str((t1, t2))] for (t1, t2) in tempGraph[TR_INITIATING]])
+        [level[t2] - level[t1] for (t1, t2) in tempGraph[TR_DEPENDENT]]
+        + [z_parallel[str((t1, t2))] for (t1, t2) in tempGraph[TR_PARALLEL]]
+        + [z_initiating[str((t1, t2))] for (t1, t2) in tempGraph[TR_INITIATING]]
+    )
     model += obj_func
 
     # solve the model
     status = model.solve()
 
-    #print
+    # print
     for var in level.values():
         print(f"{var.name}: {var.value()}")
 
     levels_dict = dict()
-    for type in tempGraph['nodes']:
+    for type in tempGraph["nodes"]:
         # print(f"{level[type].name}: {level[type].value()}")
         levels_dict.setdefault(level[type].value(), set())
         levels_dict[level[type].value()].add(type)
@@ -599,7 +767,9 @@ def mlpaDiscovery(totem: Totem):
     for l in sorted_levels:
         types_of_level = list(levels_dict[l])
         connected_components_undirected(types_of_level, type_relations)
-        resulting_process_view[l] = connected_components_undirected(types_of_level, type_relations)
+        resulting_process_view[l] = connected_components_undirected(
+            types_of_level, type_relations
+        )
 
     print("Process View (without matching event types):")
     print(resulting_process_view)
@@ -613,10 +783,14 @@ def mlpaDiscovery(totem: Totem):
         for cc in resulting_process_view[l]:
             requested_event_types = set()
             for type in cc:
-                requested_event_types = requested_event_types.union(obj_typ_to_ev_type[type])
+                requested_event_types = requested_event_types.union(
+                    obj_typ_to_ev_type[type]
+                )
                 # print(f"{type} requests: {requested_event_types}")
 
-            assigned_event_types = requested_event_types.intersection(remaining_ev_types)
+            assigned_event_types = requested_event_types.intersection(
+                remaining_ev_types
+            )
             # add cc and event types to result
             ccs_with_event_types.append((cc, assigned_event_types))
             # upadate remaining eventtypes

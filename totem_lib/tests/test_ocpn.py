@@ -3,6 +3,7 @@ from totem_lib import import_ocel, discover_oc_petri_net_polars, ocpns_are_simil
 import pm4py
 import os
 
+
 def test_ocpn_against_pm4py():
     """
     Test to compare the output of OCPN discovery against PM4Py's implementation.

@@ -1,12 +1,20 @@
 import pm4py
 import os
-from totem_lib import import_ocel, discover_oc_petri_net_polars, ocpns_are_similar, convert_ocel_polars_to_pm4py
+from totem_lib import (
+    import_ocel,
+    discover_oc_petri_net_polars,
+    ocpns_are_similar,
+    convert_ocel_polars_to_pm4py,
+)
 from datetime import datetime
 
 import pandas as pd
 from pm4py.objects.ocel.obj import OCEL
 
-def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name="OCEL 2"):
+
+def analyze_ocel_diff(
+    ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name="OCEL 2"
+):
     """
     Compares two PM4Py OCEL objects and prints a detailed analysis of their
     differences in stats, columns, and entity IDs.
@@ -29,7 +37,7 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
 
     # === 2. Compare DataFrame Columns ===
     print("\n## 🏛️ DataFrame Column Comparison")
-    
+
     def compare_cols(name, cols1, cols2):
         print(f"### {name} Columns")
         cols1, cols2 = set(cols1), set(cols2)
@@ -58,22 +66,26 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
 
         only_in_1 = set1 - set2
         only_in_2 = set2 - set1
-        
+
         if only_in_1:
             print(f"  - ❗️ {len(only_in_1)} IDs found only in {ocel1_name}.")
             if len(only_in_1) < 10:
                 print(f"    - Sample: {list(only_in_1)[:5]}")
-        
+
         if only_in_2:
             print(f"  - ❗️ {len(only_in_2)} IDs found only in {ocel2_name}.")
             if len(only_in_2) < 10:
                 print(f"    - Sample: {list(only_in_2)[:5]}")
-        
+
         # Specific check for the object that caused the error
-        if name == "Object" and 'vh130' in only_in_1:
-             print(f"  - 🚨 NOTE: 'vh130' is in {ocel1_name} but missing from {ocel2_name}.")
-        if name == "Object" and 'vh130' in only_in_2:
-             print(f"  - 🚨 NOTE: 'vh130' is in {ocel2_name} but missing from {ocel1_name}.")
+        if name == "Object" and "vh130" in only_in_1:
+            print(
+                f"  - 🚨 NOTE: 'vh130' is in {ocel1_name} but missing from {ocel2_name}."
+            )
+        if name == "Object" and "vh130" in only_in_2:
+            print(
+                f"  - 🚨 NOTE: 'vh130' is in {ocel2_name} but missing from {ocel1_name}."
+            )
 
     # Get sets of IDs
     eids1 = set(ocel1.events["ocel:eid"])
@@ -91,23 +103,32 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
         print(f"### Checking {name}...")
         rel_oids = set(ocel.relations["ocel:oid"])
         missing_oids = rel_oids - oids_set
-        
+
         if not missing_oids:
             print(f"✅ All related objects exist in the objects table.")
         else:
-            print(f"  - ❌ ERROR: {len(missing_oids)} object IDs are in the relations table but NOT in the objects table!")
+            print(
+                f"  - ❌ ERROR: {len(missing_oids)} object IDs are in the relations table but NOT in the objects table!"
+            )
             print(f"    - Sample missing: {list(missing_oids)[:5]}")
-            if 'vh130' in missing_oids:
-                print(f"    - 🚨 CRITICAL: 'vh130' is one of the missing objects. This is the cause of your KeyError.")
-                
+            if "vh130" in missing_oids:
+                print(
+                    f"    - 🚨 CRITICAL: 'vh130' is one of the missing objects. This is the cause of your KeyError."
+                )
+
     check_integrity(ocel1_name, ocel1, oids1)
     check_integrity(ocel2_name, ocel2, oids2)
 
     print("\n--- ✅ Comparison Finished ---")
+
+
 import pandas as pd
 from pm4py.objects.ocel.obj import OCEL
 
-def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name="OCEL 2"):
+
+def analyze_ocel_diff(
+    ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name="OCEL 2"
+):
     """
     Compares two PM4Py OCEL objects and prints a detailed analysis of their
     differences, including FULL LISTS of differing IDs.
@@ -130,7 +151,7 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
 
     # === 2. Compare DataFrame Columns ===
     print("\n## 🏛️ DataFrame Column Comparison")
-    
+
     def compare_cols(name, cols1, cols2):
         print(f"### {name} Columns")
         cols1, cols2 = set(cols1), set(cols2)
@@ -159,22 +180,26 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
 
         only_in_1 = set1 - set2
         only_in_2 = set2 - set1
-        
+
         if only_in_1:
             print(f"  - ❗️ {len(only_in_1)} IDs found only in {ocel1_name}:")
             # *** CHANGED: Print full sorted list ***
             print(f"    {sorted(list(only_in_1))}")
-        
+
         if only_in_2:
             print(f"  - ❗️ {len(only_in_2)} IDs found only in {ocel2_name}:")
             # *** CHANGED: Print full sorted list ***
             print(f"    {sorted(list(only_in_2))}")
-        
+
         # Specific check for the object that caused the error
-        if name == "Object" and 'vh130' in only_in_1:
-             print(f"  - 🚨 NOTE: 'vh130' is in {ocel1_name} but missing from {ocel2_name}.")
-        if name == "Object" and 'vh130' in only_in_2:
-             print(f"  - 🚨 NOTE: 'vh130' is in {ocel2_name} but missing from {ocel1_name}.")
+        if name == "Object" and "vh130" in only_in_1:
+            print(
+                f"  - 🚨 NOTE: 'vh130' is in {ocel1_name} but missing from {ocel2_name}."
+            )
+        if name == "Object" and "vh130" in only_in_2:
+            print(
+                f"  - 🚨 NOTE: 'vh130' is in {ocel2_name} but missing from {ocel1_name}."
+            )
 
     # Get sets of IDs
     eids1 = set(ocel1.events["ocel:eid"])
@@ -192,20 +217,25 @@ def analyze_ocel_diff(ocel1: OCEL, ocel2: OCEL, ocel1_name="OCEL 1", ocel2_name=
         print(f"### Checking {name}...")
         rel_oids = set(ocel.relations["ocel:oid"])
         missing_oids = rel_oids - oids_set
-        
+
         if not missing_oids:
             print(f"✅ All related objects exist in the objects table.")
         else:
-            print(f"  - ❌ ERROR: {len(missing_oids)} object IDs are in the relations table but NOT in the objects table!")
+            print(
+                f"  - ❌ ERROR: {len(missing_oids)} object IDs are in the relations table but NOT in the objects table!"
+            )
             # *** CHANGED: Print full sorted list ***
             print(f"    - Full list of missing IDs: {sorted(list(missing_oids))}")
-            if 'vh130' in missing_oids:
-                print(f"    - 🚨 CRITICAL: 'vh130' is one of the missing objects. This is the cause of your KeyError.")
-                
+            if "vh130" in missing_oids:
+                print(
+                    f"    - 🚨 CRITICAL: 'vh130' is one of the missing objects. This is the cause of your KeyError."
+                )
+
     check_integrity(ocel1_name, ocel1, oids1)
     check_integrity(ocel2_name, ocel2, oids2)
 
     print("\n--- ✅ Comparison Finished ---")
+
 
 # Using pm4py
 start_pm4py = datetime.now()
@@ -221,7 +251,9 @@ print(ocel_objects_1)
 ocpn_from_pm4py = pm4py.discover_oc_petri_net(ocel_1)
 end_pm4py = datetime.now()
 print(f"PM4Py OCPN discovery took: {end_pm4py - start_pm4py}")
-pm4py.save_vis_ocpn(ocpn_from_pm4py, os.path.join("figures", "ContainerLogistics_ocpn_pm4py.png"))
+pm4py.save_vis_ocpn(
+    ocpn_from_pm4py, os.path.join("figures", "ContainerLogistics_ocpn_pm4py.png")
+)
 
 # Using totem_lib with Polars and the adapter
 start_lib = datetime.now()
@@ -237,12 +269,16 @@ print(ocel_objects_2)
 
 
 print("Analyzing differences between the two OCEL imports:")
-analyze_ocel_diff(ocel1=ocel_1, ocel2=ocel_2, ocel1_name="PM4Py Import", ocel2_name="totem_lib Import")
+analyze_ocel_diff(
+    ocel1=ocel_1, ocel2=ocel_2, ocel1_name="PM4Py Import", ocel2_name="totem_lib Import"
+)
 
 # ocpn_from_lib = discover_oc_petri_net_polars(ocel)  # uses an adapter internally
 ocpn_from_lib = pm4py.discover_oc_petri_net(ocel_2)  # directly use PM4Py function
 end_lib = datetime.now()
 print(f"totem_lib OCPN discovery took: {end_lib - start_lib}")
-pm4py.save_vis_ocpn(ocpn_from_lib, os.path.join("figures", "ContainerLogistics_ocpn_lib.png"))
+pm4py.save_vis_ocpn(
+    ocpn_from_lib, os.path.join("figures", "ContainerLogistics_ocpn_lib.png")
+)
 
 print("Are the two OCPNs similar?", ocpns_are_similar(ocpn_from_pm4py, ocpn_from_lib))

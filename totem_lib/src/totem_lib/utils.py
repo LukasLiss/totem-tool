@@ -1,5 +1,6 @@
 from typing import Dict, Any, Set, Tuple, FrozenSet
 
+
 def compare_ocpns(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any]:
     """
     Compares two Object-Centric Petri Nets (OCPNs) for structural and semantic equality.
@@ -16,10 +17,7 @@ def compare_ocpns(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any
         A dictionary containing the comparison results, including an 'overall_match'
         boolean and detailed breakdowns of each compared component.
     """
-    results = {
-        "overall_match": True,
-        "details": {}
-    }
+    results = {"overall_match": True, "details": {}}
 
     # 1. Compare top-level sets of activities and object types
     activities1 = ocpn1.get("activities", set())
@@ -50,8 +48,12 @@ def compare_ocpns(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any
         ot_res = {"match": True}
 
         # Compare start activities (just the activity names, not counts)
-        sa1 = set(ocpn1.get("start_activities", {}).get("events", {}).get(ot, {}).keys())
-        sa2 = set(ocpn2.get("start_activities", {}).get("events", {}).get(ot, {}).keys())
+        sa1 = set(
+            ocpn1.get("start_activities", {}).get("events", {}).get(ot, {}).keys()
+        )
+        sa2 = set(
+            ocpn2.get("start_activities", {}).get("events", {}).get(ot, {}).keys()
+        )
         ot_res["start_activities_match"] = sa1 == sa2
         if not ot_res["start_activities_match"]:
             ot_res["match"] = False
@@ -73,22 +75,22 @@ def compare_ocpns(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any
         # Compare Petri nets by generating a structural signature
         net1_tuple = ocpn1.get("petri_nets", {}).get(ot)
         net2_tuple = ocpn2.get("petri_nets", {}).get(ot)
-        
+
         if net1_tuple and net2_tuple:
             sig1 = _get_petri_net_signature(net1_tuple)
             sig2 = _get_petri_net_signature(net2_tuple)
             ot_res["petri_net_match"] = sig1 == sig2
             if not ot_res["petri_net_match"]:
                 ot_res["match"] = False
-        elif net1_tuple or net2_tuple: # one exists but not the other
+        elif net1_tuple or net2_tuple:  # one exists but not the other
             ot_res["petri_net_match"] = False
             ot_res["match"] = False
-        else: # neither exists
+        else:  # neither exists
             ot_res["petri_net_match"] = True
 
         if not ot_res["match"]:
             results["overall_match"] = False
-        
+
         ot_results[ot] = ot_res
 
     results["details"]["object_type_details"] = ot_results
@@ -110,20 +112,16 @@ def _get_petri_net_signature(petri_net_tuple: Tuple) -> Dict[str, Any]:
     - Representations of initial and final markings using place names.
     """
     net, initial_marking, final_marking = petri_net_tuple
-    
+
     # Use transition names and labels for the signature.
-    transition_signatures = frozenset(
-        (t.name, t.label) for t in net.transitions
-    )
+    transition_signatures = frozenset((t.name, t.label) for t in net.transitions)
 
     # Use place names for the signature.
     place_names = frozenset(p.name for p in net.places)
 
     # Generate a set of all arcs using the names of the source and target.
-    arc_signatures = frozenset(
-        (arc.source.name, arc.target.name) for arc in net.arcs
-    )
-        
+    arc_signatures = frozenset((arc.source.name, arc.target.name) for arc in net.arcs)
+
     # Generate signatures for initial and final markings based on place names.
     im_sig = frozenset(p.name for p, count in initial_marking.items() if count > 0)
     fm_sig = frozenset(p.name for p, count in final_marking.items() if count > 0)
@@ -136,6 +134,7 @@ def _get_petri_net_signature(petri_net_tuple: Tuple) -> Dict[str, Any]:
         "initial_marking": im_sig,
         "final_marking": fm_sig,
     }
+
 
 def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -154,10 +153,7 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
         A detailed dictionary of comparison results, including `_diff` keys
         for any components that do not match.
     """
-    results = {
-        "overall_match": True,
-        "details": {}
-    }
+    results = {"overall_match": True, "details": {}}
 
     # 1. Compare top-level sets of activities and object types
     activities1 = ocpn1.get("activities", set())
@@ -188,8 +184,12 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
         ot_res = {"match": True}
 
         # Compare start activities
-        sa1 = set(ocpn1.get("start_activities", {}).get("events", {}).get(ot, {}).keys())
-        sa2 = set(ocpn2.get("start_activities", {}).get("events", {}).get(ot, {}).keys())
+        sa1 = set(
+            ocpn1.get("start_activities", {}).get("events", {}).get(ot, {}).keys()
+        )
+        sa2 = set(
+            ocpn2.get("start_activities", {}).get("events", {}).get(ot, {}).keys()
+        )
         ot_res["start_activities_match"] = sa1 == sa2
         if not ot_res["start_activities_match"]:
             ot_res["match"] = False
@@ -220,11 +220,11 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
         # Compare Petri nets with detailed diff
         net1_tuple = ocpn1.get("petri_nets", {}).get(ot)
         net2_tuple = ocpn2.get("petri_nets", {}).get(ot)
-        
+
         if net1_tuple and net2_tuple:
             sig1 = _get_petri_net_signature(net1_tuple)
             sig2 = _get_petri_net_signature(net2_tuple)
-            
+
             petri_net_diffs = {}
             for key in sig1.keys():
                 if sig1[key] != sig2[key]:
@@ -232,7 +232,7 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
                         "ocpn1_only": sorted(list(sig1[key] - sig2[key])),
                         "ocpn2_only": sorted(list(sig2[key] - sig1[key])),
                     }
-            
+
             if petri_net_diffs:
                 ot_res["petri_net_match"] = False
                 ot_res["petri_net_diff"] = petri_net_diffs
@@ -243,13 +243,15 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
         elif net1_tuple or net2_tuple:
             ot_res["petri_net_match"] = False
             ot_res["match"] = False
-            ot_res["petri_net_diff"] = "One OCPN has a Petri net for this object type while the other does not."
+            ot_res["petri_net_diff"] = (
+                "One OCPN has a Petri net for this object type while the other does not."
+            )
         else:
             ot_res["petri_net_match"] = True
 
         if not ot_res["match"]:
             results["overall_match"] = False
-        
+
         ot_results[ot] = ot_res
 
     results["details"]["object_type_details"] = ot_results
@@ -259,16 +261,15 @@ def compare_ocpns_debug(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[st
 def ocpns_are_similar(ocpn1, ocpn2):
     """
     Compares two Object-Centric Petri Nets (OCPNs) for structural similarity.
-    
+
     Parameters:
     - ocpn1: The first OCPN to compare.
     - ocpn2: The second OCPN to compare.
-    
+
     Returns:
     - bool: True if the OCPNs are structurally similar, False otherwise.
     """
     res = compare_ocpns_debug(ocpn1, ocpn2)
     print(res)
-            
-    return res["overall_match"]
 
+    return res["overall_match"]
