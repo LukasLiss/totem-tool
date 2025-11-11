@@ -327,7 +327,7 @@ function VariantRow({
       if (!map.has(o.type)) map.set(o.type, []);
       map.get(o.type)!.push(o);
     }
-    for (const [t, arr] of map) arr.sort((a, b) => a.id.localeCompare(b.id));
+    for (const [, arr] of map) arr.sort((a, b) => a.id.localeCompare(b.id));
     return Array.from(map.entries()); // [type, objects[]][]
   }, [objects]);
 
