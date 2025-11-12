@@ -4,6 +4,8 @@ import { RefreshCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
+import OCDFGVisualizer from './OCDFGVisualizer';
+import { hrCompanyWorkersOcdfgMock } from '@/mocks/ocdfgDetailMock';
 
 type TotemApiResponse = {
   tempgraph: {
@@ -1399,6 +1401,7 @@ function TotemVisualizer({
     }
   }, []);
   const [expandedAreas, setExpandedAreas] = useState<Record<string, boolean>>({});
+  const [detailSizes, setDetailSizes] = useState<Record<string, { width: number; height: number }>>({});
 
   const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem) : []), [rawTotem]);
   const typeColorMap = useMemo(
@@ -1745,6 +1748,9 @@ function TotemVisualizer({
                             minContrast: 4,
                             gradientSamples: [],
                           });
+                          const detailSize = detailSizes[area.id];
+                          const ocdfgWidth = detailSize?.width ?? OBJECT_NODE_WIDTH;
+                          const ocdfgHeight = detailSize?.height ?? OBJECT_NODE_MIN_HEIGHT;
 
                           return (
                             <div
@@ -1846,28 +1852,56 @@ function TotemVisualizer({
                                 </span>
                               )}
                               {isExpanded && (
-                                <span
+                                <div
                                   ref={(element) => assignNodeRef(detailNodeId, element)}
                                   style={{
                                     position: 'absolute',
                                     top: '50%',
                                     left: `calc(100% + ${GRID_COLUMN_GAP * 1.5}px)`,
                                     transform: 'translateY(-50%)',
-                                    width: OBJECT_NODE_WIDTH,
+                                    width: ocdfgWidth,
+                                    minWidth: OBJECT_NODE_WIDTH,
                                     minHeight: OBJECT_NODE_MIN_HEIGHT,
+                                    height: ocdfgHeight,
                                     borderRadius: 18,
-                                    border: `1px solid ${detailBorder}`,
-                                    background: detailBackground,
+                                    border: `1.5px solid ${detailBorder}`,
+                                    background: 'transparent',
                                     display: 'flex',
-                                    alignItems: 'center',
+                                    alignItems: 'stretch',
                                     justifyContent: 'center',
                                     zIndex: 1,
                                     boxSizing: 'border-box',
-                                    boxShadow: PROCESS_AREA_INSET_SHADOW,
+                                    boxShadow: 'inset 0 0 12px 3px rgba(37, 99, 235, 0.08)',
                                     color: detailForeground,
                                     pointerEvents: 'none',
+                                    overflow: 'hidden',
                                   }}
-                                />
+                                >
+                                  <OCDFGVisualizer
+                                    variant="canvas"
+                                    height={ocdfgHeight}
+                                    data={hrCompanyWorkersOcdfgMock}
+                                    onSizeChange={(size) => {
+                                      setDetailSizes((prev) => {
+                                        const existing = prev[area.id];
+                                        if (
+                                          existing &&
+                                          existing.width === size.width &&
+                                          existing.height === size.height
+                                        ) {
+                                          return prev;
+                                        }
+                                        return {
+                                          ...prev,
+                                          [area.id]: {
+                                            width: size.width,
+                                            height: size.height,
+                                          },
+                                        };
+                                      });
+                                    }}
+                                  />
+                                </div>
                               )}
                             </div>
                           );
