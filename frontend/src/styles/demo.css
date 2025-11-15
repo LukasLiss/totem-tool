@@ -1,10 +1,20 @@
 .grid-stack {
   background: #FAFAD2;
+  min-height: 400px;
+  min-width: 300px;
 }
 
 .grid-stack-item-content {
   text-align: center;
   background-color: #18bc9c;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .grid-stack-item-removing {
