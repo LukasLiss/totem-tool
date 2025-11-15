@@ -12,7 +12,7 @@ import type { ComponentDataType,
 
 import "../../styles/demo.css";
 
-const CELL_HEIGHT = 30;
+const CELL_HEIGHT = 40;
 const BREAKPOINTS = [
   { c: 1, w: 700 },
   { c: 4, w: 850 },
@@ -21,7 +21,7 @@ const BREAKPOINTS = [
 ];
 
 function Text({ content }: { content: string }) {
-  return <div className="w-full h-full">{content}</div>;
+  return <div >{content}</div>;
 }
 
 const COMPONENT_MAP: ComponentMap = {
@@ -36,7 +36,7 @@ const gridOptions: GridStackOptions = {
   columnOpts: {
     breakpointForWindow: true,
     breakpoints: BREAKPOINTS,
-    layout: "moveScale",
+    layout: "list",
     columnMax: 12,
   },
   margin: 100,
@@ -45,7 +45,7 @@ const gridOptions: GridStackOptions = {
     acceptWidgets: true,
     columnOpts: {
       breakpoints: BREAKPOINTS,
-      layout: "moveScale",
+      layout: "list",
     },
     margin: 8,
     minRow: 2,
@@ -54,8 +54,8 @@ const gridOptions: GridStackOptions = {
   children: [
     {
       id: "item1",
-      h: 2,
-      w: 2,
+      h: 5,
+      w: 5,
       x: 0,
       y: 0,
       content: JSON.stringify({
@@ -74,60 +74,7 @@ const gridOptions: GridStackOptions = {
         props: { content: "Item 2" },
       }),
     },
-    {
-      id: "sub-grid-1",
-      h: 5,
-      sizeToContent: true,
-      subGridOpts: {
-        acceptWidgets: true,
-        cellHeight: CELL_HEIGHT,
-        alwaysShowResizeHandle: false,
-        column: "auto",
-        minRow: 2,
-        layout: "list",
-        margin: 8,
-        children: [
-          {
-            id: "sub-grid-1-title",
-            locked: true,
-            noMove: true,
-            noResize: true,
-            w: 12,
-            x: 0,
-            y: 0,
-            content: JSON.stringify({
-              name: "Text",
-              props: { content: "Sub Grid 1 Title" },
-            }),
-          },
-          {
-            id: "item3",
-            h: 2,
-            w: 2,
-            x: 0,
-            y: 1,
-            content: JSON.stringify({
-              name: "Text",
-              props: { content: "Item 3" },
-            }),
-          },
-          {
-            id: "item4",
-            h: 2,
-            w: 2,
-            x: 2,
-            y: 0,
-            content: JSON.stringify({
-              name: "Text",
-              props: { content: "Item 4" },
-            }),
-          },
-        ],
-      },
-      w: 12,
-      x: 0,
-      y: 2,
-    },
+    
   ],
 };
 
@@ -138,13 +85,13 @@ export function GridStackDemo() {
 
   return (
     <>
-    <GridStackProvider initialOptions={initialOptions}>
-      <Toolbar />
-        <GridStackRenderProvider>
-        <GridStackRender componentMap={COMPONENT_MAP} />
-      </GridStackRenderProvider>
-      
-    </GridStackProvider>
+      <GridStackProvider initialOptions={initialOptions}>
+        <Toolbar />
+          <GridStackRenderProvider>
+          <GridStackRender componentMap={COMPONENT_MAP} />
+        </GridStackRenderProvider>
+        
+      </GridStackProvider>
 
     </>
   );
@@ -171,8 +118,8 @@ function Toolbar() {
           
           addWidget({
             id,
-            w: 2,
-            h: 2,
+            w: 5,
+            h: 12,
             x: 0,
             y: 0,
             content: JSON.stringify({
