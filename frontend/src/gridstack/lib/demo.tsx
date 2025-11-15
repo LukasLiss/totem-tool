@@ -12,10 +12,10 @@ import type { ComponentDataType,
 
 import "../../styles/demo.css";
 
-const CELL_HEIGHT = 50;
+const CELL_HEIGHT = 30;
 const BREAKPOINTS = [
   { c: 1, w: 700 },
-  { c: 3, w: 850 },
+  { c: 4, w: 850 },
   { c: 6, w: 950 },
   { c: 8, w: 1100 },
 ];
@@ -39,7 +39,7 @@ const gridOptions: GridStackOptions = {
     layout: "moveScale",
     columnMax: 12,
   },
-  margin: 8,
+  margin: 100,
   cellHeight: CELL_HEIGHT,
   subGridOpts: {
     acceptWidgets: true,
@@ -143,16 +143,9 @@ export function GridStackDemo() {
         <GridStackRenderProvider>
         <GridStackRender componentMap={COMPONENT_MAP} />
       </GridStackRenderProvider>
-      <DebugInfo />
+      
     </GridStackProvider>
 
-    <GridStackProvider initialOptions={initialOptions2}>
-      <Toolbar />
-        <GridStackRenderProvider>
-        <GridStackRender componentMap={COMPONENT_MAP} />
-      </GridStackRenderProvider>
-      <DebugInfo />
-    </GridStackProvider>
     </>
   );
 }

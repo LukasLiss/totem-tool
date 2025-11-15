@@ -12,7 +12,6 @@ import { VariantsOverview } from './VariantsOverview';
 import { DeleteView } from "./DeleteView";
 import { Grid } from './Grid';
 
-
 function App() {
     const [selectedFile, setSelectedFile] = useState(null);
     
