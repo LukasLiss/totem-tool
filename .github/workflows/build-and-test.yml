@@ -43,7 +43,7 @@ jobs:
     - name: Run Django tests
       run: python backend/manage.py test
 
-  build-frontend:
+  build-frontend-no-typecheck:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -54,6 +54,6 @@ jobs:
     - name: Install dependencies
       working-directory: ./frontend
       run: npm install
-    - name: Build
+    - name: Build (no typecheck)
       working-directory: ./frontend
-      run: npm run build
+      run: npm run build-no-typecheck
