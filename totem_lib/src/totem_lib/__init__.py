@@ -24,8 +24,9 @@ __all__ = [
     "totemDiscovery",
     "Totem",
     "mlpaDiscovery",
-    "import_ocelcalculate_layout",
+    "import_ocel",
+    "calculate_layout",
     "discover_oc_petri_net_polars",
     "ocpns_are_similar",
-    convert_ocel_polars_to_pm4py,
+    "convert_ocel_polars_to_pm4py",
 ]
