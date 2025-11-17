@@ -41,6 +41,8 @@ h1 {
 
 .grid-stack {
   background: #FAFAD2;
+  flex-grow: 1;
+  width: auto;
 }
 .grid-stack.grid-stack-static {
   background: #eee;
@@ -109,4 +111,10 @@ h1 {
 
 .grid-stack.show-dimensions .grid-stack-item[gs-h][gs-w]::after {
    content: attr(gs-w) 'x' attr(gs-h);
+}
+
+div.group.peer.text-sidebar-foreground {
+  position: absolute;
+  width: 0;
+  flex-shrink: 0;
 }
