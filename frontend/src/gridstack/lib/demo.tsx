@@ -32,23 +32,19 @@ const COMPONENT_MAP: ComponentMap = {
 // ! Content must be json string like this:
 // { name: "Text", props: { content: "Item 1" } }
 const gridOptions: GridStackOptions = {
-  acceptWidgets: true,
+  acceptWidgets: false,
   columnOpts: {
     breakpointForWindow: true,
     breakpoints: BREAKPOINTS,
     layout: "list",
     columnMax: 12,
   },
-  margin: 100,
+  margin: "10px",
   cellHeight: CELL_HEIGHT,
   subGridOpts: {
-    acceptWidgets: true,
-    columnOpts: {
-      breakpoints: BREAKPOINTS,
-      layout: "list",
-    },
+    acceptWidgets: false,
+    column: 1,
     margin: 8,
-    minRow: 2,
     cellHeight: CELL_HEIGHT,
   },
   children: [
@@ -85,13 +81,10 @@ export function GridStackDemo() {
 
   return (
     <>
-      <GridStackProvider initialOptions={initialOptions}>
-        <Toolbar />
-          <GridStackRenderProvider>
+        <GridStackRenderProvider>
           <GridStackRender componentMap={COMPONENT_MAP} />
         </GridStackRenderProvider>
         
-      </GridStackProvider>
 
     </>
   );
