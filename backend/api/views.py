@@ -1566,6 +1566,6 @@ def OCDFGViewSet(request):
         dfg_json = nx.node_link_data(ocdfg)
 
         return Response({"dfg": dfg_json}, status=status.HTTP_200_OK)
-    
+
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
