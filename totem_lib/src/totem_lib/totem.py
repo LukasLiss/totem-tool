@@ -2,9 +2,6 @@ from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
 from pulp import *
-import graphviz
-import os
-from pathlib import Path
 
 TR_TOTAL = "total"
 TR_DEPENDENT = "D"
@@ -31,34 +28,11 @@ LC_ZERO_MANY = "0...*"
 
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
-# For visualization
-# map 'Dependent' to 'during' (box), 'Initiating' to 'precedes' (normal), and 'Parallel' to 'parallel' (teetee).
-YOUR_TR_TO_EDGE_ARROWHEAD = {
-    TR_DEPENDENT: 'box',
-    TR_DEPENDENT_INVERSE: 'obox',
-    TR_INITIATING: 'normal',
-    TR_INITIATING_REVERSE: 'onormal',
-    TR_PARALLEL: 'teetee',
-    None: 'none'
-}
-
-# Constants used for styling in the visualize method
-GV_FONT = 'Helvetica'
-GV_GRAPH_FONTSIZE = '10'
-GV_NODE_FONTSIZE = '10'
-GV_EDGE_FONTSIZE = '8'
-TR_EDGE_ATTR = {
-    'arrowtail': 'none',
-    'dir': 'both',
-    'decorate': 'false'
-}
-
-
 class Totem:
     """
     A class to represent the temporal graph and related information mined from an Object Centric Event Log using the totemDiscovery algorithm.
     """
-    def __init__(self, tempgraph: Dict, cardinalities: Dict, type_relations: Set[Set[str]], all_event_types: Set[str], object_type_to_event_types: Dict[str, Set[str]]):
+    def __init__(self, tempgraph: Dict, type_relations: Set[Set[str]], all_event_types: Set[str], object_type_to_event_types: Dict[str, Set[str]]):
         """
         Initialize the Totem object with the temporal graph and related information.
         :param tempgraph: A dictionary representing the temporal graph with nodes and edges categorized by temporal relations.
@@ -68,7 +42,6 @@ class Totem:
         """
         # Attributes output by totemDiscovery and used by mlpaDiscovery
         self.tempgraph = tempgraph
-        self.cardinalities = cardinalities
         self.type_relations = type_relations
         self.all_event_types = all_event_types
         self.object_type_to_event_types = object_type_to_event_types
@@ -90,70 +63,6 @@ class Totem:
     #                        log_cardinalities=log_cardinalities,
     #                        event_cardinalities=event_cardinalities,
     #                        temporal_relations=temporal_relations)
-
-    def visualize(self, output_dir: Path, output_file: str, ot_to_hex_color: dict) -> None:
-        """
-        Draws the discovered TOTeM model using graphviz.
-        This method is adapted from the implementation by Löseke et al.
-
-        Parameters:
-        - output_dir (Path): Directory to save the output PDF.
-        - output_file (str): Filename for the output PDF.
-        - ot_to_hex_color (dict): A mapping of object types to their hex color codes.
-        """
-        # --- Corrected Data Transformation Step ---
-        # 1. Extract nodes directly from the tempgraph
-        nodes = self.tempgraph.get('nodes', set())
-
-        # 2. Reconstruct the edges dictionary from your tempgraph structure
-        edges = {}
-        # Iterate over relation types ('P', 'I', 'D', etc.) in the tempgraph
-        for relation_type, relation_set in self.tempgraph.items():
-            if relation_type == 'nodes':
-                continue # Skip the nodes entry
-            # Iterate over each pair of object types for the current relation
-            if isinstance(relation_set, set):
-                for (ot_a, ot_b) in relation_set:
-                    edges[(ot_a, ot_b)] = {'TR': relation_type}
-
-        # --- Visualization Logic ---
-        G = graphviz.Digraph(
-            graph_attr={
-                # 'label': f'Filter parameter: tau = {tau}',
-                'fontname': GV_FONT, 'fontsize': GV_GRAPH_FONTSIZE,
-                'margin': '0.1,0.1',
-                'overlap': 'false',
-                'rankdir': 'LR'
-            }
-        )
-
-        for ot in nodes:
-            color = ot_to_hex_color.get(ot, '#000000') # Default to black if not in map
-            G.node(ot, label=ot, shape='box', fontname=GV_FONT, fontsize=GV_NODE_FONTSIZE, color=color)
-
-        for (ot_a, ot_b), edge_dict in edges.items():
-            tr_relation = edge_dict.get('TR')
-            # prepare label with cardinalities
-            card_info = self.cardinalities.get((ot_a, ot_b), {})
-            lc = card_info.get('LC', '')
-            ec = card_info.get('EC', '')
-            
-            edge_label = f"{lc}\n({ec})"
-            arrowhead_shape = YOUR_TR_TO_EDGE_ARROWHEAD.get(tr_relation, 'none')
-
-            G.edge(ot_a, ot_b,
-                   label=edge_label,
-                   fontname=GV_FONT, fontsize=GV_EDGE_FONTSIZE,
-                   arrowhead=arrowhead_shape,
-                   **TR_EDGE_ATTR)
-
-        os.makedirs(output_dir, exist_ok=True)
-        temp_file_path = output_dir + '/tmp_graph'
-        # TODO: handle exceptions if graphviz is not installed
-        # TODO: handle bug when output_file is not a .pdf
-        G.render(filename=str(temp_file_path), cleanup=True, format='pdf')
-        os.replace(f'{temp_file_path}.pdf', output_dir + '/' + output_file)
-        print(f"Graph successfully saved to {output_dir + '/' + output_file}")
 
 
 # Help functions for OCEL2.0
@@ -486,8 +395,6 @@ def totemDiscovery(ocel, tau=0.9):
         TR_DEPENDENT: set(),
     }
 
-    cardinalities = {}
-
     # for each connection give the 6 relations
     for connected_types in type_relations:
         t1, t2 = connected_types
@@ -515,11 +422,8 @@ def totemDiscovery(ocel, tau=0.9):
         # print(f"TRi: {tr_i}")
         print("")
 
-        cardinalities[(t1, t2)] = {'LC': lc, 'EC': ec}
-        cardinalities[(t2, t1)] = {'LC': lc_i, 'EC': ec_i}
-
     print(f"Finished building the temporal graph, end time: {datetime.now()}")
-    totem = Totem(tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type)
+    totem = Totem(tempgraph, type_relations, all_event_types, obj_typ_to_ev_type)
     return totem
 
 def mlpaDiscovery(totem: Totem):

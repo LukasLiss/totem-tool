@@ -1,4 +1,4 @@
-from totem_lib import import_ocel, totemDiscovery, mlpaDiscovery, discover_oc_petri_net_polars
+from totem_lib import import_ocel, totemDiscovery, mlpaDiscovery
 import cProfile
 
 
@@ -22,12 +22,8 @@ print(ocel.get_event_objectIDs("book_vehs_td1"))  # get objects related to event
 print("\n\n\n-------------------- Totem Discovery --------------------")
 totem = totemDiscovery(ocel)
 print(totem.tempgraph)
-totem.visualize(output_dir="figures", output_file="totem_example.pdf", ot_to_hex_color={})
 print("\n\n\n-------------------- MLPA Discovery --------------------")
 view = mlpaDiscovery(totem)
 # cProfile.run('mlpaDiscovery(ocel)')
-
-ocpn = discover_oc_petri_net_polars(ocel)
-print("done")
 
 
