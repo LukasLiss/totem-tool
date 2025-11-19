@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/card"
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
+import { DashboardView } from "./components/dashboard_view";
 
 
 export function ProcessOverview() {
@@ -26,7 +27,7 @@ export function ProcessOverview() {
   
       const { selectedFile } = useContext(SelectedFileContext);
       const { selectedDashboard, setSelectedDashboard } = useContext(DashboardContext);
-      
+      const {dashboards, setDashboards} = useState([])
       
 
 
@@ -52,17 +53,21 @@ export function ProcessOverview() {
   
           handleProcessFile();
       }, [selectedFile]);
+
+
       
   return (
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        {selectedDashboard === "DevDash" && (
+        {selectedDashboard === "DevDash" ? (
           <>
             {console.log("DevDash activated")}
             <DevDashboard />
-          </>
-        )}
+          </>) : (<DashboardView/>)
+        }
+
+
 
       </SidebarInset>
     </SidebarProvider>

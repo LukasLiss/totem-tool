@@ -4,14 +4,13 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent
 from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
-
+from .serializers import DashboardComponentPolymorphicSerializer
 
 from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.ocvariants import find_variants, calculate_layout
-from totem_lib.totem import totemDiscovery, mlpaDiscovery
 
 from collections import defaultdict
 
@@ -30,9 +29,6 @@ import re
 from django.core.cache import cache
 
 
-@api_view(['OPTIONS'])
-def debug_options(request):
-    return Response({"headers": dict(request.headers)})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -74,39 +70,6 @@ class EventLogViewSet(viewsets.ModelViewSet):
             processed= "Filetype not yet supported"
         return Response(processed, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["get"])
-    def discover_totem(self, request, pk=None):
-        try:
-            user_file = self.get_queryset().get(pk=pk)
-        except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            ocel = _build_ocel_from_path(user_file.file.path)
-            totem = totemDiscovery(ocel)
-            # process_view = mlpaDiscovery(totem)
-            return Response(totem, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-    @action(detail=True, methods=["get"])
-    def discover_mlpa(self, request, pk=None):
-        """API endpoint to perform MLPA discovery on a given event log.
-        It applies totem discovery first, then MLPA discovery."""
-        # the address would be like /api/eventlogs/{id}/discover_mlpa/ ?
-        try:
-            user_file = self.get_queryset().get(pk=pk)
-        except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        try:
-            ocel = _build_ocel_from_path(user_file.file.path)
-            totem = totemDiscovery(ocel)
-            process_view = mlpaDiscovery(totem)
-            return Response(process_view, status=status.HTTP_200_OK)
-        except Exception as e:
-            return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -121,6 +84,21 @@ class DashboardViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         project_id = self.request.data.get("project")
         project = Project.objects.get(id=project_id, users=self.request.user)
+        serializer.save(project=project)
+    
+    @action(detail=True, methods=["PATCH"])
+    def rename(self, request, pk=None):
+        """
+        Rename a dashboard. Only accepts `name` in the body.
+        """
+        dashboard = self.get_object()
+        new_name = request.data.get("name")
+        if not new_name:
+            return Response({"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        dashboard.name = new_name
+        dashboard.save()
+        return Response(self.get_serializer(dashboard).data)
 
         
         serializer.save(project=project)
@@ -213,4 +191,24 @@ def variants(request):
             },
         })
 
-    return Response({"variants": out}, status=status.HTTP_200_OK)
+    return Response({"variants": out}, status=status.HTTP_200_OK)        
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_user_data(request):
+    confirm = request.data.get("confirm")
+    if confirm != "DELETE":
+        return Response(
+            {"error": "Please confirm by sending {'confirm': 'DELETE'}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user = request.user
+    projects = Project.objects.filter(users=user)
+    deleted_count = projects.count()
+    projects.delete()
+
+    return Response(
+        {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
+        status=status.HTTP_200_OK
+    )

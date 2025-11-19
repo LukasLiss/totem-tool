@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import {BrowserRouter, Routes, Route} from 'react-router-dom';
 import {Login} from "./react_component/login";
 import {Home} from "./react_component/home";
 import {Logout} from './react_component/logout';
@@ -7,8 +7,9 @@ import UploadView from './UploadView';
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import './styles/app.css';
 import { ProcessOverview } from './ProcessOverview_new';
-import { DashboardProvider } from "./contexts/DashboardContext";import { VariantsOverview } from './VariantsOverview';
-
+import { DashboardProvider } from "./contexts/DashboardContext";
+import { VariantsOverview } from './VariantsOverview';
+import { DeleteView } from "./DeleteView";
 
 
 function App() {
@@ -28,7 +29,7 @@ function App() {
               <Route path="/upload" element={<UploadView/>}/>
               <Route path="/overview" element={<ProcessOverview/>}/>
               <Route path="/variantsview" element={<VariantsOverview/>}/>
-              <Route path="/" element={<Navigate to="/upload" replace />} />
+              <Route path="/userdatadelete" element={<DeleteView/>}/>
           </Routes>
               
           

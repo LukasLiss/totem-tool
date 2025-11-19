@@ -19,7 +19,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { DevDash } from "./nav-dev-dash";
-import { getDashboards, testOptions } from "@/api/dashboardApi";
+import { getDashboards } from "@/api/dashboardApi";
 
 // sample data
 // This is sample data.
@@ -167,7 +167,14 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <DevDash />
-        <NavDashboard dashboards={dashboards} />
+        <NavDashboard 
+          dashboards={dashboards} 
+          refreshDashboards={() => {
+            if (!selectedFile?.project) return;
+            const token = localStorage.getItem("access_token");
+            getDashboards(token, selectedFile.project).then(setDashboards);
+          }} 
+        />
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>

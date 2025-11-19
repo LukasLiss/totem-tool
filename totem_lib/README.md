@@ -15,7 +15,3 @@ totem = totemDiscovery(ocel, tau=0.9)
 # Process Areas Mining
 process_view = mlpaDiscovery(totem)
 ```
-
-# Acknowledgements
-The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
-The TOTeM visualization function is adapted from [this repository](https://github.com/loeseke/object-centric-streaming-discovery/).

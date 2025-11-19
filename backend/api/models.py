@@ -40,6 +40,11 @@ class Dashboard(models.Model):
     
 
 class DashboardComponent(models.Model):
+    dashboard = models.ForeignKey(
+        Dashboard,
+        on_delete=models.CASCADE,
+        related_name="components"
+    )
     x = models.FloatField(
         validators=[
             MinValueValidator(0.0),
@@ -55,4 +60,16 @@ class DashboardComponent(models.Model):
     width = models.FloatField()
     height = models.FloatField()
 
+    class Meta:
+        verbose_name = "Dashboard Component"
+        verbose_name_plural = "Dashboard Components"
+
+
+class NumberofEventsComponent(DashboardComponent):
+    color = models.CharField(max_length=20, default="blue")
+
+
+class TextBoxComponent(DashboardComponent):
+    text = models.TextField()
+    font_size = models.IntegerField(default=14)
 

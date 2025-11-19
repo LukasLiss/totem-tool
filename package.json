@@ -23,5 +23,8 @@
     "wait-on": "^7.2.0"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "cmdk": "^1.1.1"
+  }
 }
