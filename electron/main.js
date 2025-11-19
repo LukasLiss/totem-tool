@@ -44,7 +44,7 @@ function createWindow() {
 
 function checkBackendRunning() {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:8000/api/greeting/', (res) => {
+    const req = http.get('http://localhost:8000/api/health-check/', (res) => {
       console.log('Backend already running on port 8000');
       resolve(true);
     });
@@ -130,7 +130,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   // Only kill backend if we started it (not in development mode)
   if (backendProcess && !isDev) {
-    backendProcess.kill();
+      backendProcess.kill();
   }
   if (process.platform !== 'darwin') {
     app.quit();
@@ -140,6 +140,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // Only kill backend if we started it (not in development mode)
   if (backendProcess && !isDev) {
-    backendProcess.kill();
+      backendProcess.kill();
   }
 });
