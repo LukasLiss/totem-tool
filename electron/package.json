@@ -41,5 +41,8 @@
     "electron": "^37.2.3",
     "electron-builder": "^26.0.12",
     "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
   }
 }
