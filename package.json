@@ -11,7 +11,7 @@
     "build-frontend": "cd frontend && npm run build-no-typecheck",
     "build-electron": "cd electron && npm run build",
     "build-electron-win": "cd electron && npm run build-win",
-    "build:copy-resources": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend && shx cp -r frontend/build/. electron/resources/frontend-build/ && shx cp -r backend/. electron/resources/backend/ && shx cp -r totem_lib electron/resources/totem_lib",
+    "build:copy-resources": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend && shx cp -r frontend/dist/. electron/resources/frontend-build/ && shx cp -r backend/. electron/resources/backend/ && shx cp -r totem_lib electron/resources/totem_lib",
     "build:setup-backend": "cd electron/resources/backend && python -m venv venv && .\\venv\\Scripts\\python.exe -m pip install -r requirements.txt && .\\venv\\Scripts\\python.exe -m pip install -e ../totem_lib && .\\venv\\Scripts\\python.exe manage.py migrate && .\\venv\\Scripts\\python.exe manage.py loaddata initial_user.json",
     "build-all": "npm run build-frontend && npm run build:copy-resources && npm run build:setup-backend && npm run build-electron-win",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
