@@ -137,7 +137,7 @@ export function NavDashboard({
                       <SidebarMenuSubButton className="flex w-full items-center justify-between"
                       onClick={() => {
                         console.log("Dashboard clicked:", dashboard);
-                        setSelectedDashboard(dashboard);
+                        setSelectedDashboard(dashboard.id);
                       }}>
                         <span>{dashboard.name}</span>
 
