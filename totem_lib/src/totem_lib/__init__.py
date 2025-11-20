@@ -2,6 +2,8 @@ from .ocel import ObjectCentricEventLog, load_events_from_sqlite, load_objects_f
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import discover_oc_petri_net_polars
 from .utils import ocpns_are_similar
+from .ocdfg import OCDFG, CCDFG
+from .ocvariants import calculate_layout
 
 __all__ = [
     "ObjectCentricEventLog",
@@ -14,8 +16,10 @@ __all__ = [
     "totemDiscovery",
     "Totem",
     "mlpaDiscovery",
-    "import_ocel"
+    "import_ocel",
     "calculate_layout",
     "discover_oc_petri_net_polars",
-    "ocpns_are_similar"
+    "ocpns_are_similar",
+    "OCDFG",
+    "CCDFG",
 ]

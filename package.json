@@ -25,6 +25,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "cmdk": "^1.1.1"
+    "cmdk": "^1.1.1",
+    "glpk.js": "^4.0.2",
+    "gridstack": "^12.3.3"
   }
 }
