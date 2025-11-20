@@ -1,4 +1,4 @@
-import React, { ComponentProps, useEffect } from "react";
+import React, { ComponentProps, useEffect, useContext } from "react";
 import { GridStackOptions, GridStackWidget } from "gridstack";
 
 import { GridStackDemo } from "./gridstack/lib/demo";
@@ -17,8 +17,9 @@ import {
 import type { ComponentDataType,
   ComponentMap } from "../lib/grid-stack-render";
 import "./styles/demo.css";
-
-
+import { DashboardContext } from "./contexts/DashboardContext";
+import { getLayout, saveLayout } from "./api/componentsApi";
+import { SaveGridButton } from "./components/save_grid_button";
 
 const CELL_HEIGHT = 40;
 const BREAKPOINTS = [
@@ -95,72 +96,50 @@ const gridOptions: GridStackOptions = {
 
 
 
-function DebugInfo() {
-  const { initialOptions, saveOptions } = useGridStackContext();
-
-  const [realtimeOptions, setRealtimeOptions] = useState<
-    GridStackOptions | GridStackWidget[] | undefined
-  >(undefined);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (saveOptions) {
-        const data = saveOptions();
-        setRealtimeOptions(data);
-      }
-    }, 2000);
-
-    return () => clearInterval(timer);
-  }, [saveOptions]);
-
-  return (
-    <div>
-      <h2>Debug Info</h2>
-      <div
-        style={{
-          display: "grid",
-          gap: "1rem",
-          gridTemplateColumns: "repeat(2, 1fr)",
-        }}
-      >
-        <div>
-          <h3>Initial Options</h3>
-          <pre
-            style={{
-              backgroundColor: "#f3f4f6",
-              padding: "1rem",
-              borderRadius: "0.25rem",
-              overflow: "auto",
-            }}
-          >
-            {JSON.stringify(initialOptions, null, 2)}
-          </pre>
-        </div>
-        <div>
-          <h3>Realtime Options (2s refresh)</h3>
-          <pre
-            style={{
-              backgroundColor: "#f3f4f6",
-              padding: "1rem",
-              borderRadius: "0.25rem",
-              overflow: "auto",
-            }}
-          >
-            {JSON.stringify(realtimeOptions, null, 2)}
-          </pre>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
 export function Grid() {
-   
-  //saving stuff
+  const token = localStorage.getItem("token");
+  const EMPTY_LAYOUT: GridStackOptions = {
+    ...gridOptions,
+    children: []
+  };
+  const { selectedDashboard, setSelectedDashboard } = useContext(DashboardContext);
+  const [initialLayout, setInitialLayout] = React.useState<GridStackOptions>(EMPTY_LAYOUT);
   //  const grid = GridStack.get('.grid-stack');
   //  const layout = grid.engine.save();
+
+
+
+    useEffect(() => {
+    async function load() {
+      try { 
+        const token = localStorage.getItem("token");
+        const result = await getLayout(selectedDashboard, token);
+        const children = result.components.map(c => ({
+          id: String(c.id),
+          x: c.x,
+          y: c.y,
+          w: c.w,
+          h: c.h,
+          content: JSON.stringify({
+            name: c.component_name,
+            props: c.props,
+          }),
+        }));
+
+        setInitialLayout({
+          ...gridOptions,
+          children,
+        });
+        console.log('Successfully loaded initial Layout')
+      } catch (err)  {
+        console.log('Could not load initial layout')
+      }
+    }
+
+    load();
+  }, [selectedDashboard]);
+
+  if (!initialLayout) return <div>Loading...</div>;
 
 
 
@@ -169,10 +148,13 @@ export function Grid() {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <GridStackProvider initialOptions={gridOptions}>
+        <GridStackProvider initialOptions={initialLayout}>
           <GridStackRenderProvider>
             <div className="grid-container">
               <DnDSidebar/>
+
+              <SaveGridButton dashboardId={selectedDashboard} token={token}/>
+
               <GridStackRender componentMap={COMPONENT_MAP} />
             </div>
           </GridStackRenderProvider>
