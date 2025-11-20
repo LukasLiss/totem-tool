@@ -10,40 +10,8 @@ import { DashboardView } from "./components/dashboard_view";
 
 
 export function ProcessOverview() {
-  const [files, setFiles] = useState([]);
-      const [processedResult, setProcessedResult] = useState(null);
-  
-      const { selectedFile } = useContext(SelectedFileContext);
-      const { selectedDashboard, setSelectedDashboard } = useContext(DashboardContext);
-      const {dashboards, setDashboards} = useState([])
-      
+      const { selectedDashboard } = useContext(DashboardContext);
 
-
-      useEffect(() => {
-          const handleProcessFile = async () => {
-              console.log("handleProcessFile");
-  
-              if (!selectedFile?.id) {
-              alert("Please select a file first");
-              return;
-              }
-          
-              const token = localStorage.getItem("access_token");
-  
-              try {
-              const result = await processFile(token, selectedFile.id);
-              setProcessedResult(result);
-              console.log(result);
-              } catch (err) {
-              console.error("Failed to process file:", err);
-              }
-          };
-  
-          handleProcessFile();
-      }, [selectedFile]);
-
-
-      
   return (
     <SidebarProvider>
       <AppSidebar />
