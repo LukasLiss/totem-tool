@@ -1,7 +1,6 @@
-import React, { useState, useRef, useContext } from "react";
+import { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
-import Dropzone from 'react-dropzone';
 import {useDropzone} from 'react-dropzone';
 import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
@@ -23,10 +22,11 @@ export function FileUploadValidator() {
     //Right now JSON with OR logic
     const { setSelectedFile } = useContext(SelectedFileContext);
     
-    const [file, setFile] = useState(null);
-    const hiddenInputRef = useRef(null);
+    const [file, setFile] = useState<File | null>(null);
+    const hiddenInputRef = useRef<HTMLInputElement | null>(null);
 
-    const {getRootProps, getInputProps, open, acceptedFiles} = useDropzone({
+
+    const {getRootProps, getInputProps} = useDropzone({
       onDrop: (incomingFiles) => {
         if (hiddenInputRef.current) {
           const dataTransfer = new DataTransfer();
@@ -75,6 +75,14 @@ export function FileUploadValidator() {
   const handleFileUpload = async () => {
     const token = localStorage.getItem("access_token");
     try {
+      if (!token) {
+      console.error("No token found!");
+      return;
+      }
+      if (!file) {
+        console.error("No file selected!");
+        return;
+      }
       const response = await uploadFile(file, token);
       console.log("Upload success:", response);
       setSelectedFile(response);
@@ -87,7 +95,7 @@ export function FileUploadValidator() {
   };
 
 
- const handleSubmit = async (e) => {
+ const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const isValid = await validateFile();
     if (isValid) {
@@ -95,11 +103,7 @@ export function FileUploadValidator() {
     }
  };
 
-  const files = acceptedFiles.map(file => (
-    <li key={file.path}>
-      {file.path} - {file.size} bytes
-    </li>
-  ));
+
 
 
 

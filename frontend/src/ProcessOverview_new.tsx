@@ -1,21 +1,9 @@
 import { AppSidebar } from "@/components/app-sidebar"
-import React, { useState, useContext, useEffect } from "react";
-import { processFile } from "./api/fileApi";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { useContext } from "react";
 import {
   SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
+  SidebarProvider
 } from "@/components/ui/sidebar"
-import { Badge } from "@/components/ui/badge"
-import {
-  Card,
-  CardAction,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
 import { DashboardView } from "./components/dashboard_view";

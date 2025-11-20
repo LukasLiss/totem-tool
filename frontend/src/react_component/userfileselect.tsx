@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useContext, createContext } from "react";
+import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
@@ -40,6 +40,10 @@ function UserFileSelect() {
         const fetchFiles = async () => {
             const token = localStorage.getItem("access_token");
             try {
+            if (!token) {
+                    console.error("No token found!");
+                    return;
+                  }
             const response = await getUserFiles(token);
             setFiles(response);
             console.log(files)
@@ -53,10 +57,7 @@ function UserFileSelect() {
     
 
 
-    // Handle file upload
-    const handleFileChange = (e) => {
-        setFiles(Array.from(e.target.files)); // convert FileList to array
-    };
+    
 
     const handleSubmit = () => {
         const file = files.find((f) => f.id === Number(selectedFile.id));

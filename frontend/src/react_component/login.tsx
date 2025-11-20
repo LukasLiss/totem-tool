@@ -1,7 +1,6 @@
 // Import the react JS packages 
 import axios from "axios";
 import { useState } from "react";
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -19,7 +18,7 @@ export const Login = () => {
   const [password, setPassword] = useState('');
 
   // Create the submit method.
-  const submit = async (e) => {
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
     const user = {

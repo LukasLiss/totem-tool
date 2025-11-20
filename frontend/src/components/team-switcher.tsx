@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext } from "react";
 import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
 
 import {
@@ -24,19 +24,14 @@ import { useNavigate } from "react-router-dom";
 
 
 // extend type to allow optional logo component
-type Project = {
-  id: string | number
-  name: string
-  logo?: React.ComponentType<{ className?: string }>
-}
 
-export function Switcher(){
+
+export function Switcher() {
   const { isMobile } = useSidebar()
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   console.log('beginning')
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState("");
   const navigate = useNavigate();
   
   // find active project by id, fallback to first
@@ -48,6 +43,10 @@ const displayName = selectedFile?.file
       const fetchFiles = async () => {
         const token = localStorage.getItem("access_token");
         try {
+          if (!token) {
+            console.error("No token found!");
+            return;
+          }
           const response = await getUserFiles(token);
           setFiles(response);
           console.log('Loading files successfull')

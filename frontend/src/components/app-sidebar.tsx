@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import {
-  AudioWaveform, BookOpen, Bot, Command, Frame, GalleryVerticalEnd,
-  Map, PieChart, Settings2, SquareTerminal, FileStack, ArrowUp01
+  AudioWaveform, Command, GalleryVerticalEnd,
+  Map, PieChart, Settings2, FileStack, ArrowUp01
 } from "lucide-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -113,9 +113,8 @@ const data = {
 
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
-  const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
+  const { selectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
-  const [selectedFileId, setSelectedFileId] = useState("");
   const [dashboards, setDashboards] = useState([])
 
   console.log("Current selectedFile:", selectedFile);
@@ -124,6 +123,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     const fetchFiles = async () => {
       const token = localStorage.getItem("access_token");
       try {
+        if (!token) {
+          console.error("No token found!");
+          return;
+        }
         const response = await getUserFiles(token);
         setFiles(response);
       } catch (err) {
@@ -140,6 +143,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     if (!selectedFile?.project) return; // nothing selected
     const token = localStorage.getItem("access_token");
     try {
+      if (!token) {
+        console.error("No token found!");
+        return;
+      }
       const response = await getDashboards(token, selectedFile.project);
       setDashboards(response);
       console.log('loaded dashboards', response)
@@ -154,15 +161,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         {files.length > 0 && (
-          <Switcher
-            projects={files}
-            selectedId={selectedFileId}
-            onSelect={(id) => {
-              setSelectedFileId(id);
-              const file = files.find((f) => f.id === id);
-              if (file) setSelectedFile(file);
-            }}
-          />
+          <Switcher/>
         )}
       </SidebarHeader>
       <SidebarContent>
