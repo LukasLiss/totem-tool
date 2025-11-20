@@ -45,20 +45,20 @@ class DashboardComponent(models.Model):
         on_delete=models.CASCADE,
         related_name="components"
     )
-    x = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
-    )
-    y = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
-    )
-    width = models.FloatField()
-    height = models.FloatField()
+
+    # GridStack-native geometry
+    x = models.IntegerField()
+    y = models.IntegerField()
+    w = models.IntegerField()
+    h = models.IntegerField()
+
+    # The actual component name, matching your React componentMap
+    component_name = models.CharField(max_length=100)
+
+    # Raw JSON props as passed to React component
+    props = models.JSONField(default=dict)
+
+    order = models.IntegerField(default=0)  # for z-order or stable sorting
 
     class Meta:
         verbose_name = "Dashboard Component"

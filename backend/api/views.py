@@ -102,6 +102,70 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         
         serializer.save(project=project)
+    
+    @action(detail=True, methods=["GET"])
+    def get_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        components = dashboard.components.all().order_by("order", "id")
+        serializer = DashboardComponentPolymorphicSerializer(components, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=["POST"])
+    def save_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        layout = request.data.get("layout")
+
+        if not isinstance(layout, list):
+            return Response({"error": "layout must be a list"}, status=400)
+
+        existing = {c.id: c for c in dashboard.components.all()}
+
+        updated_ids = []
+
+        for widget in layout:
+            comp_id = widget.get("id")
+            x = widget.get("x")
+            y = widget.get("y")
+            w = widget.get("w")
+            h = widget.get("h")
+            content = widget.get("content")  # JSON string from GridStack
+
+            if not all([comp_id, x is not None, y is not None, w, h]):
+                continue
+
+            try:
+                content_json = eval(content)  # or json.loads(content)
+            except Exception:
+                content_json = {"name": "Text", "props": {}}
+
+            name = content_json.get("name")
+            props = content_json.get("props", {})
+
+            if comp_id in existing:
+                comp = existing[comp_id]
+            else:
+                comp = DashboardComponent(id=comp_id, dashboard=dashboard)
+
+            comp.x = x
+            comp.y = y
+            comp.w = w
+            comp.h = h
+            comp.component_name = name
+            comp.props = props
+            comp.save()
+
+            updated_ids.append(comp.id)
+
+        # Delete removed components
+        for cid, comp in existing.items():
+            if cid not in updated_ids:
+                comp.delete()
+
+        return Response({"status": "saved"})
+
+
+
+
 # TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     
