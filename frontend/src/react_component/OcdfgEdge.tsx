@@ -23,6 +23,7 @@ const DEFAULT_COLOR = '#2563EB';
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 72;
 const EPSILON = 1e-6;
+const POINT_TOLERANCE = 0.5;
 
 function buildFallbackPolyline(
   sourceX: number,
@@ -43,9 +44,35 @@ function clampPolylineToEndpoints(points: Point[], source: Point, target: Point)
   if (points.length === 0) return [];
   if (points.length === 1) return [{ ...source }];
   const result = points.map(point => ({ ...point }));
-  result[0] = { ...source };
-  result[result.length - 1] = { ...target };
+  if (pointsAreClose(result[0], source)) {
+    result[0] = { ...source };
+  }
+  if (pointsAreClose(result[result.length - 1], target)) {
+    result[result.length - 1] = { ...target };
+  }
   return result;
+}
+
+function pointsAreClose(a?: Point, b?: Point, tolerance = POINT_TOLERANCE) {
+  if (!a || !b) return false;
+  return Math.abs(a.x - b.x) <= tolerance && Math.abs(a.y - b.y) <= tolerance;
+}
+
+function pointOnNodeBoundary(
+  point: Point | undefined,
+  geometry: { center: Point; size: { width: number; height: number } },
+  tolerance = POINT_TOLERANCE,
+) {
+  if (!point) {
+    return false;
+  }
+  const halfWidth = geometry.size.width / 2;
+  const halfHeight = geometry.size.height / 2;
+  const dx = Math.abs(point.x - geometry.center.x);
+  const dy = Math.abs(point.y - geometry.center.y);
+  const onVertical = Math.abs(dx - halfWidth) <= tolerance && dy <= halfHeight + tolerance;
+  const onHorizontal = Math.abs(dy - halfHeight) <= tolerance && dx <= halfWidth + tolerance;
+  return onVertical || onHorizontal;
 }
 
 function calculateCollisionPoint(tail: Point, head: Point, headWidth: number, headHeight: number): Point {
@@ -316,6 +343,12 @@ const OcdfgEdge = memo(function OcdfgEdge({
     if (!targetGeometry || clamped.length < 2) {
       return clamped;
     }
+
+    const currentTarget = clamped[clamped.length - 1];
+    if (pointOnNodeBoundary(currentTarget, targetGeometry)) {
+      return clamped;
+    }
+
     const approachPoint = clamped[clamped.length - 2];
     const collision = calculateCollisionPoint(
       approachPoint,
@@ -332,11 +365,10 @@ const OcdfgEdge = memo(function OcdfgEdge({
     return adjusted;
   }, [isSelfLoop, data?.polyline, targetGeometry, sourceX, sourceY, targetX, targetY]);
 
-  const thicknessFactorRaw = typeof data?.thicknessFactor === 'number' && Number.isFinite(data.thicknessFactor)
-    ? Math.min(2, Math.max(0.5, data.thicknessFactor))
-    : 1;
-  const baseStroke = Math.max(6, owners.length * 3);
-  const strokeBase = baseStroke * thicknessFactorRaw;
+  // Fixed thickness: always 12px (thicknessFactor = 2 for base stroke of 6)
+  const thicknessFactorRaw = 2;
+  const baseStroke = 6; // Fixed base stroke
+  const strokeBase = baseStroke * thicknessFactorRaw; // = 12px
   const tailOwner = owners[0];
   const headOwner = owners[owners.length - 1];
   const tailColor = tailOwner && tailOwner !== 'default'

@@ -542,6 +542,86 @@ function simplifyPolyline(points: LayoutPoint[]): LayoutPoint[] {
   return simplified;
 }
 
+function clipPolylineEndpoints(
+  points: LayoutPoint[],
+  sourceNode?: LayoutNode,
+  targetNode?: LayoutNode,
+  laneOffset = 0,
+  laneOrientation?: 'horizontal' | 'vertical',
+) {
+  if (points.length < 2) return points;
+  const clipped = points.map(p => ({ ...p }));
+
+  if (sourceNode && clipped.length >= 2) {
+    const margin = 0; // No margin needed as dummies are already positioned correctly
+    const laneEndpoint = computeLaneEndpoint(
+      sourceNode,
+      clipped[1],
+      laneOffset,
+      laneOrientation,
+      margin,
+    );
+    clipped[0] = laneEndpoint ?? projectFromNode(sourceNode, clipped[1], margin);
+  }
+
+  if (targetNode && clipped.length >= 2) {
+    const margin = 0;
+    const laneEndpoint = computeLaneEndpoint(
+      targetNode,
+      clipped[clipped.length - 2],
+      laneOffset,
+      laneOrientation,
+      margin,
+    );
+    clipped[clipped.length - 1] = laneEndpoint
+      ?? projectFromNode(targetNode, clipped[clipped.length - 2], margin);
+  }
+
+  return clipped;
+}
+
+function computeLaneEndpoint(
+  node: LayoutNode | undefined,
+  neighborPoint: LayoutPoint,
+  laneOffset: number,
+  laneOrientation: 'horizontal' | 'vertical' | undefined,
+  margin: number,
+) {
+  if (
+    !node ||
+    laneOrientation === undefined ||
+    node.x === undefined ||
+    node.y === undefined
+  ) {
+    return null;
+  }
+
+  const width = node.width ?? OCDFGLayout.DEFAULT_WIDTH;
+  const height = node.height ?? OCDFGLayout.DEFAULT_HEIGHT;
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const centerX = node.x;
+  const centerY = node.y;
+  const halfWidth = width / 2 + margin;
+  const halfHeight = height / 2 + margin;
+
+  if (laneOrientation === 'vertical') {
+    const direction = neighborPoint.y >= centerY ? 1 : -1;
+    return {
+      x: centerX + laneOffset,
+      y: centerY + direction * halfHeight,
+    };
+  }
+
+  const direction = neighborPoint.x >= centerX ? 1 : -1;
+  return {
+    x: centerX + direction * halfWidth,
+    y: centerY + laneOffset,
+  };
+}
+
 function fallbackDirect(edge: { polyline?: LayoutPoint[] }, source: LayoutNode, target: LayoutNode) {
   if (
     source.x === undefined ||
@@ -647,22 +727,58 @@ export function routeEdges(layout: OCDFGLayout) {
     }
   });
 
-  const context = buildRoutingContext(layout);
-
+  // Simply connect the dummy chain with straight line segments
   Object.keys(layout.edges).forEach((edgeId) => {
-    if (context) {
-      buildEdgePolyline(layout, context, edgeId);
-    } else {
-      const edge = layout.edges[edgeId];
-      if (!edge) return;
-      const sourceNode = layout.nodes[edge.source];
-      const targetNode = layout.nodes[edge.target];
-      if (!sourceNode || !targetNode) {
-        delete edge.polyline;
-        return;
-      }
-      fallbackDirect(edge, sourceNode, targetNode);
+    const edge = layout.edges[edgeId];
+    if (!edge || edge.reversed) return;
+
+    const sourceNode = layout.nodes[edge.source];
+    const targetNode = layout.nodes[edge.target];
+    if (!sourceNode || !targetNode) {
+      delete edge.polyline;
+      return;
     }
+
+    if (
+      sourceNode.x === undefined ||
+      sourceNode.y === undefined ||
+      targetNode.x === undefined ||
+      targetNode.y === undefined
+    ) {
+      delete edge.polyline;
+      return;
+    }
+
+    // Build polyline by connecting: source -> dummies -> target
+    const polyline: LayoutPoint[] = [];
+
+    // Start at source
+    polyline.push({ x: sourceNode.x, y: sourceNode.y });
+
+    // Add each dummy in the path
+    edge.path.forEach((dummyId) => {
+      const dummy = layout.nodes[dummyId];
+      if (dummy && dummy.x !== undefined && dummy.y !== undefined) {
+        polyline.push({ x: dummy.x, y: dummy.y });
+      }
+    });
+
+    // End at target
+    polyline.push({ x: targetNode.x, y: targetNode.y });
+
+    // Simplify the polyline (remove redundant co-linear points)
+    const simplified = simplifyPolyline(polyline);
+
+    // Clip to node boundaries
+    const clipped = clipPolylineEndpoints(
+      simplified,
+      sourceNode,
+      targetNode,
+      edge.laneOffset ?? 0,
+      edge.laneOrientation,
+    );
+
+    edge.polyline = clipped.length >= 2 ? clipped : undefined;
   });
 
   layout.invalidateSegments();

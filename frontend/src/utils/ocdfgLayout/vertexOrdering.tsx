@@ -13,6 +13,23 @@ export function orderVertices(layout: OCDFGLayout, config: LayoutConfig) {
   );
   const optimizedLayering = upDownBarycenterBilayerSweep(layout, initialLayering, config);
   layout.updateLayering(optimizedLayering);
+
+  // DEBUG: Summary of all highway bundles after optimization
+  const highwayDummies = Object.values(layout.nodes).filter(
+    (node) => node.type === DUMMY_TYPE && node.isInHighwayBundle,
+  );
+  if (highwayDummies.length > 0) {
+    console.log(`[HIGHWAY SUMMARY] ${highwayDummies.length} dummy nodes marked as part of highway bundles`);
+    const bundlesByLayer = new Map<number, typeof highwayDummies>();
+    highwayDummies.forEach((node) => {
+      const existing = bundlesByLayer.get(node.layer) || [];
+      existing.push(node);
+      bundlesByLayer.set(node.layer, existing);
+    });
+    bundlesByLayer.forEach((dummies, layer) => {
+      console.log(`  Layer ${layer}: ${dummies.length} highway dummies`);
+    });
+  }
 }
 
 function applyObjectCentralityOrdering(
@@ -98,22 +115,125 @@ function reorderLayer(
   downward: boolean,
   config: LayoutConfig,
 ) {
-  const barycenters = new Map<string, number>();
-  layering[layerIndex].forEach((nodeId) => {
-    barycenters.set(
-      nodeId,
-      computeBarycenter(layout, layering, nodeId, layerIndex, downward, config),
+  const layer = layering[layerIndex];
+
+  // Group nodes that should stay together (dummy nodes sharing segments)
+  const bundles = groupSharedSegmentDummies(layout, layer);
+
+  // Compute barycenter for each bundle (using the first node's barycenter)
+  const bundleBarycenters = new Map<string, number>();
+  bundles.forEach((bundle) => {
+    if (bundle.length === 0) return;
+    const representativeBarycenter = computeBarycenter(
+      layout,
+      layering,
+      bundle[0],
+      layerIndex,
+      downward,
+      config,
     );
+    bundle.forEach((nodeId) => {
+      bundleBarycenters.set(nodeId, representativeBarycenter);
+    });
+  });
+
+  // Compute barycenters for non-bundled nodes
+  const barycenters = new Map<string, number>();
+  layer.forEach((nodeId) => {
+    if (bundleBarycenters.has(nodeId)) {
+      barycenters.set(nodeId, bundleBarycenters.get(nodeId)!);
+    } else {
+      barycenters.set(
+        nodeId,
+        computeBarycenter(layout, layering, nodeId, layerIndex, downward, config),
+      );
+    }
   });
 
   const originalOrder = new Map<string, number>();
-  layering[layerIndex].forEach((nodeId, idx) => originalOrder.set(nodeId, idx));
+  layer.forEach((nodeId, idx) => originalOrder.set(nodeId, idx));
 
-  return [...layering[layerIndex]].sort((a, b) => {
+  // Sort while keeping bundle members together
+  const sortedLayer = [...layer].sort((a, b) => {
     const diff = (barycenters.get(a) ?? 0) - (barycenters.get(b) ?? 0);
     if (Math.abs(diff) > EPS) return diff;
+
+    // If same barycenter, check if they're in the same bundle
+    const bundleA = bundles.find((bundle) => bundle.includes(a));
+    const bundleB = bundles.find((bundle) => bundle.includes(b));
+
+    if (bundleA && bundleB && bundleA === bundleB) {
+      // Maintain order within bundle
+      return bundleA.indexOf(a) - bundleA.indexOf(b);
+    }
+
     return (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0);
   });
+
+  return sortedLayer;
+}
+
+function groupSharedSegmentDummies(layout: OCDFGLayout, layer: string[]): string[][] {
+  const bundles: string[][] = [];
+  const assigned = new Set<string>();
+
+  // Find dummy nodes and group them by shared segments
+  const dummyNodes = layer.filter((nodeId) => {
+    const node = layout.nodes[nodeId];
+    return node && node.type === DUMMY_TYPE;
+  });
+
+  dummyNodes.forEach((nodeId) => {
+    if (assigned.has(nodeId)) return;
+
+    const node = layout.nodes[nodeId];
+    if (!node) return;
+
+    const segmentKey = `${node.upper || 'null'}->${node.lower || 'null'}`;
+
+    // Find all dummies sharing this segment
+    const bundleMembers = dummyNodes.filter((candidateId) => {
+      const candidate = layout.nodes[candidateId];
+      if (!candidate) return false;
+      const candidateSegmentKey = `${candidate.upper || 'null'}->${candidate.lower || 'null'}`;
+      return candidateSegmentKey === segmentKey;
+    });
+
+    if (bundleMembers.length > 1) {
+      // Sort by edge ID for consistent ordering
+      bundleMembers.sort((a, b) => {
+        const edgeA = layout.nodes[a]?.belongsTo || '';
+        const edgeB = layout.nodes[b]?.belongsTo || '';
+        return edgeA.localeCompare(edgeB);
+      });
+
+      bundles.push(bundleMembers);
+      bundleMembers.forEach((id) => assigned.add(id));
+
+      // DEBUG: Log highway bundle detection
+      console.log(`[HIGHWAY BUNDLE DETECTED] Layer ${node.layer}:`, {
+        segmentKey,
+        bundleSize: bundleMembers.length,
+        edges: bundleMembers.map((id) => layout.nodes[id]?.belongsTo).filter(Boolean),
+        dummyIds: bundleMembers,
+      });
+
+      // Mark nodes as part of highway bundle
+      bundleMembers.forEach((id, index) => {
+        const dummyNode = layout.nodes[id];
+        if (dummyNode) {
+          dummyNode.isInHighwayBundle = true;
+          dummyNode.bundleIndex = index;
+        }
+      });
+    }
+  });
+
+  if (bundles.length > 0) {
+    console.log(`[HIGHWAY] Found ${bundles.length} highway bundle(s) in layer with ${layer.length} nodes`);
+  }
+
+  return bundles;
 }
 
 function computeBarycenter(
@@ -180,11 +300,49 @@ function dummyBarycenter(
   if (!neighborLayer) return -1;
   const index = positionInLayer(neighborLayer, neighborId);
   if (index === -1) return -1;
+
+  // Base position calculation
+  let basePosition: number;
   if (!downward && node.lower && layout.nodes[node.lower]?.type !== DUMMY_TYPE) {
     const upperIndex = node.upper ? positionInLayer(layering[layerIndex - 1], node.upper) : index;
-    return (index + upperIndex) / 2 + 1;
+    basePosition = (index + upperIndex) / 2 + 1;
+  } else {
+    basePosition = index + 1;
   }
-  return index + 1;
+
+  // Find other dummy nodes sharing the same segment (upper, lower)
+  const currentLayer = layering[layerIndex];
+  const segmentKey = `${node.upper || 'null'}->${node.lower || 'null'}`;
+  const sharedSegmentDummies = currentLayer.filter((nodeId) => {
+    const candidate = layout.nodes[nodeId];
+    if (!candidate || candidate.type !== DUMMY_TYPE) return false;
+    const candidateSegmentKey = `${candidate.upper || 'null'}->${candidate.lower || 'null'}`;
+    return candidateSegmentKey === segmentKey;
+  });
+
+  // If this is the only dummy on this segment, return base position
+  if (sharedSegmentDummies.length <= 1) {
+    return basePosition;
+  }
+
+  // Sort shared dummies by their edge ID for consistent ordering
+  sharedSegmentDummies.sort((a, b) => {
+    const edgeA = layout.nodes[a]?.belongsTo || '';
+    const edgeB = layout.nodes[b]?.belongsTo || '';
+    return edgeA.localeCompare(edgeB);
+  });
+
+  // Find this dummy's index within the shared segment group
+  const dummyIndex = sharedSegmentDummies.indexOf(node.id);
+  if (dummyIndex === -1) return basePosition;
+
+  // Calculate offset: spread dummies around the base position
+  // Use small increments (0.1) to keep them close together like highway lanes
+  const numDummies = sharedSegmentDummies.length;
+  const spreadFactor = 0.15; // Controls how far apart parallel edges are
+  const offset = (dummyIndex - (numDummies - 1) / 2) * spreadFactor;
+
+  return basePosition + offset;
 }
 
 function gatherObjectPositions(

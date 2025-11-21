@@ -13,15 +13,18 @@ import {
   layoutOCDFG,
   type DfgNode,
   type DfgLink,
+  type DebugData,
 } from '../utils/GraphLayouter';
 import { mapTypesToColors } from '../utils/objectColors';
 import OcdfgEdge from './OcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
 import OcdfgDefaultNode from './OcdfgDefaultNode';
+import { OCDFGDebugOverlay } from './OCDFGDebugOverlay';
+import { DebugDummyNode, DebugBufferNode, DebugLayerNode } from './DebugNodes';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, SaveIcon } from 'lucide-react';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, SaveIcon, BugIcon } from 'lucide-react';
 
 const THICKNESS_MIN_LIMIT = 0.1;
 const THICKNESS_MAX_LIMIT = 5;
@@ -49,6 +52,8 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
   const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
+  const [debugData, setDebugData] = useState<DebugData | null>(null);
+  const [debugEnabled, setDebugEnabled] = useState(true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('TB');
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [optionsCollapsed, setOptionsCollapsed] = useState(false);
@@ -59,18 +64,34 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const [settingsSaved, setSettingsSaved] = useState(false);
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
-  const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge }), []);
+  const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
   const nodeTypes = useMemo(
     () => ({
-      ocdfgStart: OcdfgTerminalNode,
-      ocdfgEnd: OcdfgTerminalNode,
-      ocdfgDefault: OcdfgDefaultNode,
+      ocdfgStart: OcdfgTerminalNode as any,
+      ocdfgEnd: OcdfgTerminalNode as any,
+      ocdfgDefault: OcdfgDefaultNode as any,
+      debugDummy: DebugDummyNode as any,
+      debugBuffer: DebugBufferNode as any,
+      debugLayer: DebugLayerNode as any,
     }),
     [],
   );
 
-  const onNodesChange = useCallback((c) => setNodes((nds) => applyNodeChanges(c, nds)), []);
-  const onEdgesChange = useCallback((c) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
+  const onNodesChange = useCallback((c: any) => setNodes((nds) => applyNodeChanges(c, nds)), []);
+  const onEdgesChange = useCallback((c: any) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
+
+  // Filter nodes based on debug mode
+  const visibleNodes = useMemo(() => {
+    if (debugEnabled) {
+      return nodes;
+    }
+    // Hide debug nodes when debug is disabled
+    return nodes.filter(n =>
+      !n.id.startsWith('debug-dummy-') &&
+      !n.id.startsWith('debug-buffer-') &&
+      !n.id.startsWith('debug-layer-')
+    );
+  }, [nodes, debugEnabled]);
 
   const computeThicknessFactor = useCallback(
     (normalized?: number) => {
@@ -320,9 +341,10 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
           config: {
             direction: layoutDirection,
           },
-        }).then(({ nodes, edges }) => {
+        }).then(({ nodes, edges, debug }) => {
           setNodes(nodes);
           setEdges(applyThicknessToEdges(edges));
+          setDebugData(debug || null);
           window.requestAnimationFrame(() => fitView());
         }).catch(console.error);
       })
@@ -342,9 +364,10 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         direction: layoutDirection,
       },
     })
-      .then(({ nodes, edges }) => {
+      .then(({ nodes, edges, debug }) => {
         setNodes(nodes);
         setEdges(applyThicknessToEdges(edges));
+        setDebugData(debug || null);
         window.requestAnimationFrame(() => fitView());
       })
       .catch(console.error);
@@ -360,7 +383,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   return (
     <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
       <ReactFlow
-        nodes={nodes}
+        nodes={visibleNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -378,6 +401,8 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         zoomOnPinch={!interactionLocked}
         zoomOnScroll={!interactionLocked}
       >
+        {/* Debug Overlay inside ReactFlow viewport */}
+        {debugEnabled && <OCDFGDebugOverlay debugData={debugData} nodes={visibleNodes} enabled={debugEnabled} />}
       </ReactFlow>
 
       <div
@@ -504,66 +529,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
                   aria-label="Toggle horizontal layout"
                 />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <span style={{ fontSize: 13, color: '#1E293B', fontWeight: 500 }}>Variable edge thickness</span>
-                <Switch
-                  checked={thicknessEnabled}
-                  onCheckedChange={setThicknessEnabled}
-                  aria-label="Toggle variable edge thickness"
-                />
-              </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 12,
-                  paddingLeft: 16,
-                  marginBottom: 16,
-                  opacity: thicknessEnabled ? 1 : 0.45,
-                  pointerEvents: thicknessEnabled ? 'auto' : 'none',
-                }}
-              >
-                <div style={{ fontSize: 12, color: '#475569', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Minimum thickness</span>
-                  <span>{thicknessMin.toFixed(2)}×</span>
-                </div>
-                <Slider
-                  value={[thicknessMin]}
-                  min={THICKNESS_MIN_LIMIT}
-                  max={THICKNESS_MAX_LIMIT}
-                  step={0.05}
-                  onValueChange={(value) => {
-                    const next = value?.[0];
-                    if (typeof next !== 'number') return;
-                    const clamped = Math.min(
-                      Math.max(next, THICKNESS_MIN_LIMIT),
-                      Math.min(thicknessMax, THICKNESS_MAX_LIMIT),
-                    );
-                    setThicknessMin(parseFloat(clamped.toFixed(2)));
-                  }}
-                  disabled={!thicknessEnabled}
-                />
-                <div style={{ fontSize: 12, color: '#475569', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Maximum thickness</span>
-                  <span>{thicknessMax.toFixed(2)}×</span>
-                </div>
-                <Slider
-                  value={[thicknessMax]}
-                  min={THICKNESS_MIN_LIMIT}
-                  max={THICKNESS_MAX_LIMIT}
-                  step={0.05}
-                  onValueChange={(value) => {
-                    const next = value?.[0];
-                    if (typeof next !== 'number') return;
-                    const clamped = Math.max(
-                      Math.min(next, THICKNESS_MAX_LIMIT),
-                      Math.max(thicknessMin, THICKNESS_MIN_LIMIT),
-                    );
-                    setThicknessMax(parseFloat(clamped.toFixed(2)));
-                  }}
-                  disabled={!thicknessEnabled}
-                />
-              </div>
+              {/* Edge thickness controls disabled - edges are now fixed at 12px */}
               <Button variant="secondary" size="sm" onClick={onLayout} className="w-full justify-center">
                 Relayout
               </Button>
@@ -628,6 +594,16 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
           >
             <SaveIcon className="h-4 w-4" />
             <span className="text-sm font-medium">{settingsSaved ? 'Saved' : 'Save'}</span>
+          </Button>
+          <Button
+            type="button"
+            variant={debugEnabled ? 'default' : 'outline'}
+            size="icon"
+            onClick={() => setDebugEnabled((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={debugEnabled ? 'Hide debug overlay' : 'Show debug overlay'}
+          >
+            <BugIcon className="h-4 w-4" />
           </Button>
         </div>
       </div>

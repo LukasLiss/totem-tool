@@ -9,6 +9,7 @@ import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview_new";
 import { DashboardProvider } from "./contexts/DashboardContext";
 import { VariantsOverview } from "./VariantsOverview";
+import { OCDFGDemo } from "./OCDFGDemo";
 
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -18,12 +19,14 @@ function App() {
       <DashboardProvider>
         <div className="website-background">
           <Routes>
+            <Route path="/" element={<OCDFGDemo />} />
             <Route path="/home" element={<Home />} />
             <Route path="/login" element={<Login />} />
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
+            <Route path="/ocdfg-demo" element={<OCDFGDemo />} />
           </Routes>
         </div>
       </DashboardProvider>

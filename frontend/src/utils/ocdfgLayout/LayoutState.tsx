@@ -205,6 +205,8 @@ export interface LayoutNode {
   lower?: string;
   routeVirtual?: boolean;
   variant?: 'start' | 'end' | 'center';
+  isInHighwayBundle?: boolean; // DEBUG: marks if this dummy is part of a highway bundle
+  bundleIndex?: number; // DEBUG: which bundle this dummy belongs to
 }
 
 export interface LayoutPoint {
@@ -227,6 +229,8 @@ export interface LayoutEdge {
   original: boolean;
   type1: boolean;
   polyline?: LayoutPoint[];
+  laneOffset?: number;
+  laneOrientation?: 'horizontal' | 'vertical';
 }
 
 export interface LayerSize {
@@ -402,6 +406,8 @@ export class OCDFGLayout {
         maxLayer: 0,
         original: true,
         type1: false,
+        laneOffset: 0,
+        laneOrientation: undefined,
       };
       owners.forEach((o) => objectTypes.add(o));
     });
@@ -733,6 +739,8 @@ function cloneLayoutEdge(edge: LayoutEdge): LayoutEdge {
     owners: [...edge.owners],
     path: [...edge.path],
     polyline: edge.polyline ? edge.polyline.map((point) => ({ ...point })) : undefined,
+    laneOffset: edge.laneOffset,
+    laneOrientation: edge.laneOrientation,
   };
 }
 
@@ -1336,7 +1344,13 @@ function calculateCoreMetrics(layout: OCDFGLayout, config: LayoutConfig): CoreMe
   const layerStats = new Map<number, { minCross: number; maxCross: number; sumCross: number; count: number }>();
 
   Object.values(layout.nodes).forEach((node) => {
-    if (!node || isTerminalNode(node) || !isFiniteNumber(node.x) || !isFiniteNumber(node.y)) {
+    if (
+      !node ||
+      node.type === DUMMY_TYPE ||
+      isTerminalNode(node) ||
+      !isFiniteNumber(node.x) ||
+      !isFiniteNumber(node.y)
+    ) {
       return;
     }
 
