@@ -41,7 +41,8 @@ export function ProcessOverview() {
               }
           
               const token = localStorage.getItem("access_token");
-  
+              console.log('token',token)
+              
               try {
               const result = await processFile(token, selectedFile.id);
               setProcessedResult(result);
