@@ -97,7 +97,7 @@ const gridOptions: GridStackOptions = {
 
 
 export function Grid() {
-  const token = localStorage.getItem("token");
+  const token = localStorage.getItem("access_token");
   const EMPTY_LAYOUT: GridStackOptions = {
     ...gridOptions,
     children: []
@@ -106,35 +106,36 @@ export function Grid() {
   const [initialLayout, setInitialLayout] = React.useState<GridStackOptions>(EMPTY_LAYOUT);
   //  const grid = GridStack.get('.grid-stack');
   //  const layout = grid.engine.save();
+  console.log('token',token);
 
 
+  useEffect(() => {
+  async function load() {
+    try { 
+      const token = localStorage.getItem("access_token");
+      console.log(token);
+      const result = await getLayout(selectedDashboard, token);
+      const children = result.components.map(c => ({
+        id: String(c.id),
+        x: c.x,
+        y: c.y,
+        w: c.w,
+        h: c.h,
+        content: JSON.stringify({
+          name: c.component_name,
+          props: c.props,
+        }),
+      }));
 
-    useEffect(() => {
-    async function load() {
-      try { 
-        const token = localStorage.getItem("token");
-        const result = await getLayout(selectedDashboard, token);
-        const children = result.components.map(c => ({
-          id: String(c.id),
-          x: c.x,
-          y: c.y,
-          w: c.w,
-          h: c.h,
-          content: JSON.stringify({
-            name: c.component_name,
-            props: c.props,
-          }),
-        }));
-
-        setInitialLayout({
-          ...gridOptions,
-          children,
-        });
-        console.log('Successfully loaded initial Layout')
-      } catch (err)  {
-        console.log('Could not load initial layout')
-      }
+      setInitialLayout({
+        ...gridOptions,
+        children,
+      });
+      console.log('Successfully loaded initial Layout')
+    } catch (err)  {
+      console.log('Could not load initial layout')
     }
+  }
 
     load();
   }, [selectedDashboard]);
