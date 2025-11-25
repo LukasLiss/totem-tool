@@ -17,6 +17,8 @@ type EdgeData = {
   frequency?: number;
   thicknessFactor?: number;
   frequencyNormalized?: number;
+  sourceAnchorOffset?: { x: number; y: number };
+  targetAnchorOffset?: { x: number; y: number };
 };
 
 const DEFAULT_COLOR = '#2563EB';
@@ -332,14 +334,33 @@ const OcdfgEdge = memo(function OcdfgEdge({
     if (isSelfLoop && targetGeometry) {
       return buildSelfLoopPolyline(targetGeometry);
     }
+
+    // If we have a custom polyline with anchoring data, use ReactFlow's coordinates
+    // as they update automatically when nodes move
     const basePoints = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
-    const clamped = clampPolylineToEndpoints(
-      basePoints,
-      { x: sourceX, y: sourceY },
-      { x: targetX, y: targetY },
-    );
+
+    // For edges with center anchoring, update the polyline endpoints to match node centers
+    // This ensures edges move with nodes when dragged
+    const useNodeCenters = data?.sourceAnchorOffset !== undefined;
+    const clamped = useNodeCenters
+      ? basePoints.map((point, index) => {
+          if (index === 0) {
+            // Update source endpoint to current node center
+            return { x: sourceX, y: sourceY };
+          } else if (index === basePoints.length - 1) {
+            // Update target endpoint to current node center
+            return { x: targetX, y: targetY };
+          }
+          return { ...point };
+        })
+      : clampPolylineToEndpoints(
+          basePoints,
+          { x: sourceX, y: sourceY },
+          { x: targetX, y: targetY },
+        );
+
     if (!targetGeometry || clamped.length < 2) {
       return clamped;
     }
@@ -363,7 +384,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
       return { ...point };
     });
     return adjusted;
-  }, [isSelfLoop, data?.polyline, targetGeometry, sourceX, sourceY, targetX, targetY]);
+  }, [isSelfLoop, data?.polyline, data?.sourceAnchorOffset, targetGeometry, sourceX, sourceY, targetX, targetY]);
 
   // Fixed thickness: always 12px (thicknessFactor = 2 for base stroke of 6)
   const thicknessFactorRaw = 2;

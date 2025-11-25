@@ -16,6 +16,8 @@ const TERMINAL_OVERLAP_PENALTY = 1200;
 const TERMINAL_DEFAULT_SIDE_OFFSET = 140;
 const TERMINAL_AXIS_PADDING = 28;
 
+let measureCanvas: HTMLCanvasElement | null = null;
+
 type StyleRecord = Record<string, unknown>;
 
 type NodeWithMeasurements = Node & {
@@ -54,6 +56,49 @@ function toNumber(value: unknown): number | undefined {
     return Number.isNaN(parsed) ? undefined : parsed;
   }
   return undefined;
+}
+
+function toPixels(value: unknown, relativeBase = 16): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  const parsed = parseFloat(trimmed);
+  if (Number.isNaN(parsed)) return undefined;
+  if (trimmed.endsWith('px')) return parsed;
+  if (trimmed.endsWith('rem')) return parsed * relativeBase;
+  if (trimmed.endsWith('em')) return parsed * relativeBase;
+  return parsed;
+}
+
+function measureLabelContentWidth(label: string, style: StyleRecord | undefined) {
+  if (typeof document === 'undefined') return undefined;
+  const clean = label.trim();
+  if (!clean) return undefined;
+
+  if (!measureCanvas) {
+    measureCanvas = document.createElement('canvas');
+  }
+  const ctx = measureCanvas.getContext('2d');
+  if (!ctx) return undefined;
+
+  const fontSize = toPixels(style?.fontSize, 16) ?? 16;
+  let fontFamily = typeof style?.fontFamily === 'string'
+    ? style.fontFamily
+    : 'Inter, sans-serif';
+  if (fontFamily.includes('var(')) {
+    fontFamily = 'Inter, sans-serif';
+  }
+  const fontWeight = typeof style?.fontWeight === 'string' || typeof style?.fontWeight === 'number'
+    ? style.fontWeight
+    : 500;
+  const fontStyle = typeof style?.fontStyle === 'string' ? style.fontStyle : 'normal';
+  const letterSpacing = toPixels(style?.letterSpacing, fontSize) ?? 0;
+
+  ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+  const baseWidth = ctx.measureText(clean).width;
+  const spacingAdjustment = Math.max(0, clean.length - 1) * letterSpacing;
+
+  return baseWidth + spacingAdjustment;
 }
 
 function extractPadding(
@@ -146,13 +191,18 @@ function resolveNodeDimensions(renderNode: Node | undefined, label: string) {
       ? toNumber(style?.height) ?? toNumber(style?.minHeight) ?? undefined
       : undefined;
 
+  const measuredLabelWidth = measureLabelContentWidth(label, style);
+
   let width: number;
   if (measuredWidth !== undefined && measuredWidth > 0) {
     width = Math.max(measuredWidth, defaultWidth + horizontal);
   } else if (styleWidth !== undefined && styleWidth > 0) {
     width = Math.max(styleWidth + horizontal, defaultWidth + horizontal);
   } else {
-    width = Math.max(defaultWidth + horizontal, estimateLabelWidth(label, horizontal));
+    const contentWidth = measuredLabelWidth !== undefined
+      ? measuredLabelWidth + horizontal
+      : estimateLabelWidth(label, horizontal);
+    width = Math.max(defaultWidth + horizontal, contentWidth);
   }
 
   let height: number;
@@ -504,12 +554,60 @@ export class OCDFGLayout {
       metrics,
     );
 
+    const baseLayerCount = this.layering.length;
     const updatedLayering = this.layering.map((layer) => [...layer]);
+
+    if (endCandidates.length > 0) {
+      const defaultEndLayer = baseLayerCount;
+      const endTargets = new Map<number, string[]>();
+
+      endCandidates.forEach((candidate) => {
+        const anchorLayer = Math.max(0, candidate.anchorLayer);
+        const anchorId = candidate.primaryNeighborId
+          ?? terminalMetadata[candidate.node.id]?.incoming?.[0]
+          ?? null;
+        const anchorNode = anchorId ? this.nodes[anchorId] : undefined;
+        const anchorIsShared = Boolean(anchorNode && anchorNode.objectTypes.length > 1);
+        const anchorHasLaterLayers = anchorLayer < baseLayerCount - 1;
+        const anchorHasLowerNeighbors = anchorId
+          ? this.getLowerNeighbors(anchorId).some(
+              (neighborId) => (this.nodes[neighborId]?.layer ?? -1) > anchorLayer,
+            )
+          : false;
+        const terminalTypes = candidate.node.objectTypes ?? [];
+        const anchorContainsTerminalType = anchorNode
+          ? terminalTypes.some((type) => anchorNode.objectTypes.includes(type))
+          : false;
+
+        // When the final activity is shared with other object types and those
+        // types continue afterwards, keep the terminal close to its anchor
+        // instead of pushing it to the very last layer.
+        const shouldStickToAnchor = anchorIsShared
+          && anchorContainsTerminalType
+          && anchorHasLaterLayers
+          && anchorHasLowerNeighbors;
+
+        const targetLayer = shouldStickToAnchor
+          ? anchorLayer + 1
+          : defaultEndLayer;
+
+        const bucket = endTargets.get(targetLayer) ?? [];
+        bucket.push(candidate.node.id);
+        endTargets.set(targetLayer, bucket);
+      });
+
+      Array.from(endTargets.entries())
+        .sort((a, b) => a[0] - b[0])
+        .forEach(([targetLayer, nodeIds]) => {
+          while (updatedLayering.length <= targetLayer) {
+            updatedLayering.push([]);
+          }
+          updatedLayering[targetLayer].push(...nodeIds);
+        });
+    }
+
     if (startCandidates.length > 0) {
       updatedLayering.unshift(startCandidates.map((candidate) => candidate.node.id));
-    }
-    if (endCandidates.length > 0) {
-      updatedLayering.push(endCandidates.map((candidate) => candidate.node.id));
     }
     this.updateLayering(updatedLayering);
 
@@ -788,6 +886,17 @@ function positionTerminalGroup(
       }
     }
 
+    // Special handling for end nodes: if the incoming neighbor has a specific Y position
+    // (e.g., a shared node), place the end node below that position instead of using axisMax
+    if (directionFactor > 0 && candidate.axisAnchor !== null && !isMidLayer) {
+      // For end nodes with an axisAnchor, use it to position below the incoming neighbor
+      // This handles cases where the last node is a shared node positioned higher than axisMax
+      const neighborAxisHalf = candidate.primaryNeighborHeight !== null
+        ? candidate.primaryNeighborHeight / 2
+        : config.activityHeight / 2;
+      axisCoordinate = candidate.axisAnchor + neighborAxisHalf + config.layerSep + axisHalf;
+    }
+
     const radius = crossHalf + config.vertexSep / 2;
 
     if (directionFactor < 0 && config.direction === 'TB') {
@@ -907,7 +1016,6 @@ function maybeOffsetTerminalAxis(
   axisMin: number,
   axisMax: number,
 ): number | null {
-  const isVertical = config.direction === 'TB';
   if ((directionFactor < 0 && node.variant !== 'start') || (directionFactor > 0 && node.variant !== 'end')) {
     return null;
   }
@@ -918,14 +1026,20 @@ function maybeOffsetTerminalAxis(
     return null;
   }
 
-  const layerIndex = Math.min(
-    Math.max(candidate.anchorLayer, 0),
-    layout.layering.length > 0 ? layout.layering.length - 1 : 0,
-  );
-  const adjacentLayerIndex = directionFactor < 0 ? layerIndex - 1 : layerIndex + 1;
+  // For end nodes, the terminal will be placed in a NEW layer after the current last layer.
+  // So we should use the anchorLayer (the layer of incoming neighbors) as the adjacent layer.
+  // For start nodes, the terminal will be placed BEFORE the first layer.
+  const adjacentLayerIndex = directionFactor < 0
+    ? Math.max(candidate.anchorLayer - 1, 0)
+    : candidate.anchorLayer;
+
   if (adjacentLayerIndex < 0 || adjacentLayerIndex >= layout.layerSizes.length) {
     return null;
   }
+
+  const layerIndex = directionFactor < 0
+    ? Math.max(candidate.anchorLayer, 0)
+    : Math.min(candidate.anchorLayer + 1, layout.layerSizes.length);
 
   const currentLayerHalf = getLayerHalfSize(layout, layerIndex, config);
   const adjacentLayerHalf = getLayerHalfSize(layout, adjacentLayerIndex, config);
@@ -1262,16 +1376,14 @@ function buildTerminalPlacementCandidates(
         axisValue: number;
         width: number;
         height: number;
-        layer: number | undefined;
+        layer: number;
       } => detail !== null);
 
     const crossNeighbors = neighborDetails.map((detail) => detail.crossValue);
     const axisNeighbors = neighborDetails.map((detail) => detail.axisValue);
     const barycenter = crossNeighbors.length > 0 ? average(crossNeighbors) : crossCenter;
 
-    const neighborLayers = neighborDetails
-      .map((detail) => detail.layer)
-      .filter((layer): layer is number => typeof layer === 'number' && Number.isFinite(layer));
+    const neighborLayers = neighborDetails.map((detail) => detail.layer);
 
     const anchorLayer = neighborLayers.length > 0
       ? (directionFactor < 0 ? Math.min(...neighborLayers) : Math.max(...neighborLayers))
@@ -1287,7 +1399,11 @@ function buildTerminalPlacementCandidates(
       : axisMax + config.layerSep * 2;
     const axisValueForCheck = anchorAxis ?? axisFallback;
     const insideCore = axisValueForCheck >= axisMin - 1e-3 && axisValueForCheck <= axisMax + 1e-3;
-    const isMidLayer = hasBothDirections || insideCore;
+
+    // For end nodes (directionFactor > 0), only treat as mid-layer if it has both directions
+    // Don't use insideCore check for end nodes, as they should be placed below their last neighbor
+    // even if that neighbor is inside the core bounds (e.g., a shared node)
+    const isMidLayer = hasBothDirections || (directionFactor < 0 && insideCore);
 
     const preferredSide: 'left' | 'right' | 'center' | null = isMidLayer
       ? (barycenter <= crossCenter ? 'left' : 'right')
