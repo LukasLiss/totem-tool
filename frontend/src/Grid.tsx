@@ -16,7 +16,6 @@ import {
 } from "./gridstack/lib";
 import type { ComponentDataType,
   ComponentMap } from "../lib/grid-stack-render";
-import "./styles/demo.css";
 import { DashboardContext } from "./contexts/DashboardContext";
 import { getLayout, saveLayout } from "./api/componentsApi";
 import { SaveGridButton } from "./components/save_grid_button";
@@ -151,19 +150,20 @@ export function Grid() {
       <SidebarInset>
         <GridStackProvider initialOptions={initialLayout}>
           <GridStackRenderProvider>
-            <div className="grid-container">
-              <DnDSidebar/>
-
-              <SaveGridButton dashboardId={selectedDashboard} token={token}/>
-
-              <GridStackRender componentMap={COMPONENT_MAP} />
-            </div>
+            <SidebarProvider>
+              <DnDSidebar />
+              <div className="flex flex-col flex-1 w-full">
+                <div className="gridstack-container flex-1">
+                  <SaveGridButton dashboardId={selectedDashboard} token={token}/>
+                  <GridStackRender componentMap={COMPONENT_MAP} />
+                </div>
+              </div>
+            </SidebarProvider>
           </GridStackRenderProvider>
         </GridStackProvider>
       </SidebarInset>
     </SidebarProvider>
-            
-    );
+  );
 }
 
 export default Grid;

@@ -15,14 +15,17 @@ export function ProcessOverview() {
   return (
     <SidebarProvider>
       <AppSidebar />
+     
       <SidebarInset>
-        {selectedDashboard === "DevDash" ? (
-          <>
-            {console.log("DevDash activated")}
-            <DevDashboard />
-          </>) : (<DashboardView/>)
-        }
-
+        <div>
+          <SidebarTrigger />
+          {selectedDashboard === "DevDash" ? (
+            <>
+              {console.log("DevDash activated")}
+              <DevDashboard />
+            </>) : (<DashboardView/>)
+          }
+        </div>
 
 
       </SidebarInset>

@@ -158,7 +158,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 }, [selectedFile]);
 
   return (
-    <Sidebar collapsible="icon" {...props}>
+    <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
         {files.length > 0 && (
           <Switcher/>
@@ -177,7 +177,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>
-      <SidebarRail />
+      
     </Sidebar>
   )
 }
