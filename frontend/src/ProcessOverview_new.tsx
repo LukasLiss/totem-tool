@@ -27,7 +27,7 @@ export function ProcessOverview() {
   
       const { selectedFile } = useContext(SelectedFileContext);
       const { selectedDashboard, setSelectedDashboard } = useContext(DashboardContext);
-      const {dashboards, setDashboards} = useState([])
+      const [dashboards, setDashboards] = useState([])
       
 
 
@@ -60,14 +60,17 @@ export function ProcessOverview() {
   return (
     <SidebarProvider>
       <AppSidebar />
+     
       <SidebarInset>
-        {selectedDashboard === "DevDash" ? (
-          <>
-            {console.log("DevDash activated")}
-            <DevDashboard />
-          </>) : (<DashboardView/>)
-        }
-
+        <div>
+          <SidebarTrigger />
+          {selectedDashboard === "DevDash" ? (
+            <>
+              {console.log("DevDash activated")}
+              <DevDashboard />
+            </>) : (<DashboardView/>)
+          }
+        </div>
 
 
       </SidebarInset>

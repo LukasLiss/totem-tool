@@ -15,6 +15,7 @@ import {
   SidebarContent,
   SidebarHeader,
   SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
@@ -122,14 +123,15 @@ export function DnDSidebar() {
     });
   };
 
-  return (
-    <Sidebar collapsible="icon" side="right">
+  return ( 
+    <Sidebar variant="sidebar" side="right" className="border-l border-border">
       <SidebarHeader>Choose new components</SidebarHeader>
       <SidebarContent>
         <button onClick={() => handleAdd("Text")}>Text</button>
         <button onClick={() => handleAdd("Chart")}>Chart</button>
         <button onClick={() => handleAdd("Map")}>Map</button>
       </SidebarContent>
+      <SidebarTrigger />
     </Sidebar>
   );
 }

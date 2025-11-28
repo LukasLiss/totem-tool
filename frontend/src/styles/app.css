@@ -14,3 +14,7 @@
   flex-direction: row;
   gap: 1rem;
 }
+
+.gridstack-sidebar .sidebar {
+  border-left: 1px solid var(--border-color); /* use your theme variable */
+}
