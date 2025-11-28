@@ -130,3 +130,9 @@ html, body, #root {
 .ocdfg-controls .react-flow__controls-button:active {
   background-color: #e2e8f0;
 }
+
+/* Keep arrow heads static even when edges are animated */
+.react-flow__edge.animated .ocdfg-arrow-head {
+  stroke-dasharray: none;
+  animation: none;
+}

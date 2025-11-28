@@ -6,7 +6,7 @@ import {
   type DfgNode,
 } from './NaiveOCDFGLayouting';
 import { type LayoutConfig, type LayoutInitData, sugiyama } from './ocdfgLayout/sugiyama';
-import { type Point } from './edgeGeometry';
+import { type Point, sampleCubicBezier } from './edgeGeometry';
 import type { LayoutNode } from './ocdfgLayout/LayoutState';
 import { DUMMY_TYPE } from './ocdfgLayout/LayoutState';
 
@@ -22,6 +22,7 @@ export interface LayoutRequest {
   mode?: LayoutMode;
   config?: Partial<LayoutConfig>;
   activeTypes?: string[];
+  typeTraceLimit?: Record<string, number>;
 }
 
 export interface DebugLayerInfo {
@@ -63,6 +64,7 @@ export type LayoutResult = Promise<{
   nodes: Node[];
   edges: Edge[];
   debug?: DebugData;
+  traceCounts?: Record<string, number>;
 }>;
 
 const DEFAULT_CONFIG: LayoutConfig = {
@@ -94,6 +96,19 @@ const LANE_TOLERANCE = 1e-3;
 const LAYER_MARKER_THICKNESS = 10;
 const LAYER_MARKER_PADDING = 60;
 const LAYER_MARKER_COLOR = 'rgba(255, 232, 138, 0.45)';
+// Slightly smaller again (~10% less area than the previous buffer).
+const BUFFER_ZONE_MARGIN = 45;
+const BUFFER_ZONE_COLOR = LAYER_MARKER_COLOR;
+const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30;
+const LONGEST_TRACE_BEZIER_SAMPLES = 32;
+const LONGEST_TRACE_BEZIER_HANDLE_SCALE = 1.35;
+const LONGEST_TRACE_LANE_OFFSET = 12; // match rendered stroke thickness so parallel edges form clean lanes
+
+// Remember the last computed object-type column order so that
+// subsequent layouts (e.g. when toggling object types) can
+// preserve the relative ordering unless there is a clearly
+// better layout according to the interaction cost.
+let previousTypeOrderGlobal: string[] | null = null;
 
 function buildLayerMarkers(
   axisPositions: number[],
@@ -169,6 +184,75 @@ function buildLayerMarkers(
   });
 }
 
+function buildBufferZones(baseNodes: Node[], margin: number) {
+  const visibleNodes = baseNodes.filter(
+    n => !n.hidden && n.position && Number.isFinite(n.position.x) && Number.isFinite(n.position.y),
+  );
+  if (visibleNodes.length === 0) {
+    return [] as Node[];
+  }
+
+  return visibleNodes.map((node, index) => {
+    const width = (node.width ?? DEFAULT_NODE_WIDTH) + margin * 2;
+    const height = (node.height ?? DEFAULT_NODE_HEIGHT) + margin * 2;
+    const position = {
+      x: (node.position!.x ?? 0) - margin,
+      y: (node.position!.y ?? 0) - margin,
+    };
+
+    return {
+      id: `debug-buffer-${node.id}-${index}`,
+      type: 'debugLayer',
+      position,
+      data: {
+        color: BUFFER_ZONE_COLOR,
+        label: '',
+        direction: 'TB' as const,
+      },
+      width,
+      height,
+      draggable: false,
+      selectable: false,
+      style: {
+        width,
+        height,
+        padding: 0,
+        border: 'none',
+        pointerEvents: 'none',
+        zIndex: -9,
+      },
+    } satisfies Node;
+  });
+}
+
+type BufferRect = {
+  id: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+function buildBufferRects(baseNodes: Node[], margin: number): BufferRect[] {
+  return baseNodes
+    .filter(
+      n => !n.hidden && n.position && Number.isFinite(n.position.x) && Number.isFinite(n.position.y),
+    )
+    .map((node) => {
+      const width = (node.width ?? DEFAULT_NODE_WIDTH) + margin * 2;
+      const height = (node.height ?? DEFAULT_NODE_HEIGHT) + margin * 2;
+      const left = (node.position!.x ?? 0) - margin;
+      const top = (node.position!.y ?? 0) - margin;
+      return {
+        id: node.id,
+        left,
+        right: left + width,
+        top,
+        bottom: top + height,
+      };
+    });
+}
+
 export async function layoutOCDFG({
   renderNodes,
   renderEdges,
@@ -199,11 +283,12 @@ export async function layoutOCDFGLongestTrace({
   renderEdges,
   dfgNodes,
   dfgLinks,
+  typeTraceLimit,
   activeTypes,
 }: Omit<LayoutRequest, 'mode' | 'config'>): LayoutResult {
   console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges`);
 
-  return layoutWithLongestTrace(renderNodes, renderEdges, dfgNodes, dfgLinks, activeTypes);
+  return layoutWithLongestTrace(renderNodes, renderEdges, dfgNodes, dfgLinks, typeTraceLimit, activeTypes);
 }
 
 async function layoutWithSugiyama(
@@ -299,12 +384,13 @@ async function layoutWithSugiyama(
       ? layoutEdge.owners
       : (edge.data as { owners?: string[] } | undefined)?.owners ?? [];
 
+    const laneOffset = layoutEdge.laneOffset;
     const finalPolyline = clipPolylineEndpoints(
       centerPolyline,
       layout.nodes[layoutEdge.source],
       layout.nodes[layoutEdge.target],
       {
-        laneOffset: layoutEdge.laneOffset,
+        laneOffset,
         laneOrientation: layoutEdge.laneOrientation,
       },
     );
@@ -321,6 +407,7 @@ async function layoutWithSugiyama(
         owners,
         polyline: finalPolyline,
         edgeKind,
+        overlayDebug: hasLaneOffset(laneOffset),
       },
     };
   });
@@ -501,6 +588,10 @@ type LaneEndpointInfo = {
   laneOrientation?: 'horizontal' | 'vertical';
 };
 
+// When a lane offset is applied (edge is part of an overlap bundle), expose a flag for debug rendering.
+const hasLaneOffset = (laneOffset?: number) =>
+  typeof laneOffset === 'number' && Math.abs(laneOffset) > LANE_TOLERANCE;
+
 function clipPolylineEndpoints(
   points: Point[],
   sourceNode?: LayoutNode,
@@ -629,6 +720,221 @@ function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
+function addRelaxationMidpoints(points: Point[]): Point[] {
+  if (points.length >= 3) return points.map(p => ({ ...p }));
+  if (points.length === 2) {
+    const a = points[0];
+    const b = points[1];
+    return [
+      { ...a },
+      { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      { ...b },
+    ];
+  }
+  return points.map(p => ({ ...p }));
+}
+
+function relaxPolylineAroundBuffers(
+  polyline: Point[],
+  buffers: BufferRect[],
+  sourceId?: string,
+  targetId?: string,
+): Point[] {
+  if (polyline.length < 2 || buffers.length === 0) {
+    return polyline.map(p => ({ ...p }));
+  }
+
+  // Only adjust simple straight edges; keep special polylines (e.g. cycles) as-is.
+  if (polyline.length !== 2) {
+    return polyline.map(p => ({ ...p }));
+  }
+
+  const [src, tgt] = polyline;
+  const allowedBuffers = buffers.filter(b => b.id !== sourceId && b.id !== targetId);
+  if (allowedBuffers.length === 0) {
+    return polyline.map(p => ({ ...p }));
+  }
+
+  const vx = tgt.x - src.x;
+  const vy = tgt.y - src.y;
+  const segLen = Math.hypot(vx, vy);
+  if (!Number.isFinite(segLen) || segLen < 1e-3) {
+    return polyline.map(p => ({ ...p }));
+  }
+
+  // Sample along the straight edge to detect which buffers it actually crosses.
+  const sampleTs = [0.15, 0.3, 0.45, 0.6, 0.75, 0.9];
+  const blockers: BufferRect[] = [];
+  const hitCounts = new Map<string, number>();
+
+  const isInside = (px: number, py: number, rect: BufferRect, pad = 4) =>
+    px >= rect.left - pad
+    && px <= rect.right + pad
+    && py >= rect.top - pad
+    && py <= rect.bottom + pad;
+
+  allowedBuffers.forEach((rect) => {
+    let hits = 0;
+    sampleTs.forEach((t) => {
+      const sx = src.x + vx * t;
+      const sy = src.y + vy * t;
+      if (isInside(sx, sy, rect)) {
+        hits += 1;
+      }
+    });
+    if (hits > 0) {
+      blockers.push(rect);
+      hitCounts.set(rect.id, hits);
+    }
+  });
+
+  if (blockers.length === 0) {
+    return polyline.map(p => ({ ...p }));
+  }
+
+  const longEdge = segLen > BUFFER_ZONE_MARGIN * 4;
+  const multiBlocker = blockers.length >= 2;
+  const spansBuffer = Array.from(hitCounts.values()).some(c => c >= 2);
+  const needsStrongerCurve = longEdge || multiBlocker || spansBuffer;
+
+  // Determine sideways direction that moves the edge away from blocking buffers.
+  const midForDirection = {
+    x: src.x + vx * 0.5,
+    y: src.y + vy * 0.5,
+  };
+  let dirX = 0;
+  let dirY = 0;
+  blockers.forEach((rect) => {
+    const cx = (rect.left + rect.right) / 2;
+    const cy = (rect.top + rect.bottom) / 2;
+    dirX += midForDirection.x - cx;
+    dirY += midForDirection.y - cy;
+  });
+
+  // If blockers are symmetric, fall back to a stable perpendicular.
+  if (Math.hypot(dirX, dirY) < 1e-3) {
+    dirX = -vy;
+    dirY = vx;
+  }
+
+  const dirLen = Math.hypot(dirX, dirY) || 1;
+  const nx = dirX / dirLen;
+  const ny = dirY / dirLen;
+
+  const baseOffset = BUFFER_REPULSION_RADIUS;
+  const offset = needsStrongerCurve ? baseOffset * 1.6 : baseOffset * 1.15;
+
+  // Longer edges get more bend points; each bend is eased so that
+  // the maximum offset is near the middle of the edge and fades
+  // smoothly towards the endpoints.
+  const lengthFactor = segLen / (BUFFER_ZONE_MARGIN * (needsStrongerCurve ? 1.3 : 1.8));
+  const maxSegments = needsStrongerCurve ? 4 : 3;
+  const minSegments = needsStrongerCurve ? 2 : 1;
+  let segmentCount = Math.floor(lengthFactor);
+  if (segmentCount < minSegments) segmentCount = minSegments;
+  if (segmentCount > maxSegments) segmentCount = maxSegments;
+
+  const bendTs: number[] = [];
+  for (let i = 1; i <= segmentCount; i += 1) {
+    bendTs.push(i / (segmentCount + 1));
+  }
+
+  const bends = bendTs.map((t) => {
+    // Smooth easing: 0 at endpoints, 1 at center.
+    const ease = Math.sin(Math.PI * t);
+    const localOffset = offset * ease;
+    return {
+      x: src.x + vx * t + nx * localOffset,
+      y: src.y + vy * t + ny * localOffset,
+    };
+  });
+
+  const bent = [src, ...bends, tgt];
+
+  // Second stage: if the edge still runs inside buffers for most of its length,
+  // nudge the bend points further away from the node rectangles themselves.
+  const samplePerSegment = 4;
+  let totalSamples = 0;
+  let insideBuffer = 0;
+
+  const rectContains = (px: number, py: number, rect: BufferRect, pad = 0) =>
+    px >= rect.left - pad
+    && px <= rect.right + pad
+    && py >= rect.top - pad
+    && py <= rect.bottom + pad;
+
+  for (let i = 0; i < bent.length - 1; i += 1) {
+    const a = bent[i];
+    const b = bent[i + 1];
+    for (let j = 1; j <= samplePerSegment; j += 1) {
+      const t = j / (samplePerSegment + 1);
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+      totalSamples += 1;
+      if (buffers.some(rect => rectContains(px, py, rect, 0))) {
+        insideBuffer += 1;
+      }
+    }
+  }
+
+  const coverage = totalSamples > 0 ? insideBuffer / totalSamples : 0;
+  // If a significant fraction of the bent edge still runs through buffers,
+  // push it further away from node centers.
+  if (coverage <= 0.4) {
+    return bent;
+  }
+
+  // Compute a gentle repulsion direction from node centers for samples that are
+  // too close to the nodes (inner 40px around the node centers).
+  let repulseX = 0;
+  let repulseY = 0;
+
+  for (let i = 0; i < bent.length - 1; i += 1) {
+    const a = bent[i];
+    const b = bent[i + 1];
+    for (let j = 1; j <= samplePerSegment; j += 1) {
+      const t = j / (samplePerSegment + 1);
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+
+      buffers.forEach((rect) => {
+        const cx = (rect.left + rect.right) / 2;
+        const cy = (rect.top + rect.bottom) / 2;
+        const innerHalfW = Math.max((rect.right - rect.left) / 2 - 40, 0);
+        const innerHalfH = Math.max((rect.bottom - rect.top) / 2 - 40, 0);
+        const inInner =
+          Math.abs(px - cx) <= innerHalfW
+          && Math.abs(py - cy) <= innerHalfH;
+        if (inInner) {
+          repulseX += px - cx;
+          repulseY += py - cy;
+        }
+      });
+    }
+  }
+
+  const repulseLen = Math.hypot(repulseX, repulseY);
+  if (repulseLen < 1e-3) {
+    return bent;
+  }
+
+  const rx = repulseX / repulseLen;
+  const ry = repulseY / repulseLen;
+  const extraOffset = BUFFER_REPULSION_RADIUS * 1.6;
+
+  const adjusted = bent.map((p, idx) => {
+    if (idx === 0 || idx === bent.length - 1) {
+      return { ...p };
+    }
+    return {
+      x: p.x + rx * extraOffset,
+      y: p.y + ry * extraOffset,
+    };
+  });
+
+  return adjusted;
+}
+
 function getEndpointMargin(node: LayoutNode, isSource: boolean) {
   if (node.variant === 'start' || node.variant === 'end' || node.variant === 'center') {
     return CENTER_MARGIN;
@@ -682,6 +988,7 @@ async function layoutWithLongestTrace(
   renderEdges: Edge[],
   dfgNodes: DfgNode[],
   dfgLinks: DfgLink[],
+  typeTraceLimit?: Record<string, number>,
   activeTypes?: string[],
 ): LayoutResult {
   console.log('[LONGEST TRACE] Starting longest trace layout');
@@ -699,7 +1006,7 @@ async function layoutWithLongestTrace(
 
   // Build a map of edges by their owners (object instances)
   // For each owner, we'll track which edges they followed
-  const ownerTraces = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
+  const ownerEdges = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
 
   dfgLinks.forEach(link => {
     const owners = link.owners || [];
@@ -708,16 +1015,16 @@ async function layoutWithLongestTrace(
       if (activeTypeSet && !activeTypeSet.has(ownerType)) {
         return;
       }
-      if (!ownerTraces.has(owner)) {
-        ownerTraces.set(owner, []);
+      if (!ownerEdges.has(owner)) {
+        ownerEdges.set(owner, []);
       }
-      ownerTraces.get(owner)!.push({ source: link.source, target: link.target, link });
+      ownerEdges.get(owner)!.push({ source: link.source, target: link.target, link });
     });
   });
 
-  console.log(`[LONGEST TRACE] Found ${ownerTraces.size} unique object instances`);
+  console.log(`[LONGEST TRACE] Found ${ownerEdges.size} unique object instances`);
 
-  // For each owner, reconstruct their complete trace and collect all traces
+  // For each owner, reconstruct all possible traces (simple paths) and collect them
   type TraceInfo = {
     trace: string[];
     owner: string;
@@ -725,10 +1032,11 @@ async function layoutWithLongestTrace(
   };
   const allTraces: TraceInfo[] = [];
 
-  ownerTraces.forEach((edges, owner) => {
+  ownerEdges.forEach((edges, owner) => {
     // Build adjacency list for this owner's edges
     const adjacency = new Map<string, string[]>();
     const incomingCount = new Map<string, number>();
+    const allNodes = new Set<string>();
 
     edges.forEach(({ source, target }) => {
       if (!adjacency.has(source)) {
@@ -740,94 +1048,115 @@ async function layoutWithLongestTrace(
       if (!incomingCount.has(source)) {
         incomingCount.set(source, 0);
       }
+      allNodes.add(source);
+      allNodes.add(target);
     });
 
     // Find the start node (node with no incoming edges)
-    const startNodes = Array.from(adjacency.keys()).filter(node =>
-      (incomingCount.get(node) || 0) === 0
-    );
+    const startNodes = Array.from(allNodes).filter(node => (incomingCount.get(node) || 0) === 0);
+    const seeds = startNodes.length > 0 ? startNodes : Array.from(allNodes);
 
-    if (startNodes.length === 0) return; // Skip if no clear start
+    const pathLimit = 500;
+    const uniquePaths = new Set<string>();
 
-    // Build the trace by following the path from start
-    const trace: string[] = [];
-    let current = startNodes[0]; // Take first start node
-    const visited = new Set<string>();
+    const dfs = (current: string, path: string[], visited: Set<string>) => {
+      if (path.length > pathLimit) {
+        console.warn(`[LONGEST TRACE] Path limit reached for owner ${owner}, stopping expansion.`);
+        uniquePaths.add(path.join('->'));
+        return;
+      }
+      const nextList = adjacency.get(current) ?? [];
+      const available = nextList.filter(n => !visited.has(n));
+      if (available.length === 0) {
+        uniquePaths.add(path.join('->'));
+        return;
+      }
+      available.forEach((next) => {
+        visited.add(next);
+        path.push(next);
+        dfs(next, path, visited);
+        path.pop();
+        visited.delete(next);
+      });
+    };
 
-    trace.push(current);
-    visited.add(current);
+    seeds.forEach((start) => {
+      const visited = new Set<string>([start]);
+      dfs(start, [start], visited);
+    });
 
-    // Follow the path
-    while (adjacency.has(current)) {
-      const nextNodes = adjacency.get(current)!;
-      if (nextNodes.length === 0) break;
-
-      // Take the first unvisited next node (in a proper trace, there should only be one)
-      const next = nextNodes.find(n => !visited.has(n));
-      if (!next) break;
-
-      trace.push(next);
-      visited.add(next);
-      current = next;
-    }
-
-    // Store this trace
-    allTraces.push({
-      trace,
-      owner,
-      length: trace.length,
+    uniquePaths.forEach((pathKey) => {
+      const trace = pathKey.split('->').filter(Boolean);
+      if (trace.length === 0) return;
+      allTraces.push({
+        trace,
+        owner,
+        length: trace.length,
+      });
     });
   });
 
   // Sort traces by length (descending)
   allTraces.sort((a, b) => b.length - a.length);
 
-  // Get up to four longest traces
-  const longestTrace = allTraces[0]?.trace || [];
-  const longestOwner = allTraces[0]?.owner || '';
-  const secondLongestTrace = allTraces[1]?.trace || [];
-  const secondLongestOwner = allTraces[1]?.owner || '';
-  const thirdLongestTrace = allTraces[2]?.trace || [];
-  const thirdLongestOwner = allTraces[2]?.owner || '';
-  const fourthLongestTrace = allTraces[3]?.trace || [];
-  const fourthLongestOwner = allTraces[3]?.owner || '';
-
-  console.log(`[LONGEST TRACE] Longest trace has ${longestTrace.length} nodes for owner "${longestOwner}":`, longestTrace);
-  console.log(`[LONGEST TRACE] Second longest trace has ${secondLongestTrace.length} nodes for owner "${secondLongestOwner}":`, secondLongestTrace);
-  if (thirdLongestTrace.length > 0) {
-    console.log(`[LONGEST TRACE] Third longest trace has ${thirdLongestTrace.length} nodes for owner "${thirdLongestOwner}":`, thirdLongestTrace);
-  }
-  if (fourthLongestTrace.length > 0) {
-    console.log(`[LONGEST TRACE] Fourth longest trace has ${fourthLongestTrace.length} nodes for owner "${fourthLongestOwner}":`, fourthLongestTrace);
+  const traceLimitMap = new Map<string, number>();
+  if (typeTraceLimit) {
+    Object.entries(typeTraceLimit).forEach(([type, limit]) => {
+      if (typeof limit === 'number' && Number.isFinite(limit) && limit >= 0) {
+        traceLimitMap.set(type, limit);
+      }
+    });
   }
 
-  // Extract object types
-  const longestOwnerType = longestOwner.split('_')[0];
-  const secondLongestOwnerType = secondLongestOwner.split('_')[0];
-  const thirdLongestOwnerType = thirdLongestOwner.split('_')[0];
-  const fourthLongestOwnerType = fourthLongestOwner.split('_')[0];
-  console.log(`[LONGEST TRACE] Object type of longest trace: "${longestOwnerType}"`);
-  console.log(`[LONGEST TRACE] Object type of second longest trace: "${secondLongestOwnerType}"`);
-  if (thirdLongestTrace.length > 0) {
-    console.log(`[LONGEST TRACE] Object type of third longest trace: "${thirdLongestOwnerType}"`);
-  }
-  if (fourthLongestTrace.length > 0) {
-    console.log(`[LONGEST TRACE] Object type of fourth longest trace: "${fourthLongestOwnerType}"`);
+  const tracesByType = new Map<string, TraceInfo[]>();
+  allTraces.forEach((t) => {
+    if (t.trace.length === 0) return;
+    const ownerType = t.owner.split('_')[0];
+    if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
+    if (!tracesByType.has(ownerType)) {
+      tracesByType.set(ownerType, []);
+    }
+    tracesByType.get(ownerType)!.push({ ...t });
+  });
+
+  const traceCounts: Record<string, number> = {};
+  tracesByType.forEach((traces, type) => {
+    traceCounts[type] = traces.length;
+  });
+
+  const selectedTraces: Array<TraceInfo & { ownerType: string; index: number }> = [];
+  Array.from(tracesByType.entries()).forEach(([type, traces]) => {
+    const limit = traceLimitMap.has(type) ? Math.max(0, traceLimitMap.get(type) ?? 0) : traces.length;
+    const sorted = traces.slice().sort((a, b) => b.length - a.length);
+    const slice = sorted.slice(0, limit);
+    slice.forEach((t, idx) => {
+      selectedTraces.push({ ...t, ownerType: type, index: idx });
+    });
+  });
+
+  selectedTraces.sort((a, b) => {
+    const lenDiff = b.length - a.length;
+    if (lenDiff !== 0) return lenDiff;
+    return a.owner.localeCompare(b.owner);
+  });
+
+  const logCount = Math.min(selectedTraces.length, 5);
+  for (let i = 0; i < logCount; i += 1) {
+    const t = selectedTraces[i];
+    console.log(`[LONGEST TRACE] Trace #${i + 1} has ${t.trace.length} nodes for owner "${t.owner}":`, t.trace);
+    console.log(`[LONGEST TRACE] Object type of trace #${i + 1}: "${t.ownerType}"`);
   }
 
   // If no trace was found, return empty layout
-  if (longestTrace.length === 0) {
+  if (selectedTraces.length === 0) {
     console.warn('[LONGEST TRACE] No valid trace found');
     return { nodes: [], edges: [] };
   }
 
   const renderNodeById = new Map(renderNodes.map(n => [n.id, n]));
-  const visibleNodeIds = new Set<string>([
-    ...longestTrace,
-    ...secondLongestTrace,
-    ...thirdLongestTrace,
-    ...fourthLongestTrace,
-  ]);
+  const visibleNodeIds = new Set<string>(
+    selectedTraces.flatMap(t => t.trace),
+  );
 
   const getNodeTypes = (nodeId: string): string[] => {
     const node = renderNodeById.get(nodeId);
@@ -842,10 +1171,11 @@ async function layoutWithLongestTrace(
     getNodeTypes(id).forEach(t => includedTypes.add(t));
   });
   if (includedTypes.size === 0) {
-    if (longestOwnerType && (!activeTypeSet || activeTypeSet.has(longestOwnerType))) includedTypes.add(longestOwnerType);
-    if (secondLongestOwnerType && (!activeTypeSet || activeTypeSet.has(secondLongestOwnerType))) includedTypes.add(secondLongestOwnerType);
-    if (thirdLongestOwnerType && (!activeTypeSet || activeTypeSet.has(thirdLongestOwnerType))) includedTypes.add(thirdLongestOwnerType);
-    if (fourthLongestOwnerType && (!activeTypeSet || activeTypeSet.has(fourthLongestOwnerType))) includedTypes.add(fourthLongestOwnerType);
+    selectedTraces.forEach(({ ownerType }) => {
+      if (!ownerType) return;
+      if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
+      includedTypes.add(ownerType);
+    });
   }
 
   type WeightMap = Map<string, Map<string, number>>;
@@ -898,6 +1228,50 @@ async function layoutWithLongestTrace(
 
   const typeList = Array.from(includedTypes);
 
+  // Estimate a "temporal center" for each type based on where its
+  // nodes appear along the selected traces (0 = early, 1 = late).
+  const typeTimeAgg = new Map<string, { sum: number; count: number }>();
+  selectedTraces.forEach(({ trace }) => {
+    if (!trace || trace.length === 0) return;
+    const length = trace.length;
+    trace.forEach((nodeId, index) => {
+      const nodeTypes = getNodeTypes(nodeId);
+      if (nodeTypes.length === 0) return;
+      const position = length > 1 ? index / (length - 1) : 0.5;
+      nodeTypes.forEach((type) => {
+        if (!includedTypes.has(type)) return;
+        const agg = typeTimeAgg.get(type) ?? { sum: 0, count: 0 };
+        agg.sum += position;
+        agg.count += 1;
+        typeTimeAgg.set(type, agg);
+      });
+    });
+  });
+
+  const getTypeTimeCenter = (type: string): number => {
+    const agg = typeTimeAgg.get(type);
+    if (!agg || agg.count === 0) return 0.5;
+    return agg.sum / agg.count;
+  };
+
+  const typeOrderByTime = [...typeList].sort(
+    (a, b) => getTypeTimeCenter(a) - getTypeTimeCenter(b),
+  );
+  const idealTimeIndex = new Map<string, number>();
+  typeOrderByTime.forEach((type, index) => {
+    idealTimeIndex.set(type, index);
+  });
+
+  const timePenalty = (order: string[]): number => {
+    let penalty = 0;
+    order.forEach((type, index) => {
+      const ideal = idealTimeIndex.get(type);
+      if (ideal === undefined) return;
+      penalty += Math.abs(index - ideal);
+    });
+    return penalty;
+  };
+
   const layoutCost = (order: string[]): number => {
     let cost = 0;
     for (let i = 0; i < order.length; i += 1) {
@@ -914,82 +1288,162 @@ async function layoutWithLongestTrace(
   const computeOrder = (): string[] => {
     if (typeList.length <= 1) return [...typeList];
 
-    const totalWeights = typeList.map((t) => {
-      const sum = weights.get(t)
-        ? Array.from(weights.get(t)!.values()).reduce((acc, v) => acc + v, 0)
-        : 0;
-      return { type: t, sum };
-    });
+    const hasPreviousOrder = Array.isArray(previousTypeOrderGlobal)
+      && previousTypeOrderGlobal.length > 0;
 
-    const allZero = totalWeights.every(({ sum }) => sum <= 0);
-    if (allZero) {
-      return [...typeList].sort();
-    }
+    const baselineOrder: string[] | null = hasPreviousOrder
+      ? (() => {
+          const prev = previousTypeOrderGlobal as string[];
+          const result: string[] = [];
+          const seen = new Set<string>();
+          prev.forEach((type) => {
+            if (!includedTypes.has(type)) return;
+            if (!typeList.includes(type)) return;
+            result.push(type);
+            seen.add(type);
+          });
+          typeList.forEach((type) => {
+            if (!seen.has(type)) {
+              result.push(type);
+            }
+          });
+          return result.length === typeList.length ? result : null;
+        })()
+      : null;
 
-    totalWeights.sort((a, b) => b.sum - a.sum);
-    const order: string[] = [totalWeights[0].type];
-    const remaining = new Set(typeList.filter(t => t !== totalWeights[0].type));
+    let bestOrder: string[] = [...typeList];
 
-    const insertionCost = (current: string[], candidate: string, index: number) => {
-      const newOrder = [...current.slice(0, index), candidate, ...current.slice(index)];
-      return layoutCost(newOrder);
-    };
-
-    while (remaining.size > 0) {
-      let bestType: string | null = null;
-      let bestIndex = 0;
+    // For a small number of types, exhaustively search all permutations.
+    // Use interaction cost as the primary metric and temporal penalty
+    // only as a tiebreaker when no previous layout exists.
+    if (typeList.length <= 8) {
       let bestCost = Number.POSITIVE_INFINITY;
-      Array.from(remaining).forEach((candidate) => {
-        for (let i = 0; i <= order.length; i += 1) {
-          const cost = insertionCost(order, candidate, i);
-          if (cost < bestCost) {
+      let bestTimePenalty = Number.POSITIVE_INFINITY;
+
+      const used = new Set<string>();
+      const current: string[] = [];
+
+      const dfs = () => {
+        if (current.length === typeList.length) {
+          const cost = layoutCost(current);
+          const tPenalty = timePenalty(current);
+
+          if (cost < bestCost - 1e-6
+            || (Math.abs(cost - bestCost) <= 1e-6 && tPenalty + 1e-6 < bestTimePenalty)
+          ) {
             bestCost = cost;
-            bestType = candidate;
-            bestIndex = i;
+            bestTimePenalty = tPenalty;
+            bestOrder = [...current];
+          }
+          return;
+        }
+        typeList.forEach((type) => {
+          if (used.has(type)) return;
+          used.add(type);
+          current.push(type);
+          dfs();
+          current.pop();
+          used.delete(type);
+        });
+      };
+
+      dfs();
+    } else {
+      const totalWeights = typeList.map((t) => {
+        const sum = weights.get(t)
+          ? Array.from(weights.get(t)!.values()).reduce((acc, v) => acc + v, 0)
+          : 0;
+        return { type: t, sum };
+      });
+
+      const allZero = totalWeights.every(({ sum }) => sum <= 0);
+      if (allZero) {
+        bestOrder = [...typeList].sort();
+      } else {
+        totalWeights.sort((a, b) => b.sum - a.sum);
+        const order: string[] = [totalWeights[0].type];
+        const remaining = new Set(typeList.filter(t => t !== totalWeights[0].type));
+
+        const insertionCost = (current: string[], candidate: string, index: number) => {
+          const newOrder = [...current.slice(0, index), candidate, ...current.slice(index)];
+          return layoutCost(newOrder);
+        };
+
+        while (remaining.size > 0) {
+          let bestType: string | null = null;
+          let bestIndex = 0;
+          let bestCost = Number.POSITIVE_INFINITY;
+          Array.from(remaining).forEach((candidate) => {
+            for (let i = 0; i <= order.length; i += 1) {
+              const cost = insertionCost(order, candidate, i);
+              if (cost < bestCost - 1e-6) {
+                bestCost = cost;
+                bestType = candidate;
+                bestIndex = i;
+              }
+            }
+          });
+          if (bestType === null) {
+            break;
+          }
+          order.splice(bestIndex, 0, bestType);
+          remaining.delete(bestType);
+        }
+
+        // Local improvement: adjacent swaps
+        let improved = true;
+        while (improved) {
+          improved = false;
+          for (let i = 0; i < order.length - 1; i += 1) {
+            const swapped = [...order];
+            [swapped[i], swapped[i + 1]] = [swapped[i + 1], swapped[i]];
+            const currentCost = layoutCost(order);
+            const swappedCost = layoutCost(swapped);
+            if (swappedCost + 1e-6 < currentCost) {
+              order.splice(0, order.length, ...swapped);
+              improved = true;
+            }
           }
         }
-      });
-      if (bestType === null) {
-        break;
-      }
-      order.splice(bestIndex, 0, bestType);
-      remaining.delete(bestType);
-    }
 
-    // Local improvement: adjacent swaps
-    let improved = true;
-    while (improved) {
-      improved = false;
-      for (let i = 0; i < order.length - 1; i += 1) {
-        const swapped = [...order];
-        [swapped[i], swapped[i + 1]] = [swapped[i + 1], swapped[i]];
-        if (layoutCost(swapped) + 1e-6 < layoutCost(order)) {
-          order.splice(0, order.length, ...swapped);
-          improved = true;
-        }
+        bestOrder = order;
       }
     }
 
-    return order;
+    // If we have a previous layout, only move away from the previous
+    // ordering when the interaction cost strictly improves. Symmetric
+    // reorderings (like mirroring) that keep the same cost are rejected,
+    // so columns stay where users expect them.
+    if (baselineOrder) {
+      const EPS = 1e-6;
+      const baselineCost = layoutCost(baselineOrder);
+      const bestCost = layoutCost(bestOrder);
+      if (bestCost >= baselineCost - EPS) {
+        return baselineOrder;
+      }
+    }
+
+    return bestOrder;
   };
 
   const typeOrder = computeOrder();
+  previousTypeOrderGlobal = [...typeOrder];
 
   // Find shared nodes between traces
-  const longestTraceSet = new Set(longestTrace);
-  const secondLongestTraceSet = new Set(secondLongestTrace);
-  const thirdLongestTraceSet = new Set(thirdLongestTrace);
-  const fourthLongestTraceSet = new Set(fourthLongestTrace);
-  const sharedNodes = new Set<string>();
-  [longestTraceSet, secondLongestTraceSet, thirdLongestTraceSet, fourthLongestTraceSet].forEach((setA, idx, arr) => {
-    for (const node of setA) {
-      for (let j = idx + 1; j < arr.length; j += 1) {
-        if (arr[j].has(node)) {
-          sharedNodes.add(node);
-        }
-      }
-    }
+  const traceMembership = new Map<string, number[]>();
+  selectedTraces.forEach((t, traceIdx) => {
+    t.trace.forEach((nodeId) => {
+      const list = traceMembership.get(nodeId) ?? [];
+      list.push(traceIdx);
+      traceMembership.set(nodeId, list);
+    });
   });
+
+  const sharedNodes = new Set<string>(
+    Array.from(traceMembership.entries())
+      .filter(([, traces]) => traces.length > 1)
+      .map(([nodeId]) => nodeId),
+  );
   console.log(`[LONGEST TRACE] Shared nodes between traces:`, Array.from(sharedNodes));
 
   // Layout configuration
@@ -1029,75 +1483,30 @@ async function layoutWithLongestTrace(
   };
 
   // Filter out terminal nodes from traces to get only activity nodes
-  const firstTraceActivities = longestTrace.filter(nodeId => !isTerminalNode(nodeId));
-  const secondTraceActivities = secondLongestTrace.filter(nodeId => !isTerminalNode(nodeId));
-  const thirdTraceActivities = thirdLongestTrace.filter(nodeId => !isTerminalNode(nodeId));
-  const fourthTraceActivities = fourthLongestTrace.filter(nodeId => !isTerminalNode(nodeId));
-
-  console.log(`[LONGEST TRACE] First trace activities (non-terminal):`, firstTraceActivities);
-  console.log(`[LONGEST TRACE] Second trace activities (non-terminal):`, secondTraceActivities);
-
-  // First pass: Position all activity nodes to determine their Y coordinates
-  const activityPositions = new Map<string, number>();
-
-  // Calculate Y positions for all activity nodes
-  firstTraceActivities.forEach((nodeId, index) => {
-    const y = START_Y + index * VERTICAL_SPACING;
-    activityPositions.set(nodeId, y);
-  });
-
-  secondTraceActivities.forEach((nodeId, index) => {
-    if (!activityPositions.has(nodeId)) {
-      // Only set if not already set (not shared)
-      const y = START_Y + index * VERTICAL_SPACING;
-      activityPositions.set(nodeId, y);
-    }
-  });
-
-  thirdTraceActivities.forEach((nodeId, index) => {
-    if (!activityPositions.has(nodeId)) {
-      const y = START_Y + index * VERTICAL_SPACING;
-      activityPositions.set(nodeId, y);
-    }
-  });
-
-  fourthTraceActivities.forEach((nodeId, index) => {
-    if (!activityPositions.has(nodeId)) {
-      const y = START_Y + index * VERTICAL_SPACING;
-      activityPositions.set(nodeId, y);
-    }
-  });
-
-  // Find the Y position of the last activity in each trace
-  const lastActivityFirstTrace = firstTraceActivities[firstTraceActivities.length - 1];
-  const lastActivitySecondTrace = secondTraceActivities[secondTraceActivities.length - 1];
-  const lastActivityThirdTrace = thirdTraceActivities[thirdTraceActivities.length - 1];
-  const lastActivityFourthTrace = fourthTraceActivities[fourthTraceActivities.length - 1];
-
-  const lastActivityYFirstTrace = lastActivityFirstTrace
-    ? activityPositions.get(lastActivityFirstTrace) || START_Y
-    : START_Y;
-  const lastActivityYSecondTrace = lastActivitySecondTrace
-    ? activityPositions.get(lastActivitySecondTrace) || START_Y
-    : START_Y;
-  const lastActivityYThirdTrace = lastActivityThirdTrace
-    ? activityPositions.get(lastActivityThirdTrace) || START_Y
-    : START_Y;
-  const lastActivityYFourthTrace = lastActivityFourthTrace
-    ? activityPositions.get(lastActivityFourthTrace) || START_Y
-    : START_Y;
-
-  // The Y position for end nodes should be after the last activity
-  const endNodeY = Math.max(
-    lastActivityYFirstTrace,
-    lastActivityYSecondTrace,
-    lastActivityYThirdTrace,
-    lastActivityYFourthTrace,
-  ) + VERTICAL_SPACING;
+  const traceActivities = selectedTraces.map(({ trace }) =>
+    trace.filter(nodeId => !isTerminalNode(nodeId)),
+  );
 
   console.log(
-    `[LONGEST TRACE] Last activity Y positions - First: ${lastActivityYFirstTrace}, Second: ${lastActivityYSecondTrace}, Third: ${lastActivityYThirdTrace}, Fourth: ${lastActivityYFourthTrace}, End nodes will be at: ${endNodeY}`,
+    '[LONGEST TRACE] Activity counts per trace:',
+    traceActivities.map((acts, idx) => `#${idx + 1}:${acts.length}`).join(', '),
   );
+
+  const activityPositions = new Map<string, number>();
+  traceActivities.forEach((activities) => {
+    activities.forEach((nodeId, index) => {
+      if (!activityPositions.has(nodeId)) {
+        const y = START_Y + index * VERTICAL_SPACING;
+        activityPositions.set(nodeId, y);
+      }
+    });
+  });
+
+  const lastActivityYByTrace = traceActivities.map((activities) => {
+    const last = activities[activities.length - 1];
+    return last ? (activityPositions.get(last) || START_Y) : START_Y;
+  });
+  const endNodeY = Math.max(...lastActivityYByTrace, START_Y) + VERTICAL_SPACING;
 
   // Position nodes based on which trace(s) they belong to
   const positionedNodes = renderNodes.map((node) => {
@@ -1116,18 +1525,11 @@ async function layoutWithLongestTrace(
     }
     const resolvedStyle = Object.keys(nextStyle).length > 0 ? nextStyle : node.style;
 
-    const indexInFirstTrace = longestTrace.indexOf(node.id);
-    const indexInSecondTrace = secondLongestTrace.indexOf(node.id);
-    const indexInThirdTrace = thirdLongestTrace.indexOf(node.id);
-    const indexInFourthTrace = fourthLongestTrace.indexOf(node.id);
-    const isInFirstTrace = indexInFirstTrace !== -1;
-    const isInSecondTrace = indexInSecondTrace !== -1;
-    const isInThirdTrace = indexInThirdTrace !== -1;
-    const isInFourthTrace = indexInFourthTrace !== -1;
-    const isShared = sharedNodes.has(node.id);
+    const membership = traceMembership.get(node.id) ?? [];
+    const isShared = membership.length > 1;
     const isTerminal = isTerminalNode(node.id);
 
-    if (isInFirstTrace || isInSecondTrace || isInThirdTrace || isInFourthTrace) {
+    if (membership.length > 0) {
       let x: number;
       let y: number;
 
@@ -1185,84 +1587,14 @@ async function layoutWithLongestTrace(
     }
   });
 
-  // After initial placement, push nodes downward to discourage upward edges.
-  // We only consider edges along the selected traces and enforce a minimum vertical gap.
-  const MIN_DOWNWARD_GAP = Math.min(VERTICAL_SPACING * 0.25, 24);
-  const traceSequences = [longestTrace, secondLongestTrace, thirdLongestTrace, fourthLongestTrace];
-  const visibleIdList = positionedNodes.filter(n => !n.hidden).map(n => n.id);
+  const traceSequences = selectedTraces.map(t => t.trace);
   const nodeMap = new Map(positionedNodes.map(n => [n.id, { ...n }]));
-  const parents = new Map<string, string[]>();
-  const children = new Map<string, string[]>();
-  const indegree = new Map<string, number>();
 
-  visibleIdList.forEach((id) => {
-    parents.set(id, []);
-    children.set(id, []);
-    indegree.set(id, 0);
-  });
-
-  traceSequences.forEach((trace) => {
-    for (let i = 0; i < trace.length - 1; i += 1) {
-      const u = trace[i];
-      const v = trace[i + 1];
-      if (!nodeMap.has(u) || !nodeMap.has(v)) continue;
-      parents.get(v)!.push(u);
-      children.get(u)!.push(v);
-      indegree.set(v, (indegree.get(v) ?? 0) + 1);
-    }
-  });
-
-  const queue: string[] = [];
-  indegree.forEach((deg, id) => {
-    if ((deg ?? 0) === 0) queue.push(id);
-  });
-
-  while (queue.length > 0) {
-    const currentId = queue.shift()!;
-    const currentNode = nodeMap.get(currentId);
-    if (!currentNode || currentNode.hidden || !currentNode.position) {
-      (children.get(currentId) ?? []).forEach((childId) => {
-        indegree.set(childId, (indegree.get(childId) ?? 1) - 1);
-        if ((indegree.get(childId) ?? 0) === 0) queue.push(childId);
-      });
-      continue;
-    }
-
-    const parentIds = parents.get(currentId) ?? [];
-    let maxParentCenter = Number.NEGATIVE_INFINITY;
-    parentIds.forEach((pid) => {
-      const pn = nodeMap.get(pid);
-      if (!pn || pn.hidden || !pn.position) return;
-      const ph = pn.height ?? DEFAULT_NODE_HEIGHT;
-      const pc = pn.position.y + ph / 2;
-      if (pc > maxParentCenter) {
-        maxParentCenter = pc;
-      }
-    });
-
-    if (maxParentCenter > Number.NEGATIVE_INFINITY) {
-      const ch = currentNode.height ?? DEFAULT_NODE_HEIGHT;
-      const cc = currentNode.position.y + ch / 2;
-      const targetCenter = Math.max(cc, maxParentCenter + MIN_DOWNWARD_GAP);
-      if (targetCenter - cc > 1e-3) {
-        const newY = targetCenter - ch / 2;
-        nodeMap.set(currentId, {
-          ...currentNode,
-          position: {
-            ...currentNode.position,
-            y: newY,
-          },
-        });
-      }
-    }
-
-    (children.get(currentId) ?? []).forEach((childId) => {
-      indegree.set(childId, (indegree.get(childId) ?? 1) - 1);
-      if ((indegree.get(childId) ?? 0) === 0) queue.push(childId);
-    });
-  }
-
-  const adjustedPositionedNodes = Array.from(nodeMap.values());
+  const visibleLayerIds = new Set(
+    positionedNodes
+      .filter(n => !n.hidden && n.position && Number.isFinite(n.position.y))
+      .map(n => n.id),
+  );
 
   const variantOf = (nodeId: string) => {
     const node = renderNodes.find(n => n.id === nodeId);
@@ -1276,6 +1608,200 @@ async function layoutWithLongestTrace(
     }
     return undefined;
   };
+
+  // Only enforce the layering rule for end nodes: layer(end) = max(layer(pred)) + 1.
+  const layerOf = new Map<string, number>();
+  visibleLayerIds.forEach((id) => {
+    const node = nodeMap.get(id);
+    if (!node || !node.position) return;
+    const h = node.height ?? DEFAULT_NODE_HEIGHT;
+    const centerY = node.position.y + h / 2;
+    const approxLayer = Math.max(0, Math.round((centerY - START_Y) / VERTICAL_SPACING));
+    layerOf.set(id, approxLayer);
+  });
+
+  const predecessors = new Map<string, Set<string>>();
+  const addPred = (to: string, from: string) => {
+    if (!visibleLayerIds.has(to) || !visibleLayerIds.has(from)) return;
+    if (!predecessors.has(to)) predecessors.set(to, new Set());
+    predecessors.get(to)!.add(from);
+  };
+  traceSequences.forEach((trace) => {
+    for (let i = 0; i < trace.length - 1; i += 1) {
+      addPred(trace[i + 1], trace[i]);
+    }
+  });
+
+  // Resolve deepest layer reachable via predecessors (longest path depth).
+  const layerMemo = new Map<string, number>();
+  const resolving = new Set<string>();
+  const resolveDeepestLayer = (id: string): number => {
+    if (layerMemo.has(id)) return layerMemo.get(id)!;
+    if (resolving.has(id)) {
+      // Cycle guard: fall back to current layer estimate
+      return layerOf.get(id) ?? 0;
+    }
+    resolving.add(id);
+    let best = layerOf.get(id) ?? 0;
+    const preds = predecessors.get(id);
+    if (preds && preds.size > 0) {
+      preds.forEach((pred) => {
+        const candidate = resolveDeepestLayer(pred) + 1;
+        if (candidate > best) best = candidate;
+      });
+    }
+    layerMemo.set(id, best);
+    resolving.delete(id);
+    return best;
+  };
+
+  visibleLayerIds.forEach((id) => {
+    if (variantOf(id) !== 'end') {
+      return;
+    }
+    const newLayer = resolveDeepestLayer(id);
+    const node = nodeMap.get(id);
+    if (!node || !node.position) return;
+    const height = node.height ?? DEFAULT_NODE_HEIGHT;
+    const newCenterY = START_Y + newLayer * VERTICAL_SPACING;
+    layerOf.set(id, newLayer);
+    nodeMap.set(id, {
+      ...node,
+      position: {
+        ...node.position,
+        y: newCenterY - height / 2,
+      },
+    });
+  });
+
+  // Slightly offset nodes within the same column when some traces skip over
+  // intermediate nodes in that column. This keeps long vertical traces visible
+  // while leaving straight, unskipped chains untouched.
+  const getCenter = (id: string) => {
+    const node = nodeMap.get(id);
+    if (!node || !node.position) return null;
+    const w = node.width ?? DEFAULT_NODE_WIDTH;
+    const h = node.height ?? DEFAULT_NODE_HEIGHT;
+    return {
+      x: node.position.x + w / 2,
+      y: node.position.y + h / 2,
+    };
+  };
+
+  const COLUMN_TOLERANCE = 8; // px tolerance to consider nodes in the same column
+  const OFFSET_STEP = 64; // horizontal nudge in px
+
+  const columnBuckets = new Map<number, string[]>();
+  const blockerIds = new Set<string>();
+  visibleLayerIds.forEach((id) => {
+    const center = getCenter(id);
+    if (!center) return;
+    const key = Math.round(center.x / COLUMN_TOLERANCE) * COLUMN_TOLERANCE;
+    const existing = columnBuckets.get(key) ?? [];
+    existing.push(id);
+    columnBuckets.set(key, existing);
+  });
+
+  const toOffset = new Set<string>();
+
+  columnBuckets.forEach((ids) => {
+    // Order nodes in this column by vertical position
+    const sorted = ids
+      .map(id => ({ id, center: getCenter(id) }))
+      .filter((entry): entry is { id: string; center: { x: number; y: number } } => Boolean(entry?.center))
+      .sort((a, b) => a.center.y - b.center.y);
+
+    const indexById = new Map<string, number>();
+    sorted.forEach((entry, idx) => indexById.set(entry.id, idx));
+
+    // Detect skips: if a trace connects nodes that are not adjacent in this column,
+    // mark the intermediate nodes for horizontal offset.
+    traceSequences.forEach((trace) => {
+      const indicesInCol = trace
+        .map(id => indexById.get(id))
+        .filter((v): v is number => typeof v === 'number');
+      for (let i = 0; i < indicesInCol.length - 1; i += 1) {
+        const a = indicesInCol[i];
+        const b = indicesInCol[i + 1];
+        if (Math.abs(a - b) <= 1) continue; // consecutive, keep straight
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        for (let j = lo + 1; j < hi; j += 1) {
+          const skippedId = sorted[j]?.id;
+          if (skippedId) {
+            toOffset.add(skippedId);
+            blockerIds.add(skippedId);
+          }
+        }
+      }
+    });
+
+    // Apply offsets to marked nodes, alternating left/right down the column.
+    let direction = -1;
+    sorted.forEach((entry) => {
+      if (!toOffset.has(entry.id)) {
+        return;
+      }
+      const node = nodeMap.get(entry.id);
+      if (!node || !node.position) return;
+      const shift = direction * OFFSET_STEP;
+      direction *= -1;
+      nodeMap.set(entry.id, {
+        ...node,
+        position: {
+          ...node.position,
+          x: node.position.x + shift,
+        },
+      });
+    });
+  });
+
+  // Nudge later-in-trace nodes downward when an edge is nearly horizontal so flow direction stays clear.
+  const traceEdgesDirectional: Array<{ source: string; target: string; sourceOrder: number; targetOrder: number }> = [];
+  traceSequences.forEach((trace) => {
+    for (let i = 0; i < trace.length - 1; i += 1) {
+      traceEdgesDirectional.push({
+        source: trace[i],
+        target: trace[i + 1],
+        sourceOrder: i,
+        targetOrder: i + 1,
+      });
+    }
+  });
+
+  const enforceHorizontalDirectionality = () => {
+    const MIN_DROP = Math.max(48, VERTICAL_SPACING * 0.5);
+    traceEdgesDirectional.forEach(({ source, target, sourceOrder, targetOrder }) => {
+      const srcCenter = getCenter(source);
+      const tgtCenter = getCenter(target);
+      if (!srcCenter || !tgtCenter) return;
+      const dx = tgtCenter.x - srcCenter.x;
+      const dy = tgtCenter.y - srcCenter.y;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const horizontalEnough = absDx > 1e-3 && absDy <= Math.max(40, absDx * 0.4);
+      if (!horizontalEnough) return;
+      if (targetOrder <= sourceOrder) return;
+
+      const desiredCenterY = srcCenter.y + MIN_DROP;
+      if (tgtCenter.y < desiredCenterY - 1) {
+        const delta = desiredCenterY - tgtCenter.y;
+        const node = nodeMap.get(target);
+        if (node && node.position) {
+          nodeMap.set(target, {
+            ...node,
+            position: {
+              ...node.position,
+              y: node.position.y + delta,
+            },
+          });
+        }
+      }
+    });
+  };
+
+  enforceHorizontalDirectionality();
+
+  const adjustedPositionedNodes = Array.from(nodeMap.values());
 
   const nodesById = new Map(adjustedPositionedNodes.map(n => [n.id, { ...n }]));
   const lastActivityCenter = (trace: string[]) => {
@@ -1295,6 +1821,11 @@ async function layoutWithLongestTrace(
   };
 
   const adjustEndNodeForTrace = (trace: string[]) => {
+    // If we already assigned a layer-based position for the end node, keep it.
+    const endIdFromLayering = [...trace].reverse().find(id => variantOf(id) === 'end');
+    if (endIdFromLayering && layerOf.has(endIdFromLayering)) {
+      return;
+    }
     const maxCenter = lastActivityCenter(trace);
     if (!Number.isFinite(maxCenter)) return;
     const endId = [...trace].reverse().find(id => variantOf(id) === 'end');
@@ -1312,54 +1843,38 @@ async function layoutWithLongestTrace(
     });
   };
 
-  adjustEndNodeForTrace(longestTrace);
-  adjustEndNodeForTrace(secondLongestTrace);
-  if (thirdLongestTrace.length > 0) {
-    adjustEndNodeForTrace(thirdLongestTrace);
-  }
-  if (fourthLongestTrace.length > 0) {
-    adjustEndNodeForTrace(fourthLongestTrace);
-  }
+  traceSequences.forEach((trace) => {
+    if (trace.length > 0) {
+      adjustEndNodeForTrace(trace);
+    }
+  });
 
   const adjustedNodes = Array.from(nodesById.values());
+  const nodeCenters = new Map<string, Point>();
+  adjustedNodes.forEach((n) => {
+    const width = n.width ?? DEFAULT_NODE_WIDTH;
+    const height = n.height ?? DEFAULT_NODE_HEIGHT;
+    nodeCenters.set(n.id, {
+      x: (n.position?.x ?? 0) + width / 2,
+      y: (n.position?.y ?? 0) + height / 2,
+    });
+  });
 
-  // Build sets of valid edges for both traces (consecutive nodes only)
-  const firstTraceEdges = new Set<string>();
-  for (let i = 0; i < longestTrace.length - 1; i++) {
-    const source = longestTrace[i];
-    const target = longestTrace[i + 1];
-    firstTraceEdges.add(`${source}->${target}`);
-  }
+  // Build sets of valid edges for each trace (consecutive nodes only)
+  const traceEdgeSets = traceSequences.map((trace) => {
+    const set = new Set<string>();
+    for (let i = 0; i < trace.length - 1; i += 1) {
+      set.add(`${trace[i]}->${trace[i + 1]}`);
+    }
+    return set;
+  });
+  const traceOwnerTypes = selectedTraces.map(t => t.ownerType);
 
-  const secondTraceEdges = new Set<string>();
-  for (let i = 0; i < secondLongestTrace.length - 1; i++) {
-    const source = secondLongestTrace[i];
-    const target = secondLongestTrace[i + 1];
-    secondTraceEdges.add(`${source}->${target}`);
-  }
-
-  const thirdTraceEdges = new Set<string>();
-  for (let i = 0; i < thirdLongestTrace.length - 1; i++) {
-    const source = thirdLongestTrace[i];
-    const target = thirdLongestTrace[i + 1];
-    thirdTraceEdges.add(`${source}->${target}`);
-  }
-
-  const fourthTraceEdges = new Set<string>();
-  for (let i = 0; i < fourthLongestTrace.length - 1; i++) {
-    const source = fourthLongestTrace[i];
-    const target = fourthLongestTrace[i + 1];
-    fourthTraceEdges.add(`${source}->${target}`);
-  }
-
-  console.log(`[LONGEST TRACE] First trace edges:`, Array.from(firstTraceEdges));
-  console.log(`[LONGEST TRACE] Second trace edges:`, Array.from(secondTraceEdges));
-  if (thirdTraceEdges.size > 0) {
-    console.log(`[LONGEST TRACE] Third trace edges:`, Array.from(thirdTraceEdges));
-  }
-  if (fourthTraceEdges.size > 0) {
-    console.log(`[LONGEST TRACE] Fourth trace edges:`, Array.from(fourthTraceEdges));
-  }
+  traceEdgeSets.slice(0, 5).forEach((set, idx) => {
+    if (set.size > 0) {
+      console.log(`[LONGEST TRACE] Trace #${idx + 1} edges:`, Array.from(set));
+    }
+  });
 
   // Split edges by object type - each edge should have only one object type
   // If an edge has multiple object types, create separate edges for each type
@@ -1368,13 +1883,10 @@ async function layoutWithLongestTrace(
   renderEdges.forEach(edge => {
     const edgeKey = `${edge.source}->${edge.target}`;
 
-    // Check if edge belongs to first or second trace
-    const inFirstTrace = firstTraceEdges.has(edgeKey);
-    const inSecondTrace = secondTraceEdges.has(edgeKey);
-    const inThirdTrace = thirdTraceEdges.has(edgeKey);
-    const inFourthTrace = fourthTraceEdges.has(edgeKey);
+    const membership = traceEdgeSets.map(set => set.has(edgeKey));
+    const inAnyTrace = membership.some(Boolean);
 
-    if (!inFirstTrace && !inSecondTrace && !inThirdTrace && !inFourthTrace) {
+    if (!inAnyTrace) {
       return; // Skip edges not in selected traces
     }
 
@@ -1395,13 +1907,11 @@ async function layoutWithLongestTrace(
       if (activeTypeSet && !activeTypeSet.has(objectType)) {
         return;
       }
-      // Include edges that match either trace's object type
-      if (
-        (inFirstTrace && objectType === longestOwnerType) ||
-        (inSecondTrace && objectType === secondLongestOwnerType) ||
-        (inThirdTrace && objectType === thirdLongestOwnerType) ||
-        (inFourthTrace && objectType === fourthLongestOwnerType)
-      ) {
+      const matchesTraceType = membership.some((isInTrace, traceIdx) =>
+        isInTrace && objectType === traceOwnerTypes[traceIdx],
+      );
+
+      if (matchesTraceType) {
         splitEdgesByObjectType.push({
           ...edge,
           id: `${edge.id}-${objectType}`,
@@ -1417,8 +1927,53 @@ async function layoutWithLongestTrace(
 
   console.log(`[LONGEST TRACE] Split into ${splitEdgesByObjectType.length} edges (one per object type) from ${renderEdges.length} total`);
 
-  // Create edges with anchoring points at node centers
-  // These anchoring points will be relative to node centers and will move with nodes
+  // Detect bidirectional pairs (cycles of length 1 between two nodes)
+  const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const bidirectional = new Map<
+    string,
+    { a: string; b: string; forward: string[]; backward: string[] }
+  >();
+
+  const stableHash = (value: string) => value.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+
+  splitEdgesByObjectType.forEach((edge) => {
+    const key = pairKey(edge.source, edge.target);
+    const existing = bidirectional.get(key) ?? {
+      a: edge.source < edge.target ? edge.source : edge.target,
+      b: edge.source < edge.target ? edge.target : edge.source,
+      forward: [],
+      backward: [],
+    };
+    if (edge.source === existing.a && edge.target === existing.b) {
+      existing.forward.push(edge.id);
+    } else if (edge.source === existing.b && edge.target === existing.a) {
+      existing.backward.push(edge.id);
+    }
+    bidirectional.set(key, existing);
+  });
+
+  // Pick one bend direction per node pair so the two cycle edges curve to opposite sides.
+  const cycleBendDirection = new Map<string, number>();
+  bidirectional.forEach((_, key) => {
+    const dir = stableHash(key) % 2 === 0 ? 1 : -1;
+    cycleBendDirection.set(key, dir);
+  });
+
+  const bufferRects = buildBufferRects(adjustedNodes, BUFFER_ZONE_MARGIN);
+
+  const buildCyclePolyline = (src: Point, tgt: Point, bendDir: number): Point[] => {
+    const vx = tgt.x - src.x;
+    const vy = tgt.y - src.y;
+    const vLen = Math.hypot(vx, vy) || 1;
+    const nx = -vy / vLen;
+    const ny = vx / vLen;
+    const bend = Math.max(24, OFFSET_STEP * 0.5);
+    // Shared bendDir keeps each direction on opposite sides (normals flip with direction)
+    const ctrl1 = { x: src.x + vx * 0.33 + nx * bendDir * bend, y: src.y + vy * 0.33 + ny * bendDir * bend };
+    const ctrl2 = { x: src.x + vx * 0.66 + nx * bendDir * bend, y: src.y + vy * 0.66 + ny * bendDir * bend };
+    return [src, ctrl1, ctrl2, tgt];
+  };
+
   const enhancedEdges = splitEdgesByObjectType.map(edge => {
     const sourceNode = adjustedNodes.find(n => n.id === edge.source);
     const targetNode = adjustedNodes.find(n => n.id === edge.target);
@@ -1438,12 +1993,60 @@ async function layoutWithLongestTrace(
     const targetCenterX = targetNode.position.x + targetWidth / 2;
     const targetCenterY = targetNode.position.y + targetHeight / 2;
 
-    // Create polyline starting and ending at node centers
-    // The OcdfgEdge component will handle the projection to node boundaries
-    const polyline: Point[] = [
-      { x: sourceCenterX, y: sourceCenterY },
-      { x: targetCenterX, y: targetCenterY },
-    ];
+    // Build polyline with optional Bezier-like bend around blockers
+    const srcPoint = { x: sourceCenterX, y: sourceCenterY };
+    const tgtPoint = { x: targetCenterX, y: targetCenterY };
+    let polyline: Point[];
+    let polylineKind: 'polyline' | 'bezier' = 'polyline';
+
+    const pairKeyStr = pairKey(edge.source, edge.target);
+    const pair = bidirectional.get(pairKeyStr);
+    const isBidirectional =
+      pair &&
+      pair.forward.length > 0 &&
+      pair.backward.length > 0;
+    if (isBidirectional) {
+      const bendDir = cycleBendDirection.get(pairKeyStr) ?? 1;
+      const ctrl = buildCyclePolyline(srcPoint, tgtPoint, bendDir);
+      if (ctrl.length === 4) {
+        polyline = sampleCubicBezier(
+          ctrl[0],
+          ctrl[1],
+          ctrl[2],
+          ctrl[3],
+          LONGEST_TRACE_BEZIER_SAMPLES,
+        );
+        polylineKind = 'bezier';
+      } else {
+        polyline = ctrl;
+      }
+    } else {
+      const relaxed = relaxPolylineAroundBuffers(
+        [srcPoint, tgtPoint],
+        bufferRects,
+        edge.source,
+        edge.target,
+      );
+      if (relaxed.length > 2) {
+        const a = relaxed[0];
+        const d = relaxed[relaxed.length - 1];
+        const innerStart = relaxed[1];
+        const innerEnd = relaxed[relaxed.length - 2];
+        const scale = LONGEST_TRACE_BEZIER_HANDLE_SCALE;
+        const b = {
+          x: a.x + (innerStart.x - a.x) * scale,
+          y: a.y + (innerStart.y - a.y) * scale,
+        };
+        const c = {
+          x: d.x + (innerEnd.x - d.x) * scale,
+          y: d.y + (innerEnd.y - d.y) * scale,
+        };
+        polyline = sampleCubicBezier(a, b, c, d, LONGEST_TRACE_BEZIER_SAMPLES);
+        polylineKind = 'bezier';
+      } else {
+        polyline = relaxed;
+      }
+    }
 
     return {
       ...edge,
@@ -1451,15 +2054,114 @@ async function layoutWithLongestTrace(
         ...edge.data,
         polyline,
         edgeKind: 'normal',
-        // Store the anchoring offset from node center (currently 0,0 for center anchoring)
-        // This allows future customization of anchoring points within nodes
+        polylineKind,
         sourceAnchorOffset: { x: 0, y: 0 },
         targetAnchorOffset: { x: 0, y: 0 },
       },
     };
   });
 
-  console.log(`[LONGEST TRACE] Layout complete with ${adjustedNodes.length} nodes and ${enhancedEdges.length} edges`);
+  // Offset duplicate edges (same source/target but different object types) into parallel lanes.
+  const edgesByPair = new Map<string, Edge[]>();
+  enhancedEdges.forEach((edge) => {
+    const key = `${edge.source}->${edge.target}`;
+    if (!edgesByPair.has(key)) {
+      edgesByPair.set(key, []);
+    }
+    edgesByPair.get(key)!.push(edge);
+  });
+
+  const unitNormal = (src?: Point, tgt?: Point): Point => {
+    if (!src || !tgt) return { x: 0, y: -1 };
+    const dx = tgt.x - src.x;
+    const dy = tgt.y - src.y;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 1e-3) return { x: 0, y: -1 };
+    return { x: -dy / len, y: dx / len };
+  };
+
+  const laneAdjustedEdges = enhancedEdges.map((edge) => {
+    const group = edgesByPair.get(`${edge.source}->${edge.target}`);
+    if (!group || group.length <= 1) {
+      return edge;
+    }
+
+    const sorted = [...group].sort((a, b) => {
+      const typeA = (a.data as { objectType?: string } | undefined)?.objectType ?? '';
+      const typeB = (b.data as { objectType?: string } | undefined)?.objectType ?? '';
+      if (typeA === typeB) return a.id.localeCompare(b.id);
+      return typeA.localeCompare(typeB);
+    });
+
+    const laneIndex = sorted.findIndex(e => e.id === edge.id);
+    if (laneIndex < 0) {
+      return edge;
+    }
+
+    const srcCenter = nodeCenters.get(edge.source);
+    const tgtCenter = nodeCenters.get(edge.target);
+    const normal = unitNormal(srcCenter, tgtCenter);
+    const directionSign = stableHash(`${edge.source}->${edge.target}`) % 2 === 0 ? 1 : -1;
+
+    // Scale lane spacing by rendered stroke width so thicker edges get a wider gap.
+    const data = edge.data as { thicknessFactor?: number } | undefined;
+    const thicknessFactorRaw = data?.thicknessFactor;
+    const thicknessFactor = Number.isFinite(thicknessFactorRaw)
+      ? clamp(thicknessFactorRaw, 0.5, 3)
+      : 1;
+    // Matches OcdfgEdge: strokeBase = 6px * factor, background stroke adds 4px * factor.
+    const strokeBase = 6 * thicknessFactor;
+    const backgroundStroke = strokeBase + 4 * thicknessFactor;
+    const laneSpacing = Math.max(
+      LONGEST_TRACE_LANE_OFFSET * 1.35, // strengthen default separation
+      backgroundStroke + 6, // leave breathing room beyond the thick background stroke
+    );
+
+    const offsetMagnitude = laneIndex * laneSpacing * directionSign;
+    if (Math.abs(offsetMagnitude) < 1e-6) {
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          overlayDebug: false,
+        },
+      };
+    }
+
+    const basePolyline = (edge.data as { polyline?: Point[] } | undefined)?.polyline;
+    if (!basePolyline || basePolyline.length === 0) {
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          overlayDebug: false,
+        },
+      };
+    }
+
+    const offsetVector = {
+      x: normal.x * offsetMagnitude,
+      y: normal.y * offsetMagnitude,
+    };
+
+    const shiftedPolyline = basePolyline.map(p => ({
+      x: p.x + offsetVector.x,
+      y: p.y + offsetVector.y,
+    })) ?? [];
+
+    return {
+      ...edge,
+      data: {
+        ...edge.data,
+        polyline: shiftedPolyline,
+        sourceAnchorOffset: offsetVector,
+        targetAnchorOffset: offsetVector,
+        overlayDebug: true,
+      },
+    };
+  });
+
+  console.log(`[LONGEST TRACE] Layout complete with ${adjustedNodes.length} nodes and ${laneAdjustedEdges.length} edges`);
 
   const visibleNodes = adjustedNodes.filter(n => !n.hidden);
   const axisPositions = Array.from(
@@ -1475,9 +2177,11 @@ async function layoutWithLongestTrace(
   ).sort((a, b) => a - b);
 
   const layerMarkers = buildLayerMarkers(axisPositions, visibleNodes, 'TB');
+  const bufferZones = buildBufferZones(visibleNodes, BUFFER_ZONE_MARGIN);
 
   return {
-    nodes: [...visibleNodes, ...layerMarkers],
-    edges: enhancedEdges,
+    nodes: [...visibleNodes, ...bufferZones, ...layerMarkers],
+    edges: laneAdjustedEdges,
+    traceCounts,
   };
 }

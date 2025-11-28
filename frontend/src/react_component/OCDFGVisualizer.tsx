@@ -21,6 +21,7 @@ import OcdfgDefaultNode from './OcdfgDefaultNode';
 import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-react';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
@@ -50,6 +51,8 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
   const [typeVisibility, setTypeVisibility] = useState<Record<string, boolean>>({});
   const [typeAvailability, setTypeAvailability] = useState<Record<string, boolean>>({});
+  const [typeTraceLimit, setTypeTraceLimit] = useState<Record<string, number>>({});
+  const [typeTraceMax, setTypeTraceMax] = useState<Record<string, number>>({});
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
   const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
@@ -59,6 +62,8 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const [interactionLocked, setInteractionLocked] = useState(false);
   const layoutActiveTypesRef = useRef<string[] | null>(null);
   const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
+  const layoutTraceLimitRef = useRef<string | null>(null);
+  const typeTraceLimitCacheRef = useRef<Record<string, number>>({});
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
@@ -115,6 +120,19 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         const allTypes = Array.from(
           new Set(dfgNodes.flatMap(node => node.types ?? [])),
         );
+        const ownersByType = new Map<string, Set<string>>();
+        dfgLinks.forEach((link) => {
+          (link.owners ?? []).forEach((owner) => {
+            const type = owner.split('_')[0];
+            if (!ownersByType.has(type)) ownersByType.set(type, new Set());
+            ownersByType.get(type)!.add(owner);
+          });
+        });
+        const initialTraceMax = Object.fromEntries(
+          allTypes.map((type) => [type, ownersByType.get(type)?.size ?? 0]),
+        );
+        setTypeTraceMax(initialTraceMax);
+        setTypeTraceLimit(initialTraceMax);
         const colors = mapTypesToColors(allTypes);
         setTypeColors(colors);
         const initialAvailability = Object.fromEntries(allTypes.map(type => [type, true]));
@@ -298,6 +316,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         setRawEdges(initialEdges);
         layoutActiveTypesRef.current = null;
         initialAvailabilityRef.current = null;
+        layoutTraceLimitRef.current = null;
       })
       .catch(console.error);
   }, [fitView]);
@@ -312,13 +331,10 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       .sort();
 
     const requestedTypes = activeTypes;
-    const last = layoutActiveTypesRef.current;
-    const unchanged = last
-      && last.length === activeTypes.length
-      && last.every((type, index) => type === activeTypes[index]);
-    if (unchanged) return;
+    const traceLimitKey = JSON.stringify(typeTraceLimit);
 
     layoutActiveTypesRef.current = activeTypes;
+    layoutTraceLimitRef.current = traceLimitKey;
 
     if (activeTypes.length === 0) {
       setBaseNodes([]);
@@ -331,12 +347,38 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       renderEdges: rawEdges,
       dfgNodes: dfgData.nodes,
       dfgLinks: dfgData.links,
+      typeTraceLimit,
       activeTypes,
-    }).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
-      const currentTypes = layoutActiveTypesRef.current ?? [];
-      const layoutStale = currentTypes.length !== requestedTypes.length
-        || !currentTypes.every((type, index) => type === requestedTypes[index]);
-      if (layoutStale) return;
+    }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
+      if (traceCounts) {
+        const prevMaxSnapshot = typeTraceMax;
+        setTypeTraceMax((prev) => {
+          const next: Record<string, number> = { ...prev };
+          let changed = false;
+          Object.entries(traceCounts).forEach(([type, count]) => {
+            if (next[type] !== count) {
+              next[type] = count;
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
+        });
+        setTypeTraceLimit((prev) => {
+          const next: Record<string, number> = { ...prev };
+          let changed = false;
+          Object.entries(traceCounts).forEach(([type, count]) => {
+            const prevMax = prevMaxSnapshot[type];
+            const current = prev[type];
+            const shouldAutoExpand = current === undefined || current === prevMax;
+            const desired = shouldAutoExpand ? count : Math.min(Math.max(0, current ?? count), count);
+            if (desired !== current) {
+              next[type] = desired;
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
+        });
+      }
 
       setBaseNodes(layoutedNodes);
       setBaseEdges(layoutedEdges);
@@ -362,7 +404,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       }
       window.requestAnimationFrame(() => fitView());
     }).catch(console.error);
-  }, [typeVisibility, rawNodes, rawEdges, dfgData, typeColors, fitView]);
+  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -437,8 +479,57 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
     if (typeAvailability[type] !== true && checked) {
       return;
     }
-    setTypeVisibility(prev => ({ ...prev, [type]: checked }));
+
+    const max = typeTraceMax[type] ?? 0;
+    const currentLimit = typeTraceLimit[type] ?? max;
+
+    if (!checked) {
+      typeTraceLimitCacheRef.current[type] = currentLimit;
+      setTypeTraceLimit(prev => ({ ...prev, [type]: 0 }));
+      setTypeVisibility(prev => ({ ...prev, [type]: false }));
+      return;
+    }
+
+    const cached = typeTraceLimitCacheRef.current[type];
+    const restoredBase = cached ?? currentLimit ?? max;
+    const restored = Math.min(Math.max(0, restoredBase), max);
+    setTypeVisibility(prev => ({ ...prev, [type]: true }));
+    setTypeTraceLimit(prev => ({ ...prev, [type]: restored }));
   };
+
+  const handleTraceLimitChange = (type: string, value: number) => {
+    const max = typeTraceMax[type] ?? 0;
+    const clamped = Math.min(Math.max(0, Math.round(value)), max);
+    const prevLimit = typeTraceLimit[type] ?? max;
+
+    if (clamped === 0) {
+      typeTraceLimitCacheRef.current[type] = prevLimit;
+      setTypeVisibility(prev => (prev[type] === false ? prev : { ...prev, [type]: false }));
+    }
+
+    if (clamped > 0) {
+      setTypeVisibility(prev => ({ ...prev, [type]: true }));
+    }
+
+    setTypeTraceLimit(prev => ({ ...prev, [type]: clamped }));
+  };
+
+  useEffect(() => {
+    if (Object.keys(typeTraceMax).length === 0) return;
+    setTypeTraceLimit((prev) => {
+      const next: Record<string, number> = { ...prev };
+      let changed = false;
+      Object.entries(typeTraceMax).forEach(([type, max]) => {
+        const current = prev[type];
+        const desired = current === undefined ? max : Math.min(Math.max(0, current), max);
+        if (desired !== current) {
+          next[type] = desired;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [typeTraceMax]);
 
   return (
     <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
@@ -516,38 +607,72 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
             </div>
             {!legendCollapsed && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {Object.entries(typeColors).map(([type, color]) => (
-                  <div
-                    key={type}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span
-                        aria-hidden
+                {Object.entries(typeColors).map(([type, color]) => {
+                  const max = typeTraceMax[type] ?? 0;
+                  const resolvedLimit = typeTraceLimit[type] ?? max;
+                  const clampedLimit = Math.min(Math.max(0, resolvedLimit), max);
+                  const isVisible = typeVisibility[type] !== false;
+                  const sliderDisabled = typeAvailability[type] !== true || max <= 0;
+                  const sliderValue = clampedLimit;
+
+                  return (
+                    <div
+                      key={type}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 4,
+                        paddingBottom: 6,
+                        borderBottom: '1px solid #E2E8F0',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span
+                            aria-hidden
+                            style={{
+                              display: 'inline-block',
+                              width: 18,
+                              height: 18,
+                              borderRadius: '50%',
+                              background: color,
+                              border: '1px solid rgba(15, 23, 42, 0.12)',
+                              boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                            }}
+                          />
+                          <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
+                        </div>
+                        <Switch
+                          checked={typeVisibility[type] !== false}
+                          disabled={typeAvailability[type] !== true}
+                          onCheckedChange={(checked) => handleTypeToggle(type, checked)}
+                        />
+                      </div>
+                      <div
                         style={{
-                          display: 'inline-block',
-                          width: 18,
-                          height: 18,
-                          borderRadius: '50%',
-                          background: color,
-                          border: '1px solid rgba(15, 23, 42, 0.12)',
-                          boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          opacity: typeAvailability[type] ? (isVisible ? 1 : 0.7) : 0.5,
                         }}
-                      />
-                      <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
+                      >
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <Slider
+                            min={0}
+                            max={max}
+                            step={1}
+                            value={[sliderValue]}
+                            onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
+                            disabled={sliderDisabled}
+                          />
+                          <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
+                            {sliderValue}/{max} traces
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <Switch
-                      checked={typeVisibility[type] !== false}
-                      disabled={typeAvailability[type] !== true}
-                      onCheckedChange={(checked) => handleTypeToggle(type, checked)}
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
