@@ -1,5 +1,5 @@
 // Upload a file for the logged-in user
-export async function uploadFile(file, token) {
+export async function uploadFile(file: File, token: string) {
   const formData = new FormData();
   formData.append("file", file);
 
@@ -22,7 +22,7 @@ export async function uploadFile(file, token) {
 }
 
 // Fetch the list of files for the logged-in user
-export async function getUserFiles(token) {
+export async function getUserFiles(token: string) {
   const response = await fetch("http://localhost:8000/api/files/", {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -43,7 +43,7 @@ export async function getUserFiles(token) {
 }
 
 
-export async function processFile(token, fileId) {
+export async function processFile(token: string, fileId: string) {
   const response = await fetch(`http://localhost:8000/api/files/${fileId}/NoE/`, {
     method: "GET", // since our Django @action uses GET
     headers: {
@@ -61,3 +61,4 @@ export async function processFile(token, fileId) {
 
   return await response.json();
 }
+

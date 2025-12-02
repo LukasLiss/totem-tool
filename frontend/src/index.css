@@ -80,3 +80,53 @@ html, body, #root {
   }
 
 }
+
+:root {
+  --ocdfg-flow-length: 60;
+}
+
+@keyframes ocdfg-flow {
+  0% {
+    stroke-dashoffset: var(--ocdfg-flow-length);
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.ocdfg-controls.react-flow__controls {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+}
+
+.ocdfg-controls .react-flow__controls-button {
+  border: none;
+  background: transparent;
+  color: #0f172a;
+  height: 46px;
+  width: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.ocdfg-controls .react-flow__controls-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ocdfg-controls .react-flow__controls-button + .react-flow__controls-button {
+  border-top: 1px solid #e2e8f0;
+}
+
+.ocdfg-controls .react-flow__controls-button:hover {
+  background-color: #f1f5f9;
+}
+
+.ocdfg-controls .react-flow__controls-button:active {
+  background-color: #e2e8f0;
+}

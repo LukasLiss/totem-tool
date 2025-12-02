@@ -12,6 +12,8 @@ from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import discover_oc_petri_net_polars
 from .utils import ocpns_are_similar
 from .pm4py_adapter import convert_ocel_polars_to_pm4py
+from .ocdfg import OCDFG, CCDFG
+from .ocvariants import calculate_layout
 
 __all__ = [
     "ObjectCentricEventLog",
@@ -29,4 +31,6 @@ __all__ = [
     "discover_oc_petri_net_polars",
     "ocpns_are_similar",
     "convert_ocel_polars_to_pm4py",
+    "OCDFG",
+    "CCDFG",
 ]

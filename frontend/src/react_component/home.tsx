@@ -17,13 +17,23 @@ export const Home = () => {
           setMessage(data.message || 'Hello from Frontend + Backend!');
           setBackendStatus('✅ Connected');
           setIsLoading(false);
-          } catch (error) {
+          } catch (error: unknown) {
+          if (axios.isAxiosError(error)) {
+            // ✅ It's an AxiosError
+            setBackendStatus(`❌ Error: ${error.message}`);
+          } else if (error instanceof Error) {
+            // ✅ It's a general JS Error
+            setBackendStatus(`❌ Error: ${error.message}`);
+          } else {
+            // fallback
+            setBackendStatus('❌ Unknown error');
+          }
+
           console.error('Backend connection error:', error);
           setMessage('Hello from Frontend! (Backend not available)');
-          setBackendStatus(`❌ Error: ${error.message}`);
           setIsLoading(false);
         }
-    };
+            };
 
     // Try to connect immediately
     fetchBackendMessage();
@@ -36,29 +46,6 @@ export const Home = () => {
 
 
   }, []);
-  //handleFileSelect function for fileuploadbutton; placed here to improve reuseability
-  const [files, setFiles] = useState([]);
-
-  const handleFileSelect = async (file) => {
-  try {
-    const text = await file.text();       // read file as text
-    const data = JSON.parse(text);        // parse JSON
-
-    // Example: check required fields
-    if (!data.name || !data.age) {
-      alert("Invalid format: missing 'name' or 'age'");
-      return;
-    }
-
-    console.log("Valid file:", data);
-    // continue with upload or state update
-
-  } catch (err) {
-    console.error("Invalid JSON file:", err);
-    alert("Please upload a valid JSON file");
-  }
-};
-
 
   return (
     <div style={{ 

@@ -1,7 +1,5 @@
-import { StrictMode } from 'react'
-import React from 'react';
 import ReactDOM from 'react-dom/client';
-import {BrowserRouter, Routes, Route} from 'react-router-dom';
+import {BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './interceptors/axios';
 import './styles/custom.css';
@@ -15,3 +13,4 @@ root.render(
 
 
 );
+
