@@ -20,7 +20,8 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pytest
-        pip install -r totem_lib/requirements_github_actions.txt
+        sed -i '/totem_lib/d' totem_lib/requirements.txt
+        pip install -r totem_lib/requirements.txt
         pip install -e totem_lib
     - name: Test with pytest
       working-directory: ./totem_lib
@@ -37,7 +38,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r totem_lib/requirements_github_actions.txt
+        sed -i '/totem_lib/d' totem_lib/requirements.txt
+        pip install -r totem_lib/requirements.txt
         pip install -e totem_lib
         pip install -r backend/requirements.txt
     - name: Run Django tests
