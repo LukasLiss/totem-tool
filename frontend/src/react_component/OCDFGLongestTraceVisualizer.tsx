@@ -35,7 +35,7 @@ interface DfgData {
   };
 }
 
-interface OCDFGVisualizerProps {
+interface OCDFGLongestTraceVisualizerProps {
   height?: string | number;
 }
 
@@ -43,8 +43,8 @@ function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
 }
 
-function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps) {
-  console.log('[OCDFGVisualizer] Longest Trace Mode - Component mounted!');
+function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLongestTraceVisualizerProps) {
+  console.log('[OCDFGLongestTraceVisualizer] Component mounted!');
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -192,7 +192,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
 
         const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
 
-        // Create standard React Flow nodes
+        // Create standard React Flow nodes (no custom types)
         const initialNodes: Node[] = dfgNodes.map((node) => {
           const isStart = (incomingCounts[node.id] ?? 0) === 0;
           const isEnd = !isStart && (outgoingCounts[node.id] ?? 0) === 0;
@@ -307,9 +307,9 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
               targetVariant: nodeVariantMap[link.target],
               frequency: frequencies[index],
               frequencyNormalized: normalizedValues[index],
-              thicknessFactor: thicknessFactors[index],
-            },
-          } as Edge;
+            thicknessFactor: thicknessFactors[index],
+          },
+        } as Edge;
         });
 
         setRawNodes(initialNodes);
@@ -733,4 +733,4 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   );
 }
 
-export default OCDFGVisualizer;
+export default OCDFGLongestTraceVisualizer;

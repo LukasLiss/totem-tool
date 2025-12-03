@@ -25,6 +25,29 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
   style,
 }: NodeProps<DefaultNodeData>) {
   const label = useMemo(() => (data?.label ?? '').trim(), [data?.label]);
+  const colors = useMemo(
+    () => ((data?.colors as Record<string, string> | undefined) ?? {}),
+    [data?.colors],
+  );
+  const nodeTypes = useMemo(
+    () => Array.isArray((data as any)?.types)
+      ? ((data as any).types as unknown[])
+        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+      : [],
+    [data],
+  );
+  const typeOrder = useMemo(() => {
+    const explicit = Array.isArray((data as any)?.typeOrder)
+      ? ((data as any).typeOrder as unknown[])
+        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+      : [];
+    if (explicit.length > 0) return explicit;
+    return Object.keys(colors).sort();
+  }, [data, colors]);
+  const visibleTypes = useMemo(() => {
+    if (typeOrder.length === 0) return nodeTypes;
+    return typeOrder.filter((t) => nodeTypes.includes(t));
+  }, [typeOrder, nodeTypes]);
   const baseStyle = useMemo(
     () => ({
       ...(style ?? {}),
@@ -33,6 +56,8 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
       alignItems: 'center',
       justifyContent: 'center',
       textAlign: 'center' as const,
+      flexDirection: 'column' as const,
+      gap: 6,
     }),
     [style],
   );
@@ -60,6 +85,39 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
       >
         {label}
       </span>
+      {visibleTypes.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 6,
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexWrap: 'wrap',
+            zIndex: 1,
+          }}
+        >
+          {visibleTypes.map((type) => {
+            const isMember = nodeTypes.includes(type);
+            const color = colors[type] ?? '#CBD5E1';
+            const size = 14;
+            const thickness = 2;
+            return (
+              <div
+                key={type}
+                title={type}
+                style={{
+                  width: size,
+                  height: size,
+                  borderRadius: '50%',
+                  border: `${thickness}px solid ${color}`,
+                  background: isMember ? color : 'transparent',
+                  boxSizing: 'border-box',
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 });
