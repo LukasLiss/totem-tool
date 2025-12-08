@@ -3,12 +3,14 @@
 
 import pytest
 
+
 def test_example():
     """
     An example test function.
     This is a placeholder and should be replaced with actual tests.
     """
     assert True, "This is a simple assertion to ensure the test setup is working."
+
 
 # Example of how you might structure a test for a function from totem.py
 # from totem_lib.totem import your_function_name
@@ -22,4 +24,3 @@ def test_example():
 #
 #     # Assertion: Check if the output is what you expect
 #     # assert result == "expected_output"
-

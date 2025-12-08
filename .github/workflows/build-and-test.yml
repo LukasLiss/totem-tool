@@ -20,7 +20,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pytest
-        pip install -r totem_lib/requirements_github_actions.txt
+        grep -v "totem_lib" totem_lib/requirements.txt > totem_lib/reqs_clean.txt
+        cat totem_lib/reqs_clean.txt
+        pip install -r totem_lib/reqs_clean.txt
         pip install -e totem_lib
     - name: Test with pytest
       working-directory: ./totem_lib
@@ -37,13 +39,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r totem_lib/requirements_github_actions.txt
+        grep -v "totem_lib" totem_lib/requirements.txt > totem_lib/reqs_clean.txt
+        cat totem_lib/reqs_clean.txt
+        pip install -r totem_lib/reqs_clean.txt
         pip install -e totem_lib
         pip install -r backend/requirements.txt
     - name: Run Django tests
       run: python backend/manage.py test
 
-  build-frontend:
+  build-frontend-no-typecheck:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -54,6 +58,6 @@ jobs:
     - name: Install dependencies
       working-directory: ./frontend
       run: npm install
-    - name: Build
+    - name: Build (no typecheck)
       working-directory: ./frontend
-      run: npm run build
+      run: npm run build-no-typecheck

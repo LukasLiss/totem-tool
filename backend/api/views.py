@@ -35,6 +35,11 @@ def greeting(request):
     
     return Response({"message": "Hello, greetings from the backend!"})
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def health_check(request):
+    return Response({"status": "ok", "message": "Backend is running."})
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]

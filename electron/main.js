@@ -3,9 +3,11 @@ const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const express = require('express');
 
 let mainWindow;
 let backendProcess;
+let frontendServer;
 const isDev = process.env.NODE_ENV === 'development';
 
 function createWindow() {
@@ -25,11 +27,9 @@ function createWindow() {
     // Open DevTools in development
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, load from built React app in local resources
-    const frontendPath = path.join(__dirname, 'resources', 'frontend-build', 'index.html');
-    console.log('Production mode: Loading from', frontendPath);
-    console.log('File exists:', fs.existsSync(frontendPath));
-    mainWindow.loadFile(frontendPath);
+    // In production, load from local frontend server
+    console.log('Production mode: Loading from http://localhost:5000');
+    mainWindow.loadURL('http://localhost:5000');
   }
 
   // Add error handling for failed loads
@@ -44,7 +44,7 @@ function createWindow() {
 
 function checkBackendRunning() {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:8000/api/greeting/', (res) => {
+    const req = http.get('http://localhost:8000/api/health-check/', (res) => {
       console.log('Backend already running on port 8000');
       resolve(true);
     });
@@ -79,8 +79,9 @@ function startBackend() {
       pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python');
     } else {
       // In production, backend is in local resources
-      backendPath = path.join(__dirname, 'resources', 'backend');
-      pythonCommand = 'python'; // Assume python is in PATH for production
+      const appPath = app.getAppPath();
+      backendPath = path.join(appPath, '..', 'backend');
+      pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
     }
     
     console.log('Starting Django backend...');
@@ -105,12 +106,53 @@ function startBackend() {
       console.error('Failed to start backend:', error);
       resolve(); // Continue anyway, maybe backend is running elsewhere
     });
+
+    backendProcess.on('exit', (code) => {
+      console.log(`Backend process exited with code ${code}`);
+    });
+  });
+}
+
+function startFrontendServer() {
+  return new Promise((resolve) => {
+    if (isDev) {
+      resolve();
+      return;
+    }
+
+    const expressApp = express();
+    const frontendPath = path.join(app.getAppPath(), '..', '..', 'frontend-build');
+    
+    console.log('Serving frontend from:', frontendPath);
+
+    // Serve static files
+    expressApp.use(express.static(frontendPath));
+
+    // SPA fallback: redirect all requests to index.html for client-side routing
+    expressApp.use((req, res) => {
+      res.sendFile(path.join(frontendPath, 'index.html'));
+    });
+
+    frontendServer = expressApp.listen(5000, () => {
+      console.log('Frontend server running on http://localhost:5000');
+      resolve();
+    });
+
+    frontendServer.on('error', (error) => {
+      console.error('Frontend server error:', error);
+      resolve(); // Continue anyway
+    });
   });
 }
 
 app.whenReady().then(async () => {
   console.log('Starting backend...');
   await startBackend();
+  
+  if (!isDev) {
+    console.log('Starting frontend server...');
+    await startFrontendServer();
+  }
   
   console.log('Creating window...');
   createWindow();
@@ -123,9 +165,13 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  // Only kill backend if we started it (not in development mode)
+  // Kill backend if we started it (not in development mode)
   if (backendProcess && !isDev) {
-    backendProcess.kill();
+      backendProcess.kill();
+  }
+  // Kill frontend server if it's running
+  if (frontendServer && !isDev) {
+      frontendServer.close();
   }
   if (process.platform !== 'darwin') {
     app.quit();
@@ -133,8 +179,12 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  // Only kill backend if we started it (not in development mode)
+  // Kill backend if we started it (not in development mode)
   if (backendProcess && !isDev) {
-    backendProcess.kill();
+      backendProcess.kill();
+  }
+  // Kill frontend server if it's running
+  if (frontendServer && !isDev) {
+      frontendServer.close();
   }
 });
