@@ -90,8 +90,8 @@ function startFrontendServer() {
   
   return new Promise((resolve) => {
     const expressApp = express();
-    // In prod, frontend is in resources/frontend-build
-    const frontendPath = path.join(process.resourcesPath, 'frontend-build');
+    // In prod, frontend is in resources/app/resources/frontend-build
+    const frontendPath = path.join(process.resourcesPath, '/app/resources/frontend-build');
     
     expressApp.use(express.static(frontendPath));
     expressApp.use((req, res) => res.sendFile(path.join(frontendPath, 'index.html')));
