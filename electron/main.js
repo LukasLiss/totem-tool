@@ -1,190 +1,153 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
-const fs = require('fs');
 const http = require('http');
 const express = require('express');
+const treeKill = require('tree-kill'); // Run: npm install tree-kill
 
 let mainWindow;
-let backendProcess;
-let frontendServer;
+let backendProcess = null;
+let frontendServer = null;
 const isDev = process.env.NODE_ENV === 'development';
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
+// 1. ROBUST BACKEND SPAWNER
+function startBackend() {
+  return new Promise(async (resolve, reject) => {
+    // Check if port 8000 is taken (backend might be running externally)
+    const isRunning = await checkBackendHealth();
+    if (isRunning) {
+      console.log('Backend found running independently.');
+      resolve();
+      return;
     }
-  });
 
-  if (isDev) {
-    // In development, load from development server
-    console.log('Development mode: Loading from http://localhost:3000');
-    mainWindow.loadURL('http://localhost:3000');
-    // Open DevTools in development
-    mainWindow.webContents.openDevTools();
-  } else {
-    // In production, load from local frontend server
-    console.log('Production mode: Loading from http://localhost:5000');
-    mainWindow.loadURL('http://localhost:5000');
-  }
+    let executable;
+    let args = [];
+    let cwd;
 
-  // Add error handling for failed loads
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    console.error('Failed to load:', errorCode, errorDescription, validatedURL);
-  });
+    if (isDev) {
+      // DEV: Use global/root python venv
+      // Adjust this path to point to your ROOT .venv
+      executable = path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
+      // Point to manage.py in the backend folder
+      const scriptPath = path.join(__dirname, '..', 'backend', 'manage.py');
+      args = [scriptPath, 'runserver', '8000', '--noreload'];
+      cwd = path.join(__dirname, '..', 'backend');
+    } else {
+      // PROD: Use the compiled EXE inside resources
+      // process.resourcesPath points to the 'resources' folder in the installed app
+      const backendDir = path.join(process.resourcesPath, 'backend');
+      executable = path.join(backendDir, 'totem_backend.exe');
+      
+      // The EXE handles 'runserver' internally if you configured your spec entry point correctly, 
+      // otherwise pass the args your exe expects.
+      args = ['runserver', '8000', '--noreload']; 
+      cwd = backendDir;
+    }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+    console.log(`Spawning Backend: ${executable} ${args.join(' ')}`);
+
+    backendProcess = spawn(executable, args, {
+      cwd: cwd,
+      shell: false, // CRITICAL: Keep false to allow direct signal handling
+      stdio: 'pipe'
+    });
+
+    backendProcess.stdout.on('data', (data) => {
+      console.log(`[Backend]: ${data}`);
+      // Resolve promise when Django says it's ready
+      if (data.toString().includes('Starting development server') || data.toString().includes('Quit the server')) {
+        resolve();
+      }
+    });
+
+    backendProcess.stderr.on('data', (data) => console.error(`[Backend Error]: ${data}`));
+    
+    backendProcess.on('error', (err) => {
+      console.error('Failed to start backend:', err);
+      reject(err);
+    });
   });
 }
 
-function checkBackendRunning() {
+// 2. HEALTH CHECK HELPER
+function checkBackendHealth() {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:8000/api/health-check/', (res) => {
-      console.log('Backend already running on port 8000');
+    const req = http.get('http://127.0.0.1:8000/api/health-check/', (res) => {
       resolve(true);
     });
-    
-    req.on('error', () => {
-      console.log('Backend not running, will start it');
-      resolve(false);
-    });
-    
-    req.setTimeout(2000, () => {
+    req.on('error', () => resolve(false));
+    req.setTimeout(1000, () => {
       req.destroy();
       resolve(false);
     });
   });
 }
 
-function startBackend() {
-  return new Promise(async (resolve) => {
-    // Check if backend is already running
-    const isRunning = await checkBackendRunning();
-    if (isRunning) {
-      resolve();
-      return;
-    }
-
-    let backendPath;
-    let pythonCommand;
-    
-    if (isDev) {
-      backendPath = path.join(__dirname, '..', 'backend');
-      // Use virtual environment python in development
-      pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python');
-    } else {
-      // In production, backend is in local resources
-      const appPath = app.getAppPath();
-      backendPath = path.join(appPath, '..', 'backend');
-      pythonCommand = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
-    }
-    
-    console.log('Starting Django backend...');
-    // Start Django development server
-    backendProcess = spawn(pythonCommand, ['manage.py', 'runserver', '8000'], {
-      cwd: backendPath,
-      stdio: 'pipe'
-    });
-
-    backendProcess.stdout.on('data', (data) => {
-      console.log(`Backend: ${data}`);
-      if (data.toString().includes('Starting development server')) {
-        resolve();
-      }
-    });
-
-    backendProcess.stderr.on('data', (data) => {
-      console.error(`Backend Error: ${data}`);
-    });
-
-    backendProcess.on('error', (error) => {
-      console.error('Failed to start backend:', error);
-      resolve(); // Continue anyway, maybe backend is running elsewhere
-    });
-
-    backendProcess.on('exit', (code) => {
-      console.log(`Backend process exited with code ${code}`);
-    });
-  });
-}
-
+// 3. FRONTEND SERVER (Express is fine, but consider serving file:// in prod)
 function startFrontendServer() {
+  if (isDev) return Promise.resolve();
+  
   return new Promise((resolve) => {
-    if (isDev) {
-      resolve();
-      return;
-    }
-
     const expressApp = express();
-    const frontendPath = path.join(app.getAppPath(), '..', '..', 'frontend-build');
+    // In prod, frontend is in resources/frontend-build
+    const frontendPath = path.join(process.resourcesPath, 'frontend-build');
     
-    console.log('Serving frontend from:', frontendPath);
-
-    // Serve static files
     expressApp.use(express.static(frontendPath));
-
-    // SPA fallback: redirect all requests to index.html for client-side routing
-    expressApp.use((req, res) => {
-      res.sendFile(path.join(frontendPath, 'index.html'));
-    });
-
-    frontendServer = expressApp.listen(5000, () => {
-      console.log('Frontend server running on http://localhost:5000');
+    expressApp.use((req, res) => res.sendFile(path.join(frontendPath, 'index.html')));
+    
+    frontendServer = expressApp.listen(5000, '127.0.0.1', () => {
+      console.log('Frontend serving on port 5000');
       resolve();
-    });
-
-    frontendServer.on('error', (error) => {
-      console.error('Frontend server error:', error);
-      resolve(); // Continue anyway
     });
   });
 }
 
-app.whenReady().then(async () => {
-  console.log('Starting backend...');
-  await startBackend();
-  
-  if (!isDev) {
-    console.log('Starting frontend server...');
-    await startFrontendServer();
-  }
-  
-  console.log('Creating window...');
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js') // Optional but recommended
     }
   });
-});
 
-app.on('window-all-closed', () => {
-  // Kill backend if we started it (not in development mode)
-  if (backendProcess && !isDev) {
-      backendProcess.kill();
-  }
-  // Kill frontend server if it's running
-  if (frontendServer && !isDev) {
-      frontendServer.close();
-  }
-  if (process.platform !== 'darwin') {
+  const url = isDev ? 'http://localhost:3000' : 'http://localhost:5000';
+  mainWindow.loadURL(url);
+
+  if (isDev) mainWindow.webContents.openDevTools();
+}
+
+// 4. APP LIFECYCLE & CLEANUP
+app.whenReady().then(async () => {
+  try {
+    await startBackend();
+    await startFrontendServer();
+    createWindow();
+  } catch (e) {
+    console.error('Startup failed:', e);
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
-  // Kill backend if we started it (not in development mode)
-  if (backendProcess && !isDev) {
-      backendProcess.kill();
+// CRITICAL: Robust cleanup
+app.on('before-quit', (e) => {
+  // We intercept the quit to ensure child processes are dead
+  if (backendProcess && !backendProcess.killed) {
+    console.log('Killing backend process tree...');
+    e.preventDefault(); // Delay quit
+    
+    // tree-kill ensures subprocesses (like Django spawns) die too
+    treeKill(backendProcess.pid, 'SIGKILL', (err) => {
+      backendProcess = null;
+      if (frontendServer) frontendServer.close();
+      app.exit(); // Force exit now that we are clean
+    });
   }
-  // Kill frontend server if it's running
-  if (frontendServer && !isDev) {
-      frontendServer.close();
-  }
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
 });
