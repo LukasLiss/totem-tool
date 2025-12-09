@@ -101,6 +101,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+!totem_backend.spec
 
 # Unit test / coverage reports
 htmlcov/
