@@ -22,7 +22,8 @@
     "build-all": "npm run build-backend && npm run db:migrate && npm run db:seed && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && cd electron && npm run build-win",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
     "electron-dev": "concurrently \"npm run start-backend\" \"wait-on http://localhost:8000 && npm run start-frontend\" \"wait-on http://localhost:3000 && npm run start-electron\"",
-    "electron-dev-mac": "concurrently \"npm run start-backend-mac\" \"npm run start-frontend\" \"wait-on http://localhost:3000 --delay 1000 && npm run start-electron\""
+    "electron-dev-mac": "concurrently \"npm run start-backend-mac\" \"npm run start-frontend\" \"wait-on http://localhost:3000 --delay 1000 && npm run start-electron\"",
+    "setup-env": "node ./scripts/setup-env.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
