@@ -12,6 +12,48 @@
   border-radius: .25rem;
 }
 
+/* 1. Make sure the shadcn sidebar is visually on top */
+[data-sidebar="sidebar"] {
+  position: relative;
+  z-index: 1000; /* above gridstack */
+}
+body.sidebar-open .gridstack-container {
+  background: red !important;
+}
+[data-side="right"] [data-slot="sidebar-gap"] {
+  width: 0 !important;
+}
+/* 2. When the sidebar is open, disable interaction on the grid */
+/* Shift the grid to the right when sidebar is open */
+body.sidebar-open .gridstack-container {
+  margin-right: 400px;
+  transition: margin-left 0.25s ease;
+}
+
+body.sidebar-open .grid-stack {
+  margin-right: 400px;
+  transition: margin-left 0.25s ease;
+}
+
+/* Always keep the sidebar above */
+[data-sidebar="sidebar"] {
+  position: relative;
+  z-index: 2000;
+}
+
+
+/* 3. Sidebar (and its buttons) must remain clickable */
+[data-sidebar="sidebar"] {
+  pointer-events: auto;
+}
+
+body.sidebar-open .gridstack-container {
+  margin-right: var(--sidebar-width);
+  width: calc(100% - var(--sidebar-width));
+}
+.gridstack-container {
+  overflow: hidden;
+}
 a {
   text-decoration: none;
 }
@@ -20,6 +62,8 @@ h1 {
   font-size: 2.5rem;
   margin-bottom: .5rem;
 }
+
+
 
 .gridstack-sidebar {
   background: rgb(215, 243, 215);

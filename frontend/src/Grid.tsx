@@ -19,6 +19,7 @@ import type { ComponentDataType,
 import { DashboardContext } from "./contexts/DashboardContext";
 import { getLayout, saveLayout } from "./api/componentsApi";
 import { SaveGridButton } from "./components/save_grid_button";
+import { Trash,  CirclePlus} from "lucide-react";
 
 const CELL_HEIGHT = 40;
 const BREAKPOINTS = [
@@ -150,15 +151,17 @@ export function Grid() {
       <SidebarInset>
         <GridStackProvider initialOptions={initialLayout}>
           <GridStackRenderProvider>
-            <SidebarProvider>
-              <DnDSidebar />
-              <div className="flex flex-col flex-1 w-full">
-                <div className="gridstack-container flex-1">
-                  <SaveGridButton dashboardId={selectedDashboard} token={token}/>
-                  <GridStackRender componentMap={COMPONENT_MAP} />
-                </div>
+            <div className="sidepanel col-md-2 d-none d-md-block">
+              <div id="trash" className="sidepanel-item">
+                <Trash />
+                <div>Drop here to remove!</div>
               </div>
-            </SidebarProvider>
+              <div className="grid-stack-item sidepanel-item">
+                <CirclePlus />
+                <div>Drag me in the dashboard!</div>
+              </div>
+            </div>
+
           </GridStackRenderProvider>
         </GridStackProvider>
       </SidebarInset>

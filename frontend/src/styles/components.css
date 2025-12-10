@@ -1,0 +1,13 @@
+.TextComponentButton{
+    color: white;
+    font-size: large;
+    
+    background-image: url(../images/adgu8l.jpg) !important;
+    background-size: contain;
+    background-repeat: no-repeat !important;
+    background-position: center;
+    height: 150px;
+    border: 20px;
+    border-radius: 5px;
+}
+

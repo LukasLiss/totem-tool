@@ -10,7 +10,7 @@ import { ProcessOverview } from "./ProcessOverview_new";
 import { DashboardProvider } from "./contexts/DashboardContext";
 import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
-import { Grid } from './Grid';
+import  Grid from './Grid_new';
 
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);

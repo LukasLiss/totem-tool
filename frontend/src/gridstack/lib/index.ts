@@ -1,5 +1,5 @@
 // Runtime imports (real JS values)
-import { GridStackProvider } from "./grid-stack-provider";
+import { GridStackProvider } from "./grid-stack-provider_old";
 import { GridStackRenderProvider } from "./grid-stack-render-provider";
 import { GridStackRender } from "./grid-stack-render";
 import { useGridStackContext } from "./grid-stack-context";
