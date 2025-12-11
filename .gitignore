@@ -5,6 +5,7 @@ tests
 totem_lib/src/totem_lib/old_ocvariants.py
 totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
+.gitignore
 
 # Reinclude totem_lib tests
 !totem_lib/tests/
