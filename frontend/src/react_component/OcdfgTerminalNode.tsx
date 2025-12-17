@@ -9,6 +9,8 @@ type TerminalNodeData = {
   fillColor: string;
   nodeVariant: TerminalVariant;
   types?: string[];
+  layoutDirection?: 'TB' | 'LR';
+  sizePreset?: 'terminal' | 'terminal-min';
 };
 
 const BASE_SIZE = 80;
@@ -75,6 +77,9 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
   const label = data?.label ?? 'Terminal';
   const fillColor = data?.fillColor ?? '#1D4ED8';
   const variant: TerminalVariant = data?.nodeVariant === 'end' ? 'end' : 'start';
+  const sizePreset = data?.sizePreset ?? 'terminal';
+  const isMinimal = sizePreset === 'terminal-min';
+  const showLabel = !isMinimal;
 
   const textColor = useMemo(() => getReadableColor(fillColor), [fillColor]);
   const {
@@ -82,26 +87,29 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
     height: rawHeight,
     ...styleRest
   } = (style ?? {}) as CSSProperties;
+  const minimalFallback = 36;
   const resolvedWidth = (typeof nodeWidth === 'number' && Number.isFinite(nodeWidth))
     ? nodeWidth
-    : resolveNumericDimension(rawWidth) ?? BASE_SIZE;
+    : resolveNumericDimension(rawWidth) ?? (isMinimal ? minimalFallback : BASE_SIZE);
   const resolvedHeight = (typeof nodeHeight === 'number' && Number.isFinite(nodeHeight))
     ? nodeHeight
-    : resolveNumericDimension(rawHeight) ?? BASE_SIZE;
+    : resolveNumericDimension(rawHeight) ?? (isMinimal ? minimalFallback : BASE_SIZE);
   const effectiveSize = Math.max(4, Math.min(resolvedWidth, resolvedHeight));
   const scale = Math.max(0.2, Math.min(effectiveSize / BASE_SIZE, 2));
-  const paddingY = Math.max(4, 14 * scale);
-  const paddingX = Math.max(4, 10 * scale);
-  const gap = Math.max(2, 8 * scale);
-  const borderRadius = Math.max(6, 18 * scale);
-  const indicatorSize = Math.max(6, 18 * scale);
-  const indicatorRadius = Math.max(3, 6 * scale);
-  const triangleHeight = Math.max(5, 11 * scale);
-  const triangleWidth = Math.max(6, 18 * scale);
-  const fontSize = Math.max(9, 11 * scale);
-  const boxShadowY = 14 * scale;
-  const boxShadowBlur = 24 * Math.max(scale, 0.35);
-  const borderWidth = Math.max(1, 1.1 * scale);
+  const paddingY = isMinimal ? 4 : Math.max(4, 14 * scale);
+  const paddingX = isMinimal ? 4 : Math.max(4, 10 * scale);
+  const gap = isMinimal ? 0 : Math.max(2, 8 * scale);
+  const borderRadius = isMinimal ? 10 : Math.max(6, 18 * scale);
+  const symbolMax = isMinimal ? 24 : 30;
+  const symbolBase = Math.min(effectiveSize * 0.65, symbolMax);
+  const indicatorSize = Math.max(isMinimal ? 10 : 12, symbolBase);
+  const indicatorRadius = Math.min(indicatorSize / 2, isMinimal ? 9 : 10);
+  const triangleHeight = Math.min(Math.max(6, effectiveSize * 0.38), isMinimal ? 14 : 18);
+  const triangleWidth = Math.min(Math.max(8, effectiveSize * 0.55), isMinimal ? 20 : 28);
+  const fontSize = isMinimal ? 0 : Math.max(9, 11 * scale);
+  const boxShadowY = isMinimal ? 4 * scale : 14 * scale;
+  const boxShadowBlur = isMinimal ? 10 * Math.max(scale, 0.35) : 24 * Math.max(scale, 0.35);
+  const borderWidth = isMinimal ? 0 : Math.max(1, 1.1 * scale);
 
   const containerStyle: CSSProperties = {
     width: resolvedWidth,
@@ -161,37 +169,39 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
       {variant !== 'start' && (
         <Handle
           type="target"
-          position={Position.Top}
+          position={(data?.layoutDirection ?? 'TB') === 'LR' ? Position.Left : Position.Top}
           style={handleStyle}
         />
       )}
       {variant !== 'end' && (
         <Handle
           type="source"
-          position={Position.Bottom}
+          position={(data?.layoutDirection ?? 'TB') === 'LR' ? Position.Right : Position.Bottom}
           style={handleStyle}
         />
       )}
       {indicator}
-      <span
-        style={{
-          color: textColor,
-          fontSize,
-          fontWeight: 600,
-          letterSpacing: '-0.015em',
-          textAlign: 'center',
-          lineHeight: 1.2,
-          maxWidth: '100%',
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          position: 'relative',
-          zIndex: 1,
-        }}
-      >
-        {label}
-      </span>
+      {showLabel && (
+        <span
+          style={{
+            color: textColor,
+            fontSize,
+            fontWeight: 600,
+            letterSpacing: '-0.015em',
+            textAlign: 'center',
+            lineHeight: 1.2,
+            maxWidth: '100%',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            position: 'relative',
+            zIndex: 1,
+          }}
+        >
+          {label}
+        </span>
+      )}
     </div>
   );
 });

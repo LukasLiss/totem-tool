@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import {
   ReactFlow,
   useReactFlow,
@@ -26,25 +26,217 @@ import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-reac
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
+type LayoutDirection = 'TB' | 'LR';
+
+const VARIANT_PRESETS = {
+  full: {
+    nodeWidth: 180,
+    minHeightBase: 60,
+    padding: 64,
+    terminalSize: 80,
+    nodePadding: 14,
+    fontSize: 16,
+  },
+  canvas: {
+    nodeWidth: 180,
+    minHeightBase: 60,
+    padding: 48,
+    terminalSize: 80,
+    nodePadding: 14,
+    fontSize: 16,
+  },
+  detail: {
+    nodeWidth: 110,
+    minHeightBase: 44,
+    padding: 20,
+    terminalSize: 40,
+    nodePadding: 8,
+    fontSize: 12,
+  },
+} as const;
 
 // Define specific types for the data we expect from the backend
+export type OcdfgGraph = {
+  nodes: DfgNode[];
+  links: DfgLink[];
+};
+
 interface DfgData {
-  dfg: {
-    nodes: DfgNode[];
-    links: DfgLink[];
-  };
+  dfg: OcdfgGraph;
 }
 
 interface OCDFGVisualizerProps {
   height?: string | number;
+  data?: OcdfgGraph;
+  variant?: 'full' | 'canvas' | 'detail';
+  layoutDirection?: 'TB' | 'LR';
+  instanceId?: string;
+  typeColorOverrides?: Record<string, string>;
+  onSizeChange?: (size: { width: number; height: number }) => void;
 }
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
 }
 
-function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps) {
+function coerceNumeric(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = parseFloat(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  return undefined;
+}
+
+function measureGraphSize(
+  renderNodes: Node[],
+  padding: number,
+  fallbackWidth: number,
+  fallbackHeight: number,
+) {
+  const visible = renderNodes.filter(
+    (node) =>
+      node.hidden !== true &&
+      node.position &&
+      Number.isFinite(node.position.x) &&
+      Number.isFinite(node.position.y),
+  );
+
+  if (visible.length === 0) {
+    return null;
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  visible.forEach((node) => {
+    const x = coerceNumeric(node.position?.x) ?? 0;
+    const y = coerceNumeric(node.position?.y) ?? 0;
+    const style = node.style as {
+      width?: unknown;
+      height?: unknown;
+      minWidth?: unknown;
+      minHeight?: unknown;
+    } | undefined;
+    const rawWidth =
+      coerceNumeric(node.width) ??
+      coerceNumeric(style?.width) ??
+      coerceNumeric(style?.minWidth) ??
+      fallbackWidth;
+    const rawHeight =
+      coerceNumeric(node.height) ??
+      coerceNumeric(style?.height) ??
+      coerceNumeric(style?.minHeight) ??
+      fallbackHeight;
+    const width = Math.max(1, rawWidth);
+    const height = Math.max(1, rawHeight);
+
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + width);
+    maxY = Math.max(maxY, y + height);
+  });
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  const paddedWidth = Math.ceil(maxX - minX + padding * 2);
+  const paddedHeight = Math.ceil(maxY - minY + padding * 2);
+
+  return {
+    width: Math.max(fallbackWidth + padding * 2, paddedWidth),
+    height: Math.max(fallbackHeight + padding * 2, paddedHeight),
+  };
+}
+
+function transformLayoutDirection(
+  nodes: Node[],
+  edges: Edge[],
+  direction: LayoutDirection,
+): { nodes: Node[]; edges: Edge[] } {
+  if (direction !== 'LR') {
+    return { nodes, edges };
+  }
+
+  const positions = nodes
+    .map((node) => {
+      const x = coerceNumeric(node.position?.x) ?? 0;
+      const y = coerceNumeric(node.position?.y) ?? 0;
+      return { x, y };
+    })
+    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+
+  const minX = positions.length > 0 ? Math.min(...positions.map((p) => p.x)) : 0;
+  const minY = positions.length > 0 ? Math.min(...positions.map((p) => p.y)) : 0;
+
+  const swapPoint = (point?: { x?: number; y?: number }) => {
+    const x = coerceNumeric(point?.x) ?? 0;
+    const y = coerceNumeric(point?.y) ?? 0;
+    return {
+      x: y - minY,
+      y: x - minX,
+    };
+  };
+
+  const swapVector = (vector?: { x?: number; y?: number }) => {
+    const x = coerceNumeric(vector?.x) ?? 0;
+    const y = coerceNumeric(vector?.y) ?? 0;
+    return { x: y, y: x };
+  };
+
+  const transformedNodes = nodes.map((node) => {
+    const pos = swapPoint(node.position ?? { x: 0, y: 0 });
+    return {
+      ...node,
+      position: pos,
+    };
+  });
+
+  const transformedEdges = edges.map((edge) => {
+    const data = edge.data as {
+      polyline?: Array<{ x: number; y: number }>;
+      sourceAnchorOffset?: { x?: number; y?: number };
+      targetAnchorOffset?: { x?: number; y?: number };
+    } | undefined;
+    const swappedPolyline = data?.polyline?.map((pt) => swapPoint(pt));
+    const swappedSourceOffset = data?.sourceAnchorOffset
+      ? swapVector(data.sourceAnchorOffset)
+      : data?.sourceAnchorOffset;
+    const swappedTargetOffset = data?.targetAnchorOffset
+      ? swapVector(data.targetAnchorOffset)
+      : data?.targetAnchorOffset;
+    const nextData =
+      swappedPolyline || swappedSourceOffset || swappedTargetOffset
+        ? {
+            ...data,
+            polyline: swappedPolyline ?? data?.polyline,
+            sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
+            targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
+          }
+        : data;
+
+    return nextData ? { ...edge, data: nextData } : edge;
+  });
+
+  return { nodes: transformedNodes, edges: transformedEdges };
+}
+
+function OCDFGVisualizer({
+  height = 'calc(100vh - 50px)',
+  data,
+  variant = 'full',
+  layoutDirection = 'TB',
+  instanceId,
+  typeColorOverrides,
+  onSizeChange,
+}: OCDFGVisualizerProps) {
   console.log('[OCDFGVisualizer] Longest Trace Mode - Component mounted!');
+
+  const generatedInstanceId = useId();
+  const reactFlowId = instanceId ?? generatedInstanceId;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -64,7 +256,17 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
   const layoutTraceLimitRef = useRef<string | null>(null);
   const typeTraceLimitCacheRef = useRef<Record<string, number>>({});
-  const reactFlow = useReactFlow();
+  const resolvedVariant = variant ?? 'full';
+  const variantPreset = VARIANT_PRESETS[resolvedVariant] ?? VARIANT_PRESETS.full;
+  const paddingForSize = variantPreset.padding;
+  const fallbackNodeWidth = variantPreset.nodeWidth;
+  const fallbackNodeHeight = Math.max(variantPreset.minHeightBase, variantPreset.nodeWidth * 0.36);
+  const nodePadding = variantPreset.nodePadding;
+  const fontSize = variantPreset.fontSize;
+  const terminalSize = variantPreset.terminalSize;
+  const hideChrome = resolvedVariant !== 'full';
+  const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const reactFlow = useReactFlow({ id: reactFlowId } as any);
   const { fitView } = reactFlow;
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
   const nodeTypes = useMemo(
@@ -110,216 +312,306 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
     return presence;
   }
 
+  const stripDebugNodes = useCallback((nodeList: Node[]) => {
+    return nodeList.filter((node) => {
+      const id = typeof node.id === 'string' ? node.id : '';
+      const type = typeof node.type === 'string' ? node.type : '';
+      const data = (node.data as { isBuffer?: boolean; isDummy?: boolean } | undefined) ?? {};
+      if (id.startsWith('debug-')) return false;
+      if (type.startsWith('debug')) return false;
+      if (data.isBuffer || data.isDummy) return false;
+      return true;
+    });
+  }, []);
+
+  const reportGraphSize = useCallback(
+    (renderNodes: Node[]) => {
+      if (!onSizeChange) return;
+      const measured = measureGraphSize(renderNodes, paddingForSize, fallbackNodeWidth, fallbackNodeHeight);
+      if (!measured) return;
+      const previous = lastReportedSizeRef.current;
+      if (previous && previous.width === measured.width && previous.height === measured.height) {
+        return;
+      }
+      lastReportedSizeRef.current = measured;
+      onSizeChange(measured);
+    },
+    [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
+  );
+
   useEffect(() => {
+    if (data) {
+      setDfgData({
+        nodes: Array.isArray(data.nodes) ? data.nodes : [],
+        links: Array.isArray(data.links) ? data.links : [],
+      });
+      return;
+    }
+
+    let cancelled = false;
     fetch('http://127.0.0.1:8000/api/ocdfg/')
       .then((response) => response.json())
-      .then((data: DfgData) => {
-        const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
-        setDfgData({ nodes: dfgNodes, links: dfgLinks });
-
-        const allTypes = Array.from(
-          new Set(dfgNodes.flatMap(node => node.types ?? [])),
-        );
-        const ownersByType = new Map<string, Set<string>>();
-        dfgLinks.forEach((link) => {
-          (link.owners ?? []).forEach((owner) => {
-            const type = owner.split('_')[0];
-            if (!ownersByType.has(type)) ownersByType.set(type, new Set());
-            ownersByType.get(type)!.add(owner);
+      .then((payload: DfgData) => {
+        if (cancelled) return;
+        const graph = payload?.dfg;
+        if (graph) {
+          setDfgData({
+            nodes: Array.isArray(graph.nodes) ? graph.nodes : [],
+            links: Array.isArray(graph.links) ? graph.links : [],
           });
-        });
-        const initialTraceMax = Object.fromEntries(
-          allTypes.map((type) => [type, ownersByType.get(type)?.size ?? 0]),
-        );
-        setTypeTraceMax(initialTraceMax);
-        setTypeTraceLimit(initialTraceMax);
-        const colors = mapTypesToColors(allTypes);
-        setTypeColors(colors);
-        const initialAvailability = Object.fromEntries(allTypes.map(type => [type, true]));
-        setTypeAvailability(initialAvailability);
-        const initialVisibility = Object.fromEntries(allTypes.map(type => [type, true]));
-        setTypeVisibility(initialVisibility);
-        const groupCounts: Record<string, number> = {};
-        dfgLinks.forEach(link => {
-          const key = `${link.source}->${link.target}`;
-          groupCounts[key] = (groupCounts[key] ?? 0) + 1;
-        });
-        const groupIndex: Record<string, number> = {};
-        const incomingCounts: Record<string, number> = {};
-        const outgoingCounts: Record<string, number> = {};
-        dfgLinks.forEach(link => {
-          incomingCounts[link.target] = (incomingCounts[link.target] ?? 0) + 1;
-          outgoingCounts[link.source] = (outgoingCounts[link.source] ?? 0) + 1;
-        });
-
-        const resolveLinkFrequency = (link: DfgLink) => {
-          if (typeof link.weight === 'number' && Number.isFinite(link.weight)) {
-            return Math.max(0, link.weight);
-          }
-          if (link.weights && typeof link.weights === 'object') {
-            const total = Object.values(link.weights).reduce((sum: number, value) => {
-              if (typeof value === 'number' && Number.isFinite(value)) {
-                return sum + value;
-              }
-              return sum;
-            }, 0);
-            if (total > 0) {
-              return total;
-            }
-          }
-          if (Array.isArray(link.owners) && link.owners.length > 0) {
-            return link.owners.length;
-          }
-          return 1;
-        };
-
-        const frequencies = dfgLinks.map(resolveLinkFrequency);
-        const minFrequency = frequencies.length > 0 ? Math.min(...frequencies) : 1;
-        const maxFrequency = frequencies.length > 0 ? Math.max(...frequencies) : minFrequency;
-        const frequencySpan = Math.max(maxFrequency - minFrequency, 0);
-        const normalizedValues = frequencies.map((frequency) => {
-          if (!Number.isFinite(frequency) || frequencySpan < 1e-9) {
-            return 0;
-          }
-          return (frequency - minFrequency) / frequencySpan;
-        });
-        const thicknessFactors = normalizedValues.map((normalized) => {
-          const factor = DEFAULT_THICKNESS_MIN +
-            Math.min(1, Math.max(0, normalized)) *
-              (DEFAULT_THICKNESS_MAX - DEFAULT_THICKNESS_MIN);
-          return Math.min(DEFAULT_THICKNESS_MAX, Math.max(DEFAULT_THICKNESS_MIN, factor));
-        });
-
-        const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
-
-        // Create standard React Flow nodes
-        const initialNodes: Node[] = dfgNodes.map((node) => {
-          const isStart = (incomingCounts[node.id] ?? 0) === 0;
-          const isEnd = !isStart && (outgoingCounts[node.id] ?? 0) === 0;
-          const fillColor = (node.types?.[0] && colors[node.types[0]]) || '#2563EB';
-          const variant: 'start' | 'end' | 'center' = isStart ? 'start' : (isEnd ? 'end' : 'center');
-          const cleanLabel = (node.label || node.id || '').trim();
-          const approxLines = cleanLabel.length === 0
-            ? 1
-            : Math.max(1, Math.ceil(cleanLabel.length / 22));
-          const baseHeight = Math.max(60, approxLines * 22);
-          const minHeight = baseHeight + 0;
-          const sharedData = {
-            label: node.label || node.id,
-            types: node.types ?? [],
-            colors,
-            fillColor,
-            nodeVariant: variant,
-            isStart,
-          };
-          const terminalLabel = (node.types && node.types.length > 0)
-            ? node.types[0]
-            : (cleanLabel.replace(/\s+(start|end)$/i, '').trim() || node.id);
-
-          if (isStart) {
-            nodeVariantMap[node.id] = 'start';
-            return {
-              id: node.id,
-              type: 'ocdfgStart' as const,
-              data: { ...sharedData, label: terminalLabel, sizePreset: 'terminal' },
-              width: 80,
-              height: 80,
-              style: {
-                width: 80,
-                height: 80,
-                padding: 0,
-                border: 'none',
-                boxShadow: 'none',
-                background: 'transparent',
-              },
-              position: { x: 0, y: 0 },
-            };
-          }
-
-          if (isEnd) {
-            nodeVariantMap[node.id] = 'end';
-            return {
-              id: node.id,
-              type: 'ocdfgEnd' as const,
-              data: { ...sharedData, label: terminalLabel, sizePreset: 'terminal' },
-              width: 80,
-              height: 80,
-              style: {
-                width: 80,
-                height: 80,
-                padding: 0,
-                border: 'none',
-                boxShadow: 'none',
-                background: 'transparent',
-              },
-              position: { x: 0, y: 0 },
-            };
-          }
-
-          nodeVariantMap[node.id] = 'center';
-          return {
-            id: node.id,
-            type: 'ocdfgDefault' as const,
-            data: sharedData,
-            position: { x: 0, y: 0 },
-            style: {
-              background: '#FFFFFF',
-              color: '#000000',
-              border: '1px solid #000000',
-              borderRadius: 12,
-              padding: 14,
-              minHeight,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              fontWeight: 500,
-              letterSpacing: '-0.01em',
-              boxShadow: 'none',
-              minWidth: 180,
-            },
-          };
-        });
-
-        initialNodes.forEach((node) => {
-          const variant = (node.data as { nodeVariant?: 'start' | 'end' | 'center' } | undefined)?.nodeVariant;
-          if (variant === 'start' || variant === 'end' || variant === 'center') {
-            nodeVariantMap[node.id] = variant;
-          }
-        });
-
-        const initialEdges: Edge[] = dfgLinks.map((link, index) => {
-          const key = `${link.source}->${link.target}`;
-          const currentIndex = groupIndex[key] ?? 0;
-          groupIndex[key] = currentIndex + 1;
-          return {
-            id: `e${index}-${link.source}-${link.target}`,
-            source: link.source,
-            target: link.target,
-            type: 'ocdfg',
-            animated: true,
-            data: {
-              owners: link.owners ?? [],
-              colors,
-              parallelIndex: currentIndex,
-              parallelCount: groupCounts[key],
-              sourceVariant: nodeVariantMap[link.source],
-              targetVariant: nodeVariantMap[link.target],
-              frequency: frequencies[index],
-              frequencyNormalized: normalizedValues[index],
-              thicknessFactor: thicknessFactors[index],
-            },
-          } as Edge;
-        });
-
-        setRawNodes(initialNodes);
-        setRawEdges(initialEdges);
-        layoutActiveTypesRef.current = null;
-        initialAvailabilityRef.current = null;
-        layoutTraceLimitRef.current = null;
+        } else {
+          setDfgData({ nodes: [], links: [] });
+        }
       })
-      .catch(console.error);
-  }, [fitView]);
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('[OCDFGVisualizer] Failed to load OCDFG data', err);
+          setDfgData({ nodes: [], links: [] });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data]);
+
+  useEffect(() => {
+    if (!dfgData) {
+      lastReportedSizeRef.current = null;
+      setRawNodes([]);
+      setRawEdges([]);
+      setBaseNodes([]);
+      setBaseEdges([]);
+      setTypeColors({});
+      setTypeAvailability({});
+      setTypeVisibility({});
+      setTypeTraceLimit({});
+      setTypeTraceMax({});
+      typeTraceLimitCacheRef.current = {};
+      layoutActiveTypesRef.current = null;
+      layoutTraceLimitRef.current = null;
+      initialAvailabilityRef.current = null;
+      return;
+    }
+
+    lastReportedSizeRef.current = null;
+    const dfgNodes = Array.isArray(dfgData.nodes) ? dfgData.nodes : [];
+    const dfgLinks = Array.isArray(dfgData.links) ? dfgData.links : [];
+
+    const allTypes = Array.from(new Set(dfgNodes.flatMap((node) => node.types ?? [])));
+    const ownersByType = new Map<string, Set<string>>();
+    dfgLinks.forEach((link) => {
+      (link.owners ?? []).forEach((owner) => {
+        const type = owner.split('_')[0];
+        if (!ownersByType.has(type)) ownersByType.set(type, new Set());
+        ownersByType.get(type)!.add(owner);
+      });
+    });
+
+    const initialTraceMax = Object.fromEntries(
+      allTypes.map((type) => [type, ownersByType.get(type)?.size ?? 0]),
+    );
+    setTypeTraceMax(initialTraceMax);
+    setTypeTraceLimit(initialTraceMax);
+    const colors = mapTypesToColors(allTypes, typeColorOverrides);
+    setTypeColors(colors);
+    const initialAvailability = Object.fromEntries(allTypes.map((type) => [type, true]));
+    setTypeAvailability(initialAvailability);
+    const initialVisibility = Object.fromEntries(allTypes.map((type) => [type, true]));
+    setTypeVisibility(initialVisibility);
+    typeTraceLimitCacheRef.current = {};
+    layoutActiveTypesRef.current = null;
+    layoutTraceLimitRef.current = null;
+    initialAvailabilityRef.current = null;
+
+    const groupCounts: Record<string, number> = {};
+    dfgLinks.forEach((link) => {
+      const key = `${link.source}->${link.target}`;
+      groupCounts[key] = (groupCounts[key] ?? 0) + 1;
+    });
+    const groupIndex: Record<string, number> = {};
+    const incomingCounts: Record<string, number> = {};
+    const outgoingCounts: Record<string, number> = {};
+    dfgLinks.forEach((link) => {
+      incomingCounts[link.target] = (incomingCounts[link.target] ?? 0) + 1;
+      outgoingCounts[link.source] = (outgoingCounts[link.source] ?? 0) + 1;
+    });
+
+    const resolveLinkFrequency = (link: DfgLink) => {
+      if (typeof link.weight === 'number' && Number.isFinite(link.weight)) {
+        return Math.max(0, link.weight);
+      }
+      if (link.weights && typeof link.weights === 'object') {
+        const total = Object.values(link.weights).reduce((sum: number, value) => {
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            return sum + value;
+          }
+          return sum;
+        }, 0);
+        if (total > 0) {
+          return total;
+        }
+      }
+      if (Array.isArray(link.owners) && link.owners.length > 0) {
+        return link.owners.length;
+      }
+      return 1;
+    };
+
+    const frequencies = dfgLinks.map(resolveLinkFrequency);
+    const minFrequency = frequencies.length > 0 ? Math.min(...frequencies) : 1;
+    const maxFrequency = frequencies.length > 0 ? Math.max(...frequencies) : minFrequency;
+    const frequencySpan = Math.max(maxFrequency - minFrequency, 0);
+    const normalizedValues = frequencies.map((frequency) => {
+      if (!Number.isFinite(frequency) || frequencySpan < 1e-9) {
+        return 0;
+      }
+      return (frequency - minFrequency) / frequencySpan;
+    });
+    const thicknessFactors = normalizedValues.map((normalized) => {
+      const factor =
+        DEFAULT_THICKNESS_MIN +
+        Math.min(1, Math.max(0, normalized)) * (DEFAULT_THICKNESS_MAX - DEFAULT_THICKNESS_MIN);
+      return Math.min(DEFAULT_THICKNESS_MAX, Math.max(DEFAULT_THICKNESS_MIN, factor));
+    });
+
+    const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
+
+    // Create standard React Flow nodes
+    const initialNodes: Node[] = dfgNodes.map((node) => {
+      const isStart = (incomingCounts[node.id] ?? 0) === 0;
+      const isEnd = !isStart && (outgoingCounts[node.id] ?? 0) === 0;
+      const fillColor = (node.types?.[0] && colors[node.types[0]]) || '#2563EB';
+      const variant: 'start' | 'end' | 'center' = isStart ? 'start' : isEnd ? 'end' : 'center';
+      const cleanLabel = (node.label || node.id || '').trim();
+      const approxLines =
+        cleanLabel.length === 0 ? 1 : Math.max(1, Math.ceil(cleanLabel.length / 22));
+      const baseHeight = Math.max(variantPreset.minHeightBase, approxLines * 20);
+      const minHeight = baseHeight + 0;
+      const sharedData = {
+        label: node.label || node.id,
+        types: node.types ?? [],
+        colors,
+        fillColor,
+        nodeVariant: variant,
+        isStart,
+        layoutDirection,
+      };
+      const terminalLabel =
+        node.types && node.types.length > 0
+          ? node.types[0]
+          : cleanLabel.replace(/\s+(start|end)$/i, '').trim() || node.id;
+
+      if (isStart) {
+        nodeVariantMap[node.id] = 'start';
+        return {
+          id: node.id,
+          type: 'ocdfgStart' as const,
+          data: {
+            ...sharedData,
+            label: terminalLabel,
+            sizePreset: resolvedVariant === 'detail' ? 'terminal-min' : 'terminal',
+          },
+          width: terminalSize,
+          height: terminalSize,
+          style: {
+            width: terminalSize,
+            height: terminalSize,
+            padding: 0,
+            border: 'none',
+            boxShadow: 'none',
+            background: 'transparent',
+          },
+          position: { x: 0, y: 0 },
+        };
+      }
+
+      if (isEnd) {
+        nodeVariantMap[node.id] = 'end';
+        return {
+          id: node.id,
+          type: 'ocdfgEnd' as const,
+          data: {
+            ...sharedData,
+            label: terminalLabel,
+            sizePreset: resolvedVariant === 'detail' ? 'terminal-min' : 'terminal',
+          },
+          width: terminalSize,
+          height: terminalSize,
+          style: {
+            width: terminalSize,
+            height: terminalSize,
+            padding: 0,
+            border: 'none',
+            boxShadow: 'none',
+            background: 'transparent',
+          },
+          position: { x: 0, y: 0 },
+        };
+      }
+
+      nodeVariantMap[node.id] = 'center';
+      return {
+        id: node.id,
+        type: 'ocdfgDefault' as const,
+        data: sharedData,
+        width: fallbackNodeWidth,
+        height: minHeight,
+        position: { x: 0, y: 0 },
+        style: {
+          background: '#FFFFFF',
+          color: '#000000',
+          border: '1px solid #000000',
+          borderRadius: 12,
+          padding: nodePadding,
+          minHeight,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'var(--font-primary, Inter, sans-serif)',
+          fontWeight: 500,
+          fontSize,
+          letterSpacing: '-0.01em',
+          boxShadow: 'none',
+          minWidth: fallbackNodeWidth,
+        },
+      };
+    });
+
+    initialNodes.forEach((node) => {
+      const variant = (node.data as { nodeVariant?: 'start' | 'end' | 'center' } | undefined)?.nodeVariant;
+      if (variant === 'start' || variant === 'end' || variant === 'center') {
+        nodeVariantMap[node.id] = variant;
+      }
+    });
+
+    const initialEdges: Edge[] = dfgLinks.map((link, index) => {
+      const key = `${link.source}->${link.target}`;
+      const currentIndex = groupIndex[key] ?? 0;
+      groupIndex[key] = currentIndex + 1;
+      return {
+        id: `e${index}-${link.source}-${link.target}`,
+        source: link.source,
+        target: link.target,
+        type: 'ocdfg',
+        animated: true,
+        data: {
+          owners: link.owners ?? [],
+          colors,
+          parallelIndex: currentIndex,
+          parallelCount: groupCounts[key],
+          sourceVariant: nodeVariantMap[link.source],
+          targetVariant: nodeVariantMap[link.target],
+          frequency: frequencies[index],
+          frequencyNormalized: normalizedValues[index],
+          thicknessFactor: thicknessFactors[index],
+        },
+      } as Edge;
+    });
+
+    setRawNodes(initialNodes);
+    setRawEdges(initialEdges);
+  }, [dfgData, variantPreset, fallbackNodeWidth, nodePadding, fontSize, terminalSize, typeColorOverrides]);
 
   useEffect(() => {
     if (!dfgData) return;
@@ -349,6 +641,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       dfgLinks: dfgData.links,
       typeTraceLimit,
       activeTypes,
+      direction: layoutDirection,
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
@@ -380,12 +673,18 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         });
       }
 
-      setBaseNodes(layoutedNodes);
-      setBaseEdges(layoutedEdges);
-      if (layoutedNodes.length > 0) {
+      const cleanedNodes = resolvedVariant === 'detail' ? stripDebugNodes(layoutedNodes) : layoutedNodes;
+      const { nodes: directedNodes, edges: directedEdges } = transformLayoutDirection(
+        cleanedNodes,
+        layoutedEdges,
+        layoutDirection,
+      );
+      setBaseNodes(directedNodes);
+      setBaseEdges(directedEdges);
+      if (directedNodes.length > 0) {
         const availability = computeTypeAvailability(
-          layoutedNodes,
-          layoutedEdges,
+          directedNodes,
+          directedEdges,
           Object.keys(typeColors),
         );
         if (!initialAvailabilityRef.current) {
@@ -404,7 +703,19 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
       }
       window.requestAnimationFrame(() => fitView());
     }).catch(console.error);
-  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView]);
+  }, [
+    typeVisibility,
+    typeTraceLimit,
+    rawNodes,
+    rawEdges,
+    dfgData,
+    typeColors,
+    fitView,
+    resolvedVariant,
+    stripDebugNodes,
+    layoutDirection,
+    transformLayoutDirection,
+  ]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -453,7 +764,8 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
 
     setNodes(resolvedNodes);
     setEdges(filteredEdges);
-  }, [baseNodes, baseEdges, typeVisibility, typeColors]);
+    reportGraphSize(resolvedNodes);
+  }, [baseNodes, baseEdges, typeVisibility, typeColors, reportGraphSize]);
 
   useEffect(() => {
     if (!typeAvailability) return;
@@ -534,6 +846,7 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
   return (
     <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
       <ReactFlow
+        id={reactFlowId}
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
@@ -553,182 +866,184 @@ function OCDFGVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGVisualizerProps
         zoomOnScroll={!interactionLocked}
       />
 
-      <div
-        style={{
-          position: 'absolute',
-          top: 16,
-          left: 16,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
-          maxHeight: 'calc(100% - 32px)',
-        }}
-      >
-        {Object.keys(typeColors).length > 0 && (
-          <div
-            style={{
-              background: '#FFFFFF',
-              border: '1px solid #E5E7EB',
-              borderRadius: 12,
-              padding: '12px 16px',
-              boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
-              fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              maxHeight: '50vh',
-              overflowY: 'auto',
-              minWidth: 240,
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginBottom: legendCollapsed ? 0 : 8,
-                fontWeight: 600,
-                fontSize: 14,
-                color: '#0F172A',
-              }}
-            >
-              <span>Longest Trace View</span>
-              <button
-                type="button"
-                onClick={() => setLegendCollapsed((prev) => !prev)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: '#64748B',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-              >
-                {legendCollapsed ? 'Show' : 'Hide'}
-              </button>
-            </div>
-            {!legendCollapsed && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {Object.entries(typeColors).map(([type, color]) => {
-                  const max = typeTraceMax[type] ?? 0;
-                  const resolvedLimit = typeTraceLimit[type] ?? max;
-                  const clampedLimit = Math.min(Math.max(0, resolvedLimit), max);
-                  const isVisible = typeVisibility[type] !== false;
-                  const sliderDisabled = typeAvailability[type] !== true || max <= 0;
-                  const sliderValue = clampedLimit;
-
-                  return (
-                    <div
-                      key={type}
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 4,
-                        paddingBottom: 6,
-                        borderBottom: '1px solid #E2E8F0',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span
-                            aria-hidden
-                            style={{
-                              display: 'inline-block',
-                              width: 18,
-                              height: 18,
-                              borderRadius: '50%',
-                              background: color,
-                              border: '1px solid rgba(15, 23, 42, 0.12)',
-                              boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
-                            }}
-                          />
-                          <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
-                        </div>
-                        <Switch
-                          checked={typeVisibility[type] !== false}
-                          disabled={typeAvailability[type] !== true}
-                          onCheckedChange={(checked) => handleTypeToggle(type, checked)}
-                        />
-                      </div>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          opacity: typeAvailability[type] ? (isVisible ? 1 : 0.7) : 0.5,
-                        }}
-                      >
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <Slider
-                            min={0}
-                            max={max}
-                            step={1}
-                            value={[sliderValue]}
-                            onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
-                            disabled={sliderDisabled}
-                          />
-                          <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
-                            {sliderValue}/{max} traces
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
+      {!hideChrome && (
         <div
           style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
             display: 'flex',
-            gap: 8,
-            alignItems: 'center',
-            background: '#FFFFFF',
-            border: '1px solid #E2E8F0',
-            borderRadius: 9999,
-            padding: '6px 12px',
-            boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
+            flexDirection: 'column',
+            gap: 16,
+            maxHeight: 'calc(100% - 32px)',
           }}
         >
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => reactFlow.zoomIn?.()}
-            className="rounded-full h-9 w-9"
+          {Object.keys(typeColors).length > 0 && (
+            <div
+              style={{
+                background: '#FFFFFF',
+                border: '1px solid #E5E7EB',
+                borderRadius: 12,
+                padding: '12px 16px',
+                boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
+                fontFamily: 'var(--font-primary, Inter, sans-serif)',
+                maxHeight: '50vh',
+                overflowY: 'auto',
+                minWidth: 240,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: legendCollapsed ? 0 : 8,
+                  fontWeight: 600,
+                  fontSize: 14,
+                  color: '#0F172A',
+                }}
+              >
+                <span>Longest Trace View</span>
+                <button
+                  type="button"
+                  onClick={() => setLegendCollapsed((prev) => !prev)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#64748B',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {legendCollapsed ? 'Show' : 'Hide'}
+                </button>
+              </div>
+              {!legendCollapsed && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {Object.entries(typeColors).map(([type, color]) => {
+                    const max = typeTraceMax[type] ?? 0;
+                    const resolvedLimit = typeTraceLimit[type] ?? max;
+                    const clampedLimit = Math.min(Math.max(0, resolvedLimit), max);
+                    const isVisible = typeVisibility[type] !== false;
+                    const sliderDisabled = typeAvailability[type] !== true || max <= 0;
+                    const sliderValue = clampedLimit;
+
+                    return (
+                      <div
+                        key={type}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                          paddingBottom: 6,
+                          borderBottom: '1px solid #E2E8F0',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span
+                              aria-hidden
+                              style={{
+                                display: 'inline-block',
+                                width: 18,
+                                height: 18,
+                                borderRadius: '50%',
+                                background: color,
+                                border: '1px solid rgba(15, 23, 42, 0.12)',
+                                boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                              }}
+                            />
+                            <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
+                          </div>
+                          <Switch
+                            checked={typeVisibility[type] !== false}
+                            disabled={typeAvailability[type] !== true}
+                            onCheckedChange={(checked) => handleTypeToggle(type, checked)}
+                          />
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            opacity: typeAvailability[type] ? (isVisible ? 1 : 0.7) : 0.5,
+                          }}
+                        >
+                          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <Slider
+                              min={0}
+                              max={max}
+                              step={1}
+                              value={[sliderValue]}
+                              onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
+                              disabled={sliderDisabled}
+                            />
+                            <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
+                              {sliderValue}/{max} traces
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              background: '#FFFFFF',
+              border: '1px solid #E2E8F0',
+              borderRadius: 9999,
+              padding: '6px 12px',
+              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
+            }}
           >
-            <PlusIcon className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => reactFlow.zoomOut?.()}
-            className="rounded-full h-9 w-9"
-          >
-            <MinusIcon className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => fitView()}
-            className="rounded-full h-9 w-9"
-          >
-            <ScanIcon className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant={interactionLocked ? 'secondary' : 'outline'}
-            size="icon"
-            onClick={() => setInteractionLocked((prev) => !prev)}
-            className="rounded-full h-9 w-9"
-            title={interactionLocked ? 'Unlock interactions' : 'Lock interactions'}
-          >
-            {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
-          </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => reactFlow.zoomIn?.()}
+              className="rounded-full h-9 w-9"
+            >
+              <PlusIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => reactFlow.zoomOut?.()}
+              className="rounded-full h-9 w-9"
+            >
+              <MinusIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => fitView()}
+              className="rounded-full h-9 w-9"
+            >
+              <ScanIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant={interactionLocked ? 'secondary' : 'outline'}
+              size="icon"
+              onClick={() => setInteractionLocked((prev) => !prev)}
+              className="rounded-full h-9 w-9"
+              title={interactionLocked ? 'Unlock interactions' : 'Lock interactions'}
+            >
+              {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

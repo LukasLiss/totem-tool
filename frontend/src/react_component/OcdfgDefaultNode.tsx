@@ -6,6 +6,7 @@ type NodeVariant = 'center' | 'start' | 'end';
 type DefaultNodeData = {
   label?: string;
   nodeVariant?: NodeVariant;
+  layoutDirection?: 'TB' | 'LR';
 };
 
 const handleStyle = {
@@ -46,7 +47,10 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
   }, [data, colors]);
   const visibleTypes = useMemo(() => {
     if (typeOrder.length === 0) return nodeTypes;
-    return typeOrder.filter((t) => nodeTypes.includes(t));
+    // Show all types from nodeTypes, with typeOrder types first (in order), then remaining types
+    const orderedTypes = typeOrder.filter((t) => nodeTypes.includes(t));
+    const remainingTypes = nodeTypes.filter((t) => !typeOrder.includes(t));
+    return [...orderedTypes, ...remainingTypes];
   }, [typeOrder, nodeTypes]);
   const baseStyle = useMemo(
     () => ({
@@ -66,12 +70,12 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
     <div style={baseStyle}>
       <Handle
         type="target"
-        position={Position.Top}
+        position={(data?.layoutDirection ?? 'TB') === 'LR' ? Position.Left : Position.Top}
         style={handleStyle}
       />
       <Handle
         type="source"
-        position={Position.Bottom}
+        position={(data?.layoutDirection ?? 'TB') === 'LR' ? Position.Right : Position.Bottom}
         style={handleStyle}
       />
       <span

@@ -285,10 +285,11 @@ export async function layoutOCDFGLongestTrace({
   dfgLinks,
   typeTraceLimit,
   activeTypes,
-}: Omit<LayoutRequest, 'mode' | 'config'>): LayoutResult {
-  console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges`);
+  direction = 'TB',
+}: Omit<LayoutRequest, 'mode' | 'config'> & { direction?: 'TB' | 'LR' }): LayoutResult {
+  console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges, direction: ${direction}`);
 
-  return layoutWithLongestTrace(renderNodes, renderEdges, dfgNodes, dfgLinks, typeTraceLimit, activeTypes);
+  return layoutWithLongestTrace(renderNodes, renderEdges, dfgNodes, dfgLinks, typeTraceLimit, activeTypes, direction);
 }
 
 async function layoutWithSugiyama(
@@ -983,6 +984,33 @@ async function layoutWithNaive(
   return { nodes: nodes as Node[], edges: mergedEdges };
 }
 
+/**
+ * Get direction-aware spacing values for longest trace layout
+ *
+ * Internal layout (before coordinate swap):
+ * - x-axis (horizontal) = columns (object types)
+ * - y-axis (vertical) = trace flow (activities)
+ *
+ * After coordinate swap for LR:
+ * - x-axis = trace flow (was y-axis)
+ * - y-axis = columns (was x-axis)
+ *
+ * So for LR mode: columnSpacing becomes VERTICAL spacing (the problem!)
+ */
+function getLayoutSpacing(direction: 'TB' | 'LR' = 'TB', preset?: string) {
+  // Spacing along trace flow (vertical in internal layout)
+  // This becomes HORIZONTAL in LR after swap
+  const nodePrimarySpacing = 150;  // Keep same for both modes
+
+  // Spacing between object type columns (horizontal in internal layout)
+  // This becomes VERTICAL in LR after swap - needs to be SMALLER!
+  const columnPadding = direction === 'LR' ? 30 : 60;
+  const nodeSize = direction === 'LR' ? 72 : 180;  // Use height for LR, width for TB
+  const columnSpacing = nodeSize * 1.8 + columnPadding;  // Reduced multiplier for LR
+
+  return { nodePrimarySpacing, columnPadding, columnSpacing };
+}
+
 async function layoutWithLongestTrace(
   renderNodes: Node[],
   renderEdges: Edge[],
@@ -990,6 +1018,7 @@ async function layoutWithLongestTrace(
   dfgLinks: DfgLink[],
   typeTraceLimit?: Record<string, number>,
   activeTypes?: string[],
+  direction: 'TB' | 'LR' = 'TB',
 ): LayoutResult {
   console.log('[LONGEST TRACE] Starting longest trace layout');
 
@@ -1446,10 +1475,11 @@ async function layoutWithLongestTrace(
   );
   console.log(`[LONGEST TRACE] Shared nodes between traces:`, Array.from(sharedNodes));
 
-  // Layout configuration
-  const VERTICAL_SPACING = 150;
-  const COLUMN_PADDING = 60;
-  const COLUMN_SPACING = DEFAULT_NODE_WIDTH * 3 + COLUMN_PADDING; // center-to-center spacing with a full column gap
+  // Layout configuration - direction-aware spacing
+  const spacing = getLayoutSpacing(direction);
+  const VERTICAL_SPACING = spacing.nodePrimarySpacing;
+  const COLUMN_PADDING = spacing.columnPadding;
+  const COLUMN_SPACING = spacing.columnSpacing; // center-to-center spacing with a full column gap
   const FIRST_COLUMN_CENTER = 300;
   const typeCenters = new Map<string, number>();
   const typeIndex = new Map<string, number>();

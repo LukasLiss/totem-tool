@@ -4,8 +4,16 @@ import { RefreshCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
-import OCDFGVisualizer from './OCDFGVisualizer';
-import { hrCompanyWorkersOcdfgMock } from '@/mocks/ocdfgDetailMock';
+import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
+import {
+  orderItemOcdfgMock,
+  hrWorkerOcdfgMock,
+  companyLifecycleOcdfgMock,
+  factoryOcdfgMock,
+  warehouseOcdfgMock,
+  ocdfgDetailMiniMock,
+  type OcdfgMockData,
+} from '@/mocks/ocdfgDetailMock';
 
 type TotemApiResponse = {
   tempgraph: {
@@ -1376,6 +1384,20 @@ function buildLayers(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
+function selectDetailMock(area: ProcessAreaDefinition): OcdfgMockData {
+  const label = (area.label || '').toLowerCase();
+  const types = area.objectTypes.map((t) => t.toLowerCase());
+  const has = (keyword: string) => label.includes(keyword) || types.some((t) => t.includes(keyword));
+
+  if (has('order') || has('item')) return orderItemOcdfgMock;
+  if (has('hr') || has('human')) return hrWorkerOcdfgMock;
+  if (has('worker')) return hrWorkerOcdfgMock;
+  if (has('company')) return companyLifecycleOcdfgMock;
+  if (has('factory')) return factoryOcdfgMock;
+  if (has('warehouse')) return warehouseOcdfgMock;
+  return ocdfgDetailMiniMock;
+}
+
 function TotemVisualizer({
   eventLogId,
   height = '100%',
@@ -1504,6 +1526,7 @@ function TotemVisualizer({
 
   useEffect(() => {
     setExpandedAreas({});
+    setDetailSizes({});
   }, [rawTotem?.tempgraph]);
 
   useLayoutEffect(() => {
@@ -1568,7 +1591,7 @@ function TotemVisualizer({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [allEdges, areaAnchorMembers, layers, rawTotem]);
+  }, [allEdges, areaAnchorMembers, detailSizes, layers, rawTotem]);
 
   const computedHeight = resolveHeight(height);
   const hasLayers = layers.length > 0;
@@ -1751,6 +1774,11 @@ function TotemVisualizer({
                           const detailSize = detailSizes[area.id];
                           const ocdfgWidth = detailSize?.width ?? OBJECT_NODE_WIDTH;
                           const ocdfgHeight = detailSize?.height ?? OBJECT_NODE_MIN_HEIGHT;
+                          const detailData = selectDetailMock(area);
+                          const containerMinHeight = Math.max(
+                            OBJECT_NODE_MIN_HEIGHT + 32,
+                            isExpanded ? ocdfgHeight + 32 : OBJECT_NODE_MIN_HEIGHT + 32,
+                          );
 
                           return (
                             <div
@@ -1765,7 +1793,7 @@ function TotemVisualizer({
                                 justifyItems: 'center',
                                 alignItems: 'start',
                                 position: 'relative',
-                                minHeight: OBJECT_NODE_MIN_HEIGHT + 32,
+                                minHeight: containerMinHeight,
                               }}
                             >
                               <div
@@ -1877,10 +1905,11 @@ function TotemVisualizer({
                                     overflow: 'hidden',
                                   }}
                                 >
-                                  <OCDFGVisualizer
-                                    variant="canvas"
+                                  <OCDFGDetailVisualizer
                                     height={ocdfgHeight}
-                                    data={hrCompanyWorkersOcdfgMock}
+                                    data={detailData}
+                                    instanceId={`detail-${area.id}`}
+                                    typeColorOverrides={typeColorMap}
                                     onSizeChange={(size) => {
                                       setDetailSizes((prev) => {
                                         const existing = prev[area.id];
