@@ -47,6 +47,11 @@ Finally, install the project itself in editable mode so changes to the code are 
 pip install -e .
 ```
 
+To run all tests, execute:
+```bash
+pytest ./tests/
+```
+
 ## Acknowledgements
 The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
 The TOTeM visualization function is adapted from [this repository](https://github.com/loeseke/object-centric-streaming-discovery/).
