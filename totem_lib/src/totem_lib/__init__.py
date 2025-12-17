@@ -10,6 +10,7 @@ from .ocel import (
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import discover_oc_petri_net_polars
+from .occn import OCCausalNet, OCCausalNetState
 from .utils import ocpns_are_similar
 from .pm4py_adapter import convert_ocel_polars_to_pm4py
 from .ocdfg import OCDFG, CCDFG
@@ -29,6 +30,8 @@ __all__ = [
     "import_ocel",
     "calculate_layout",
     "discover_oc_petri_net_polars",
+    "OCCausalNet",
+    "OCCausalNetState",
     "ocpns_are_similar",
     "convert_ocel_polars_to_pm4py",
     "OCDFG",
