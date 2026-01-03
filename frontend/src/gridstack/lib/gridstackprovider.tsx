@@ -1,122 +1,215 @@
-// GridStackProvider.tsx
 import React, {
   createContext,
-  useEffect,
+  useContext,
   useRef,
-  ReactNode,
+  useEffect,
   useState,
+  ReactNode,
 } from "react";
-import { GridStack, GridStackWidget } from "gridstack";
-import "gridstack/dist/gridstack.min.css";
-import { createRoot, Root } from "react-dom/client";
-import { GridItem } from "./types/GridItem";
+import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
 
 interface GridContextValue {
-  grid: React.MutableRefObject<GridStack | null>;
-  containerRef: React.RefObject<HTMLDivElement>;
-  addWidget: (item: GridItem) => void;
+  grid: GridStack | null;
+  gridRef: React.RefObject<HTMLDivElement>;
+  addWidget: (content?: string) => void;
+  getLayout: () => any[];
+  loadLayout: (layout: any[]) => void;
+  resetGrid: () => void;
 }
 
-export const GridContext = createContext<GridContextValue | null>(null);
+const GridContext = createContext<GridContextValue | undefined>(undefined);
 
-interface Props {
+export const useGrid = () => {
+  const ctx = useContext(GridContext);
+  if (!ctx) throw new Error("useGrid must be used inside GridProvider");
+  return ctx;
+};
+
+interface GridProviderProps {
   children: ReactNode;
-  initialItems: GridItem[];
-  insertTemplate: Partial<GridItem>;
+  options?: GridStackOptions;
 }
 
-export function GridStackProvider({
+export const GridProvider: React.FC<GridProviderProps> = ({
   children,
-  initialItems,
-  insertTemplate,
-}: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  options,
+}) => {
   const gridRef = useRef<GridStack | null>(null);
+  const [grid, setGrid] = useState<GridStack | null>(null);
 
-  // Map<widgetId, ReactRoot>
-  const widgetRoots = useRef<Map<string, Root>>(new Map());
+  // Define grid options here so resetGrid can access them
+  const gridOptions: GridStackOptions = {
+    cellHeight: 70,
+    acceptWidgets: true,
+    removable: "#trash",
+    float: true,
+    margin: 5,
+    ...(options || {}),
+  };
 
-  //
-  // 1 — renderCB: mount widget.component into GridStack items
-  //
   useEffect(() => {
-    GridStack.renderCB = (el: HTMLElement, widget: GridStackWidget) => {
-      const id = widget.id?.toString();
-      if (!id) return;
-
-      const item = initialItems.find((i) => i.id === id);
-      if (!item) return;
-
-      // Unmount previous React root if exists
-      if (widgetRoots.current.has(id)) {
-        widgetRoots.current.get(id)?.unmount();
+    // render callback for GridStack - set data attribute for component persistence
+    GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
+      el.innerHTML = w.content || "";
+      // Set component name in data attribute from the node
+      if (w.component_name) {
+        el.dataset.componentName = w.component_name;
       }
-
-      const root = createRoot(el);
-      widgetRoots.current.set(id, root);
-      root.render(<>{item.component}</>);
     };
-  }, [initialItems]);
 
-  //
-  // 2 — Initialize GridStack
-  //
-  useEffect(() => {
-    if (!containerRef.current) return;
+    const instance = GridStack.init(gridOptions);
 
-    const grid = GridStack.init(
-      {
-        acceptWidgets: true,
-        removable: "#trash",
-        cellHeight: 70,
-        children: initialItems.map((item) => ({
-          id: item.id,
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-        })),
-      },
-      containerRef.current
-    );
+    gridRef.current = instance;
+    setGrid(instance);
 
-    gridRef.current = grid;
-
-    //
-    // 3 — drag-in from sidebar
-    //
-    GridStack.setupDragIn(".sidepanel .grid-stack-item", undefined, {
-      w: insertTemplate.w ?? 2,
-      h: insertTemplate.h ?? 2,
-      id: insertTemplate.id ?? "insert-" + Date.now(),
-    });
-
-    return () => {
-      grid.destroy(false);
-      widgetRoots.current.forEach((r) => r.unmount());
-    };
+    return () => instance.destroy(false);
   }, []);
 
-  //
-  // 4 — Add widget programmatically
-  //
-  const addWidget = (item: GridItem) => {
-    if (!gridRef.current) return;
+  const resetGrid = () => {
+    console.log("Resetting grid completely");
+    try {
+      // Clear all widgets and reset the grid state without destroying
+      if (grid) {
+        console.log("Clearing all widgets");
+        grid.removeAll(true);
+        
+        // Clear the DOM manually to ensure clean state
+        if (gridRef.current) {
+          console.log("Clearing DOM");
+          gridRef.current.innerHTML = '';
+        }
+        
+        console.log("Grid reset complete - kept instance");
+      } else {
+        console.log("No grid instance to reset");
+      }
+    } catch (error) {
+      console.warn("Error resetting grid:", error);
+      // If reset fails, try to recreate the grid
+      try {
+        if (gridRef.current) {
+          gridRef.current.innerHTML = '';
+          const newGrid = GridStack.init(gridOptions, gridRef.current);
+          setGrid(newGrid);
+          console.log("Grid recreated after reset failure");
+        }
+      } catch (recreateError) {
+        console.error("Failed to recreate grid:", recreateError);
+      }
+    }
+  };
 
-    gridRef.current.addWidget({
-      id: item.id,
-      x: item.x,
-      y: item.y,
-      w: item.w,
-      h: item.h,
+  const getLayout = () => {
+    if (!gridRef.current) return [];
+    const nodes = gridRef.current.save(false) as GridStackNode[];
+    return nodes.map((node, index) => {
+      // Use component_name from the node, fallback to data attribute or content-based logic
+      let component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
+      let props: any = {};
+      if (component_name === "NumberofEventsComponent") {
+        props = { color: "blue" };
+      } else if (component_name === "TextBoxComponent") {
+        props = { text: node.el ? node.el.innerHTML.trim() || "Enter text here" : "Enter text here", font_size: 14 };
+      } else {
+        props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
+      }
+      return {
+        component_name,
+        x: node.x,
+        y: node.y,
+        w: node.w,
+        h: node.h,
+        order: index,
+        ...props,
+      };
     });
   };
 
+  const loadLayout = (layout: any[]) => {
+    console.log("loadLayout called with:", layout);
+    
+    if (!gridRef.current) {
+      console.log("No grid container found");
+      return;
+    }
+    
+    if (!Array.isArray(layout)) {
+      console.error("loadLayout received invalid layout:", layout);
+      // Try to reset the grid if it's in a bad state
+      try {
+        if (grid) grid.removeAll(false);
+      } catch (error) {
+        console.warn("Error clearing grid:", error);
+        resetGrid();
+      }
+      return;
+    }
+    
+    console.log("Clearing grid before loading new layout");
+    try {
+      gridRef.current.removeAll(true);
+    } catch (error) {
+      console.warn("Error clearing grid, resetting:", error);
+      resetGrid();
+      // After reset, try again
+      if (grid) {
+        try {
+          grid.removeAll(true);
+        } catch (retryError) {
+          console.error("Failed to clear grid even after reset:", retryError);
+          return;
+        }
+      }
+    }
+    
+    // Check DOM after clearing
+    const gridContainer = document.querySelector('.grid-stack');
+    console.log("DOM elements after clear:", gridContainer?.children.length || 0);
+    
+    if (layout.length > 0) {
+      console.log("Adding", layout.length, "widgets");
+      layout.forEach((item, index) => {
+        console.log(`Adding widget ${index}:`, item);
+        let content = "";
+        if (item.component_name === "NumberOfEventsComponent") {
+          content = "Number of Events";
+        } else if (item.component_name === "TextBoxComponent") {
+          content = "Text Box";
+        } else {
+          content = "Unknown";
+        }
+        
+        try {
+          const widgetEl = gridRef.current?.addWidget({
+            x: item.x,
+            y: item.y,
+            w: item.w,
+            h: item.h,
+            content,
+            component_name: item.component_name, // Store component_name in the node
+          });
+          // Set data attribute for persistence
+          if (widgetEl) {
+            widgetEl.dataset.componentName = item.component_name;
+          }
+          console.log("Widget added:", widgetEl);
+        } catch (error) {
+          console.error(`Error adding widget ${index}:`, error);
+        }
+      });
+    } else {
+      console.log("No widgets to add");
+    }
+    
+    // Final check
+    console.log("Final DOM elements:", gridContainer?.children.length || 0);
+  };
+
   return (
-    <GridContext.Provider
-      value={{ grid: gridRef, containerRef, addWidget }}
-    >
+    <GridContext.Provider value={{ grid, gridRef, getLayout, loadLayout, resetGrid }}>
       {children}
     </GridContext.Provider>
   );
-}
+};
+
+export default GridProvider;

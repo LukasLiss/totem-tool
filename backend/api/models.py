@@ -55,9 +55,6 @@ class DashboardComponent(models.Model):
     # The actual component name, matching your React componentMap
     component_name = models.CharField(max_length=100)
 
-    # Raw JSON props as passed to React component
-    props = models.JSONField(default=dict)
-
     order = models.IntegerField(default=0)  # for z-order or stable sorting
 
     class Meta:

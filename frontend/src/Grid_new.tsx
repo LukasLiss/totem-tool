@@ -1,54 +1,141 @@
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { GridStackProvider } from "./gridstack/lib/gridstackprovider";
-import { GridStackArea } from "./gridstack/lib/gridstack_area";
-import { BasicWidget } from "./gridstack/widgets/basic_widget";
-import { LockedWidget } from "./gridstack/widgets/locked_widget";
-import { DnDSidebar } from "./components/dnd_sidebar";
+import React, { useContext, useEffect } from "react";
+import GridProvider from "./gridstack/lib/gridstackprovider"
+import DashboardGrid from "./gridstack/lib/dashboard_grid";
+import SidePanel from "./gridstack/lib/sidepanel";
+import "./styles/grid_demo.css";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+import { AppSidebar } from "./components/app-sidebar";
+import GridContainer from "./gridstack/lib/grid_container";
+import { useGrid } from "./gridstack/lib/gridstackprovider";
+import { saveLayout, getLayout } from "./api/componentsApi";
+import { DashboardContext } from "@/contexts/DashboardContext";
+import { SelectedFileContext } from "./contexts/SelectedFileContext";
 
-export default function Grid() {
-  const initialItems = [
-    {
-      id: "1",
-      x: 0,
-      y: 0,
-      w: 4,
-      h: 2,
-      component: <BasicWidget label="1" />,
-    },
-    {
-      id: "locked",
-      x: 4,
-      y: 0,
-      w: 4,
-      h: 4,
-      locked: true,
-      component: <LockedWidget />,
-    },
-    {
-      id: "4",
-      x: 10,
-      y: 0,
-      w: 2,
-      h: 2,
-      component: <BasicWidget label="4" />,
-    },
-  ];
+// Type-safe layout items
+// Removed initialWidgets - grid starts empty now
 
-  const insertTemplate = {
-    id: "new",
-    h: 2,
-    w: 2,
-    component: <BasicWidget label="new item" />,
+const GridContent: React.FC = () => {
+  const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
+  const { selectedDashboard } = useContext(DashboardContext);
+  const { selectedFile } = useContext(SelectedFileContext);
+
+  useEffect(() => {
+    console.log("Dashboard changed to:", selectedDashboard);
+    console.log("Current grid containers:", document.querySelectorAll('.grid-stack').length);
+    console.log("Current grid-stack-item elements:", document.querySelectorAll('.grid-stack-item').length);
+    
+    const loadSelectedDashboard = async () => {
+      console.log("Starting to load dashboard layout");
+      
+      // Completely reset the grid instance
+      console.log("Resetting grid instance");
+      resetGrid();
+      
+      if (!selectedDashboard) {
+        console.log("No dashboard selected, staying blank");
+        return;
+      }
+      
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        console.log("No token found");
+        return;
+      }
+      
+      try {
+        console.log("Fetching layout for dashboard:", selectedDashboard);
+        const response = await getLayout(selectedDashboard, token);
+        console.log("Layout response:", response);
+        
+        if (Array.isArray(response) && response.length > 0) {
+          console.log("Loading layout with", response.length, "components");
+          // Small delay to ensure grid is fully initialized after reset
+          setTimeout(() => loadLayout(response), 50);
+        } else {
+          console.log("No layout to load or empty response");
+        }
+      } catch (error) {
+        console.error("Failed to load layout:", error);
+      }
+    };
+    
+    loadSelectedDashboard();
+  }, [selectedDashboard, resetGrid]);
+
+  const handleSave = async () => {
+    if (!selectedDashboard) {
+      alert("No dashboard selected!");
+      return;
+    }
+    const layout = getGridLayout();
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+    await saveLayout(selectedDashboard, layout, token);
+    console.log("Layout saved:", layout);
+    alert("Layout saved!");
+  };
+
+  const handleLoad = async () => {
+    if (!selectedDashboard) {
+      alert("No dashboard selected!");
+      return;
+    }
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+    const response = await getLayout(selectedDashboard, token);
+    // Small delay to ensure any pending operations complete
+    setTimeout(() => loadLayout(response), 50);
+  };
+
+  const handleLog = async () => {
+    console.log("Current layout:", getGridLayout());
   };
 
   return (
-    <SidebarProvider>
-      <GridStackProvider initialItems={initialItems} insertTemplate={insertTemplate}>
-        <div className="app-layout flex">
-          <DnDSidebar />
-          <GridStackArea />
+    <div className="flex flex-col h-screen  overflow-hidden">
+      <div className="flex justify-end p-2 space-x-2">
+        <button onClick={() => resetGrid()} className="bg-red-500 text-white px-4 py-2 rounded">
+          Reset Grid
+        </button>
+        <button onClick={handleLoad} className="bg-green-500 text-white px-4 py-2 rounded">
+          Load Layout
+        </button>
+        <button onClick={handleSave} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Save Layout
+        </button>
+        <button onClick={handleLog} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Log Layout
+        </button>
+      </div>
+      <div className="flex flex-row flex-grow overflow-hidden">
+        
+        <div className="flex-grow overflow-auto">
+          <GridContainer>
+            <DashboardGrid />
+          </GridContainer>
         </div>
-      </GridStackProvider>
-    </SidebarProvider>
+        <SidePanel />
+
+      </div>
+    </div>
   );
-}
+};
+
+const Grid: React.FC = () => {
+  return (
+    <SidebarProvider>
+      <AppSidebar/>
+      <SidebarInset>
+        <GridProvider>
+          <GridContent />
+        </GridProvider>
+      </SidebarInset>
+    </SidebarProvider>  
+  );
+};
+
+export default Grid;

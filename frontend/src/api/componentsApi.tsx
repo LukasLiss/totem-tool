@@ -20,13 +20,11 @@ export async function getLayout(dashboardId: number, token: string) {
     },
   });
    if (response.status === 401) {
-    console.log('401: authentification')
-    //window.location.href = '/login';
-    return;
+    throw new Error('Authentication failed');
   }
 
   if (!response.ok) {
-    throw new Error(`Fetching files failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Fetching layout failed: ${response.status} ${response.statusText}`);
   }
 
   return await response.json();

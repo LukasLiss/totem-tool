@@ -3,7 +3,7 @@ import { GridStack } from 'gridstack';
 // Note: We don't need useGridStack here because setupDragIn is static, 
 // but if you wanted to drag programmatically, you would use it.
 
-export default const SidePanel: React.FC = () => {
+const SidePanel: React.FC = () => {
   const sidepanelItemRef = useRef<HTMLDivElement>(null);
 
   // We rely on GridStack.setupDragIn being called in the Provider

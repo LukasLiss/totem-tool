@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent
 from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
 
@@ -153,50 +153,51 @@ class DashboardViewSet(viewsets.ModelViewSet):
         layout = request.data.get("layout")
 
         if not isinstance(layout, list):
-            return Response({"error": "layout must be a list"}, status=400)
+            return Response({"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST)
 
-        existing = {c.id: c for c in dashboard.components.all()}
+        # Delete existing components
+        dashboard.components.all().delete()
 
-        updated_ids = []
-
-        for widget in layout:
-            comp_id = widget.get("id")
+        for i, widget in enumerate(layout):
+            component_name = widget.get("component_name")
             x = widget.get("x")
             y = widget.get("y")
             w = widget.get("w")
             h = widget.get("h")
-            content = widget.get("content")  # JSON string from GridStack
 
-            if not all([comp_id, x is not None, y is not None, w, h]):
+            if not all([component_name, x is not None, y is not None, w, h]):
                 continue
 
-            try:
-                content_json = eval(content)  # or json.loads(content)
-            except Exception:
-                content_json = {"name": "Text", "props": {}}
-
-            name = content_json.get("name")
-            props = content_json.get("props", {})
-
-            if comp_id in existing:
-                comp = existing[comp_id]
+            # Create specific component based on component_name
+            if component_name == "NumberofEventsComponent":
+                color = widget.get("color", "blue")
+                NumberofEventsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=x, y=y, w=w, h=h,
+                    component_name=component_name,
+                    color=color,
+                    order=i
+                )
+            elif component_name == "TextBoxComponent":
+                text = widget.get("text", "")
+                font_size = widget.get("font_size", 14)
+                TextBoxComponent.objects.create(
+                    dashboard=dashboard,
+                    x=x, y=y, w=w, h=h,
+                    component_name=component_name,
+                    text=text,
+                    font_size=font_size,
+                    order=i
+                )
+            # Add more component types here as needed
             else:
-                comp = DashboardComponent(id=comp_id, dashboard=dashboard)
-
-            comp.x = x
-            comp.y = y
-            comp.w = w
-            comp.h = h
-            comp.component_name = name
-            comp.props = props
-            comp.save()
-
-            updated_ids.append(comp.id)
-
-        # Delete removed components
-        for cid, comp in existing.items():
-            if cid not in updated_ids:
-                comp.delete()
+                # For unknown components, create base DashboardComponent (though ideally all should be known)
+                DashboardComponent.objects.create(
+                    dashboard=dashboard,
+                    x=x, y=y, w=w, h=h,
+                    component_name=component_name,
+                    order=i
+                )
 
         return Response({"status": "saved"})
 
