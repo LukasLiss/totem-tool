@@ -7,7 +7,15 @@ export async function saveLayout(dashboardId: number, layout: object, token: str
         "Content-Type": "application/json" },
     body: JSON.stringify({ layout })
   });
-    return response.json();
+  if (response.status === 401) {
+    window.location.href = '/login';
+    return;
+  }
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+  }
+    
+  return await response.json();
   }
 
 
@@ -20,7 +28,8 @@ export async function getLayout(dashboardId: number, token: string) {
     },
   });
    if (response.status === 401) {
-    throw new Error('Authentication failed');
+    window.location.href = '/login';
+    return;
   }
 
   if (!response.ok) {

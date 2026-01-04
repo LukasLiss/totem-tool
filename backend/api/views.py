@@ -143,9 +143,22 @@ class DashboardViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
         dashboard = self.get_object()
-        components = dashboard.components.all().order_by("order", "id")
+        base_components = dashboard.components.all()
+        components = []
+        for comp in base_components:
+            if comp.component_name == 'TextBoxComponent':
+                components.append(TextBoxComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'NumberOfEventsComponent':
+                components.append(NumberofEventsComponent.objects.get(id=comp.id))
+            else:
+                components.append(comp)
+        print(f"Dashboard {pk} has {len(components)} components")
+        for comp in components:
+            print(f"Component {comp.id}: type {type(comp).__name__}, component_name {comp.component_name}, text {getattr(comp, 'text', 'N/A')}")
         serializer = DashboardComponentPolymorphicSerializer(components, many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        print("Serialized data:", data)
+        return Response(data)
     
     @action(detail=True, methods=["POST"])
     def save_layout(self, request, pk=None):
@@ -155,49 +168,36 @@ class DashboardViewSet(viewsets.ModelViewSet):
         if not isinstance(layout, list):
             return Response({"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Delete existing components
+            # Clear existing components
         dashboard.components.all().delete()
+        
+        for item in layout:
+            component_name = item['component_name']
+            print(f"Saving item: {item}")
+            if component_name == 'TextBoxComponent':
+                comp = TextBoxComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    text=item.get('text', ''),
+                    font_size=item.get('font_size', 14),
+                )
+                print(f"Created TextBoxComponent {comp.id} with text '{comp.text}'")
 
-        for i, widget in enumerate(layout):
-            component_name = widget.get("component_name")
-            x = widget.get("x")
-            y = widget.get("y")
-            w = widget.get("w")
-            h = widget.get("h")
-
-            if not all([component_name, x is not None, y is not None, w, h]):
-                continue
-
-            # Create specific component based on component_name
-            if component_name == "NumberofEventsComponent":
-                color = widget.get("color", "blue")
+            elif component_name == 'NumberOfEventsComponent':
                 NumberofEventsComponent.objects.create(
                     dashboard=dashboard,
-                    x=x, y=y, w=w, h=h,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
                     component_name=component_name,
-                    color=color,
-                    order=i
+                    color=item.get('color', 'blue'),
                 )
-            elif component_name == "TextBoxComponent":
-                text = widget.get("text", "")
-                font_size = widget.get("font_size", 14)
-                TextBoxComponent.objects.create(
-                    dashboard=dashboard,
-                    x=x, y=y, w=w, h=h,
-                    component_name=component_name,
-                    text=text,
-                    font_size=font_size,
-                    order=i
-                )
-            # Add more component types here as needed
-            else:
-                # For unknown components, create base DashboardComponent (though ideally all should be known)
-                DashboardComponent.objects.create(
-                    dashboard=dashboard,
-                    x=x, y=y, w=w, h=h,
-                    component_name=component_name,
-                    order=i
-                )
+            # Add more as needed
 
         return Response({"status": "saved"})
 

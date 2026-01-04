@@ -14,6 +14,7 @@ import { useGrid } from "./gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "./api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { useGridMode } from './gridstack/lib/gridstackprovider';
 
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -72,11 +73,17 @@ const GridContent: React.FC = () => {
       return;
     }
     const layout = getGridLayout();
+    console.log('Layout to save:', layout); // Debug: Check what's being saved
     const token = localStorage.getItem("access_token");
     if (!token) return;
-    await saveLayout(selectedDashboard, layout, token);
-    console.log("Layout saved:", layout);
-    alert("Layout saved!");
+    try {
+      const response = await saveLayout(selectedDashboard, layout, token);
+      console.log('Save response:', response); // Debug: Check API response
+      alert("Layout saved!");
+    } catch (error) {
+      console.error('Save failed:', error); // Debug: Check for errors
+      alert("Save failed!");
+    }
   };
 
   const handleLoad = async () => {
@@ -94,10 +101,20 @@ const GridContent: React.FC = () => {
   const handleLog = async () => {
     console.log("Current layout:", getGridLayout());
   };
+  const { isEditMode, setIsEditMode } = useGridMode();
 
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
       <div className="flex justify-end p-2 space-x-2">
+        <button
+          onClick={() => {
+            console.log('Edit mode button clicked, current isEditMode:', isEditMode);
+            setIsEditMode(!isEditMode);
+          }}
+          className={`px-4 py-2 rounded ${isEditMode ? 'bg-green-500 text-white' : 'bg-gray-500 text-white'}`}
+        >
+          {isEditMode ? 'Disable Edit Mode' : 'Enable Edit Mode'}
+        </button>
         <button onClick={() => resetGrid()} className="bg-red-500 text-white px-4 py-2 rounded">
           Reset Grid
         </button>

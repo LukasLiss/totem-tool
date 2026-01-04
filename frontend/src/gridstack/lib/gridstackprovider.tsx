@@ -6,7 +6,9 @@ import React, {
   useState,
   ReactNode,
 } from "react";
+import ReactDOM from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
+import { componentMap } from "../../components/componentMap";
 
 interface GridContextValue {
   grid: GridStack | null;
@@ -16,6 +18,13 @@ interface GridContextValue {
   loadLayout: (layout: any[]) => void;
   resetGrid: () => void;
 }
+
+const GridModeContext = createContext<{
+  isEditMode: boolean;
+  setIsEditMode: (mode: boolean) => void;
+}>({ isEditMode: false, setIsEditMode: () => {} });
+
+export const useGridMode = () => useContext(GridModeContext);
 
 const GridContext = createContext<GridContextValue | undefined>(undefined);
 
@@ -36,6 +45,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+
 
   // Define grid options here so resetGrid can access them
   const gridOptions: GridStackOptions = {
@@ -48,22 +59,76 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   };
 
   useEffect(() => {
-    // render callback for GridStack - set data attribute for component persistence
-    GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
-      el.innerHTML = w.content || "";
-      // Set component name in data attribute from the node
-      if (w.component_name) {
-        el.dataset.componentName = w.component_name;
-      }
-    };
-
+    // Initialize GridStack without renderCB (set later)
     const instance = GridStack.init(gridOptions);
-
     gridRef.current = instance;
     setGrid(instance);
 
     return () => instance.destroy(false);
-  }, []);
+  }, []); // Empty dependency: run once on mount
+
+  // Separate effect for setting renderCB and updating grid static state when edit mode changes
+  useEffect(() => {
+    console.log('GridProvider useEffect - isEditMode changed to:', isEditMode);
+    // Update renderCB with current isEditMode
+    GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
+      const component_name = (w as any).component_name || el.dataset.componentName;
+      const Component = componentMap[component_name];
+
+      if (Component) {
+        el.innerHTML = '';
+        const root = ReactDOM.createRoot(el);
+        root.render(
+          <Component
+            node={w}
+            isEditMode={isEditMode} // Use current isEditMode
+            onUpdate={(updates) => {
+              Object.assign(w, updates);
+              gridRef.current?.update(el, updates);
+            }}
+          />
+        );
+        (el as any)._reactRoot = root;
+        (el as any).gridstackNode = w; // Store node for re-rendering
+      } else {
+        el.innerHTML = w.content || '';
+      }
+    };
+
+    if (grid) {
+      grid.setStatic(!isEditMode); // Lock grid when not in edit mode
+      console.log('Grid setStatic called with:', !isEditMode);
+      // Re-render all components with updated isEditMode
+      const items = document.querySelectorAll('.grid-stack-item');
+      console.log('Found grid items to re-render:', items.length);
+      items.forEach((item, index) => {
+        console.log(`Re-rendering item ${index}`);
+        const root = (item as any)._reactRoot;
+        const node = (item as any).gridstackNode;
+        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
+        const Component = componentMap[component_name];
+        if (root && Component && node) {
+          console.log(`Re-rendering component for item ${index}`);
+          root.render(
+            <Component
+              node={node}
+              isEditMode={isEditMode}
+              onUpdate={(updates) => {
+                Object.assign(node, updates);
+                gridRef.current?.update(item as HTMLElement, updates);
+              }}
+            />
+          );
+        } else {
+          console.log(`Skipping re-render for item ${index} - missing root, Component, or node`);
+        }
+      });
+    } else {
+      console.log('No grid instance to update');
+    }
+  }, [isEditMode, grid]);
+
 
   const resetGrid = () => {
     console.log("Resetting grid completely");
@@ -109,7 +174,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: node.el ? node.el.innerHTML.trim() || "Enter text here" : "Enter text here", font_size: 14 };
+        props = { text: (node as any).text || "Enter text here", font_size: 14 };  // Read from node.text
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -185,9 +250,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             y: item.y,
             w: item.w,
             h: item.h,
-            content,
-            component_name: item.component_name, // Store component_name in the node
+            content,  // Keep for GridStack compatibility
+            text: item.text,  // Add text for component data
+            component_name: item.component_name,
           });
+          // After adding, ensure custom properties are on the node
+          if (widgetEl) {
+            const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
+            if (node) {
+              (node as any).component_name = item.component_name;
+              (node as any).text = item.text;
+              (node as any).color = item.color; // For NumberOfEventsComponent
+              (node as any).font_size = item.font_size;
+            }
+          }
           // Set data attribute for persistence
           if (widgetEl) {
             widgetEl.dataset.componentName = item.component_name;
@@ -206,9 +282,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   };
 
   return (
-    <GridContext.Provider value={{ grid, gridRef, getLayout, loadLayout, resetGrid }}>
-      {children}
-    </GridContext.Provider>
+    <GridModeContext.Provider value={{ isEditMode, setIsEditMode }}>
+      <GridContext.Provider value={{ grid, gridRef, getLayout, loadLayout, resetGrid }}>
+        {children}
+      </GridContext.Provider>
+    </GridModeContext.Provider>
   );
 };
 
