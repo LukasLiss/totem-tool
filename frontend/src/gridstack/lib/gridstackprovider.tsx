@@ -54,7 +54,6 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     acceptWidgets: true,
     removable: "#trash",
     float: true,
-    margin: 5,
     ...(options || {}),
   };
 
@@ -171,6 +170,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       // Use component_name from the node, fallback to data attribute or content-based logic
       let component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
       let props: any = {};
+      const w =
+        node.w ??
+        1; // necessary because GS sets w=1 to undefined
+      const h =
+        node.h ??
+        1; // necessary because GS sets h=1 to undefined
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
@@ -178,12 +183,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
+      
       return {
         component_name,
         x: node.x,
         y: node.y,
-        w: node.w,
-        h: node.h,
+        w,
+        h,
         order: index,
         ...props,
       };

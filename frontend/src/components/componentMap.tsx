@@ -28,7 +28,6 @@ interface ComponentProps {
 const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
   console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
   const [text, setText] = React.useState(node.text || 'Enter text here');
-
   // Sync local state with node.text when it changes (e.g., from loading or updates)
   React.useEffect(() => {
     console.log('TextBoxComponent useEffect - updating text to:', node.text);
@@ -42,20 +41,32 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
   };
 
   return (
-    <div style={{ fontSize: node.font_size || 14 }}>
+    <div style={{ height: '100%', width: '100%',fontSize: node.font_size || 14 }}>
       {isEditMode ? (
         // Edit mode: Editable
-        <>
-          <Textarea
+        <Card className="w-full h-full min-h-80 rounded-none">
+          <CardHeader>
+            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
+              Edit text
+            </CardTitle>
+             <CardDescription>Click the field below to change title text
+              
+             </CardDescription>
+         
+          </CardHeader>
+          <CardContent>
+            <Textarea
             value={text}
             onChange={(e) => handleTextChange(e.target.value)}
             placeholder="Type here..."
-            className="w-full h-20 resize-none"
+            className="w-full h-full resize-none"
           />
-        </>
+          </CardContent>
+        </Card>
+        
       ) : (
         // Normal mode: Read-only
-        <Card className="max-w-sm h-full ">
+        <Card className="w-full h-full min-h-80 rounded-none">
           <CardHeader>
             <CardDescription>Total Revenue</CardDescription>
             <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
@@ -67,7 +78,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
               <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
             </div>
           </CardContent>
-      </Card>
+        </Card>
       )}
     </div>
   );
