@@ -13,6 +13,8 @@ import {
 import { GridStackNode } from 'gridstack';
 import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
+import { Input } from '@/components/ui/input';
+import { uploadImageToComponent } from "@/api/componentsApi";
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -21,6 +23,7 @@ interface ComponentProps {
     text?: string;
     font_size?: number;
     color?: string;
+    image?: string;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -70,9 +73,8 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
         // Normal mode: Read-only
         <Card className="w-full h-full min-h-80 rounded-none">
           <CardHeader>
-            <CardDescription>Total Revenue</CardDescription>
             <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              $1,250.00
+              Title
             </CardTitle>              
           </CardHeader>
           <CardContent>
@@ -95,7 +97,7 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ node, isEditMode = 
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  
+
   useEffect(() => {
     const handleProcessFile = async () => {
       console.log("NumberOfEventsComponent: Processing file for selectedFile:", selectedFile);
@@ -154,9 +156,55 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ node, isEditMode = 
   );
 };
 
+
+const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
+  const [imageUrl, setImageUrl] = useState<string | null>(node.image || null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const token = localStorage.getItem('access_token');
+    try {
+      const data = await uploadImageToComponent(node.id, file, token);
+      setImageUrl(data.image);
+      onUpdate?.({ image: data.image });
+    } catch (error) {
+      console.error('Upload error:', error);
+    } finally {
+      setUploading(false);
+    }
+  };
+  return (
+    <Card className="w-full h-full rounded-none">
+      <CardHeader>
+        <CardTitle>Image Component</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isEditMode ? (
+          <>
+            <Input type="file" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
+            {uploading && <p>Uploading...</p>}
+          </>
+        ) : (
+          imageUrl ? (
+            <img src={imageUrl} alt="Uploaded" className="w-full h-full object-cover" />
+          ) : (
+            <p>No image uploaded</p>
+          )
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
   NumberOfEventsComponent,
+  ImageComponent,
   // Add more as needed, e.g., ChartComponent: ChartComponent,
 };

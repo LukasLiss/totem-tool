@@ -4,8 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent
-from .serializers import EventLogSerializer, DashboardSerializer
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent
+from .serializers import EventLogSerializer, DashboardSerializer 
 from django.db.models import Max
 
 from totem_lib.ocdfg import OCDFG, CCDFG
@@ -27,6 +27,7 @@ from totem_lib.ocel import (
     load_events_from_xml,    load_objects_from_xml,
 )
 import json
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 @api_view(['GET'])
@@ -150,6 +151,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(TextBoxComponent.objects.get(id=comp.id))
             elif comp.component_name == 'NumberOfEventsComponent':
                 components.append(NumberofEventsComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'ImageComponent':
+                components.append(ImageComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -197,12 +200,45 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     color=item.get('color', 'blue'),
                 )
+            elif component_name == 'ImageComponent':
+                ImageComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    image=item.get('image', None),
+                )
             # Add more as needed
 
         return Response({"status": "saved"})
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="upload-image",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_image(self, request, pk=None):
+        dashboard = self.get_object()
 
+        image = request.FILES.get("image")
+        if not image:
+            return Response({"error": "No image provided"}, status=400)
+        if image:
+            if not image.content_type in ['image/jpeg', 'image/png', 'image/gif']:
+                return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
+            if image.size > 5 * 1024 * 1024:  # 5MB limit
+                return Response({'error': 'File too large'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            dashboard.image = image
+            dashboard.save()
+            serializer = ImageComponentSerializer(dashboard)
 
+        return Response({
+            serializer.data
+        })
 
 # TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:

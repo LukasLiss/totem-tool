@@ -246,6 +246,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
+        }  else if (item.component_name === "ImageComponent") {
+          content = "Image Component";
         } else {
           content = "Unknown";
         }
@@ -268,6 +270,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
+              (node as any).image = item.image; // For ImageComponent
             }
           }
           // Set data attribute for persistence

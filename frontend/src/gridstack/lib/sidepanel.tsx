@@ -30,6 +30,15 @@ const SidePanel: React.FC = () => {
       },
       [{ h: 2, w: 2, content: "Text Box", component_name: "TextBoxComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
     );
+
+    GridStack.setupDragIn(
+      ".sidepanel .image-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{ h: 2, w: 2, content: "Image Component", component_name: "ImageComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
+    );
     
     console.log("Drag-in setup complete");
   }, [grid]);
@@ -49,6 +58,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item text-box">
         <CirclePlus/>
         <div>Text Box</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item image-component">
+        <CirclePlus/>
+        <div>Image Component</div>
       </div>
     </div>
   );

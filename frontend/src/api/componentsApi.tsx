@@ -38,3 +38,42 @@ export async function getLayout(dashboardId: number, token: string) {
 
   return await response.json();
 }
+
+export async function uploadImageToComponent(
+  componentId: number,
+  file: File,
+  token: string
+) {
+
+  const formData = new FormData();
+  formData.append("image", file);
+
+  const response = await fetch(
+    `/api/dashboard-components/${componentId}/upload_image/`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error("Upload failed:", response.status, text);
+    throw new Error(`Image upload failed (${response.status})`);
+
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData?.error ?? errorMessage;
+    } catch {
+      // response was not JSON, keep default message
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data;
+}

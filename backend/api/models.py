@@ -70,3 +70,7 @@ class TextBoxComponent(DashboardComponent):
     text = models.TextField()
     font_size = models.IntegerField(default=14)
 
+class ImageComponent(DashboardComponent):
+    image = models.ImageField(upload_to=project_directory_path)
+
+
