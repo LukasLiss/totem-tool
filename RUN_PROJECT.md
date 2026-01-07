@@ -1,6 +1,6 @@
 # How to Run the Project
 
-This guide provides the steps to run the Django backend, the React frontend, and the `totem_lib`.
+This guide provides the steps to run the Django backend, the React frontend, and the `totem_lib` (in development mode).
 
 ## Prerequisites
 
@@ -35,6 +35,7 @@ This guide provides the steps to run the Django backend, the React frontend, and
 1.  **Run the backend server:**
     ```bash
     python backend/manage.py migrate
+    python backend/manage.py loaddata initial_user.json
     python backend/manage.py runserver
     ```
     The backend will be running at `http://127.0.0.1:8000`.

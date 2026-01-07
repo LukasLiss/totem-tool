@@ -8,17 +8,19 @@ Your Windows executable has been successfully created using electron-packager.
 
 The Windows executable is located at:
 ```
-electron/dist/totem-tool-win32-x64/totem-tool.exe
+electron/dist/win-unpacked/totem-tool.exe
 ```
 
 ## 🚀 How to Build (Simple Commands)
 
 ### Option 1: Use the automated build script
 ```bash
+npm run setup-env
+.\.venv\Scripts\Activate.ps1
 npm run build-all
 ```
 
-### Option 2: Manual step-by-step
+### Option 2: Manual step-by-step (TODO: OUTDATED)
 ```bash
 # 1. Build React frontend
 npm run build-frontend
