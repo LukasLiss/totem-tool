@@ -2,12 +2,12 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { useContext } from "react";
 import {
   SidebarInset,
-  SidebarProvider
+  SidebarProvider,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
-import { DashboardView } from "./components/dashboard_view";
-
+import Grid from './components/grid';
 
 export function ProcessOverview() {
       const { selectedDashboard } = useContext(DashboardContext);
@@ -19,11 +19,11 @@ export function ProcessOverview() {
       <SidebarInset>
         <div>
           <SidebarTrigger />
-          {selectedDashboard === "DevDash" ? (
+          {selectedDashboard === -1 ? (
             <>
               {console.log("DevDash activated")}
               <DevDashboard />
-            </>) : (<DashboardView/>)
+            </>) : (<Grid/>)
           }
         </div>
 
@@ -32,5 +32,5 @@ export function ProcessOverview() {
     </SidebarProvider>
   )
 }
- 
+
 export default ProcessOverview;

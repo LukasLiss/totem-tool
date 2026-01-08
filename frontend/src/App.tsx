@@ -10,7 +10,6 @@ import { ProcessOverview } from "./ProcessOverview_new";
 import { DashboardProvider } from "./contexts/DashboardContext";
 import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
-import  Grid from './Grid_new';
 
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -27,7 +26,6 @@ function App() {
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
-              <Route path="/grid" element={<Grid/>}/>
           </Routes>
         </div>
       </DashboardProvider>

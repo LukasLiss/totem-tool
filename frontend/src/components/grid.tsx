@@ -1,20 +1,17 @@
 import React, { useContext, useEffect } from "react";
-import GridProvider from "./gridstack/lib/gridstackprovider"
-import DashboardGrid from "./gridstack/lib/dashboard_grid";
-import SidePanel from "./gridstack/lib/sidepanel";
-import "./styles/grid_demo.css";
+import GridProvider from "../gridstack/lib/gridstackprovider"
+import DashboardGrid from "../gridstack/lib/dashboard_grid";
+import SidePanel from "../gridstack/lib/sidepanel";
+import "../styles/grid_demo.css";
 import {
   SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { AppSidebar } from "./components/app-sidebar";
-import GridContainer from "./gridstack/lib/grid_container";
-import { useGrid } from "./gridstack/lib/gridstackprovider";
-import { saveLayout, getLayout } from "./api/componentsApi";
+import GridContainer from "../gridstack/lib/grid_container";
+import { useGrid } from "../gridstack/lib/gridstackprovider";
+import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
-import { useGridMode } from './gridstack/lib/gridstackprovider';
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
+import { useGridMode } from '../gridstack/lib/gridstackprovider';
 
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -144,14 +141,11 @@ const GridContent: React.FC = () => {
 
 const Grid: React.FC = () => {
   return (
-    <SidebarProvider>
-      <AppSidebar/>
-      <SidebarInset>
-        <GridProvider>
-          <GridContent />
-        </GridProvider>
-      </SidebarInset>
-    </SidebarProvider>  
+  <SidebarInset>
+    <GridProvider>
+      <GridContent />
+    </GridProvider>
+  </SidebarInset>
   );
 };
 
