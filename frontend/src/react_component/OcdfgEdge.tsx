@@ -14,6 +14,7 @@ type NodeVariant = 'start' | 'end' | 'center';
 type EdgeData = {
   polyline?: Point[];
   owners?: string[];
+  ownerTypes?: string[];
   colors?: Record<string, string>;
   parallelIndex?: number;
   parallelCount?: number;

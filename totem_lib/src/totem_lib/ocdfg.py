@@ -186,6 +186,8 @@ class OCDFG(nx.DiGraph):
         for node in graph.nodes():
             graph.nodes[node]['types'] = sorted(list(graph.nodes[node].get('types', [])))
         for u, v in graph.edges():
-            graph.edges[u, v]['owners'] = sorted(list(graph.edges[u, v].get('owners', [])))
+            owners = sorted(list(graph.edges[u, v].get('owners', [])))
+            graph.edges[u, v]['owners'] = owners
+            graph.edges[u, v]['ownerTypes'] = owners.copy()
             
         return graph

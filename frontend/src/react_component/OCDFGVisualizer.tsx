@@ -68,6 +68,7 @@ interface DfgData {
 interface OCDFGVisualizerProps {
   height?: string | number;
   data?: OcdfgGraph;
+  fileId?: number;
   variant?: 'full' | 'canvas' | 'detail';
   layoutDirection?: 'TB' | 'LR';
   instanceId?: string;
@@ -211,11 +212,11 @@ function transformLayoutDirection(
     const nextData =
       swappedPolyline || swappedSourceOffset || swappedTargetOffset
         ? {
-            ...data,
-            polyline: swappedPolyline ?? data?.polyline,
-            sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
-            targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
-          }
+          ...data,
+          polyline: swappedPolyline ?? data?.polyline,
+          sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
+          targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
+        }
         : data;
 
     return nextData ? { ...edge, data: nextData } : edge;
@@ -227,6 +228,7 @@ function transformLayoutDirection(
 function OCDFGVisualizer({
   height = 'calc(100vh - 50px)',
   data,
+  fileId,
   variant = 'full',
   layoutDirection = 'TB',
   instanceId,
@@ -289,6 +291,30 @@ function OCDFGVisualizer({
     return keysA.every(k => Boolean(a[k]) === Boolean(b[k]));
   };
 
+  const resolveOwnerTypes = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
+    const values = entry?.ownerTypes && entry.ownerTypes.length > 0
+      ? entry.ownerTypes
+      : entry?.owners ?? [];
+    return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
+  };
+
+  const resolveOwnerPairs = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
+    const owners = entry?.owners ?? [];
+    const ownerTypes = entry?.ownerTypes ?? [];
+    if (owners.length > 0 && ownerTypes.length === owners.length) {
+      return owners
+        .map((owner, index) => ({ owner, type: ownerTypes[index] }))
+        .filter(
+          (pair): pair is { owner: string; type: string } =>
+            typeof pair.owner === 'string'
+            && pair.owner.length > 0
+            && typeof pair.type === 'string'
+            && pair.type.length > 0,
+        );
+    }
+    return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
+  };
+
   function computeTypeAvailability(layoutNodes: Node[], layoutEdges: Edge[], allTypes: string[]) {
     const presence = Object.fromEntries(allTypes.map(t => [t, false])) as Record<string, boolean>;
     const visibleNodeIds = new Set(
@@ -299,9 +325,9 @@ function OCDFGVisualizer({
       if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) {
         return;
       }
-      const ownerTypes = ((edge.data as { owners?: string[] } | undefined)?.owners ?? [])
-        .map(owner => owner.split('_')[0])
-        .filter(Boolean);
+      const ownerTypes = resolveOwnerTypes(
+        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
+      );
       ownerTypes.forEach((t) => {
         if (t in presence) {
           presence[t] = true;
@@ -349,7 +375,11 @@ function OCDFGVisualizer({
     }
 
     let cancelled = false;
-    fetch('http://127.0.0.1:8000/api/ocdfg/')
+    const url = fileId
+      ? `http://127.0.0.1:8000/api/ocdfg/?file_id=${fileId}`
+      : 'http://127.0.0.1:8000/api/ocdfg/';
+
+    fetch(url)
       .then((response) => response.json())
       .then((payload: DfgData) => {
         if (cancelled) return;
@@ -373,7 +403,7 @@ function OCDFGVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data]);
+  }, [data, fileId]);
 
   useEffect(() => {
     if (!dfgData) {
@@ -401,8 +431,7 @@ function OCDFGVisualizer({
     const allTypes = Array.from(new Set(dfgNodes.flatMap((node) => node.types ?? [])));
     const ownersByType = new Map<string, Set<string>>();
     dfgLinks.forEach((link) => {
-      (link.owners ?? []).forEach((owner) => {
-        const type = owner.split('_')[0];
+      resolveOwnerPairs(link).forEach(({ owner, type }) => {
         if (!ownersByType.has(type)) ownersByType.set(type, new Set());
         ownersByType.get(type)!.add(owner);
       });
@@ -597,6 +626,7 @@ function OCDFGVisualizer({
         animated: true,
         data: {
           owners: link.owners ?? [],
+          ownerTypes: link.ownerTypes ?? [],
           colors,
           parallelIndex: currentIndex,
           parallelCount: groupCounts[key],
@@ -692,11 +722,11 @@ function OCDFGVisualizer({
         }
         const mergedAvailability = initialAvailabilityRef.current
           ? Object.fromEntries(
-              Object.keys(availability).map((type) => [
-                type,
-                availability[type] || initialAvailabilityRef.current?.[type] === true,
-              ]),
-            )
+            Object.keys(availability).map((type) => [
+              type,
+              availability[type] || initialAvailabilityRef.current?.[type] === true,
+            ]),
+          )
           : availability;
         initialAvailabilityRef.current = mergedAvailability;
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
@@ -730,11 +760,11 @@ function OCDFGVisualizer({
     }
     const mergedAvailability = initialAvailabilityRef.current
       ? Object.fromEntries(
-          Object.keys(availability).map((type) => [
-            type,
-            availability[type] || initialAvailabilityRef.current?.[type] === true,
-          ]),
-        )
+        Object.keys(availability).map((type) => [
+          type,
+          availability[type] || initialAvailabilityRef.current?.[type] === true,
+        ]),
+      )
       : availability;
     initialAvailabilityRef.current = mergedAvailability;
     setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
@@ -754,9 +784,9 @@ function OCDFGVisualizer({
 
     const visibleNodeIds = new Set(resolvedNodes.filter(n => !n.hidden).map(n => n.id));
     const filteredEdges = baseEdges.filter(edge => {
-      const ownerTypes = ((edge.data as { owners?: string[] } | undefined)?.owners ?? [])
-        .map(owner => owner.split('_')[0])
-        .filter(Boolean);
+      const ownerTypes = resolveOwnerTypes(
+        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
+      );
       const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
       if (blockedByType) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);

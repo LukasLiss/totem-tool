@@ -1011,6 +1011,35 @@ function getLayoutSpacing(direction: 'TB' | 'LR' = 'TB', preset?: string) {
   return { nodePrimarySpacing, columnPadding, columnSpacing };
 }
 
+type OwnerEntry = {
+  owners?: string[];
+  ownerTypes?: string[];
+};
+
+const resolveOwnerTypes = (entry: OwnerEntry) => {
+  const values = entry.ownerTypes && entry.ownerTypes.length > 0
+    ? entry.ownerTypes
+    : entry.owners ?? [];
+  return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
+};
+
+const resolveOwnerPairs = (entry: OwnerEntry) => {
+  const owners = entry.owners ?? [];
+  const ownerTypes = entry.ownerTypes ?? [];
+  if (owners.length > 0 && ownerTypes.length === owners.length) {
+    return owners
+      .map((owner, index) => ({ owner, type: ownerTypes[index] }))
+      .filter(
+        (pair): pair is { owner: string; type: string } =>
+          typeof pair.owner === 'string'
+          && pair.owner.length > 0
+          && typeof pair.type === 'string'
+          && pair.type.length > 0,
+      );
+  }
+  return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
+};
+
 async function layoutWithLongestTrace(
   renderNodes: Node[],
   renderEdges: Edge[],
@@ -1036,13 +1065,16 @@ async function layoutWithLongestTrace(
   // Build a map of edges by their owners (object instances)
   // For each owner, we'll track which edges they followed
   const ownerEdges = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
+  const ownerTypeByOwner = new Map<string, string>();
 
   dfgLinks.forEach(link => {
-    const owners = link.owners || [];
-    owners.forEach(owner => {
-      const ownerType = owner.split('_')[0];
-      if (activeTypeSet && !activeTypeSet.has(ownerType)) {
+    const ownerPairs = resolveOwnerPairs(link);
+    ownerPairs.forEach(({ owner, type }) => {
+      if (activeTypeSet && !activeTypeSet.has(type)) {
         return;
+      }
+      if (!ownerTypeByOwner.has(owner)) {
+        ownerTypeByOwner.set(owner, type);
       }
       if (!ownerEdges.has(owner)) {
         ownerEdges.set(owner, []);
@@ -1140,7 +1172,7 @@ async function layoutWithLongestTrace(
   const tracesByType = new Map<string, TraceInfo[]>();
   allTraces.forEach((t) => {
     if (t.trace.length === 0) return;
-    const ownerType = t.owner.split('_')[0];
+    const ownerType = ownerTypeByOwner.get(t.owner) ?? t.owner;
     if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
     if (!tracesByType.has(ownerType)) {
       tracesByType.set(ownerType, []);
@@ -1921,15 +1953,16 @@ async function layoutWithLongestTrace(
     }
 
     // Get all owners and group by object type
-    const edgeOwners = (edge.data as { owners?: string[] })?.owners || [];
     const ownersByType = new Map<string, string[]>();
+    const ownerPairs = resolveOwnerPairs(
+      (edge.data as OwnerEntry | undefined) ?? {},
+    );
 
-    edgeOwners.forEach(owner => {
-      const ownerType = owner.split('_')[0];
-      if (!ownersByType.has(ownerType)) {
-        ownersByType.set(ownerType, []);
+    ownerPairs.forEach(({ owner, type }) => {
+      if (!ownersByType.has(type)) {
+        ownersByType.set(type, []);
       }
-      ownersByType.get(ownerType)!.push(owner);
+      ownersByType.get(type)!.push(owner);
     });
 
     // Create one edge per object type
@@ -1948,6 +1981,7 @@ async function layoutWithLongestTrace(
           data: {
             ...edge.data,
             owners,
+            ownerTypes: owners.map(() => objectType),
             objectType, // Store the single object type for this edge
           },
         });
