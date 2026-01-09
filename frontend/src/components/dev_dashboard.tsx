@@ -75,7 +75,7 @@ export function DevDashboard() {
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
               <div className="line-clamp-1 flex gap-2 font-medium">
-                Trending up this month 
+                Trending up this month
               </div>
               <div className="text-muted-foreground">
                 Visitors for the last 6 months
@@ -91,7 +91,7 @@ export function DevDashboard() {
             </CardHeader>
             <CardContent className="h-[560px] p-0">
               <ReactFlowProvider>
-                <OCDFGVisualizer height="100%" />
+                <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
               </ReactFlowProvider>
             </CardContent>
           </Card>

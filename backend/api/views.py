@@ -302,11 +302,7 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    log = ObjectCentricEventLog()
-    log.events = events_df
-    log.object_df = objects_df
-
-    return log
+    return ObjectCentricEventLog(events=events_df, objects=objects_df)
 
 
 def _serialize_totem(totem: Totem) -> dict:
@@ -1538,10 +1534,10 @@ def OCDFGViewSet(request):
             }
         ]
     })
-    
-    return Response({"dfg": mockup}, status=status.HTTP_200_OK)
-    
-    file_id = request.query.get("file_id")
+
+    # return Response({"dfg": mockup}, status=status.HTTP_200_OK)
+
+    file_id = request.query_params.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
     
@@ -1558,8 +1554,6 @@ def OCDFGViewSet(request):
         except Exception as e:
             return Response({"error": f"Failed to load OCEL from file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        
-    
     try:
         ocdfg = OCDFG.from_ocel(ocel)
         # build a json response from the dfg that is a OCDFG-object
