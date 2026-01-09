@@ -157,9 +157,7 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    log = ObjectCentricEventLog()
-    log.events = events_df
-    log.object_df = objects_df
+    log = ObjectCentricEventLog(events=events_df, objects=objects_df)
 
     return log
 
