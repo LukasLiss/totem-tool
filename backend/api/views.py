@@ -75,6 +75,27 @@ class EventLogViewSet(viewsets.ModelViewSet):
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
+    def object_types(self, request, pk=None):
+        """Returns the list of object types present in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                # We reuse the utility function that handles file format detection
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response(ocel.object_types, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
         try:
             user_file = self.get_queryset().get(pk=pk)
@@ -1312,7 +1333,18 @@ def variants(request):
         print(f"CACHE HIT for file_id: {file_id}. Using cached OCEL object.")
 
     try:
-        leading_object_type = "Transport Document"  #request.query_params.get("leading_type", "Handling Unit")
+        leading_object_type = request.query_params.get("leading_type")
+
+        # If no leading_type provided or it doesn't exist, use first alphabetically sorted type
+        if not leading_object_type or leading_object_type not in ocel.object_types:
+            if ocel.object_types and len(ocel.object_types) > 0:
+                leading_object_type = sorted(ocel.object_types)[0]
+            else:
+                return Response({
+                    "variants": [],
+                    "object_types": []
+                }, status=status.HTTP_200_OK)
+
         mined = find_variants(ocel, leading_type=leading_object_type)
     except Exception as e:
         return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1349,7 +1381,10 @@ def variants(request):
             },
         })
 
-    return Response({"variants": out}, status=status.HTTP_200_OK)
+    return Response({
+        "variants": out,
+        "object_types": ocel.object_types
+    }, status=status.HTTP_200_OK)
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])

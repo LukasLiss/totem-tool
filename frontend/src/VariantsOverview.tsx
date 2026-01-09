@@ -11,6 +11,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardAction,
@@ -19,6 +20,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { ChevronDown } from "lucide-react";
 
 
 export function VariantsOverview() {
@@ -28,6 +39,15 @@ export function VariantsOverview() {
     useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [leadingType, setLeadingType] = useState<string>("");
+
+  // Reset leading type when file changes
+  useEffect(() => {
+    setLeadingType("");
+    setAvailableTypes([]);
+  }, [selectedFile]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -35,12 +55,17 @@ export function VariantsOverview() {
       const filePath = (selectedFile as any)?.file as string | undefined;
       const fileId = (selectedFile as any)?.id as number | undefined;
 
-      const qs =
+      let qs =
         fileId != null
           ? `?file_id=${fileId}`
           : filePath
             ? `?file_path=${encodeURIComponent(filePath)}`
             : "";
+
+      // Only add leading_type parameter if it's set
+      if (qs && leadingType) {
+        qs += `&leading_type=${encodeURIComponent(leadingType)}`;
+      }
 
       setStatus("loading");
       setErrorMsg("");
@@ -59,6 +84,19 @@ export function VariantsOverview() {
         }
 
         const data = await res.json();
+
+        // Extract available object types if provided
+        if (data.object_types && Array.isArray(data.object_types)) {
+          setAvailableTypes(data.object_types);
+
+          // If leadingType is not set, auto-select the first alphabetically sorted type
+          if (!leadingType && data.object_types.length > 0) {
+            const sortedTypes = [...data.object_types].sort();
+            setLeadingType(sortedTypes[0]);
+            return; // Exit early to trigger re-fetch with selected type
+          }
+        }
+
         const arr: Variant[] = Array.isArray(data) ? data : data.variants;
 
         if (!cancelled) {
@@ -74,7 +112,7 @@ export function VariantsOverview() {
     })();
 
     return () => { cancelled = true; };
-  }, [selectedFile]);
+  }, [selectedFile, leadingType]);
 
   return (
     <SidebarProvider>
@@ -112,11 +150,41 @@ export function VariantsOverview() {
             <div className="bg-muted/50 aspect-video rounded-xl" />
           </div>
           <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min p-4">
-            <div className="mb-4">
+            <div className="mb-4 flex flex-wrap gap-4 items-center">
               <FileSelect />
+
+              {selectedFile && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Perspective:</span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" className="min-w-[150px] justify-between">
+                        {leadingType}
+                        <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-[200px]">
+                      <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuRadioGroup value={leadingType} onValueChange={setLeadingType}>
+                        {availableTypes.length > 0 ? (
+                          availableTypes.map((type) => (
+                            <DropdownMenuRadioItem key={type} value={type}>
+                              {type}
+                            </DropdownMenuRadioItem>
+                          ))
+                        ) : (
+                          <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
+                        )}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
             </div>
+
             {selectedFile ? (
-              <p>Currently selected: {String((selectedFile as any).file || (selectedFile as any).name || "").split("/").pop()}</p>
+              <p className="mb-2 text-sm text-muted-foreground">Currently selected: {String((selectedFile as any).file || (selectedFile as any).name || "").split("/").pop()}</p>
             ) : (
               <p>No file selected</p>
             )}
