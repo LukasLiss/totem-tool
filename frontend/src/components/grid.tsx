@@ -132,7 +132,7 @@ const GridContent: React.FC = () => {
             <DashboardGrid />
           </GridContainer>
         </div>
-        <SidePanel />
+        {isEditMode ? <SidePanel /> : null}
 
       </div>
     </div>
