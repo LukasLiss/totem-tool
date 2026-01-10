@@ -5,7 +5,10 @@ import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
   SidebarInset,
+  SidebarTrigger
 } from "@/components/ui/sidebar"
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import GridContainer from "../gridstack/lib/grid_container";
 import { useGrid } from "../gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "../api/componentsApi";
@@ -106,13 +109,27 @@ const GridContent: React.FC = () => {
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
       <div className="flex justify-end p-2 space-x-2">
+        <SidebarTrigger className="mr-auto"/>
+        
         {isEditMode ?
-          <Save className="hover:bg-sidebar-accent w-10 h-10" onClick={handleSave} />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleSave}
+          >
+            <Save />
+            <span className="sr-only">Toggle Sidebar</span>
+          </Button>
           : null}
-        <Settings className="hover:bg-sidebar-accent w-10 h-10" onClick={() => {
+        <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
-            setIsEditMode(!isEditMode);
-          }} />
+            setIsEditMode(!isEditMode);}}>
+            <Settings />
+            <span className="sr-only">Toggle Sidebar</span>
+          </Button>
         
         
       </div>

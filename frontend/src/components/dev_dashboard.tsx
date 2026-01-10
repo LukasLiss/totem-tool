@@ -40,6 +40,7 @@ export function DevDashboard() {
   }, [selectedFile]);
   return (
     <div>
+      <SidebarTrigger/>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <div className="grid auto-rows-min gap-4 *:data-[slot=card]:bg-card dark:*:data-[slot=card]:bg-card *:data-[slot=card]:shadow-xs">
           <Card className="@container/card max-w-sm">
