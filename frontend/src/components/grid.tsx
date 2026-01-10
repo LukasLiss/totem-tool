@@ -8,7 +8,6 @@ import {
   SidebarTrigger
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import GridContainer from "../gridstack/lib/grid_container";
 import { useGrid } from "../gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "../api/componentsApi";

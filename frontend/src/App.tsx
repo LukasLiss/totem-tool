@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
 import UploadView from "./UploadView";
@@ -27,6 +27,7 @@ function App() {
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
+            <Route path="/" element={<Navigate to="/upload" replace />} />
           </Routes>
         </div>
       </DashboardProvider>
