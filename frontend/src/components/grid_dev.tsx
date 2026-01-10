@@ -12,9 +12,6 @@ import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
-import {
-  Settings, Save
-} from "lucide-react"
 
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -106,15 +103,27 @@ const GridContent: React.FC = () => {
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
       <div className="flex justify-end p-2 space-x-2">
-        {isEditMode ?
-          <Save className="hover:bg-sidebar-accent w-10 h-10" onClick={handleSave} />
-          : null}
-        <Settings className="hover:bg-sidebar-accent w-10 h-10" onClick={() => {
+        <button
+          onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
             setIsEditMode(!isEditMode);
-          }} />
-        
-        
+          }}
+          className={`px-4 py-2 rounded ${isEditMode ? 'bg-green-500 text-white' : 'bg-gray-500 text-white'}`}
+        >
+          {isEditMode ? 'Disable Edit Mode' : 'Enable Edit Mode'}
+        </button>
+        <button onClick={() => resetGrid()} className="bg-red-500 text-white px-4 py-2 rounded">
+          Reset Grid
+        </button>
+        <button onClick={handleLoad} className="bg-green-500 text-white px-4 py-2 rounded">
+          Load Layout
+        </button>
+        <button onClick={handleSave} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Save Layout
+        </button>
+        <button onClick={handleLog} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Log Layout
+        </button>
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
         
@@ -130,7 +139,7 @@ const GridContent: React.FC = () => {
   );
 };
 
-const Grid: React.FC = () => {
+const DevGrid: React.FC = () => {
   return (
   <SidebarInset>
     <GridProvider>
@@ -140,4 +149,4 @@ const Grid: React.FC = () => {
   );
 };
 
-export default Grid;
+export default DevGrid;

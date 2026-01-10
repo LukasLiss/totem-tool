@@ -1,5 +1,5 @@
-import { ChevronRight, Plus, FileStack, Settings2 } from "lucide-react"
-import React, { useContext, useEffect, useState } from 'react'
+import { ChevronRight, FileStack, Settings2 } from "lucide-react"
+import { useContext,  useState } from 'react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,15 +29,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { addDashboard, deleteDashboard, getDashboards, renameDashboard } from "@/api/dashboardApi"
+import { toast } from "sonner"
+import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
 
@@ -70,7 +69,7 @@ export function NavDashboard({
       setDashboardname("");        // ✅ reset input field
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Upload failed");
+      toast.error("Dashboard could not be created");
     }
   };
 
@@ -86,16 +85,10 @@ export function NavDashboard({
     setDashboardToRename(null); // reset
   } catch (err) {
     console.error("Rename failed:", err);
-    alert("Rename failed");
+    toast.error("Dashboard could not be renamed");
   }
 };
 
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    await handleAddDashboard();
-    await fetchDashboards();
- };
 
   const handleDeleteDashboard = async () => {
 
@@ -107,7 +100,7 @@ export function NavDashboard({
     setDashboardToDelete(null); // reset
   } catch (err) {
     console.error("Delete failed:", err);
-    alert("Delete failed");
+    toast.error("Dashboard could not be deleted");
   }
 };
 

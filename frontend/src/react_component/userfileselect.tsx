@@ -2,12 +2,9 @@ import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import './component_styles/userfileselect.css';
 import { Button } from "@/components/ui/button";
 import {
   Card,
-  CardAction,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -92,9 +89,9 @@ function UserFileSelect() {
           </PopoverTrigger>
           <PopoverContent className="w-[300px] p-0">
             <Command>
-              <CommandInput placeholder="Search framework..." />
+              <CommandInput placeholder="Search files..." />
               <CommandList>
-                <CommandEmpty>No framework found.</CommandEmpty>
+                <CommandEmpty>No file found.</CommandEmpty>
                 <CommandGroup>
                   {files.map((file) => (
                     <CommandItem

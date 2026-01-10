@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useContext } from "react";
 import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
-
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +20,6 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
-
 
 // extend type to allow optional logo component
 
