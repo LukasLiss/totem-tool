@@ -1,4 +1,5 @@
 import React, { useContext, useEffect, useState } from "react";
+import { RefreshCcw } from "lucide-react";
 import {
   Card,
   CardAction,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/card"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
@@ -18,6 +20,7 @@ import TotemVisualizer from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
   const [processedResult, setProcessedResult] = useState(null);
+  const [totemReloadSignal, setTotemReloadSignal] = useState(0);
 
   const { selectedFile } = useContext(SelectedFileContext);
   useEffect(() => {
@@ -48,15 +51,29 @@ export function DevDashboard() {
       </header>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <Card className="@container/card">
-          <CardHeader>
+          <CardHeader className="items-center">
             <CardTitle>Totem Visualizer</CardTitle>
-            <CardDescription>
-              Explore temporal relations between object types discovered from the selected event log.
-            </CardDescription>
+            <CardAction>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setTotemReloadSignal((value) => value + 1)}
+                disabled={!selectedFile?.id}
+                className="flex items-center gap-2"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                Reload
+              </Button>
+            </CardAction>
           </CardHeader>
           <CardContent className="h-[600px] p-0">
             <ReactFlowProvider>
-              <TotemVisualizer eventLogId={selectedFile?.id} height="100%" backendBaseUrl="http://localhost:8000" />
+              <TotemVisualizer
+                eventLogId={selectedFile?.id}
+                height="100%"
+                backendBaseUrl="http://localhost:8000"
+                reloadSignal={totemReloadSignal}
+              />
             </ReactFlowProvider>
           </CardContent>
         </Card>
@@ -85,9 +102,6 @@ export function DevDashboard() {
           <Card className="@container/card">
             <CardHeader>
               <CardTitle>Object-Centric DFG</CardTitle>
-              <CardDescription>
-                Interactive visualization of the discovered object-centric DFG.
-              </CardDescription>
             </CardHeader>
             <CardContent className="h-[560px] p-0">
               <ReactFlowProvider>
