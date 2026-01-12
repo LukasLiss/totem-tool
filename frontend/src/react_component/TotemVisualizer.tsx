@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCcw } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,6 +40,7 @@ type TotemVisualizerProps = {
   eventLogId?: number | string | null;
   height?: string | number;
   backendBaseUrl?: string;
+  reloadSignal?: number;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -1402,6 +1402,7 @@ function TotemVisualizer({
   eventLogId,
   height = '100%',
   backendBaseUrl = DEFAULT_BACKEND,
+  reloadSignal,
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1522,7 +1523,7 @@ function TotemVisualizer({
 
   useEffect(() => {
     fetchTotem();
-  }, [fetchTotem]);
+  }, [fetchTotem, reloadSignal]);
 
   useEffect(() => {
     setExpandedAreas({});
@@ -1684,18 +1685,6 @@ function TotemVisualizer({
           )}
 
           <div style={{ position: 'relative' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-              <Button
-                variant="outline"
-                onClick={fetchTotem}
-                disabled={!eventLogId || loading}
-                className="flex items-center gap-2"
-              >
-                <RefreshCcw className="h-4 w-4" />
-                Reload
-              </Button>
-            </div>
-
             {error && (
               <div
                 style={{
