@@ -459,7 +459,40 @@ const OcdfgEdge = memo(function OcdfgEdge({
           } else if (index === basePoints.length - 1) {
             return { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
           }
-          return { ...point };
+
+          // Proportional stretching: transform intermediate points to follow node movement
+          // This makes curved edges stay smooth during node dragging
+          const originalSrc = basePoints[0];
+          const originalTgt = basePoints[basePoints.length - 1];
+          const newSrc = { x: sourceX + sourceOffset.x, y: sourceY + sourceOffset.y };
+          const newTgt = { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
+
+          // Calculate original position relative to endpoints (0 to 1 range)
+          const originalVector = {
+            x: originalTgt.x - originalSrc.x,
+            y: originalTgt.y - originalSrc.y,
+          };
+
+          // Avoid division by zero for perfectly aligned endpoints
+          const relX =
+            Math.abs(originalVector.x) > 0.001
+              ? (point.x - originalSrc.x) / originalVector.x
+              : 0.5;
+          const relY =
+            Math.abs(originalVector.y) > 0.001
+              ? (point.y - originalSrc.y) / originalVector.y
+              : 0.5;
+
+          // Apply same relative position to new endpoints
+          const newVector = {
+            x: newTgt.x - newSrc.x,
+            y: newTgt.y - newSrc.y,
+          };
+
+          return {
+            x: newSrc.x + relX * newVector.x,
+            y: newSrc.y + relY * newVector.y,
+          };
         })
       : clampPolylineToEndpoints(
           basePoints,
