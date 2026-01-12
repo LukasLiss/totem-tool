@@ -476,9 +476,14 @@ const OcdfgEdge = memo(function OcdfgEdge({
       const currentSource = clamped[0];
       const nextPoint = clamped[1];
       if (!pointOnNodeBoundary(currentSource, sourceGeometry)) {
+        // For lane-offset edges, use the offset center for collision calculation
+        const offsetCenter = {
+          x: sourceGeometry.center.x + sourceOffset.x,
+          y: sourceGeometry.center.y + sourceOffset.y,
+        };
         const collisionFromSource = calculateCollisionPoint(
           nextPoint,
-          sourceGeometry.center,
+          offsetCenter,
           sourceGeometry.size.width,
           sourceGeometry.size.height,
         );
@@ -502,9 +507,14 @@ const OcdfgEdge = memo(function OcdfgEdge({
     }
 
     const approachPoint = clamped[clamped.length - 2];
+    // For lane-offset edges, use the offset center for collision calculation
+    const targetOffsetCenter = {
+      x: targetGeometry.center.x + targetOffset.x,
+      y: targetGeometry.center.y + targetOffset.y,
+    };
     const collision = calculateCollisionPoint(
       approachPoint,
-      targetGeometry.center,
+      targetOffsetCenter,
       targetGeometry.size.width,
       targetGeometry.size.height,
     );
