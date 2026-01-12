@@ -579,9 +579,24 @@ async function layoutWithSugiyama(
     config.direction,
   );
 
+  const terminalFirst = (edges: Edge[]) => {
+    const isTerminalEdge = (edge: Edge) => {
+      const data = edge.data as { sourceVariant?: string; targetVariant?: string } | undefined;
+      return data?.sourceVariant === 'start'
+        || data?.sourceVariant === 'end'
+        || data?.targetVariant === 'start'
+        || data?.targetVariant === 'end';
+    };
+    return [...edges].sort((a, b) => {
+      const ta = isTerminalEdge(a) ? 0 : 1; // terminal edges first (background)
+      const tb = isTerminalEdge(b) ? 0 : 1;
+      return ta - tb;
+    });
+  };
+
   const allNodes = [...positionedNodes, ...bufferZoneNodes, ...dummyReactFlowNodes, ...layerNodes];
 
-  return { nodes: allNodes, edges: enhancedEdges, debug };
+  return { nodes: allNodes, edges: terminalFirst(enhancedEdges), debug };
 }
 
 type LaneEndpointInfo = {
@@ -1671,16 +1686,25 @@ async function layoutWithLongestTrace(
     return undefined;
   };
 
-  // Only enforce the layering rule for end nodes: layer(end) = max(layer(pred)) + 1.
-  const layerOf = new Map<string, number>();
-  visibleLayerIds.forEach((id) => {
-    const node = nodeMap.get(id);
-    if (!node || !node.position) return;
-    const h = node.height ?? DEFAULT_NODE_HEIGHT;
-    const centerY = node.position.y + h / 2;
-    const approxLayer = Math.max(0, Math.round((centerY - START_Y) / VERTICAL_SPACING));
-    layerOf.set(id, approxLayer);
-  });
+  const computeLayerMap = (nodesById: Map<string, Node>) => {
+    const layerMap = new Map<string, number>();
+    visibleLayerIds.forEach((id) => {
+      const node = nodesById.get(id);
+      if (!node || !node.position) return;
+      const h = node.height ?? DEFAULT_NODE_HEIGHT;
+      const centerY = node.position.y + h / 2;
+      const rawLayer = (centerY - START_Y) / VERTICAL_SPACING;
+      let approxLayer = Math.round(rawLayer);
+      const variant = variantOf(id);
+      if (variant === 'start') {
+        approxLayer = Math.min(approxLayer, -1);
+      } else {
+        approxLayer = Math.max(0, approxLayer);
+      }
+      layerMap.set(id, approxLayer);
+    });
+    return layerMap;
+  };
 
   const predecessors = new Map<string, Set<string>>();
   const addPred = (to: string, from: string) => {
@@ -1694,47 +1718,130 @@ async function layoutWithLongestTrace(
     }
   });
 
-  // Resolve deepest layer reachable via predecessors (longest path depth).
-  const layerMemo = new Map<string, number>();
-  const resolving = new Set<string>();
-  const resolveDeepestLayer = (id: string): number => {
-    if (layerMemo.has(id)) return layerMemo.get(id)!;
-    if (resolving.has(id)) {
-      // Cycle guard: fall back to current layer estimate
-      return layerOf.get(id) ?? 0;
-    }
-    resolving.add(id);
-    let best = layerOf.get(id) ?? 0;
-    const preds = predecessors.get(id);
-    if (preds && preds.size > 0) {
-      preds.forEach((pred) => {
-        const candidate = resolveDeepestLayer(pred) + 1;
-        if (candidate > best) best = candidate;
-      });
-    }
-    layerMemo.set(id, best);
-    resolving.delete(id);
-    return best;
-  };
+  const applyLayerConstraints = (nodesById: Map<string, Node>, layerMap: Map<string, number>) => {
+    const baseLayers = new Map(layerMap);
+    const layerMemo = new Map<string, number>();
+    const resolving = new Set<string>();
+    const resolveDeepestLayer = (id: string): number => {
+      if (layerMemo.has(id)) return layerMemo.get(id)!;
+      if (resolving.has(id)) {
+        // Cycle guard: fall back to the current layer estimate
+        return baseLayers.get(id) ?? 0;
+      }
+      resolving.add(id);
+      let best = baseLayers.get(id) ?? 0;
+      const preds = predecessors.get(id);
+      if (preds && preds.size > 0) {
+        preds.forEach((pred) => {
+          const candidate = resolveDeepestLayer(pred) + 1;
+          if (candidate > best) best = candidate;
+        });
+      }
+      layerMemo.set(id, best);
+      resolving.delete(id);
+      return best;
+    };
 
-  visibleLayerIds.forEach((id) => {
-    if (variantOf(id) !== 'end') {
+    const resolvedLayers = new Map<string, number>();
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) === 'start') {
+        return;
+      }
+      resolvedLayers.set(id, resolveDeepestLayer(id));
+    });
+
+    const activityLayers = Array.from(resolvedLayers.entries())
+      .filter(([id]) => variantOf(id) !== 'end')
+      .map(([, layer]) => layer);
+    const maxActivityLayer = activityLayers.length > 0
+      ? Math.max(...activityLayers)
+      : 0;
+    const maxEndLayer = maxActivityLayer + 1;
+
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) === 'start') {
+        return;
+      }
+      let newLayer = resolvedLayers.get(id) ?? baseLayers.get(id) ?? 0;
+      if (variantOf(id) === 'end') {
+        newLayer = Math.min(newLayer, maxEndLayer);
+      }
+      const node = nodesById.get(id);
+      if (!node || !node.position) return;
+      const height = node.height ?? DEFAULT_NODE_HEIGHT;
+      const newCenterY = START_Y + newLayer * VERTICAL_SPACING;
+      layerMap.set(id, newLayer);
+      nodesById.set(id, {
+        ...node,
+        position: {
+          ...node.position,
+          y: newCenterY - height / 2,
+        },
+      });
+    });
+
+    // Compact layer indices to remove gaps (especially trailing empty layers).
+    const nonStartLayers = new Set<number>();
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) === 'start') {
+        return;
+      }
+      const layer = layerMap.get(id);
+      if (typeof layer === 'number' && Number.isFinite(layer)) {
+        nonStartLayers.add(layer);
+      }
+    });
+
+    if (nonStartLayers.size === 0) {
       return;
     }
-    const newLayer = resolveDeepestLayer(id);
-    const node = nodeMap.get(id);
-    if (!node || !node.position) return;
-    const height = node.height ?? DEFAULT_NODE_HEIGHT;
-    const newCenterY = START_Y + newLayer * VERTICAL_SPACING;
-    layerOf.set(id, newLayer);
-    nodeMap.set(id, {
-      ...node,
-      position: {
-        ...node.position,
-        y: newCenterY - height / 2,
-      },
+
+    const sortedLayers = Array.from(nonStartLayers).sort((a, b) => a - b);
+    const remap = new Map<number, number>();
+    let needsRemap = false;
+    sortedLayers.forEach((layer, idx) => {
+      remap.set(layer, idx);
+      if (layer !== idx) {
+        needsRemap = true;
+      }
     });
-  });
+
+    if (!needsRemap) {
+      return;
+    }
+
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) === 'start') {
+        return;
+      }
+      const oldLayer = layerMap.get(id);
+      if (oldLayer === undefined) {
+        return;
+      }
+      const newLayer = remap.get(oldLayer);
+      if (newLayer === undefined || newLayer === oldLayer) {
+        return;
+      }
+      const node = nodesById.get(id);
+      if (!node || !node.position) {
+        return;
+      }
+      const height = node.height ?? DEFAULT_NODE_HEIGHT;
+      const newCenterY = START_Y + newLayer * VERTICAL_SPACING;
+      layerMap.set(id, newLayer);
+      nodesById.set(id, {
+        ...node,
+        position: {
+          ...node.position,
+          y: newCenterY - height / 2,
+        },
+      });
+    });
+  };
+
+  let layerOf = computeLayerMap(nodeMap);
+  // Enforce a downward flow for all trace edges.
+  applyLayerConstraints(nodeMap, layerOf);
 
   // Slightly offset nodes within the same column when some traces skip over
   // intermediate nodes in that column. This keeps long vertical traces visible
@@ -1817,51 +1924,52 @@ async function layoutWithLongestTrace(
     });
   });
 
-  // Nudge later-in-trace nodes downward when an edge is nearly horizontal so flow direction stays clear.
-  const traceEdgesDirectional: Array<{ source: string; target: string; sourceOrder: number; targetOrder: number }> = [];
-  traceSequences.forEach((trace) => {
-    for (let i = 0; i < trace.length - 1; i += 1) {
-      traceEdgesDirectional.push({
-        source: trace[i],
-        target: trace[i + 1],
-        sourceOrder: i,
-        targetOrder: i + 1,
-      });
-    }
-  });
+  // Recompute layers after offsets and re-apply the constraints.
+  layerOf = computeLayerMap(nodeMap);
+  applyLayerConstraints(nodeMap, layerOf);
 
-  const enforceHorizontalDirectionality = () => {
-    const MIN_DROP = Math.max(48, VERTICAL_SPACING * 0.5);
-    traceEdgesDirectional.forEach(({ source, target, sourceOrder, targetOrder }) => {
-      const srcCenter = getCenter(source);
-      const tgtCenter = getCenter(target);
-      if (!srcCenter || !tgtCenter) return;
-      const dx = tgtCenter.x - srcCenter.x;
-      const dy = tgtCenter.y - srcCenter.y;
-      const absDx = Math.abs(dx);
-      const absDy = Math.abs(dy);
-      const horizontalEnough = absDx > 1e-3 && absDy <= Math.max(40, absDx * 0.4);
-      if (!horizontalEnough) return;
-      if (targetOrder <= sourceOrder) return;
-
-      const desiredCenterY = srcCenter.y + MIN_DROP;
-      if (tgtCenter.y < desiredCenterY - 1) {
-        const delta = desiredCenterY - tgtCenter.y;
-        const node = nodeMap.get(target);
-        if (node && node.position) {
-          nodeMap.set(target, {
-            ...node,
-            position: {
-              ...node.position,
-              y: node.position.y + delta,
-            },
-          });
+  const adjustStartNodesForTypes = (nodesById: Map<string, Node>, layerMap: Map<string, number>) => {
+    const minLayerByType = new Map<string, number>();
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) === 'start') return;
+      const layer = layerMap.get(id);
+      if (!Number.isFinite(layer)) return;
+      const types = getNodeTypes(id);
+      types.forEach((type) => {
+        const current = minLayerByType.get(type);
+        if (current === undefined || (layer as number) < current) {
+          minLayerByType.set(type, layer as number);
         }
+      });
+    });
+
+    visibleLayerIds.forEach((id) => {
+      if (variantOf(id) !== 'start') return;
+      const types = getNodeTypes(id);
+      const targetLayers = types
+        .map(t => minLayerByType.get(t))
+        .filter((v): v is number => Number.isFinite(v));
+      if (targetLayers.length === 0) {
+        return;
       }
+      const targetLayer = Math.min(...targetLayers) - 1;
+      const node = nodesById.get(id);
+      if (!node || !node.position) return;
+      const height = node.height ?? DEFAULT_NODE_HEIGHT;
+      const newCenterY = START_Y + targetLayer * VERTICAL_SPACING;
+      layerMap.set(id, targetLayer);
+      nodesById.set(id, {
+        ...node,
+        position: {
+          ...node.position,
+          y: newCenterY - height / 2,
+        },
+      });
     });
   };
 
-  enforceHorizontalDirectionality();
+  adjustStartNodesForTypes(nodeMap, layerOf);
+  layerOf = computeLayerMap(nodeMap);
 
   const adjustedPositionedNodes = Array.from(nodeMap.values());
 
@@ -1895,7 +2003,10 @@ async function layoutWithLongestTrace(
     const endNode = nodesById.get(endId);
     if (!endNode || !endNode.position) return;
     const height = endNode.height ?? DEFAULT_NODE_HEIGHT;
-    const newCenterY = maxCenter + VERTICAL_SPACING;
+    // Calculate layer for end node and snap to grid for regular spacing
+    const lastActivityLayer = Math.round((maxCenter - START_Y) / VERTICAL_SPACING);
+    const endLayer = lastActivityLayer + 1;
+    const newCenterY = START_Y + endLayer * VERTICAL_SPACING;
     nodesById.set(endId, {
       ...endNode,
       position: {
@@ -1910,6 +2021,50 @@ async function layoutWithLongestTrace(
       adjustEndNodeForTrace(trace);
     }
   });
+
+  layerOf = computeLayerMap(nodesById);
+
+  // Final safety: resolve any remaining overlaps by shifting horizontally.
+  const resolveOverlaps = (nodes: Map<string, Node>) => {
+    const margin = 12; // minimal gap between boxes
+    const visible = Array.from(nodes.values()).filter(n =>
+      !n.hidden && n.position && Number.isFinite(n.position.x) && Number.isFinite(n.position.y),
+    );
+    const maxIterations = 8;
+    for (let iter = 0; iter < maxIterations; iter += 1) {
+      let moved = false;
+      for (let i = 0; i < visible.length; i += 1) {
+        const a = visible[i];
+        const aw = a.width ?? DEFAULT_NODE_WIDTH;
+        const ah = a.height ?? DEFAULT_NODE_HEIGHT;
+        const ax1 = a.position!.x;
+        const ay1 = a.position!.y;
+        const ax2 = ax1 + aw;
+        const ay2 = ay1 + ah;
+        for (let j = i + 1; j < visible.length; j += 1) {
+          const b = visible[j];
+          const bw = b.width ?? DEFAULT_NODE_WIDTH;
+          const bh = b.height ?? DEFAULT_NODE_HEIGHT;
+          const bx1 = b.position!.x;
+          const by1 = b.position!.y;
+          const bx2 = bx1 + bw;
+          const by2 = by1 + bh;
+          const overlapX = Math.min(ax2, bx2) - Math.max(ax1, bx1);
+          const overlapY = Math.min(ay2, by2) - Math.max(ay1, by1);
+          if (overlapX > 0 && overlapY > 0) {
+            // Shift the later-index node to the right to clear overlap.
+            const shift = overlapX + margin;
+            b.position = { ...b.position!, x: b.position!.x + shift };
+            nodes.set(b.id, { ...b });
+            moved = true;
+          }
+        }
+      }
+      if (!moved) break;
+    }
+  };
+
+  resolveOverlaps(nodesById);
 
   const adjustedNodes = Array.from(nodesById.values());
   const nodeCenters = new Map<string, Point>();
@@ -2162,10 +2317,16 @@ async function layoutWithLongestTrace(
       return edge;
     }
 
-    const srcCenter = nodeCenters.get(edge.source);
-    const tgtCenter = nodeCenters.get(edge.target);
-    const normal = unitNormal(srcCenter, tgtCenter);
-    const directionSign = stableHash(`${edge.source}->${edge.target}`) % 2 === 0 ? 1 : -1;
+    const basePolyline = (edge.data as { polyline?: Point[] } | undefined)?.polyline;
+    if (!basePolyline || basePolyline.length === 0) {
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          overlayDebug: false,
+        },
+      };
+    }
 
     // Scale lane spacing by rendered stroke width so thicker edges get a wider gap.
     const data = edge.data as { thicknessFactor?: number } | undefined;
@@ -2181,8 +2342,40 @@ async function layoutWithLongestTrace(
       backgroundStroke + 6, // leave breathing room beyond the thick background stroke
     );
 
-    const offsetMagnitude = laneIndex * laneSpacing * directionSign;
-    if (Math.abs(offsetMagnitude) < 1e-6) {
+    // Determine if this is a straight edge (2 points) or curved edge (more points)
+    const isStraightEdge = basePolyline.length === 2;
+
+    let offsetVector: Point;
+
+    if (isStraightEdge) {
+      // For straight edges: use direction-aligned offset with centering
+      // This creates perfect "highway lanes" - parallel and centered
+      const centeredOffset = (laneIndex - (group.length - 1) / 2) * laneSpacing;
+
+      if (direction === 'TB') {
+        // TB mode: offset horizontally (x-axis only)
+        offsetVector = { x: centeredOffset, y: 0 };
+      } else {
+        // LR mode: offset vertically (y-axis only)
+        offsetVector = { x: 0, y: centeredOffset };
+      }
+
+      console.log(`[HIGHWAY LANES] Straight edge ${edge.id}: group=${group.length}, laneIndex=${laneIndex}, laneSpacing=${laneSpacing.toFixed(2)}, centeredOffset=${centeredOffset.toFixed(2)}, offsetVector=(${offsetVector.x.toFixed(2)}, ${offsetVector.y.toFixed(2)}), direction=${direction}`);
+    } else {
+      // For curved edges: use perpendicular offset (existing logic)
+      const srcCenter = nodeCenters.get(edge.source);
+      const tgtCenter = nodeCenters.get(edge.target);
+      const normal = unitNormal(srcCenter, tgtCenter);
+      const directionSign = stableHash(`${edge.source}->${edge.target}`) % 2 === 0 ? 1 : -1;
+      const offsetMagnitude = laneIndex * laneSpacing * directionSign;
+      offsetVector = {
+        x: normal.x * offsetMagnitude,
+        y: normal.y * offsetMagnitude,
+      };
+    }
+
+    // Skip if offset is negligible
+    if (Math.abs(offsetVector.x) < 1e-6 && Math.abs(offsetVector.y) < 1e-6) {
       return {
         ...edge,
         data: {
@@ -2191,27 +2384,18 @@ async function layoutWithLongestTrace(
         },
       };
     }
-
-    const basePolyline = (edge.data as { polyline?: Point[] } | undefined)?.polyline;
-    if (!basePolyline || basePolyline.length === 0) {
-      return {
-        ...edge,
-        data: {
-          ...edge.data,
-          overlayDebug: false,
-        },
-      };
-    }
-
-    const offsetVector = {
-      x: normal.x * offsetMagnitude,
-      y: normal.y * offsetMagnitude,
-    };
 
     const shiftedPolyline = basePolyline.map(p => ({
       x: p.x + offsetVector.x,
       y: p.y + offsetVector.y,
     })) ?? [];
+
+    if (isStraightEdge && group.length > 1) {
+      console.log(`[HIGHWAY LANES] Shifted polyline for ${edge.id}:`,
+        `base: (${basePolyline[0].x.toFixed(1)}, ${basePolyline[0].y.toFixed(1)}) -> (${basePolyline[1].x.toFixed(1)}, ${basePolyline[1].y.toFixed(1)})`,
+        `shifted: (${shiftedPolyline[0].x.toFixed(1)}, ${shiftedPolyline[0].y.toFixed(1)}) -> (${shiftedPolyline[1].x.toFixed(1)}, ${shiftedPolyline[1].y.toFixed(1)})`
+      );
+    }
 
     return {
       ...edge,
@@ -2228,24 +2412,46 @@ async function layoutWithLongestTrace(
   console.log(`[LONGEST TRACE] Layout complete with ${adjustedNodes.length} nodes and ${laneAdjustedEdges.length} edges`);
 
   const visibleNodes = adjustedNodes.filter(n => !n.hidden);
-  const axisPositions = Array.from(
-    new Set(
-      visibleNodes
-        .map((node) => {
-          const top = node.position?.y ?? 0;
-          const height = node.height ?? DEFAULT_NODE_HEIGHT;
-          return top + height / 2;
-        })
-        .map((val) => Math.round(val * 1000) / 1000),
-    ),
-  ).sort((a, b) => a - b);
+  const terminalFirst = (edges: Edge[]) => {
+    const isTerminalEdge = (edge: Edge) => {
+      const data = edge.data as { sourceVariant?: string; targetVariant?: string } | undefined;
+      return data?.sourceVariant === 'start'
+        || data?.sourceVariant === 'end'
+        || data?.targetVariant === 'start'
+        || data?.targetVariant === 'end';
+    };
+    return [...edges].sort((a, b) => {
+      const ta = isTerminalEdge(a) ? 0 : 1; // terminal edges render first (background)
+      const tb = isTerminalEdge(b) ? 0 : 1;
+      return ta - tb;
+    });
+  };
+  const axisPositions = layerOf.size > 0
+    ? Array.from(
+      new Set(
+        Array.from(layerOf.values())
+          .map((layer) => START_Y + layer * VERTICAL_SPACING)
+          .map((val) => Math.round(val * 1000) / 1000),
+      ),
+    ).sort((a, b) => a - b)
+    : Array.from(
+      new Set(
+        visibleNodes
+          .map((node) => {
+            const top = node.position?.y ?? 0;
+            const height = node.height ?? DEFAULT_NODE_HEIGHT;
+            return top + height / 2;
+          })
+          .map((val) => Math.round(val * 1000) / 1000),
+      ),
+    ).sort((a, b) => a - b);
 
   const layerMarkers = buildLayerMarkers(axisPositions, visibleNodes, 'TB');
   const bufferZones = buildBufferZones(visibleNodes, BUFFER_ZONE_MARGIN);
 
   return {
     nodes: [...visibleNodes, ...bufferZones, ...layerMarkers],
-    edges: laneAdjustedEdges,
+    edges: terminalFirst(laneAdjustedEdges),
     traceCounts,
   };
 }

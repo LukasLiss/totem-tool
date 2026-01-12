@@ -368,15 +368,17 @@ function setCoordinates(
   config: LayoutConfig,
 ) {
   const layerSizes: { layer: number; size: number }[] = [];
+
+  // Use standard activity node size for consistent layer spacing
+  // This ensures all layers have the same spacing regardless of node types
+  const standardSecondarySize = config.direction === 'TB' ? config.activityHeight : config.activityWidth;
+  const standardSecondaryHalf = standardSecondarySize / 2;
+
   let accumulated = config.borderPadding;
 
   layering.forEach((layer, layerIndex) => {
-    let maxSecondaryHalf = 0;
-    layer.forEach((nodeId) => {
-      const node = layout.nodes[nodeId];
-      if (!node) return;
-      maxSecondaryHalf = Math.max(maxSecondaryHalf, nodeSecondaryHalf(node, config));
-    });
+    // Use the standard size for consistent layer spacing across all layers
+    const maxSecondaryHalf = standardSecondaryHalf;
     layerSizes.push({ layer: layerIndex, size: maxSecondaryHalf * 2 });
 
     const baseCoord = accumulated + maxSecondaryHalf;
