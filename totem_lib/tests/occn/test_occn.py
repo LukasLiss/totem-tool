@@ -1,7 +1,7 @@
 from typing import Counter
 import pytest
 from totem_lib import OCCausalNet, OCCausalNetState
-from example_occns import TEST_OCCN_FACTORIES, TEST_INVALID_OCCN_FACTORIES
+from tests.assets.example_occns import TEST_OCCN_FACTORIES, TEST_INVALID_OCCN_FACTORIES
 
 @pytest.mark.parametrize("factory_func", TEST_OCCN_FACTORIES)
 def test_constructor(factory_func):
