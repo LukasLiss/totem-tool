@@ -6,8 +6,11 @@ from tests.assets.example_occns import (
     occn_basic_2,
     occn_multi,
     occn_multi_marker,
-    occn_multi_ot,
     occn_multi_ot_multi_min_0,
+    occn_multi_ot_multi_arc,
+    occn_multi_ot_multi_marker,
+    occn_multi_ot_multi_marker_redundant_mg,
+    occn_start_parallel,
 )
 
 # --- Helper Functions for Constructing Bindings & Sequences ---
@@ -554,8 +557,8 @@ class TestOCCausalNetSemantics:
                     ({"b1", "o1"}, {"b1", "o1"}),
                     ({"b1", "o2"}, {"b1", "o2"}),
                     ({"c1", "o2"}, {"c1", "o2"}),
-                    ({"c1", "o1", "o2"}, {"c1", "o1", "o2"})
-                ]
+                    ({"c1", "o1", "o2"}, {"c1", "o1", "o2"}),
+                ],
             ),
         ],
     )
@@ -597,36 +600,236 @@ class TestOCCausalNetSemantics:
                 match_found
             ), f"Expected pair ({exp_cons}, {exp_prod}) not found in actual bindings: {actual_pairs}"
 
-    def test_enabled_bindings_combinatorics(self):
+    def test_enabled_bindings_multi_arc(self):
         """
-        Tests the generation of all enabled bindings (combinatorics).
+        Uses occn_multi_ot_multi_arc.
         """
-        occn = occn_multi()
-        # 'a' takes (1, -1) orders from START.
+        occn = occn_multi_ot_multi_arc()
 
-        # State: 2 orders available.
-        # Possible consumptions: {o1}, {o2}, {o1, o2}
+        state = OCCausalNetState()
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        state = OCCausalNetState({"a": Counter([("START_order", "o1", "order")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 0
+
         state = OCCausalNetState(
             {
                 "a": Counter(
-                    [("START_order", "o1", "order"), ("START_order", "o2", "order")]
+                    [("START_order", "o1", "order"), ("START_item", "i1", "item")]
                 )
             }
         )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 1
 
-        bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i2", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 3
 
-        # Convert internal bindings to sets of consumed object sets for verification
-        consumed_sets = consumed_from_bindings(bindings)
+    def test_enabled_bindings_multi_min_0(self):
+        """
+        Uses occn_multi_ot_multi_min_0 (item consumption optional 0..-1).
+        """
+        occn = occn_multi_ot_multi_min_0()
 
-        # We expect {o1}, {o2}, {o1, o2}
-        assert len(bindings) == 3
-        assert len(consumed_sets) == 3
-        assert {"o1"} in consumed_sets
-        assert {"o2"} in consumed_sets
-        assert {"o1", "o2"} in consumed_sets
+        state = OCCausalNetState()
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
 
-        # No need to check prod here (symmetrical to cons in this case)
+        state = OCCausalNetState({"a": Counter([("START_order", "o1", "order")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 1
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [("START_order", "o1", "order"), ("START_item", "i1", "item")]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i2", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 4
+
+    def test_enabled_bindings_indices(self):
+        """
+        Tests usage of IDs/Indices.
+        """
+        act_to_idx = {
+            "START_order": 0,
+            "START_item": 1,
+            "a": 2,
+            "b": 3,
+            "END_order": 4,
+            "END_item": 5,
+        }
+
+        ot_to_idx = {"order": 0, "item": 1}
+
+        occn = occn_multi_ot_multi_min_0()
+
+        state = OCCausalNetState()
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        # State using indices: Act 2 ('a') has obligation from Act 0 ('START_order')
+        state = OCCausalNetState({2: Counter([(0, "o1", 0)])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(
+            occn, "a", state, act_to_idx, ot_to_idx
+        )
+        assert len(enabled_bindings) == 1
+
+        state = OCCausalNetState({2: Counter([(0, "o1", 0), (1, "i1", 1)])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(
+            occn, "a", state, act_to_idx, ot_to_idx
+        )
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState(
+            {2: Counter([(0, "o1", 0), (1, "i1", 1), (1, "i2", 1)])}
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(
+            occn, "a", state, act_to_idx, ot_to_idx
+        )
+        assert len(enabled_bindings) == 4
+
+    def test_enabled_bindings_multi_marker(self):
+        """
+        Uses occn_multi_ot_multi_marker.
+        """
+        occn = occn_multi_ot_multi_marker()
+
+        state = OCCausalNetState()
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        state = OCCausalNetState({"a": Counter([("START_order", "o1", "order")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [("START_order", "o1", "order"), ("START_item", "i1", "item")]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState({"a": Counter([("START_item", "i1", "item")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 1
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i1", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i2", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 6
+
+    def test_enabled_bindings_redundant_mg(self):
+        """
+        Uses occn_multi_ot_multi_marker_redundant_mg.
+        """
+        occn = occn_multi_ot_multi_marker_redundant_mg()
+
+        state = OCCausalNetState()
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        state = OCCausalNetState({"a": Counter([("START_order", "o1", "order")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert enabled_bindings == ()
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [("START_order", "o1", "order"), ("START_item", "i1", "item")]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState({"a": Counter([("START_item", "i1", "item")])})
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 1
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i1", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 2
+
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i2", "item"),
+                    ]
+                )
+            }
+        )
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        assert len(enabled_bindings) == 6
+
 
     @pytest.mark.parametrize(
         "occn_factory, activity, object_type, objects, expected_produced_sets",
@@ -658,6 +861,53 @@ class TestOCCausalNetSemantics:
         produced_sets = produced_from_bindings(bindings)
         for expected_set in expected_produced_sets:
             assert expected_set in produced_sets
+
+    def test_enabled_start_bindings_parallel(self):
+        """
+        Uses occn_start_parallel.
+        """
+        occn = occn_start_parallel()
+
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings_start_activity(
+            occn, "START_order", "order", set()
+        )
+        assert len(enabled_bindings) == 0
+
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings_start_activity(
+            occn, "START_order", "order", {"o1"}
+        )
+        assert len(enabled_bindings) == 3
+
+        enabled_bindings = OCCausalNetSemantics.enabled_bindings_start_activity(
+            occn, "START_order", "order", {"o1", "o2"}
+        )
+        # Combinations logic:
+        # o1 only (3 bindings), o2 only (3 bindings)
+        # {o1, o2} (4 bindings):
+        #   OMG2(a): {a: {o1,o2}} (1)
+        #   OMG3(b): {b: {o1,o2}} (1)
+        #   OMG1(a,b): {a:{o1}, b:{o2}} and {a:{o2}, b:{o1}} (2)
+        # Total = 10
+        assert len(enabled_bindings) == 10
+
+        for binding in enabled_bindings:
+            # Internal Binding structure is (act, cons, prod)
+            # We reconstruct prod to External dictionary format to verify validity
+            _, _, prod_tuple = binding
+
+            prod_dict = {}
+            if prod_tuple:
+                for succ, obj_per_ot in prod_tuple:
+                    prod_dict[succ] = {}
+                    for ot, objects in obj_per_ot:
+                        prod_dict[succ][ot] = set(objects)
+
+            assert (
+                OCCausalNetSemantics.is_binding_enabled(
+                    occn, ("START_order", None, prod_dict), OCCausalNetState()
+                )
+                is not None
+            )
 
     def test_zero_cardinality_consumption(self):
         """
