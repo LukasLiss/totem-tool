@@ -711,8 +711,3 @@ class TestOCCausalNetSemantics:
             OCCausalNetSemantics.bind_activity(internal_b, state)
         except TypeError:
             pytest.fail("bind_activity failed to accept/convert InternalBinding tuple")
-
-
-# To allow for debugging
-if __name__ == "__main__":
-    pytest.main([__file__])

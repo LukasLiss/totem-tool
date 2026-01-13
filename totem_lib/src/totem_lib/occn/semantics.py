@@ -554,13 +554,17 @@ class OCCausalNetSemantics:
         Binding
             The binding in ExternalBinding format
         """
-        _, cons, _ = binding
+        _, cons, prod = binding
+        
+        if cons is None and prod is None:
+            # Same in both formats
+            return binding
         
         # Check if an InternalBinding or ExternalBinding is given
-        if isinstance(cons, tuple): # InternalBinding format
+        if isinstance(cons, tuple) or (cons is None and isinstance(prod, tuple)) : # InternalBinding format
             # Convert to ExternalBinding format.
             return cls._internal_binding_to_external(binding)
-        elif isinstance(cons, dict): # ExternalBinding format
+        elif isinstance(cons, dict) or (cons is None and isinstance(prod, dict)): # ExternalBinding format
             return binding
         else:
             raise TypeError("Binding has to be either an InternalBinding or ExternalBinding.")

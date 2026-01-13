@@ -4,12 +4,13 @@ import networkx as nx
 from typing import Any, Generic, Set, Tuple, List, Dict
 from collections import Counter, defaultdict
 from functools import cached_property
-from .utils import filter4
+from .utils.filter import filter4
 
 
 class OCCausalNet(object):
     """
     Object-Centric Causal Net capturing dependency graph and marker groups.
+    Start activities are named "START_{object_type}" and end activities "END_{object_type}".
 
     Reference:
     Liss et al. (2025). Object-Centric Causal Nets.
@@ -276,6 +277,20 @@ class OCCausalNet(object):
             for bs in binds
             for o in bs.markers
         }
+        # Make sure a start and end activity exists for each object type
+        for ot in self.__object_types:
+            start_act = f"START_{ot}"
+            end_act = f"END_{ot}"
+            assert start_act in self.__activities, f"Missing start activity {start_act} for object type {ot}"
+            assert end_act in self.__activities, f"Missing end activity {end_act} for object type {ot}"
+        # Assert no other START and END activities are present
+        for act in self.__activities:
+            if act.startswith("START_"):
+                ot = act[len("START_") :]
+                assert ot in self.__object_types, f"Unexpected start activity {act} for unknown object type {ot}"
+            if act.startswith("END_"):
+                ot = act[len("END_") :]
+                assert ot in self.__object_types, f"Unexpected end activity {act} for unknown object type {ot}"
         self.__activity_count = activity_count
 
     def __repr__(self):
