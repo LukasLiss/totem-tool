@@ -13,28 +13,29 @@ from .ocpn import discover_oc_petri_net_polars
 from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics
 from .utils import ocpns_are_similar
 from .pm4py_adapter import convert_ocel_polars_to_pm4py
-from .ocdfg import OCDFG, CCDFG
+from .dfg import OCDFG, CCDFG
 from .ocvariants import calculate_layout
 
+# should be kept alphabetically sorted
 __all__ = [
-    "ObjectCentricEventLog",
-    "load_events_from_sqlite",
-    "load_objects_from_sqlite",
-    "load_events_from_json",
-    "load_objects_from_json",
-    "load_events_from_xml",
-    "load_objects_from_xml",
-    "totemDiscovery",
-    "Totem",
-    "mlpaDiscovery",
-    "import_ocel",
     "calculate_layout",
-    "discover_oc_petri_net_polars",
-    "OCCausalNet",
-    "OCCausalNetState",
-    "OCCausalNetSemantics",
-    "ocpns_are_similar",
-    "convert_ocel_polars_to_pm4py",
-    "OCDFG",
     "CCDFG",
+    "convert_ocel_polars_to_pm4py",
+    "discover_oc_petri_net_polars",
+    "import_ocel",
+    "load_events_from_json",
+    "load_events_from_sqlite",
+    "load_events_from_xml",
+    "load_objects_from_json",
+    "load_objects_from_sqlite",
+    "load_objects_from_xml",
+    "ObjectCentricEventLog",
+    "OCCausalNet",
+    "OCCausalNetSemantics",
+    "OCCausalNetState",
+    "OCDFG",
+    "ocpns_are_similar",
+    "mlpaDiscovery",
+    "Totem",
+    "totemDiscovery",
 ]
