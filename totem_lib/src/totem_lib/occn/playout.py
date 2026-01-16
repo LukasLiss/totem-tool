@@ -2,9 +2,9 @@ import random
 from typing import Counter, Dict, Iterator, Tuple, Union
 
 import pandas as pd
-from totem_lib.occn.semantics import Sequence, Binding
-from totem_lib.ocel import ObjectCentricEventLog
+from totem_lib import ObjectCentricEventLog
 from . import OCCausalNet, OCCausalNetState, OCCausalNetSemantics
+from .semantics import Sequence, Binding
 
 
 # Marks the final state in a state space exploration
@@ -19,7 +19,7 @@ def occn_playout(
     branching_factor_bindings: int = float("inf"),
     return_ocel: bool = False,
     make_objects_unique_per_sequence: bool = False,
-) -> Union[Iterator[Sequence], "ObjectCentricEventLog"]:
+) -> Union[Iterator[Sequence], ObjectCentricEventLog]:
     """
     Compute playout of an object-centric causal net generating either an iterator of binding sequences or an OCEL.
     Extensive search, generates all binding sequences in the language of the OCCN unless constrained by the parameters.
