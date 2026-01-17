@@ -7,7 +7,8 @@ The TOTeM Tool is an object-centric Process Analysis Tool that enables easy to u
 This is a complete desktop application built with:
 - **Frontend:** React.js
 - **Backend:** Django REST API  
-- **Desktop:** Electron wrapper
+- **TOTeM Library:** Python implementation of algorithms and data structures
+- **Desktop executable:** Electron wrapper
 - **Database:** SQLite
 
 ## 📁 Project Structure
@@ -39,11 +40,13 @@ npm run build-all
 
 ## 📦 Distribution
 
-The Windows executable is built using Electron and includes everything needed to run the application.
+The Windows executable is built using Electron and includes everything needed to run the application:
+- Backend server and TOTeM library (built with PyInstaller)
+- Frontend (served with Express.js)
 
 ## 📚 Documentation
 
 - [QUICK_START.md](QUICK_START.md) - Development setup
-- [BUILD_GUIDE.md](BUILD_GUIDE.md) - Building executables
-- [SETUP.md](SETUP.md) - Detailed setup instructions
-- [GIT_GUIDE.md](GIT_GUIDE.md) - Git management guidelines
+- [BUILD_GUIDE.md](docs/BUILD_GUIDE.md) - Building executables
+- [SETUP.md](docs/SETUP.md) - Detailed setup instructions
+- [GIT_GUIDE.md](docs/GIT_GUIDE.md) - Git management guidelines
