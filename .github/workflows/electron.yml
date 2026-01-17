@@ -41,7 +41,7 @@ jobs:
       run: npm run build-all
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: totem-tool-win
         path: electron/dist/win-unpacked/
