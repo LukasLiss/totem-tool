@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./react_component/login";
 import { Home } from "./react_component/home";
 import { Logout } from "./react_component/logout";
@@ -19,6 +19,7 @@ function App() {
       <DashboardProvider>
         <div className="website-background">
           <Routes>
+            <Route path="/" element={<Navigate to="/upload" replace />} />
             <Route path="/home" element={<Home />} />
             <Route path="/login" element={<Login />} />
             <Route path="/logout" element={<Logout />} />
