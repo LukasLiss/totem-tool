@@ -39,11 +39,11 @@ function UserFileSelect() {
             try {
             if (!token) {
                     console.error("No token found!");
-                    return;
                   }
             const response = await getUserFiles(token);
+            console.log("Fetched files:", response);
             setFiles(response);
-            console.log(files)
+            console.log("files",files)
             } catch (err) {
             console.error(err);
             }

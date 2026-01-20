@@ -1,6 +1,7 @@
 // Import the react JS packages 
 import axios from "axios";
 import { useState } from "react";
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,7 +19,7 @@ export const Login = () => {
   const [password, setPassword] = useState('');
 
   // Create the submit method.
-  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (e) => {
     e.preventDefault();
 
     const user = {
@@ -27,27 +28,34 @@ export const Login = () => {
     };
 
     try {
-      // Create the POST request
-      const { data } = await axios.post(
-        'http://localhost:8000/token/',
-        user,
-        {
-          headers: { 'Content-Type': 'application/json' },
-        }
-      );
+    const response = await fetch('http://localhost:8000/token/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(user),
+    });
 
-      // Initialize the access & refresh token in localstorage.      
-      localStorage.clear();
-      localStorage.setItem('access_token', data.access);
-      localStorage.setItem('refresh_token', data.refresh);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${data['access']}`;
-
-      // Redirect to home
-      window.history.back();
-    } catch (error) {
-      console.error("Login failed:", error);
-      alert("Invalid credentials or server error.");
+    if (!response.ok) {
+      throw new Error('Login failed');
     }
+
+    const data = await response.json();
+
+    // Initialize the access & refresh token in localStorage
+    localStorage.clear();
+    localStorage.setItem('access_token', data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+
+
+    console.log("Login successful");
+    //window.history.back();
+    window.location.href = '/upload';
+  } catch (error) {
+    console.error("Login failed:", error);
+    alert("Invalid credentials or server error.");
+  }
+
   };
 
   return (
