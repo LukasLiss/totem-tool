@@ -19,11 +19,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
-        grep -v "totem_lib" totem_lib/requirements.txt > totem_lib/reqs_clean.txt
-        cat totem_lib/reqs_clean.txt
-        pip install -r totem_lib/reqs_clean.txt
-        pip install -e totem_lib
+        pip install -e totem_lib[test]
     - name: Test with pytest
       working-directory: ./totem_lib
       run: pytest
@@ -39,11 +35,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        grep -v "totem_lib" totem_lib/requirements.txt > totem_lib/reqs_clean.txt
-        cat totem_lib/reqs_clean.txt
-        pip install -r totem_lib/reqs_clean.txt
         pip install -e totem_lib
         pip install -r backend/requirements.txt
+        pip install -r backend/requirements-dev.txt
     - name: Run Django tests
       run: python backend/manage.py test
 
