@@ -12,11 +12,21 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useLocation, useNavigate } from "react-router-dom";
 
+type LocationState = {
+  from?: string;
+};
 // Define the Login function.
 export const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const from =
+    (location.state as LocationState)?.from ?? "/upload";
 
   // Create the submit method.
   const submit = async (e) => {
@@ -50,7 +60,7 @@ export const Login = () => {
 
     console.log("Login successful");
     //window.history.back();
-    window.location.href = '/upload';
+    navigate(from, { replace: true });
   } catch (error) {
     console.error("Login failed:", error);
     alert("Invalid credentials or server error.");

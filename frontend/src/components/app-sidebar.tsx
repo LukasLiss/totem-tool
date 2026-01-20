@@ -20,6 +20,7 @@ import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { DevDash } from "./nav-dev-dash";
 import { getDashboards } from "@/api/dashboardApi";
+import { error } from "console";import { useLocation, useNavigate } from "react-router-dom";
 
 // sample data
 // This is sample data.
@@ -113,6 +114,8 @@ const data = {
 
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const context = useContext(SelectedFileContext);
   if (!context) {
     console.error('SelectedFileContext not provided');
@@ -134,15 +137,22 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       try {
         if (!token) {
           console.error("No token found!");
-          return;
+          
         }
         const response = await getUserFiles(token);
         const data = response.results || response;
         setFiles(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        setFiles([]);
-      }
+      } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                  navigate("/login", {
+                    replace: true,
+                    state: { from: location.pathname },
+                  });
+                } else {
+                  console.error(error);
+                  setFiles([]);
+            }
+          };
     };
     fetchFiles();
   }, []);
@@ -158,30 +168,33 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     const token = localStorage.getItem("access_token");
     if (!token) {
       setDashboards([]);
-      return;
+      
     }
     try {
-      if (!token) {
-        console.error("No token found!");
-        return;
-      }
       const response = await getDashboards(token, selectedFile.project);
       const data = response.results || response;
       setDashboards(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-      setDashboards([]);
+    } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                  navigate("/login", {
+                    replace: true,
+                    state: { from: location.pathname },
+                  });
+                } else {
+                  console.error(error);
+                  setDashboards([]);   }
+          };
     }
-  };
+  
   fetchDashboards();
 }, [selectedFile]);
 
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
-        {files && Array.isArray(files) && files.length > 0 && (
+        
           <Switcher/>
-        )}
+        
       </SidebarHeader>
       <SidebarContent>
         <DevDash />
@@ -195,12 +208,19 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
               const response = await getDashboards(token, selectedFile.project);
               const data = response.results || response;
               setDashboards(Array.isArray(data) ? data : []);
-            } catch (err) {
-              console.error(err);
-              setDashboards([]);
+            } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                  navigate("/login", {
+                    replace: true,
+                    state: { from: location.pathname },
+                  });
+                } else {
+                  console.error(error);
+                  setDashboards([]);
             }
-          }} 
-        />
+          };
+        }}        /> 
+        
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>

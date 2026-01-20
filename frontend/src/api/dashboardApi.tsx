@@ -13,8 +13,7 @@ export async function addDashboard(dashboardName: string, projectId: number, tok
   });
 
   if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
   if (!response.ok) {
     const err = await response.text();
@@ -33,6 +32,9 @@ export async function renameDashboard(dashboardId: number, newName: string, toke
     },
     body: JSON.stringify({ name: newName }),
   });
+  if (response.status === 401) {
+    throw new Error("UNAUTHORIZED");
+  }
 
   if (!response.ok) {
     const err = await response.text();
@@ -49,7 +51,7 @@ export async function getDashboards(token: string, projectId?: number) {
     : "http://localhost:8000/api/dashboard/";
 
   console.log("Requesting dashboards from:", url);
-
+  
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -58,11 +60,8 @@ export async function getDashboards(token: string, projectId?: number) {
   });
 
   if (response.status === 401) {
-    console.log("401: authentication");
-    window.location.href = "/login";
-    return;
+    throw new Error("UNAUTHORIZED");
   }
-
   if (!response.ok) {
     throw new Error(
       `Fetching dashboards failed: ${response.status} ${response.statusText}`
@@ -83,8 +82,7 @@ export async function deleteDashboard(dashboardId: number, token: string) {
   });
 
   if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
 
   if (!response.ok) {

@@ -44,9 +44,17 @@ function UserFileSelect() {
             console.log("Fetched files:", response);
             setFiles(response);
             console.log("files",files)
-            } catch (err) {
-            console.error(err);
+            } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+                console.error(error);
+              }
             }
+          
         };
 
         fetchFiles(); 
