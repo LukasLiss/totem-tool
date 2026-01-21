@@ -1,7 +1,6 @@
 from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
-    PolarsOCELAdapter,
     convert_ocel_polars_to_pm4py,
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
@@ -26,7 +25,6 @@ __all__ = [
     "OCCausalNetState",
     "OCDFG",
     "ocpns_are_similar",
-    "PolarsOCELAdapter",
     "mlpaDiscovery",
     "Totem",
     "totemDiscovery",
