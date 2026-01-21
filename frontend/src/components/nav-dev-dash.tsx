@@ -1,6 +1,4 @@
 import { ChevronRight } from "lucide-react"
-
-
 import {
   SidebarGroup,
   SidebarMenu,
@@ -18,7 +16,7 @@ export function DevDash() {
     <SidebarGroup>
       <SidebarMenu>
         <SidebarMenuItem>
-            <SidebarMenuButton tooltip={"Development View to see all Components"} onClick={() => {setSelectedDashboard("DevDash"); 
+            <SidebarMenuButton tooltip={"Development View to see all Components"} onClick={() => {setSelectedDashboard(-1); 
               console.log('Context set to DevDash')}}>
                   
                   <span>Dev Dashboard</span>

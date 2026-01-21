@@ -4,8 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard
-from .serializers import EventLogSerializer, DashboardSerializer
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent
+from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 from totem_lib.ocdfg import OCDFG, CCDFG
@@ -27,6 +27,7 @@ from totem_lib.ocel import (
     load_events_from_xml,    load_objects_from_xml,
 )
 import json
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 @api_view(['GET'])
@@ -73,6 +74,27 @@ class EventLogViewSet(viewsets.ModelViewSet):
         else:
             processed= "Filetype not yet supported"
         return Response(processed, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def object_types(self, request, pk=None):
+        """Returns the list of object types present in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                # We reuse the utility function that handles file format detection
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response(ocel.object_types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -139,9 +161,107 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         
         serializer.save(project=project)
+    
+    @action(detail=True, methods=["GET"])
+    def get_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        base_components = dashboard.components.all()
+        components = []
+        for comp in base_components:
+            if comp.component_name == 'TextBoxComponent':
+                components.append(TextBoxComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'NumberOfEventsComponent':
+                components.append(NumberofEventsComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'ImageComponent':
+                components.append(ImageComponent.objects.get(id=comp.id))
+            else:
+                components.append(comp)
+        print(f"Dashboard {pk} has {len(components)} components")
+        for comp in components:
+            print(f"Component {comp.id}: type {type(comp).__name__}, component_name {comp.component_name}, text {getattr(comp, 'text', 'N/A')}")
+        serializer = DashboardComponentPolymorphicSerializer(components, many=True)
+        data = serializer.data
+        print("Serialized data:", data)
+        return Response(data)
+    
+    @action(detail=True, methods=["POST"])
+    def save_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        layout = request.data.get("layout")
 
+        if not isinstance(layout, list):
+            return Response({"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Clear existing components
+        dashboard.components.all().delete()
+        
+        for item in layout:
+            component_name = item['component_name']
+            print(f"Saving item: {item}")
+            if component_name == 'TextBoxComponent':
+                comp = TextBoxComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    text=item.get('text', ''),
+                    font_size=item.get('font_size', 14),
+                )
+                print(f"Created TextBoxComponent {comp.id} with text '{comp.text}'")
 
+            elif component_name == 'NumberOfEventsComponent':
+                NumberofEventsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    color=item.get('color', 'blue'),
+                )
+            elif component_name == 'ImageComponent':
+                ImageComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    image=item.get('image', None),
+                )
+            # Add more as needed
+
+        return Response({"status": "saved"})
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="upload-image",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_image(self, request, pk=None):
+        dashboard = self.get_object()
+
+        image = request.FILES.get("image")
+        if not image:
+            return Response({"error": "No image provided"}, status=400)
+        if image:
+            if not image.content_type in ['image/jpeg', 'image/png', 'image/gif']:
+                return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
+            if image.size > 5 * 1024 * 1024:  # 5MB limit
+                return Response({'error': 'File too large'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            dashboard.image = image
+            dashboard.save()
+            serializer = ImageComponentSerializer(dashboard)
+
+        return Response({
+            serializer.data
+        })
+
+# TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     
     ext = os.path.splitext(path)[1].lower()
@@ -157,9 +277,7 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    log = ObjectCentricEventLog()
-    log.events = events_df
-    log.object_df = objects_df
+    log = ObjectCentricEventLog(events=events_df, objects=objects_df)
 
     return log
 
@@ -1314,7 +1432,18 @@ def variants(request):
         print(f"CACHE HIT for file_id: {file_id}. Using cached OCEL object.")
 
     try:
-        leading_object_type = "Transport Document"  #request.query_params.get("leading_type", "Handling Unit")
+        leading_object_type = request.query_params.get("leading_type")
+
+        # If no leading_type provided or it doesn't exist, use first alphabetically sorted type
+        if not leading_object_type or leading_object_type not in ocel.object_types:
+            if ocel.object_types and len(ocel.object_types) > 0:
+                leading_object_type = sorted(ocel.object_types)[0]
+            else:
+                return Response({
+                    "variants": [],
+                    "object_types": []
+                }, status=status.HTTP_200_OK)
+
         mined = find_variants(ocel, leading_type=leading_object_type)
     except Exception as e:
         return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1351,7 +1480,10 @@ def variants(request):
             },
         })
 
-    return Response({"variants": out}, status=status.HTTP_200_OK)
+    return Response({
+        "variants": out,
+        "object_types": ocel.object_types
+    }, status=status.HTTP_200_OK)
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])

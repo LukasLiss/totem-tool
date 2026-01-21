@@ -11,8 +11,7 @@ export async function uploadFile(file: File, token: string) {
     body: formData,
   });
   if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
   if (!response.ok) {
     throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
@@ -30,9 +29,7 @@ export async function getUserFiles(token: string) {
     },
   });
    if (response.status === 401) {
-    console.log('401: authentification')
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
 
   if (!response.ok) {
@@ -52,8 +49,7 @@ export async function processFile(token: string, fileId: string) {
     },
   });
   if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
   if (!response.ok) {
     throw new Error(`Processing file failed: ${response.status} ${response.statusText}`);

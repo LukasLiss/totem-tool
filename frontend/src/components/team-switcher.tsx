@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useContext } from "react";
 import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
-
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +20,6 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
-
 
 // extend type to allow optional logo component
 
@@ -45,14 +43,21 @@ const displayName = selectedFile?.file
         try {
           if (!token) {
             console.error("No token found!");
-            return;
+            
           }
           const response = await getUserFiles(token);
           setFiles(response);
           console.log('Loading files successfull')
-        } catch (err) {
-          console.error(err);
-        }
+        } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                  navigate("/login", {
+                    replace: true,
+                    state: { from: location.pathname },
+                  });
+                } else {
+                  console.error(error);
+                  }
+                };
       };
       fetchFiles();
     }, []);

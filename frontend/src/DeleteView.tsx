@@ -1,4 +1,3 @@
-import React, { useState } from 'react';
 import { deleteUserData } from './api/projectApi';
 import { Button } from './components/ui/button';
 

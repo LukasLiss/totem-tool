@@ -170,8 +170,8 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
             for obj_id in row["_objects"]:
                 object_to_events[obj_id].append(row["_eventId"])
 
-    leading_object_ids = ocel.object_df.filter(
-        ocel.object_df["_objType"] == leading_type
+    leading_object_ids = ocel.objects.filter(
+        ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
     print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
@@ -279,8 +279,8 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
             for obj_id in row["_objects"]:
                 object_to_events[obj_id].append(row["_eventId"])
 
-    leading_object_ids = ocel.object_df.filter(
-        ocel.object_df["_objType"] == leading_type
+    leading_object_ids = ocel.objects.filter(
+        ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
     print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
