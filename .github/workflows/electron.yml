@@ -30,18 +30,18 @@ jobs:
         cd ../electron
         npm install
         cd ..
-        python -m venv backend/venv
-        ./backend/venv/Scripts/activate
+        python -m venv backend/.venv
+        ./backend/.venv/Scripts/activate
         python -m pip install --upgrade pip
         pip install -r backend/requirements.txt
+        pip install -r backend/requirements-dev.txt
         pip install -e totem_lib
-        pip install pyinstaller
 
     - name: Build application
       run: npm run build-all
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: totem-tool-win
         path: electron/dist/win-unpacked/

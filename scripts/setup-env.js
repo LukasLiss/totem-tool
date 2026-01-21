@@ -5,17 +5,16 @@ const readline = require('readline');
 
 // CONFIGURATION
 const ROOT_DIR = path.join(__dirname, '..');
-const VENV_DIR = path.join(ROOT_DIR, '.venv');
-const LIB_DIR = path.join(ROOT_DIR, 'totem_lib');
 const BACKEND_DIR = path.join(ROOT_DIR, 'backend');
+const VENV_DIR = path.join(BACKEND_DIR, '.venv'); // Unified venv in backend/.venv
+const LIB_DIR = path.join(ROOT_DIR, 'totem_lib');
 
 // DETECT PLATFORM & PATHS
 const isWin = process.platform === 'win32';
-// This is the "Base" python (from your system PATH) used to CREATE the venv
-const systemPython = isWin ? 'python' : 'python3'; 
-// This is the "Venv" python used to INSTALL packages
-const venvPython = isWin 
-    ? path.join(VENV_DIR, 'Scripts', 'python.exe') 
+const systemPython = isWin ? 'python' : 'python3';
+// Path to the python executable INSIDE the venv
+const venvPython = isWin
+    ? path.join(VENV_DIR, 'Scripts', 'python.exe')
     : path.join(VENV_DIR, 'bin', 'python');
 
 // HELPER: Run Command
@@ -59,47 +58,60 @@ function confirm(question) {
     let promptMsg = '';
 
     if (venvExists) {
-        promptMsg = `⚠️  Found existing .venv at ${VENV_DIR}.\n   This will try to upgrade pip and install dependencies into it.\n   Proceed? [y/N] `;
+        promptMsg = `⚠️  Found existing .venv at ${VENV_DIR}.\n   This will perform a sync/update.\n   Proceed? [y/N] `;
     } else {
         promptMsg = `🆕 No .venv found. I will create one at ${VENV_DIR}.\n   Proceed? [y/N] `;
     }
 
-    const shouldProceed = await confirm(promptMsg);
-    if (!shouldProceed) {
-        console.log('🛑 Aborted by user.');
-        process.exit(0);
+    // Skip confirmation if CI environment or flag passed (optional improvement)
+    if (!process.argv.includes('--yes')) {
+        const shouldProceed = await confirm(promptMsg);
+        if (!shouldProceed) {
+            console.log('🛑 Aborted by user.');
+            process.exit(0);
+        }
     }
 
     // 3. CREATE VIRTUAL ENVIRONMENT (If missing)
     if (!venvExists) {
         console.log('📦 Creating .venv...');
-        run(systemPython, ['-m', 'venv', '.venv']);
+        run(systemPython, ['-m', 'venv', VENV_DIR]);
     }
 
     // 4. UPGRADE PIP
-    // Note: We explicitly use 'venvPython' here. This effectively "activates" it for this command.
     console.log('⬆️  Upgrading pip...');
     run(venvPython, ['-m', 'pip', 'install', '--upgrade', 'pip']);
 
-    // 5. INSTALL SHARED LIBRARY (Editable Mode)
-    if (fs.existsSync(LIB_DIR)) {
-        console.log('📚 Installing totem_lib (editable)...');
-        run(venvPython, ['-m', 'pip', 'install', '-e', 'totem_lib']);
-    }
-
-    // 6. INSTALL BACKEND REQUIREMENTS
+    // 5. INSTALL BACKEND REQUIREMENTS
     const backendReqs = path.join(BACKEND_DIR, 'requirements.txt');
     if (fs.existsSync(backendReqs)) {
         console.log('🐍 Installing backend requirements...');
         run(venvPython, ['-m', 'pip', 'install', '-r', backendReqs]);
     }
-    
-    // 7. INSTALL PYINSTALLER (For Building)
-    console.log('🔨 Installing build tools...');
-    // Best practice: Use a pinned version or a requirements file here
-    run(venvPython, ['-m', 'pip', 'install', 'pyinstaller']);
+
+    // 6. INSTALL BACKEND DEV REQUIREMENTS (PyInstaller, Pytest)
+    const backendDevReqs = path.join(BACKEND_DIR, 'requirements-dev.txt');
+    if (fs.existsSync(backendDevReqs)) {
+        console.log('🔨 Installing backend DEV requirements...');
+        run(venvPython, ['-m', 'pip', 'install', '-r', backendDevReqs]);
+    }
+
+    // 7. INSTALL TOTEM LIB (Editable + Test deps)
+    if (fs.existsSync(LIB_DIR)) {
+        console.log('📚 Installing totem_lib (editable + test)...');
+        // Installs editable (-e) and the [test] optional dependencies
+        run(venvPython, ['-m', 'pip', 'install', '-e', 'totem_lib[test]']);
+    }
+
+    // 8. NPM INSTALL
+    console.log('📦 Installing Frontend Dependencies...');
+    run('npm', ['install'], path.join(ROOT_DIR, 'frontend'));
+
+    console.log('📦 Installing Electron Dependencies...');
+    run('npm', ['install'], path.join(ROOT_DIR, 'electron'));
+
 
     console.log('\n✅ Setup Complete!');
-    console.log(`   To activate manually in terminal: source .venv/Scripts/activate`);
-    console.log(`From this venv, you can build the electron app with "npm run build-all"`);
+    console.log(`   To activate manually: source backend/.venv/Scripts/activate`);
+    console.log(`   (or backend/.venv/bin/activate on Mac/Linux)`);
 })();
