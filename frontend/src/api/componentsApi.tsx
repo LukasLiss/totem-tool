@@ -1,3 +1,5 @@
+import { Navigate, useLocation } from "react-router-dom";
+
 
 export async function saveLayout(dashboardId: number, layout: object, token: string) {
     const response = await fetch(`http://localhost:8000/api/dashboard/${dashboardId}/save_layout/`, {
@@ -8,8 +10,7 @@ export async function saveLayout(dashboardId: number, layout: object, token: str
     body: JSON.stringify({ layout })
   });
   if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
   if (!response.ok) {
     throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
@@ -28,8 +29,7 @@ export async function getLayout(dashboardId: number, token: string) {
     },
   });
    if (response.status === 401) {
-    window.location.href = '/login';
-    return;
+    throw new Error("UNAUTHORIZED");
   }
 
   if (!response.ok) {

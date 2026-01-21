@@ -39,14 +39,22 @@ function UserFileSelect() {
             try {
             if (!token) {
                     console.error("No token found!");
-                    return;
                   }
             const response = await getUserFiles(token);
+            console.log("Fetched files:", response);
             setFiles(response);
-            console.log(files)
-            } catch (err) {
-            console.error(err);
+            console.log("files",files)
+            } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+                console.error(error);
+              }
             }
+          
         };
 
         fetchFiles(); 

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
+import { Title } from "./Title";
 import UploadView from "./UploadView";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import "./styles/app.css";
@@ -21,6 +22,7 @@ function App() {
           <Toaster position="top-center" richColors/>
 
           <Routes>
+            <Route path="/title" element={<Title />} />
             <Route path="/login" element={<Login />} />
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
