@@ -24,6 +24,12 @@ const GridModeContext = createContext<{
   setIsEditMode: (mode: boolean) => void;
 }>({ isEditMode: false, setIsEditMode: () => {} });
 
+interface GridProviderProps {
+  children: ReactNode;
+  options?: GridStackOptions;
+  selectedFile: any;
+}
+
 export const useGridMode = () => useContext(GridModeContext);
 
 const GridContext = createContext<GridContextValue | undefined>(undefined);
@@ -42,6 +48,7 @@ interface GridProviderProps {
 export const GridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
+  selectedFile,
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
@@ -81,6 +88,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           <Component
             node={w}
             isEditMode={isEditMode} // Use current isEditMode
+            selectedFile={selectedFile}
             onUpdate={(updates) => {
               Object.assign(w, updates);
               gridRef.current?.update(el, updates);
@@ -113,6 +121,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             <Component
               node={node}
               isEditMode={isEditMode}
+              selectedFile={selectedFile}
               onUpdate={(updates) => {
                 Object.assign(node, updates);
                 gridRef.current?.update(item as HTMLElement, updates);
@@ -126,7 +135,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     } else {
       console.log('No grid instance to update');
     }
-  }, [isEditMode, grid]);
+  }, [isEditMode, grid, selectedFile]);
 
 
   const resetGrid = () => {

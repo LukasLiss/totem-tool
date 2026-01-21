@@ -24,12 +24,12 @@ import {
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
   const { selectedDashboard } = useContext(DashboardContext);
-  const { selectedFile } = useContext(SelectedFileContext);
+  
 
   useEffect(() => {
     console.log("Dashboard changed to:", selectedDashboard);
-    console.log("Current grid containers:", document.querySelectorAll('.grid-stack').length);
-    console.log("Current grid-stack-item elements:", document.querySelectorAll('.grid-stack-item').length);
+    //console.log("Current grid containers:", document.querySelectorAll('.grid-stack').length);
+    //console.log("Current grid-stack-item elements:", document.querySelectorAll('.grid-stack-item').length);
     
     const loadSelectedDashboard = async () => {
       console.log("Starting to load dashboard layout");
@@ -147,9 +147,12 @@ const GridContent: React.FC = () => {
 };
 
 const Grid: React.FC = () => {
+  const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
+
+  console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
-    <GridProvider>
+    <GridProvider selectedFile={selectedFile}>
       <GridContent />
     </GridProvider>
   </SidebarInset>
