@@ -19,7 +19,7 @@ export const Logout = () => {
         localStorage.clear();
 
         // Redirect
-        //window.location.href = '/upload';
+        window.location.href = '/title';
       } catch (e) {
         console.log('logout not working', e);
       }
