@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useContext } from "react";
 import {
   AudioWaveform, Command, GalleryVerticalEnd,
-  Map, PieChart, Settings2, FileStack, ArrowUp01
+  Map, PieChart, Settings2, FileStack, ArrowUp01,
+  ChevronRight, LogOut
 } from "lucide-react"
 
 import { NavMain } from "@/components/nav-main"
@@ -15,103 +16,15 @@ import {
   SidebarContent,
   SidebarHeader,
   SidebarRail,
+  SidebarFooter,
+  SidebarMenuButton,
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { DevDash } from "./nav-dev-dash";
 import { getDashboards } from "@/api/dashboardApi";
-import { error } from "console";import { useLocation, useNavigate } from "react-router-dom";
-
-// sample data
-// This is sample data.
-const data = {
-  user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
-  packages: [
-    {
-      name: "Acme Inc",
-      logo: GalleryVerticalEnd,
-      plan: "Enterprise",
-    },
-    {
-      name: "Acme Corp.",
-      logo: AudioWaveform,
-      plan: "Startup",
-    },
-    {
-      name: "Evil Corp.",
-      logo: Command,
-      plan: "Free",
-    },
-  ],
-  dashboards: [
-    {
-      title: "Dashboards",
-      url: "#",
-      icon: FileStack,
-      isActive: true,
-      items: [
-        {
-          title: "Dashboard #1",
-          url: "#",
-        },
-        {
-          title: "Dashboard #2",
-          url: "#",
-        },
-        {
-          title: "+ Add New Dashboard",
-          url: "#",
-        },
-      ],
-    },
-  ],
-  filter: [
-    
-    {
-      title: "Filter",
-      url: "#",
-      icon: ArrowUp01,
-      isActive: true,
-      items: [
-        {
-          title: "Filter #1",
-          url: "#",
-        },
-        {
-          title: "Filter #2",
-          url: "#",
-        },
-        {
-          title: "+ Add Custom Filter",
-          url: "#",
-        },
-      ],
-    },
-    
-  ],
-  parameters: [
-    {
-      name: "Token replay",
-      url: "#",
-      icon: Settings2,
-    },
-    {
-      name: "τ",
-      url: "#",
-      icon: PieChart,
-    },
-    {
-      name: "Frequency",
-      url: "#",
-      icon: Map,
-    },
-  ],
-}
-
+import { error } from "console";
+import { useLocation, useNavigate } from "react-router-dom";
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate();
@@ -221,10 +134,15 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           };
         }}        /> 
         
-        <NavMain items={data.filter} />
-        <NavProjects projects={data.parameters} />
+        
       </SidebarContent>
-      
+      <SidebarFooter>
+        <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
+            <LogOut />
+            <span>Log out</span>
+            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+        </SidebarMenuButton>
+      </SidebarFooter>
     </Sidebar>
   )
 }

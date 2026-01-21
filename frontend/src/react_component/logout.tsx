@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { toast } from "sonner";
 
 export const Logout = () => {
   useEffect(() => {
@@ -19,6 +20,7 @@ export const Logout = () => {
         localStorage.clear();
 
         // Redirect
+        toast.success('Logged out successfully');
         window.location.href = '/title';
       } catch (e) {
         console.log('logout not working', e);

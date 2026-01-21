@@ -50,19 +50,10 @@ export function DevDashboard() {
                 {processedResult ?? "—"}
               </CardTitle>
               <CardAction>
-                <Badge variant="outline">
-                  +12.5%
-                </Badge>
+                
               </CardAction>
             </CardHeader>
-            <CardFooter className="flex-col items-start gap-1.5 text-sm">
-              <div className="line-clamp-1 flex gap-2 font-medium">
-                Trending up this month 
-              </div>
-              <div className="text-muted-foreground">
-                Visitors for the last 6 months
-              </div>
-            </CardFooter>
+            
           </Card>
           <Card className="@container/card">
             <CardHeader>

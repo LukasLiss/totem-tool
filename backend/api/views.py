@@ -16,7 +16,7 @@ import networkx as nx
 
 from collections import defaultdict
 
-from totem_lib.ocel import load_events_from_sqlite
+from totem_lib.ocel import load_events_from_sqlite, load_events_from_json, load_events_from_xml
 from django.core.cache import cache
 
 import os
@@ -70,9 +70,15 @@ class EventLogViewSet(viewsets.ModelViewSet):
         
         if user_file.file.path.split('.')[-1] == 'sqlite':
             OCEL = load_events_from_sqlite(user_file.file.path)
-            processed= len(OCEL.unique(subset='_eventId'))
+            processed = OCEL["_eventId"].n_unique()
+        elif user_file.file.path.split('.')[-1] == 'json':
+            OCEL = load_events_from_json(user_file.file.path)
+            processed = OCEL["_eventId"].n_unique()
+        elif user_file.file.path.split('.')[-1] == 'xml':
+            OCEL = load_events_from_xml(user_file.file.path)
+            processed = OCEL["_eventId"].n_unique()
         else:
-            processed= "Filetype not yet supported"
+            return Response({"error": "Unsupported file format"}, status=status.HTTP_400_BAD_REQUEST)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
