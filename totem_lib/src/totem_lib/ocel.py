@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import os
 from collections import defaultdict
 from functools import cached_property
+import networkx as nx
 
 EVENTS_SCHEMA = {
     "_eventId": pl.Utf8,
