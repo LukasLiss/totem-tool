@@ -113,24 +113,35 @@ const data = {
 
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
-  const { selectedFile } = useContext(SelectedFileContext);
+  const context = useContext(SelectedFileContext);
+  if (!context) {
+    console.error('SelectedFileContext not provided');
+    return null;
+  }
+  const { selectedFile } = context;
   const [files, setFiles] = useState<any[]>([]);
-  const [dashboards, setDashboards] = useState([])
+  const [dashboards, setDashboards] = useState<any[]>([]);
 
   console.log("Current selectedFile:", selectedFile);
 
   useEffect(() => {
     const fetchFiles = async () => {
       const token = localStorage.getItem("access_token");
+      if (!token) {
+        setFiles([]);
+        return;
+      }
       try {
         if (!token) {
           console.error("No token found!");
           return;
         }
         const response = await getUserFiles(token);
-        setFiles(response);
+        const data = response.results || response;
+        setFiles(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error(err);
+        setFiles([]);
       }
     };
     fetchFiles();
@@ -140,27 +151,35 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   useEffect(() => {
   const fetchDashboards = async () => {
-    if (!selectedFile?.project) return; // nothing selected
+    if (!selectedFile?.project) {
+      setDashboards([]);
+      return;
+    }
     const token = localStorage.getItem("access_token");
+    if (!token) {
+      setDashboards([]);
+      return;
+    }
     try {
       if (!token) {
         console.error("No token found!");
         return;
       }
       const response = await getDashboards(token, selectedFile.project);
-      setDashboards(response);
-      console.log('loaded dashboards', response)
+      const data = response.results || response;
+      setDashboards(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
+      setDashboards([]);
     }
   };
   fetchDashboards();
 }, [selectedFile]);
 
   return (
-    <Sidebar collapsible="icon" {...props}>
+    <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
-        {files.length > 0 && (
+        {files && Array.isArray(files) && files.length > 0 && (
           <Switcher/>
         )}
       </SidebarHeader>
@@ -168,16 +187,24 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <DevDash />
         <NavDashboard 
           dashboards={dashboards} 
-          refreshDashboards={() => {
+          refreshDashboards={async () => {
             if (!selectedFile?.project) return;
             const token = localStorage.getItem("access_token");
-            getDashboards(token, selectedFile.project).then(setDashboards);
+            if (!token) return;
+            try {
+              const response = await getDashboards(token, selectedFile.project);
+              const data = response.results || response;
+              setDashboards(Array.isArray(data) ? data : []);
+            } catch (err) {
+              console.error(err);
+              setDashboards([]);
+            }
           }} 
         />
         <NavMain items={data.filter} />
         <NavProjects projects={data.parameters} />
       </SidebarContent>
-      <SidebarRail />
+      
     </Sidebar>
   )
 }

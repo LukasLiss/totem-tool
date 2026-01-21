@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
 from .models import EventLog
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent
 from django.db.models import Max
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -48,6 +48,10 @@ class TextBoxComponentSerializer(DashboardComponentSerializer):
         model = TextBoxComponent
         fields = "__all__"
 
+class ImageComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = ImageComponent
+        fields = "__all__"
 #Fill in new Component Serializers here and then edit the mapping below
 
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
@@ -55,4 +59,5 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         DashboardComponent: DashboardComponentSerializer,
         NumberofEventsComponent: NumberOfEventsComponentSerializer,
         TextBoxComponent: TextBoxComponentSerializer,
+        ImageComponent: ImageComponentSerializer,
     }

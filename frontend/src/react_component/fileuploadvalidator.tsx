@@ -2,7 +2,6 @@ import { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
 import {useDropzone} from 'react-dropzone';
-import "./component_styles/fileuploadvalidator.css";
 import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import {
@@ -14,7 +13,7 @@ import {
   CardTitle,
   CardContent,
 } from "@/components/ui/card"
-import { Toaster, toast } from "sonner"
+import { toast } from "sonner"
 
 
 export function FileUploadValidator() {
@@ -44,7 +43,7 @@ export function FileUploadValidator() {
 
     const validateFile = async () => {
     if (!file) {
-      alert("Please select a file first");
+      toast.error("Please select a file first");
       return false;
     }
 
@@ -63,7 +62,7 @@ export function FileUploadValidator() {
         file.name.toLowerCase().endsWith(".db"));
 
     if (!(isJson || isXml || isSqlite)){
-        alert("Invalid file type. Please enter 'json','xml' or 'sqlite'.")
+        toast.error("Invalid file type", {description:"Please enter 'json','xml' or 'sqlite'."});
         return false;
     }
     
@@ -80,17 +79,18 @@ export function FileUploadValidator() {
       return;
       }
       if (!file) {
-        console.error("No file selected!");
+        toast.warning("No file selected!");
         return;
       }
       const response = await uploadFile(file, token);
-      console.log("Upload success:", response);
       setSelectedFile(response);
-      toast.success(`${file.name} uploaded successfully`);
+      toast.success("Upload successful", {
+      description: file.name,
+    });
       setFile(null);
         } catch (err) {
       console.error("Upload failed:", err);
-      alert("Upload failed");
+      toast.error("Upload failed");
     }
   };
 
@@ -128,9 +128,6 @@ export function FileUploadValidator() {
               />
               <input  {...getInputProps()} />
               <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
-              {/*  <button type="button" onClick={open}>
-                Open File Dialog
-              </button> */}
             </div>  
        
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
@@ -144,7 +141,6 @@ export function FileUploadValidator() {
       </form>
     </CardContent>
   </Card>
-    <Toaster position="top" richColors/>
   </div>
   );
 }

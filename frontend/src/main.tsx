@@ -3,6 +3,7 @@ import {BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './interceptors/axios';
 import './styles/custom.css';
+import 'gridstack/dist/gridstack.min.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
