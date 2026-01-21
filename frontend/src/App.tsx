@@ -29,7 +29,7 @@ function App() {
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
-            <Route path="/" element={<Navigate to="/upload" replace />} />
+            <Route path="/" element={<Navigate to="/title" replace />} />
           </Routes>
         </div>
       </DashboardProvider>
