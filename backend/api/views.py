@@ -14,6 +14,7 @@ from totem_lib.ocel.importer import (
     load_events_from_sqlite, load_objects_from_sqlite,
     load_events_from_json, load_objects_from_json,
     load_events_from_xml, load_objects_from_xml,
+    import_ocel_from_csv,
 )
 import networkx as nx
 
@@ -64,12 +65,13 @@ class EventLogViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        
-        if user_file.file.path.split('.')[-1] == 'sqlite':
-            OCEL = load_events_from_sqlite(user_file.file.path)
-            processed= len(OCEL.unique(subset='_eventId'))
-        else:
-            processed= "Filetype not yet supported"
+
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+            processed = len(ocel.events.unique(subset='_eventId'))
+        except Exception as e:
+            return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -260,21 +262,25 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
 # TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
-    
+
     ext = os.path.splitext(path)[1].lower()
     if ext in (".sqlite", ".db"):
         events_df  = load_events_from_sqlite(path)
         objects_df = load_objects_from_sqlite(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".json":
         events_df  = load_events_from_json(path)
         objects_df = load_objects_from_json(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".xml":
         events_df  = load_events_from_xml(path)
         objects_df = load_objects_from_xml(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
+    elif ext == ".csv":
+        # CSV importer returns the complete ObjectCentricEventLog with attributes
+        log = import_ocel_from_csv(path)
     else:
-        raise ValueError(f"Unsupported file type: {ext}")
-
-    log = ObjectCentricEventLog(events=events_df, objects=objects_df)
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .csv")
 
     return log
 
