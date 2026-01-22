@@ -1,8 +1,8 @@
 from pm4py import discover_oc_petri_net
-from .pm4py_adapter import PolarsOCELAdapter
+from totem_lib import PolarsOCELAdapter, ObjectCentricEventLog
 
 
-def discover_oc_petri_net_polars(ocel: "ObjectCentricEventLog"):
+def discover_oc_petri_net_polars(ocel: ObjectCentricEventLog):
     """
     Discovers an Object-Centric Petri Net from the given Object-Centric Event Log (OCEL) implemented in Polars as in this library,
     using the pm4py library.

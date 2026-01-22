@@ -30,6 +30,7 @@ class PolarsOCELAdapter:
     """
     An adapter class to make the Polars-based ObjectCentricEventLog compatible
     with the pm4py library, which expects a Pandas-based interface.
+    This may be passed to pm4py functions that require an OCEL input.
     """
 
     # TODO: proofread and test this class
@@ -79,6 +80,7 @@ class PolarsOCELAdapter:
         valid_oids = set(self._ocel.objects["_objId"].to_list())
 
         relations_data = []
+        # TODO: replace slow for-loop with vectorized operation
         for event_id, event_data in self._ocel.event_cache.items():
             for obj_id in event_data["objects"]:
                 # Only add the relation if the object ID is valid
