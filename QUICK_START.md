@@ -32,6 +32,8 @@ npm run electron-dev
 ```bash
 cd backend
 source venv/Scripts/activate
+# OR: venv\Scripts\activate   # On Windows CMD
+# OR: source ./venv/bin/activate # On Unix Systems, e.g. Linux or MacOS
 python manage.py runserver 8000
 ```
 
