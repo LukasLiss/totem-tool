@@ -29,18 +29,19 @@ interface ComponentProps {
   isEditMode?: boolean; // Now passed globally
 }
 
+
 // TextBoxComponent: Editable text with ShadCN UI
 const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
-  console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
+  //console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
   const [text, setText] = React.useState(node.text || 'Enter text here');
   // Sync local state with node.text when it changes (e.g., from loading or updates)
   React.useEffect(() => {
-    console.log('TextBoxComponent useEffect - updating text to:', node.text);
+    //console.log('TextBoxComponent useEffect - updating text to:', node.text);
     setText(node.text || 'Enter text here');
   }, [node.text]);
 
   const handleTextChange = (value: string) => {
-    console.log('TextBoxComponent handleTextChange - new value:', value);
+    //console.log('TextBoxComponent handleTextChange - new value:', value);
     setText(value);
     onUpdate?.({ text: value });
   };
@@ -72,11 +73,6 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
       ) : (
         // Normal mode: Read-only
         <Card className="w-full h-full min-h-80 rounded-none">
-          <CardHeader>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              Title
-            </CardTitle>              
-          </CardHeader>
           <CardContent>
             <div>
               <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
@@ -90,17 +86,19 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 
 
 // NumberOfEventsComponent: Static display with a button (customize as needed)
-const NumberOfEventsComponent: React.FC<ComponentProps> = ({ node, isEditMode = false }) => {
+const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
-  const { selectedFile } = useContext(SelectedFileContext);
+  
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  
+  console.log("selectedFile start:", selectedFile);
 
   useEffect(() => {
     const handleProcessFile = async () => {
-      console.log("NumberOfEventsComponent: Processing file for selectedFile:", selectedFile);
+      
       
       if (!selectedFile?.id) {
         console.log("No file selected, skipping processing");
