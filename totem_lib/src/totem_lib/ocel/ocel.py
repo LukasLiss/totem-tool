@@ -41,7 +41,7 @@ class ObjectCentricEventLog:
         self,
         events: pl.DataFrame,
         objects: pl.DataFrame,
-        object_attributes: pl.DataFrame | None = None
+        object_attributes: pl.DataFrame | None = None,
     ):
         """
         Initializes the ObjectCentricEventLog with events and objects DataFrames.
@@ -61,6 +61,53 @@ class ObjectCentricEventLog:
             self.object_attributes = pl.DataFrame(schema=OBJECT_ATTRIBUTE_SCHEMA)
         else:
             self.object_attributes = object_attributes
+
+    def __repr__(self) -> str:
+        """
+        Returns a string representation of the ObjectCentricEventLog.
+
+        Displays summary statistics and previews of the events, objects,
+        and object_attributes DataFrames.
+
+        Returns:
+            str: A formatted string representation of the log.
+        """
+        lines = []
+        lines.append("ObjectCentricEventLog")
+        lines.append("=" * 80)
+        lines.append(f"Number of events: {self.events.height}")
+        lines.append(f"Number of objects: {self.objects.height}")
+        lines.append(
+            f"Number of object attribute records: {self.object_attributes.height}"
+        )
+        lines.append("")
+
+        # Helper function to get preview of a dataframe
+        def get_df_preview(df: pl.DataFrame, name: str) -> str:
+            result = [f"{name}:"]
+            if df.height == 0:
+                result.append("  (empty)")
+            elif df.height <= 5:
+                result.append(str(df))
+            else:
+                # Show first 3 rows
+                result.append(str(df.head(3)))
+                result.append("  ...")
+                # Show last 2 rows
+                result.append(str(df.tail(2)))
+            return "\n".join(result)
+
+        lines.append(get_df_preview(self.events, "Events Preview (head and tail)"))
+        lines.append("")
+        lines.append(get_df_preview(self.objects, "Objects Preview (head and tail)"))
+        lines.append("")
+        lines.append(
+            get_df_preview(
+                self.object_attributes, "Object Attributes Preview (head and tail)"
+            )
+        )
+
+        return "\n".join(lines)
 
     @cached_property
     def o2o_graph_edges(self) -> List[Tuple[str, str]]:
@@ -247,7 +294,9 @@ class ObjectCentricEventLog:
                        if the event is not found or has no attributes.
         """
         # Get the event row
-        event_row = self.events.filter(pl.col("_eventId") == event_id).select("_attributes")
+        event_row = self.events.filter(pl.col("_eventId") == event_id).select(
+            "_attributes"
+        )
 
         if event_row.height == 0:
             return []
@@ -279,7 +328,9 @@ class ObjectCentricEventLog:
             KeyError: If the attribute key is not found in the event's attributes.
         """
         # Get the event row
-        event_row = self.events.filter(pl.col("_eventId") == event_id).select("_attributes")
+        event_row = self.events.filter(pl.col("_eventId") == event_id).select(
+            "_attributes"
+        )
 
         if event_row.height == 0:
             raise ValueError(f"Event with ID '{event_id}' not found")
@@ -287,7 +338,9 @@ class ObjectCentricEventLog:
         attributes_json = event_row.item(0, 0)
 
         if attributes_json is None or attributes_json == "":
-            raise KeyError(f"Attribute key '{attribute_key}' not found for event '{event_id}'")
+            raise KeyError(
+                f"Attribute key '{attribute_key}' not found for event '{event_id}'"
+            )
 
         try:
             attributes_dict = json.loads(attributes_json)
@@ -295,7 +348,9 @@ class ObjectCentricEventLog:
             raise ValueError(f"Invalid JSON in attributes for event '{event_id}'")
 
         if attribute_key not in attributes_dict:
-            raise KeyError(f"Attribute key '{attribute_key}' not found for event '{event_id}'")
+            raise KeyError(
+                f"Attribute key '{attribute_key}' not found for event '{event_id}'"
+            )
 
         return attributes_dict[attribute_key]
 
@@ -333,10 +388,7 @@ class ObjectCentricEventLog:
         return sorted(list(all_keys))
 
     def get_object_attribute_value(
-        self,
-        object_id: str,
-        attribute_key: str,
-        timestamp: int | None = None
+        self, object_id: str, attribute_key: str, timestamp: int | None = None
     ) -> str:
         """
         Returns the value of a specific attribute for the given object at a specific time.
@@ -367,13 +419,18 @@ class ObjectCentricEventLog:
         else:
             # Get rows at or before the timestamp, sorted by timestamp descending
             object_rows = self.object_attributes.filter(
-                (pl.col("_objId") == object_id) & (pl.col("_timestampUnix") <= timestamp)
+                (pl.col("_objId") == object_id)
+                & (pl.col("_timestampUnix") <= timestamp)
             ).sort("_timestampUnix", descending=True)
 
         if object_rows.height == 0:
             raise ValueError(
                 f"No attribute records found for object '{object_id}'"
-                + (f" at or before timestamp {timestamp}" if timestamp is not None else "")
+                + (
+                    f" at or before timestamp {timestamp}"
+                    if timestamp is not None
+                    else ""
+                )
             )
 
         # Iterate through rows from most recent to oldest
@@ -458,9 +515,8 @@ class ObjectCentricEventLog:
 
         return G
 
-
     ### TODO check pls @Toan
-    def filter_by_object_type(self, object_type: str) -> 'ObjectCentricEventLog':
+    def filter_by_object_type(self, object_type: str) -> "ObjectCentricEventLog":
         """
         Filters the event log to include only a single object type and its related events.
 
@@ -477,7 +533,7 @@ class ObjectCentricEventLog:
         """
         # 1. Filter the objects DataFrame to get only the relevant objects
         filtered_objects = self.objects.filter(pl.col("_objType") == object_type)
-        
+
         # 2. Get the set of IDs for these relevant objects
         relevant_object_ids = filtered_objects.get_column("_objId")
 
@@ -485,19 +541,20 @@ class ObjectCentricEventLog:
         # Keep an event if its list of objects has a non-empty intersection
         # with our set of relevant object IDs.
         filtered_events = self.events.filter(
-            pl.col("_objects").list.eval(pl.element().is_in(relevant_object_ids)).list.any()
+            pl.col("_objects")
+            .list.eval(pl.element().is_in(relevant_object_ids))
+            .list.any()
         )
 
         # 4. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
-    
+
     def get_object_ids_by_type(self, object_type: str) -> List[str]:
         """
         Returns a list of object IDs for a given object type.
         """
         return (
-            self.objects
-            .filter(pl.col("_objType") == object_type)
+            self.objects.filter(pl.col("_objType") == object_type)
             .get_column("_objId")
             .to_list()
         )
