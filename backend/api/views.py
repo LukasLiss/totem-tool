@@ -1317,6 +1317,9 @@ def variants(request):
         leading_object_type = "Transport Document"  #request.query_params.get("leading_type", "Handling Unit")
         mined = find_variants(ocel, leading_type=leading_object_type)
     except Exception as e:
+        import traceback
+        print(f"ERROR in find_variants: {e}")
+        traceback.print_exc()
         return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     out = []

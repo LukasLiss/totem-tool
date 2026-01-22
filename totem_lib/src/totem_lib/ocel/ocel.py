@@ -1,4 +1,5 @@
 import polars as pl
+import networkx as nx
 from functools import cached_property
 from typing import List, Tuple, Dict
 from collections import defaultdict
