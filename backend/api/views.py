@@ -8,24 +8,21 @@ from .models import EventLog, Project, Dashboard
 from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
 
-from totem_lib.ocdfg import OCDFG, CCDFG
-from totem_lib.ocel import ObjectCentricEventLog
-from totem_lib.ocvariants import find_variants, calculate_layout
-from totem_lib.totem import totemDiscovery, mlpaDiscovery
+from totem_lib import OCDFG, CCDFG, ObjectCentricEventLog, calculate_layout, totemDiscovery, mlpaDiscovery
+from totem_lib.variants.ocvariants import find_variants
+from totem_lib.ocel.importer import (
+    load_events_from_sqlite, load_objects_from_sqlite,
+    load_events_from_json, load_objects_from_json,
+    load_events_from_xml, load_objects_from_xml,
+)
 import networkx as nx
 
 from collections import defaultdict
 
-from totem_lib.ocel import load_events_from_sqlite
 from django.core.cache import cache
 
 import os
 from hashlib import sha1
-from totem_lib.ocel import (
-    load_events_from_sqlite, load_objects_from_sqlite,
-    load_events_from_json,   load_objects_from_json,
-    load_events_from_xml,    load_objects_from_xml,
-)
 import json
 
 
