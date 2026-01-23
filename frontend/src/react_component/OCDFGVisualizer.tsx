@@ -26,6 +26,7 @@ import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-reac
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
+const DETAIL_FIT_PADDING = 0.12;
 type LayoutDirection = 'TB' | 'LR';
 
 const VARIANT_PRESETS = {
@@ -254,6 +255,9 @@ function OCDFGVisualizer({
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(false);
+  const [autoInteractionLocked, setAutoInteractionLocked] = useState(false);
+  const [measuredGraphSize, setMeasuredGraphSize] = useState<{ width: number; height: number } | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const layoutActiveTypesRef = useRef<string[] | null>(null);
   const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
   const layoutTraceLimitRef = useRef<string | null>(null);
@@ -268,8 +272,16 @@ function OCDFGVisualizer({
   const terminalSize = variantPreset.terminalSize;
   const hideChrome = resolvedVariant !== 'full';
   const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow({ id: reactFlowId } as any);
   const { fitView } = reactFlow;
+  const fitViewOptions = useMemo(() => {
+    if (resolvedVariant === 'detail') {
+      return { padding: DETAIL_FIT_PADDING, offset: { x: 0, y: 0 } };
+    }
+    return { padding: 0.15, offset: { x: 120, y: 0 } };
+  }, [resolvedVariant]);
+  const fitViewWithOffset = useCallback(() => fitView(fitViewOptions as any), [fitView, fitViewOptions]);
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
   const nodeTypes = useMemo(
     () => ({
@@ -352,7 +364,6 @@ function OCDFGVisualizer({
 
   const reportGraphSize = useCallback(
     (renderNodes: Node[]) => {
-      if (!onSizeChange) return;
       const measured = measureGraphSize(renderNodes, paddingForSize, fallbackNodeWidth, fallbackNodeHeight);
       if (!measured) return;
       const previous = lastReportedSizeRef.current;
@@ -360,10 +371,70 @@ function OCDFGVisualizer({
         return;
       }
       lastReportedSizeRef.current = measured;
-      onSizeChange(measured);
+      setMeasuredGraphSize(measured);
+      if (onSizeChange) {
+        onSizeChange(measured);
+      }
     },
     [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
   );
+
+  const updateAutoInteractionLock = useCallback(() => {
+    if (resolvedVariant !== 'detail') {
+      setAutoInteractionLocked(false);
+      return;
+    }
+    if (!measuredGraphSize || containerSize.width <= 0 || containerSize.height <= 0) {
+      setAutoInteractionLocked(false);
+      return;
+    }
+    const viewport = reactFlow.getViewport?.();
+    const zoom = viewport?.zoom ?? 1;
+    const fitsWidth = measuredGraphSize.width * zoom <= containerSize.width + 1;
+    const fitsHeight = measuredGraphSize.height * zoom <= containerSize.height + 1;
+    const shouldLock = fitsWidth && fitsHeight;
+    setAutoInteractionLocked((prev) => (prev === shouldLock ? prev : shouldLock));
+  }, [containerSize, measuredGraphSize, reactFlow, resolvedVariant]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateSize = () => {
+      const width = Math.max(0, container.clientWidth);
+      const height = Math.max(0, container.clientHeight);
+      setContainerSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+    };
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => updateSize());
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    updateAutoInteractionLock();
+  }, [updateAutoInteractionLock]);
+
+  useEffect(() => {
+    if (resolvedVariant !== 'detail') return;
+    if (!measuredGraphSize) return;
+    if (containerSize.width <= 0 || containerSize.height <= 0) return;
+    if (nodes.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      fitView(fitViewOptions as any);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    resolvedVariant,
+    measuredGraphSize,
+    containerSize.width,
+    containerSize.height,
+    nodes.length,
+    fitView,
+    fitViewOptions,
+  ]);
 
   useEffect(() => {
     if (data) {
@@ -408,6 +479,8 @@ function OCDFGVisualizer({
   useEffect(() => {
     if (!dfgData) {
       lastReportedSizeRef.current = null;
+      setMeasuredGraphSize(null);
+      setAutoInteractionLocked(false);
       setRawNodes([]);
       setRawEdges([]);
       setBaseNodes([]);
@@ -505,6 +578,8 @@ function OCDFGVisualizer({
     });
 
     const nodeVariantMap: Record<string, 'start' | 'end' | 'center' | undefined> = {};
+    const typeIndicatorSize = resolvedVariant === 'detail' ? 10 : 14;
+    const typeIndicatorThickness = resolvedVariant === 'detail' ? 1.5 : 2;
 
     // Create standard React Flow nodes
     const initialNodes: Node[] = dfgNodes.map((node) => {
@@ -525,6 +600,8 @@ function OCDFGVisualizer({
         nodeVariant: variant,
         isStart,
         layoutDirection,
+        typeIndicatorSize,
+        typeIndicatorThickness,
       };
       const terminalLabel =
         node.types && node.types.length > 0
@@ -672,6 +749,7 @@ function OCDFGVisualizer({
       typeTraceLimit,
       activeTypes,
       direction: layoutDirection,
+      layoutKey: reactFlowId,
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
@@ -731,7 +809,7 @@ function OCDFGVisualizer({
         initialAvailabilityRef.current = mergedAvailability;
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
       }
-      window.requestAnimationFrame(() => fitView());
+      window.requestAnimationFrame(() => fitViewWithOffset());
     }).catch(console.error);
   }, [
     typeVisibility,
@@ -740,17 +818,19 @@ function OCDFGVisualizer({
     rawEdges,
     dfgData,
     typeColors,
-    fitView,
+    fitViewWithOffset,
     resolvedVariant,
     stripDebugNodes,
     layoutDirection,
     transformLayoutDirection,
+    reactFlowId,
   ]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
       setNodes([]);
       setEdges([]);
+      setMeasuredGraphSize(null);
       return;
     }
 
@@ -873,27 +953,35 @@ function OCDFGVisualizer({
     });
   }, [typeTraceMax]);
 
+  const interactionsDisabled = interactionLocked || autoInteractionLocked;
+
   return (
-    <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
+    <div
+      ref={containerRef}
+      style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
+    >
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onMoveEnd={resolvedVariant === 'detail' ? updateAutoInteractionLock : undefined}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         fitView
+        fitViewOptions={fitViewOptions}
         proOptions={{ hideAttribution: true }}
         minZoom={0.25}
         maxZoom={2.5}
-        nodesDraggable={!interactionLocked}
-        nodesConnectable={!interactionLocked}
-        elementsSelectable={!interactionLocked}
-        panOnDrag={!interactionLocked}
-        panOnScroll={!interactionLocked}
-        zoomOnPinch={!interactionLocked}
-        zoomOnScroll={!interactionLocked}
+        nodesDraggable={!interactionsDisabled}
+        nodesConnectable={!interactionsDisabled}
+        elementsSelectable={!interactionsDisabled}
+        panOnDrag={!interactionsDisabled}
+        panOnScroll={!interactionsDisabled}
+        zoomOnPinch={!interactionsDisabled}
+        zoomOnScroll={!interactionsDisabled}
+        zoomOnDoubleClick={!interactionsDisabled}
       />
 
       {!hideChrome && (
@@ -908,6 +996,21 @@ function OCDFGVisualizer({
             maxHeight: 'calc(100% - 32px)',
           }}
         >
+          <div
+            style={{
+              background: 'transparent',
+              border: '1px solid transparent',
+              borderRadius: 12,
+              padding: '10px 14px',
+              boxShadow: 'none',
+              fontFamily: 'var(--font-primary, Inter, sans-serif)',
+              minWidth: 240,
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+              Object-Centric DFG
+            </div>
+          </div>
           {Object.keys(typeColors).length > 0 && (
             <div
               style={{
@@ -1056,7 +1159,7 @@ function OCDFGVisualizer({
               type="button"
               variant="outline"
               size="icon"
-              onClick={() => fitView()}
+              onClick={() => fitViewWithOffset()}
               className="rounded-full h-9 w-9"
             >
               <ScanIcon className="h-4 w-4" />

@@ -96,19 +96,18 @@ const LANE_TOLERANCE = 1e-3;
 const LAYER_MARKER_THICKNESS = 10;
 const LAYER_MARKER_PADDING = 60;
 const LAYER_MARKER_COLOR = 'rgba(255, 232, 138, 0.45)';
-// Slightly smaller again (~10% less area than the previous buffer).
-const BUFFER_ZONE_MARGIN = 45;
+// 25% smaller buffer margin to tighten collision boxes.
+const BUFFER_ZONE_MARGIN = 45 * 0.75; // 33.75px
 const BUFFER_ZONE_COLOR = LAYER_MARKER_COLOR;
-const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30;
+const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30 * 0.75; // 56.25px
 const LONGEST_TRACE_BEZIER_SAMPLES = 32;
 const LONGEST_TRACE_BEZIER_HANDLE_SCALE = 1.35;
 const LONGEST_TRACE_LANE_OFFSET = 12; // match rendered stroke thickness so parallel edges form clean lanes
 
-// Remember the last computed object-type column order so that
-// subsequent layouts (e.g. when toggling object types) can
-// preserve the relative ordering unless there is a clearly
-// better layout according to the interaction cost.
-let previousTypeOrderGlobal: string[] | null = null;
+// Remember the last computed object-type column order per layout key so that
+// subsequent layouts (e.g. when toggling object types) can preserve ordering
+// without bleeding between independent instances.
+const previousTypeOrderByKey = new Map<string, string[]>();
 
 function buildLayerMarkers(
   axisPositions: number[],
@@ -286,10 +285,20 @@ export async function layoutOCDFGLongestTrace({
   typeTraceLimit,
   activeTypes,
   direction = 'TB',
-}: Omit<LayoutRequest, 'mode' | 'config'> & { direction?: 'TB' | 'LR' }): LayoutResult {
+  layoutKey,
+}: Omit<LayoutRequest, 'mode' | 'config'> & { direction?: 'TB' | 'LR'; layoutKey?: string }): LayoutResult {
   console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges, direction: ${direction}`);
 
-  return layoutWithLongestTrace(renderNodes, renderEdges, dfgNodes, dfgLinks, typeTraceLimit, activeTypes, direction);
+  return layoutWithLongestTrace(
+    renderNodes,
+    renderEdges,
+    dfgNodes,
+    dfgLinks,
+    typeTraceLimit,
+    activeTypes,
+    direction,
+    layoutKey,
+  );
 }
 
 async function layoutWithSugiyama(
@@ -1063,6 +1072,7 @@ async function layoutWithLongestTrace(
   typeTraceLimit?: Record<string, number>,
   activeTypes?: string[],
   direction: 'TB' | 'LR' = 'TB',
+  layoutKey?: string,
 ): LayoutResult {
   console.log('[LONGEST TRACE] Starting longest trace layout');
 
@@ -1361,15 +1371,18 @@ async function layoutWithLongestTrace(
     return cost;
   };
 
+  const cacheKey = layoutKey && layoutKey.length > 0 ? layoutKey : 'global';
+  const previousTypeOrder = previousTypeOrderByKey.get(cacheKey) ?? null;
+
   const computeOrder = (): string[] => {
     if (typeList.length <= 1) return [...typeList];
 
-    const hasPreviousOrder = Array.isArray(previousTypeOrderGlobal)
-      && previousTypeOrderGlobal.length > 0;
+    const hasPreviousOrder = Array.isArray(previousTypeOrder)
+      && previousTypeOrder.length > 0;
 
     const baselineOrder: string[] | null = hasPreviousOrder
       ? (() => {
-          const prev = previousTypeOrderGlobal as string[];
+          const prev = previousTypeOrder as string[];
           const result: string[] = [];
           const seen = new Set<string>();
           prev.forEach((type) => {
@@ -1503,7 +1516,7 @@ async function layoutWithLongestTrace(
   };
 
   const typeOrder = computeOrder();
-  previousTypeOrderGlobal = [...typeOrder];
+  previousTypeOrderByKey.set(cacheKey, [...typeOrder]);
 
   // Find shared nodes between traces
   const traceMembership = new Map<string, number[]>();
@@ -1527,7 +1540,7 @@ async function layoutWithLongestTrace(
   const VERTICAL_SPACING = spacing.nodePrimarySpacing;
   const COLUMN_PADDING = spacing.columnPadding;
   const COLUMN_SPACING = spacing.columnSpacing; // center-to-center spacing with a full column gap
-  const FIRST_COLUMN_CENTER = 300;
+  const FIRST_COLUMN_CENTER = 300; 
   const typeCenters = new Map<string, number>();
   const typeIndex = new Map<string, number>();
   typeOrder.forEach((type, index) => {
@@ -1974,54 +1987,67 @@ async function layoutWithLongestTrace(
   const adjustedPositionedNodes = Array.from(nodeMap.values());
 
   const nodesById = new Map(adjustedPositionedNodes.map(n => [n.id, { ...n }]));
-  const lastActivityCenter = (trace: string[]) => {
-    for (let i = trace.length - 1; i >= 0; i -= 1) {
-      const id = trace[i];
-      if (variantOf(id) === 'end') {
-        continue;
-      }
-      const n = nodesById.get(id);
-      if (!n || n.hidden || !n.position) {
-        continue;
-      }
-      const h = n.height ?? DEFAULT_NODE_HEIGHT;
-      return n.position.y + h / 2;
-    }
-    return Number.NEGATIVE_INFINITY;
-  };
+  // Index traces by their object type to efficiently look up the relevant sequences
+  const traceIndicesByType = new Map<string, number[]>();
+  selectedTraces.forEach((trace, idx) => {
+    const type = trace.ownerType;
+    if (!type) return;
+    if (activeTypeSet && !activeTypeSet.has(type)) return;
+    const list = traceIndicesByType.get(type) ?? [];
+    list.push(idx);
+    traceIndicesByType.set(type, list);
+  });
 
-  const adjustEndNodeForTrace = (trace: string[]) => {
-    // If we already assigned a layer-based position for the end node, keep it.
-    const endIdFromLayering = [...trace].reverse().find(id => variantOf(id) === 'end');
-    if (endIdFromLayering && layerOf.has(endIdFromLayering)) {
-      return;
-    }
-    const maxCenter = lastActivityCenter(trace);
-    if (!Number.isFinite(maxCenter)) return;
-    const endId = [...trace].reverse().find(id => variantOf(id) === 'end');
-    if (!endId) return;
-    const endNode = nodesById.get(endId);
-    if (!endNode || !endNode.position) return;
-    const height = endNode.height ?? DEFAULT_NODE_HEIGHT;
-    // Calculate layer for end node and snap to grid for regular spacing
-    const lastActivityLayer = Math.round((maxCenter - START_Y) / VERTICAL_SPACING);
-    const endLayer = lastActivityLayer + 1;
-    const newCenterY = START_Y + endLayer * VERTICAL_SPACING;
-    nodesById.set(endId, {
-      ...endNode,
-      position: {
-        ...endNode.position,
-        y: newCenterY - height / 2,
-      },
+  // Find the deepest layer reached by any node in the traces of each object type (excluding end nodes)
+  const deepestLayerByType = new Map<string, number>();
+  traceIndicesByType.forEach((traceIdxs, type) => {
+    let maxLayer = Number.NEGATIVE_INFINITY;
+    traceIdxs.forEach((idx) => {
+      const trace = traceSequences[idx];
+      trace?.forEach((nodeId) => {
+        if (variantOf(nodeId) === 'end') {
+          return;
+        }
+        const layer = layerOf.get(nodeId);
+        if (typeof layer !== 'number' || !Number.isFinite(layer)) {
+          return;
+        }
+        if (layer > maxLayer) {
+          maxLayer = layer;
+        }
+      });
     });
-  };
-
-  traceSequences.forEach((trace) => {
-    if (trace.length > 0) {
-      adjustEndNodeForTrace(trace);
+    if (Number.isFinite(maxLayer)) {
+      deepestLayerByType.set(type, maxLayer);
     }
   });
 
+  // Place each end node one layer below the deepest layer of its object type traces
+  nodesById.forEach((node, id) => {
+    if (variantOf(id) !== 'end' || !node.position) {
+      return;
+    }
+    const types = getNodeTypes(id);
+    const candidateLayers = types
+      .map(t => deepestLayerByType.get(t))
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    if (candidateLayers.length === 0) {
+      return;
+    }
+    const targetLayer = Math.max(...candidateLayers) + 1;
+    const height = node.height ?? DEFAULT_NODE_HEIGHT;
+    const newCenterY = START_Y + targetLayer * VERTICAL_SPACING;
+    layerOf.set(id, targetLayer);
+    nodesById.set(id, {
+      ...node,
+      position: {
+        ...node.position,
+        y: newCenterY - height / 2,
+      },
+    });
+  });
+
+  // Refresh layer map after end-node placement
   layerOf = computeLayerMap(nodesById);
 
   // Final safety: resolve any remaining overlaps by shifting horizontally.
@@ -2224,6 +2250,7 @@ async function layoutWithLongestTrace(
       pair &&
       pair.forward.length > 0 &&
       pair.backward.length > 0;
+
     if (isBidirectional) {
       const bendDir = cycleBendDirection.get(pairKeyStr) ?? 1;
       const ctrl = buildCyclePolyline(srcPoint, tgtPoint, bendDir);
@@ -2302,7 +2329,14 @@ async function layoutWithLongestTrace(
   const laneAdjustedEdges = enhancedEdges.map((edge) => {
     const group = edgesByPair.get(`${edge.source}->${edge.target}`);
     if (!group || group.length <= 1) {
-      return edge;
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          parallelIndex: 0,      // Single edge, index 0
+          parallelCount: 1,      // Only 1 edge in group
+        },
+      };
     }
 
     const sorted = [...group].sort((a, b) => {
@@ -2314,7 +2348,15 @@ async function layoutWithLongestTrace(
 
     const laneIndex = sorted.findIndex(e => e.id === edge.id);
     if (laneIndex < 0) {
-      return edge;
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          parallelIndex: 0,            // Fallback to 0
+          parallelCount: group.length, // Preserve group size
+          overlayDebug: false,
+        },
+      };
     }
 
     const basePolyline = (edge.data as { polyline?: Point[] } | undefined)?.polyline;
@@ -2380,6 +2422,8 @@ async function layoutWithLongestTrace(
         ...edge,
         data: {
           ...edge.data,
+          parallelIndex: laneIndex,    // Store parallel metadata even for negligible offset
+          parallelCount: group.length, // Needed for parametric edge rendering
           overlayDebug: false,
         },
       };
@@ -2404,6 +2448,8 @@ async function layoutWithLongestTrace(
         polyline: shiftedPolyline,
         sourceAnchorOffset: offsetVector,
         targetAnchorOffset: offsetVector,
+        parallelIndex: laneIndex,      // Store calculated parallel index
+        parallelCount: group.length,   // Store total parallel edge count
         overlayDebug: true,
       },
     };

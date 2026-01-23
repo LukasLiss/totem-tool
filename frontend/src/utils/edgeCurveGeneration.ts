@@ -8,10 +8,9 @@
 import { sampleCubicBezier, type Point } from './edgeGeometry';
 
 // ========== CONSTANTS ==========
-// Extracted from GraphLayouter.tsx lines 100-104
-
-export const BUFFER_ZONE_MARGIN = 45;
-export const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30; // 75
+// Shared with GraphLayouter; scaled down 25% to shrink buffer boxes.
+export const BUFFER_ZONE_MARGIN = 20 * 0.75; // 15px
+export const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 12 * 0.75; // 24px
 export const LONGEST_TRACE_BEZIER_SAMPLES = 32;
 export const LONGEST_TRACE_BEZIER_HANDLE_SCALE = 1.35;
 
@@ -23,6 +22,22 @@ export interface BufferRect {
   right: number;
   top: number;
   bottom: number;
+}
+
+/**
+ * Parametric edge curve representation with independent control points.
+ * Enables full cubic bezier flexibility including S-curves.
+ */
+export interface EdgeCurveParams {
+  // Control point 1 (P1, near source)
+  curvature1: number;     // 0.0-1.0: offset magnitude for P1 (0=on line, 1=max offset)
+  direction1: number;     // -1.0 to 1.0: perpendicular offset direction (left/right)
+  position1: number;      // 0.0-1.0: where along edge P1 is positioned (default ~0.33)
+
+  // Control point 2 (P2, near target)
+  curvature2: number;     // 0.0-1.0: offset magnitude for P2
+  direction2: number;     // -1.0 to 1.0: perpendicular offset direction (left/right)
+  position2: number;      // 0.0-1.0: where along edge P2 is positioned (default ~0.67)
 }
 
 export type { Point };
@@ -102,36 +117,15 @@ export function relaxPolylineAroundBuffers(
   const spansBuffer = Array.from(hitCounts.values()).some(c => c >= 2);
   const needsStrongerCurve = longEdge || multiBlocker || spansBuffer;
 
-  // Determine sideways direction that moves the edge away from blocking buffers.
-  const midForDirection = {
-    x: src.x + vx * 0.5,
-    y: src.y + vy * 0.5,
-  };
-  let dirX = 0;
-  let dirY = 0;
-  blockers.forEach((rect) => {
-    const cx = (rect.left + rect.right) / 2;
-    const cy = (rect.top + rect.bottom) / 2;
-    dirX += midForDirection.x - cx;
-    dirY += midForDirection.y - cy;
-  });
-
-  // If blockers are symmetric, fall back to a stable perpendicular.
-  if (Math.hypot(dirX, dirY) < 1e-3) {
-    dirX = -vy;
-    dirY = vx;
-  }
-
-  const dirLen = Math.hypot(dirX, dirY) || 1;
-  const nx = dirX / dirLen;
-  const ny = dirY / dirLen;
+  // PHASE 0 FIX: Test ALL THREE options (straight, left, right) and choose the BEST.
+  // The old approach blindly pushed away from node centers, which could make
+  // buffer intersection WORSE. Now we test all options and pick the one with
+  // the FEWEST buffer hits - including staying straight if that's best!
 
   const baseOffset = BUFFER_REPULSION_RADIUS;
-  const offset = needsStrongerCurve ? baseOffset * 1.6 : baseOffset * 1.15;
+  const offset = needsStrongerCurve ? baseOffset * 1.05 : baseOffset * 0.7;
 
-  // Longer edges get more bend points; each bend is eased so that
-  // the maximum offset is near the middle of the edge and fades
-  // smoothly towards the endpoints.
+  // Compute segment count for bend generation
   const lengthFactor = segLen / (BUFFER_ZONE_MARGIN * (needsStrongerCurve ? 1.3 : 1.8));
   const maxSegments = needsStrongerCurve ? 4 : 3;
   const minSegments = needsStrongerCurve ? 2 : 1;
@@ -144,6 +138,81 @@ export function relaxPolylineAroundBuffers(
     bendTs.push(i / (segmentCount + 1));
   }
 
+  // Perpendicular directions (right and left)
+  const perpX = -vy / segLen;
+  const perpY = vx / segLen;
+
+  // Test curving in a given direction and count buffer hits
+  const testCurve = (dirX: number, dirY: number, curveOffset: number): number => {
+    let hits = 0;
+    for (const t of bendTs) {
+      const ease = Math.sin(Math.PI * t);
+      const localOffset = curveOffset * ease;
+      const px = src.x + vx * t + dirX * localOffset;
+      const py = src.y + vy * t + dirY * localOffset;
+
+      // Check if this point falls inside any buffer (NO padding for accurate test)
+      if (allowedBuffers.some(rect => isInside(px, py, rect, 0))) {
+        hits += 1;
+      }
+    }
+    return hits;
+  };
+
+  // Test ALL THREE options: straight (offset=0), right curve, left curve
+  const hitsStraight = testCurve(perpX, perpY, 0);  // Straight line (no curve)
+  const hitsRight = testCurve(perpX, perpY, offset);
+  const hitsLeft = testCurve(-perpX, -perpY, offset);
+
+  // Choose the option with the FEWEST buffer hits
+  const minHits = Math.min(hitsStraight, hitsRight, hitsLeft);
+
+  // CRITICAL: If staying straight is best (or tied for best), stay straight!
+  if (hitsStraight === minHits) {
+    // Straight line is best - don't curve at all
+    return polyline.map(p => ({ ...p }));
+  }
+
+  // Otherwise, curve in the better direction
+  let nx: number;
+  let ny: number;
+
+  if (hitsRight < hitsLeft) {
+    // Right direction is better than left
+    nx = perpX;
+    ny = perpY;
+  } else if (hitsLeft < hitsRight) {
+    // Left direction is better than right
+    nx = -perpX;
+    ny = -perpY;
+  } else {
+    // Both curve directions have equal hits (but worse than straight, which we already handled)
+    // Use center-based logic as tie-breaker
+    const midForDirection = {
+      x: src.x + vx * 0.5,
+      y: src.y + vy * 0.5,
+    };
+    let dirX = 0;
+    let dirY = 0;
+    blockers.forEach((rect) => {
+      const cx = (rect.left + rect.right) / 2;
+      const cy = (rect.top + rect.bottom) / 2;
+      dirX += midForDirection.x - cx;
+      dirY += midForDirection.y - cy;
+    });
+
+    // If blockers are symmetric, fall back to stable perpendicular
+    if (Math.hypot(dirX, dirY) < 1e-3) {
+      dirX = -vy;
+      dirY = vx;
+    }
+
+    const dirLen = Math.hypot(dirX, dirY) || 1;
+    nx = dirX / dirLen;
+    ny = dirY / dirLen;
+  }
+
+  // Generate final bends using the chosen direction (nx, ny)
   const bends = bendTs.map((t) => {
     // Smooth easing: 0 at endpoints, 1 at center.
     const ease = Math.sin(Math.PI * t);
@@ -183,9 +252,12 @@ export function relaxPolylineAroundBuffers(
   }
 
   const coverage = totalSamples > 0 ? insideBuffer / totalSamples : 0;
-  // If a significant fraction of the bent edge still runs through buffers,
-  // push it further away from node centers.
-  if (coverage <= 0.4) {
+  // IMPORTANT: With three-way testing already choosing optimal direction,
+  // second-stage refinement should be RARE. Only apply in extreme cases
+  // where edge deeply penetrates buffers (>90% coverage).
+  // Lower thresholds cause artifacts from center-based repulsion conflicting
+  // with the chosen curve direction.
+  if (coverage <= 0.90) {
     return bent;
   }
 
@@ -225,7 +297,7 @@ export function relaxPolylineAroundBuffers(
 
   const rx = repulseX / repulseLen;
   const ry = repulseY / repulseLen;
-  const extraOffset = BUFFER_REPULSION_RADIUS * 1.6;
+  const extraOffset = BUFFER_REPULSION_RADIUS * 1.0;
 
   const adjusted = bent.map((p, idx) => {
     if (idx === 0 || idx === bent.length - 1) {
@@ -348,4 +420,170 @@ export function generateDynamicEdgeCurve(
 
   // 3. Convert waypoints to smooth Bezier curve
   return convertPolylineToBezier(waypoints);
+}
+
+// ========== PARAMETRIC EDGE SYSTEM ==========
+
+/**
+ * Computes parametric curve representation from collision detection waypoints.
+ * Extracts independent control point parameters enabling S-curves and full bezier flexibility.
+ *
+ * @param waypoints - Output from relaxPolylineAroundBuffers (2+ points)
+ * @param sourceCenter - Source node center point
+ * @param targetCenter - Target node center point
+ * @returns EdgeCurveParams with 6 parameters for independent control points
+ */
+export function computeCurveParameters(
+  waypoints: Point[],
+  sourceCenter: Point,
+  targetCenter: Point,
+): EdgeCurveParams {
+  // Straight edge (no collision detected)
+  if (waypoints.length === 2) {
+    return {
+      curvature1: 0,
+      direction1: 0,
+      position1: 0.33,
+      curvature2: 0,
+      direction2: 0,
+      position2: 0.67,
+    };
+  }
+
+  // Edge properties
+  const vx = targetCenter.x - sourceCenter.x;
+  const vy = targetCenter.y - sourceCenter.y;
+  const edgeLength = Math.hypot(vx, vy);
+
+  // Handle degenerate case
+  if (!Number.isFinite(edgeLength) || edgeLength < 1e-3) {
+    return {
+      curvature1: 0,
+      direction1: 0,
+      position1: 0.33,
+      curvature2: 0,
+      direction2: 0,
+      position2: 0.67,
+    };
+  }
+
+  // Perpendicular unit vector (normalized)
+  const perpX = -vy / edgeLength;
+  const perpY = vx / edgeLength;
+
+  // Extract P1 from first inner waypoint
+  const waypoint1 = waypoints[1];
+  // PROJECT waypoint onto edge vector to get true position along line
+  // (not euclidean distance which is longer due to perpendicular offset)
+  const t1 = ((waypoint1.x - sourceCenter.x) * vx + (waypoint1.y - sourceCenter.y) * vy) / (edgeLength * edgeLength);
+
+  // Expected position if waypoint1 was on straight line
+  const expectedPos1 = {
+    x: sourceCenter.x + vx * t1,
+    y: sourceCenter.y + vy * t1,
+  };
+
+  // Actual offset from straight line
+  const offset1X = waypoint1.x - expectedPos1.x;
+  const offset1Y = waypoint1.y - expectedPos1.y;
+  const offset1Mag = Math.hypot(offset1X, offset1Y);
+
+  // Project onto perpendicular to get signed direction (-1 to 1)
+  const dir1 = offset1Mag > 1e-6
+    ? (offset1X * perpX + offset1Y * perpY) / offset1Mag
+    : 0;
+
+  // Normalize curvature by base offset (75px)
+  const curvature1 = Math.min(1.0, offset1Mag / BUFFER_REPULSION_RADIUS);
+
+  // Extract P2 from last inner waypoint
+  const waypoint2 = waypoints[waypoints.length - 2];
+  // PROJECT waypoint onto edge vector to get true position along line
+  const t2 = ((waypoint2.x - sourceCenter.x) * vx + (waypoint2.y - sourceCenter.y) * vy) / (edgeLength * edgeLength);
+
+  const expectedPos2 = {
+    x: sourceCenter.x + vx * t2,
+    y: sourceCenter.y + vy * t2,
+  };
+
+  const offset2X = waypoint2.x - expectedPos2.x;
+  const offset2Y = waypoint2.y - expectedPos2.y;
+  const offset2Mag = Math.hypot(offset2X, offset2Y);
+
+  const dir2 = offset2Mag > 1e-6
+    ? (offset2X * perpX + offset2Y * perpY) / offset2Mag
+    : 0;
+
+  const curvature2 = Math.min(1.0, offset2Mag / BUFFER_REPULSION_RADIUS);
+
+  // Clamp positions to reasonable ranges
+  const position1 = Math.max(0.1, Math.min(0.5, t1));
+  const position2 = Math.max(0.5, Math.min(0.9, t2));
+
+  return {
+    curvature1,
+    direction1: dir1,
+    position1,
+    curvature2,
+    direction2: dir2,
+    position2,
+  };
+}
+
+/**
+ * Generates cubic bezier control points from parametric curve representation.
+ * Enables real-time curve generation with full bezier flexibility including S-curves.
+ *
+ * @param source - Source point (P0)
+ * @param target - Target point (P3)
+ * @param params - EdgeCurveParams with 6 parameters
+ * @returns Cubic bezier control points {p0, p1, p2, p3}
+ */
+export function generateBezierFromParams(
+  source: Point,
+  target: Point,
+  params: EdgeCurveParams,
+): { p0: Point; p1: Point; p2: Point; p3: Point } {
+  const p0 = source;
+  const p3 = target;
+
+  // Edge vector and properties
+  const vx = target.x - source.x;
+  const vy = target.y - source.y;
+  const edgeLength = Math.hypot(vx, vy);
+
+  // Handle degenerate case (zero-length edge)
+  if (!Number.isFinite(edgeLength) || edgeLength < 1e-3) {
+    return {
+      p0: { ...source },
+      p1: { ...source },
+      p2: { ...target },
+      p3: { ...target },
+    };
+  }
+
+  // Perpendicular unit vector (normalized)
+  const perpX = -vy / edgeLength;
+  const perpY = vx / edgeLength;
+
+  // CRITICAL FIX: Use the SAME base offset that was used to normalize curvature
+  // in computeCurveParameters. The logarithmic scaling was causing artifacts
+  // by amplifying the offset beyond what was in the original waypoints.
+  const baseOffset = BUFFER_REPULSION_RADIUS;
+
+  // P1: First control point (near source)
+  const offset1 = baseOffset * params.curvature1 * params.direction1;
+  const p1 = {
+    x: source.x + vx * params.position1 + perpX * offset1,
+    y: source.y + vy * params.position1 + perpY * offset1,
+  };
+
+  // P2: Second control point (near target)
+  const offset2 = baseOffset * params.curvature2 * params.direction2;
+  const p2 = {
+    x: source.x + vx * params.position2 + perpX * offset2,
+    y: source.y + vy * params.position2 + perpY * offset2,
+  };
+
+  return { p0, p1, p2, p3 };
 }

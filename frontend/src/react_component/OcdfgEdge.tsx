@@ -7,6 +7,7 @@ import {
   roundedPath,
   trimPolyline,
   type Point,
+  sampleCubicBezier,
 } from '../utils/edgeGeometry';
 
 type NodeVariant = 'start' | 'end' | 'center';
@@ -442,9 +443,18 @@ const OcdfgEdge = memo(function OcdfgEdge({
       return buildSelfLoopPolyline(targetGeometry);
     }
 
-    // If we have a custom polyline with anchoring data, use ReactFlow's coordinates
-    // as they update automatically when nodes move
-    const basePoints = (data?.polyline && data.polyline.length >= 2)
+    // Compute base polyline points
+    let basePoints: Point[];
+
+    // DISABLED: Parametric edge rendering was causing massive backwards bending artifacts
+    // because it recomputed curves differently than GraphLayouter. Using pre-computed polyline instead.
+    // if (data?.curveParams) {
+    //   ... dynamic collision detection code removed ...
+    // }
+
+    // Use pre-computed polyline from GraphLayouter (always)
+    // Lane offsets for parallel edges are already baked into the polyline by GraphLayouter
+    basePoints = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
 
@@ -588,6 +598,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
   }, [polyline]);
 
   const smoothingIterations = useMemo(() => {
+    // Skip smoothing for bezier curves (already smooth)
     if (data?.polylineKind === 'bezier') {
       return 0;
     }
@@ -656,8 +667,22 @@ const OcdfgEdge = memo(function OcdfgEdge({
     [style, backgroundStrokeWidth],
   );
 
+  // Detect if source or target node is being dragged to disable CSS transitions
+  const isDragging = useMemo(() => {
+    const sourceNode = reactFlow.getNode(source);
+    const targetNode = reactFlow.getNode(target);
+    return (sourceNode?.dragging === true) || (targetNode?.dragging === true);
+  }, [reactFlow, source, target, sourceX, sourceY, targetX, targetY]);
+
+  const edgeClassName = useMemo(() => {
+    const classes = ['ocdfg-edge'];
+    if (animated) classes.push('animated');
+    if (isDragging) classes.push('dragging');
+    return classes.join(' ');
+  }, [animated, isDragging]);
+
   return (
-    <g className={`ocdfg-edge${animated ? ' animated' : ''}`}>
+    <g className={edgeClassName}>
       {overlayDebug && (
         <path
           d={path}

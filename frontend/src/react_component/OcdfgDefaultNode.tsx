@@ -7,6 +7,8 @@ type DefaultNodeData = {
   label?: string;
   nodeVariant?: NodeVariant;
   layoutDirection?: 'TB' | 'LR';
+  typeIndicatorSize?: number;
+  typeIndicatorThickness?: number;
 };
 
 const handleStyle = {
@@ -103,8 +105,15 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
           {visibleTypes.map((type) => {
             const isMember = nodeTypes.includes(type);
             const color = colors[type] ?? '#CBD5E1';
-            const size = 14;
-            const thickness = 2;
+            const size =
+              typeof data?.typeIndicatorSize === 'number' && Number.isFinite(data.typeIndicatorSize)
+                ? Math.max(6, data.typeIndicatorSize)
+                : 14;
+            const thickness =
+              typeof data?.typeIndicatorThickness === 'number' && Number.isFinite(data.typeIndicatorThickness)
+                ? Math.max(1, data.typeIndicatorThickness)
+                : 2;
+            const resolvedThickness = Math.min(thickness, Math.max(1, size / 2));
             return (
               <div
                 key={type}
@@ -113,7 +122,7 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
                   width: size,
                   height: size,
                   borderRadius: '50%',
-                  border: `${thickness}px solid ${color}`,
+                  border: `${resolvedThickness}px solid ${color}`,
                   background: isMember ? color : 'transparent',
                   boxSizing: 'border-box',
                 }}

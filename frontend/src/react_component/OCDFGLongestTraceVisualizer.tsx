@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import {
   ReactFlow,
   useReactFlow,
@@ -19,10 +19,11 @@ import OcdfgEdge from './OcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
 import OcdfgDefaultNode from './OcdfgDefaultNode';
 import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
+import { BufferZoneDebug } from './BufferZoneDebug';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-react';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ShieldIcon } from 'lucide-react';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -46,6 +47,7 @@ function resolveHeightValue(height: string | number) {
 function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLongestTraceVisualizerProps) {
   console.log('[OCDFGLongestTraceVisualizer] Component mounted!');
 
+  const layoutKey = useId();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
@@ -60,6 +62,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(false);
+  const [showBufferZones, setShowBufferZones] = useState(false);
   const layoutActiveTypesRef = useRef<string[] | null>(null);
   const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
   const layoutTraceLimitRef = useRef<string | null>(null);
@@ -373,6 +376,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       dfgLinks: dfgData.links,
       typeTraceLimit,
       activeTypes,
+      layoutKey,
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
@@ -426,9 +430,12 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         initialAvailabilityRef.current = mergedAvailability;
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
       }
-      window.requestAnimationFrame(() => fitView());
+      window.requestAnimationFrame(() => fitView({
+        padding: { top: 50, right: 50, bottom: 50, left: 350 }, // Extra left padding for legend
+        duration: 200
+      }));
     }).catch(console.error);
-  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView]);
+  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -575,7 +582,9 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         panOnScroll={!interactionLocked}
         zoomOnPinch={!interactionLocked}
         zoomOnScroll={!interactionLocked}
-      />
+      >
+        <BufferZoneDebug enabled={showBufferZones} />
+      </ReactFlow>
 
       <div
         style={{
@@ -750,6 +759,16 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
             title={interactionLocked ? 'Unlock interactions' : 'Lock interactions'}
           >
             {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+          </Button>
+          <Button
+            type="button"
+            variant={showBufferZones ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setShowBufferZones((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={showBufferZones ? 'Hide buffer zones' : 'Show buffer zones (debug)'}
+          >
+            <ShieldIcon className="h-4 w-4" />
           </Button>
         </div>
       </div>
