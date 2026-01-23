@@ -28,7 +28,7 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 2, w: 2, content: "Text Box", component_name: "TextBoxComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
+      [{ h: 1, w: 6, content: "Text Box", component_name: "TextBoxComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
     );
 
     GridStack.setupDragIn(

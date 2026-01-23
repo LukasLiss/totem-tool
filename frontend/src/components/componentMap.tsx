@@ -51,15 +51,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
       {isEditMode ? (
         // Edit mode: Editable
         <Card className="w-full h-full min-h-80 rounded-none">
-          <CardHeader>
-            <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-              Edit text
-            </CardTitle>
-             <CardDescription>Click the field below to change title text
-                
-             </CardDescription>
-         
-          </CardHeader>
+          
           <CardContent>
             <Textarea
             value={text}
