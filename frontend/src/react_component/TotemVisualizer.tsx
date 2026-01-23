@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import { ScanIcon, FlaskConicalIcon } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import {
@@ -41,6 +43,8 @@ type TotemVisualizerProps = {
   height?: string | number;
   backendBaseUrl?: string;
   reloadSignal?: number;
+  title?: string;
+  topInset?: number;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -92,16 +96,103 @@ type LayoutInfo = {
   totalColumns: number;
 };
 
+type DetailSide = 'left' | 'right';
+type Rect = { id: string; left: number; right: number; top: number; bottom: number };
+type DetailLayoutNode = {
+  id: string;
+  areaId: string;
+  anchor: NodePosition;
+  size: { width: number; height: number };
+  preferredSide: DetailSide;
+};
+type DetailLayoutState = Record<string, Point2D>;
+type ProcessAreaMetrics = {
+  scale: number;
+  objectNodeWidth: number;
+  objectNodeMinHeight: number;
+  gridColumnGap: number;
+  gridRowGap: number;
+  columnWidth: number;
+  detailOffset: number;
+  processAreaPaddingY: number;
+  processAreaRadius: number;
+  objectNodePaddingX: number;
+  objectNodePaddingY: number;
+  objectNodeRadius: number;
+  objectNodeFontSize: number;
+  objectEmptyFontSize: number;
+  edgeStrokeScale: number;
+  detailCollisionPadding: number;
+  detailMinDistance: number;
+};
+
 const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
-const OBJECT_NODE_WIDTH = 180;
-const OBJECT_NODE_MIN_HEIGHT = 80;
-const GRID_COLUMN_GAP = 24;
-const GRID_ROW_GAP = 20;
-const COLUMN_WIDTH = OBJECT_NODE_WIDTH + GRID_COLUMN_GAP;
+const DEFAULT_PROCESS_AREA_SCALE = 0.9;
+const MIN_PROCESS_AREA_SCALE = 0.4;
+const MAX_PROCESS_AREA_SCALE = 1.2;
+const PROCESS_AREA_SCALE_STEP = 0.02;
+const ZOOM_IN_DURATION_MS = 260;
+const ZOOM_OUT_DURATION_MS = 160;
+const DETAIL_SCALE_PIVOT = 0.9;
+const DETAIL_SCALE_BELOW_EXPONENT = 0.5;
+const DETAIL_SCALE_ABOVE_EXPONENT = 1.4;
+const BASE_OBJECT_NODE_WIDTH = 180;
+const BASE_OBJECT_NODE_MIN_HEIGHT = 80;
+const BASE_GRID_COLUMN_GAP = 24;
+const BASE_GRID_ROW_GAP = 20;
+const BASE_HORIZONTAL_PADDING = 32;
+const BASE_PROCESS_AREA_PADDING_Y = 16;
+const BASE_PROCESS_AREA_RADIUS = 28;
+const BASE_OBJECT_NODE_PADDING_X = 20;
+const BASE_OBJECT_NODE_PADDING_Y = 16;
+const BASE_OBJECT_NODE_RADIUS = 18;
+const BASE_OBJECT_NODE_FONT_SIZE = 18;
+const BASE_OBJECT_EMPTY_FONT_SIZE = 15;
 const PROCESS_AREA_BACKGROUND = 'rgba(59, 130, 246, 0.16)';
 const PROCESS_AREA_BORDER = 'rgba(37, 99, 235, 0.35)';
 const PROCESS_AREA_INSET_SHADOW = 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)';
 const DETAIL_EDGE_STROKE = 'rgba(37, 99, 235, 0.35)';
+const BASE_DETAIL_COLLISION_PADDING = 12;
+const DETAIL_ANCHOR_SPRING = 0.12;
+const DETAIL_REPULSION = 0.38;
+const DETAIL_OBSTACLE_PUSH = 0.55;
+const DETAIL_DAMPING = 0.82;
+const DETAIL_ITERATIONS = 60;
+const BASE_DETAIL_MIN_DISTANCE = 24;
+const LEVEL_LEGEND_GAP = 24;
+const LEGEND_RIGHT_PADDING = 32;
+const LEGEND_HIDE_INSET = 12; // pixels the intruder must cross into the legend before hiding
+const CAMERA_PADDING = 24;
+
+function buildProcessAreaMetrics(scale: number): ProcessAreaMetrics {
+  const clamped = Math.min(MAX_PROCESS_AREA_SCALE, Math.max(MIN_PROCESS_AREA_SCALE, scale));
+  const roundScaled = (value: number) => Math.max(1, Math.round(value * clamped));
+
+  const objectNodeWidth = roundScaled(BASE_OBJECT_NODE_WIDTH);
+  const objectNodeMinHeight = roundScaled(BASE_OBJECT_NODE_MIN_HEIGHT);
+  const gridColumnGap = roundScaled(BASE_GRID_COLUMN_GAP);
+  const gridRowGap = roundScaled(BASE_GRID_ROW_GAP);
+
+  return {
+    scale: clamped,
+    objectNodeWidth,
+    objectNodeMinHeight,
+    gridColumnGap,
+    gridRowGap,
+    columnWidth: objectNodeWidth + gridColumnGap,
+    detailOffset: gridColumnGap * 1.5,
+    processAreaPaddingY: roundScaled(BASE_PROCESS_AREA_PADDING_Y),
+    processAreaRadius: roundScaled(BASE_PROCESS_AREA_RADIUS),
+    objectNodePaddingX: roundScaled(BASE_OBJECT_NODE_PADDING_X),
+    objectNodePaddingY: roundScaled(BASE_OBJECT_NODE_PADDING_Y),
+    objectNodeRadius: roundScaled(BASE_OBJECT_NODE_RADIUS),
+    objectNodeFontSize: roundScaled(BASE_OBJECT_NODE_FONT_SIZE),
+    objectEmptyFontSize: roundScaled(BASE_OBJECT_EMPTY_FONT_SIZE),
+    edgeStrokeScale: clamped,
+    detailCollisionPadding: roundScaled(BASE_DETAIL_COLLISION_PADDING),
+    detailMinDistance: roundScaled(BASE_DETAIL_MIN_DISTANCE),
+  };
+}
 
 function resolveHeight(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -184,6 +275,7 @@ function buildParallelBars({
   unitX,
   unitY,
   pathLength,
+  edgeScale,
   targetContact: _targetContact,
 }: {
   startX: number;
@@ -193,6 +285,7 @@ function buildParallelBars({
   unitX: number;
   unitY: number;
   pathLength: number;
+  edgeScale: number;
   targetContact?: Point2D;
 }): {
   bars: Array<{ x1: number; y1: number; x2: number; y2: number }>;
@@ -203,15 +296,24 @@ function buildParallelBars({
     return { bars: [], innerOffset: null };
   }
 
-  const tolerance = 0.15;
-  const barHeight = Math.min(Math.max(10, effectiveLength * 0.28), 20);
+  const tolerance = 0.15 * edgeScale;
+  const barHeight = Math.min(
+    Math.max(10 * edgeScale, effectiveLength * 0.28),
+    20 * edgeScale,
+  );
   const halfPerp = barHeight;
   const perpX = -unitY;
   const perpY = unitX;
   const maxOffset = Math.max(0, effectiveLength - 0.75);
   const outerOffset = 0;
-  const minGap = Math.max(6, Math.min(18, effectiveLength * 0.24));
-  const preferredGap = Math.max(minGap, Math.min(22, effectiveLength * 0.28));
+  const minGap = Math.max(
+    6 * edgeScale,
+    Math.min(18 * edgeScale, effectiveLength * 0.24),
+  );
+  const preferredGap = Math.max(
+    minGap,
+    Math.min(22 * edgeScale, effectiveLength * 0.28),
+  );
 
   let innerOffset = outerOffset + preferredGap;
   if (innerOffset > maxOffset) {
@@ -363,6 +465,7 @@ function buildDependentCap({
   normalX,
   normalY,
   effectiveLength,
+  edgeScale,
 }: {
   baseX: number;
   baseY: number;
@@ -371,6 +474,7 @@ function buildDependentCap({
   normalX: number;
   normalY: number;
   effectiveLength: number;
+  edgeScale: number;
 }): string | undefined {
   const capLength = Math.hypot(tipX - baseX, tipY - baseY);
   if (!Number.isFinite(capLength) || capLength < 1) {
@@ -381,7 +485,10 @@ function buildDependentCap({
   const unitNormalY = normalY / normLength;
   const unitTangentX = -unitNormalY;
   const unitTangentY = unitNormalX;
-  const capWidth = Math.min(Math.max(10, effectiveLength * 0.28), 20);
+  const capWidth = Math.min(
+    Math.max(10 * edgeScale, effectiveLength * 0.28),
+    20 * edgeScale,
+  );
   const halfWidth = capWidth / 2;
 
   const p1x = baseX + unitTangentX * halfWidth;
@@ -400,6 +507,7 @@ function computeEdgeSegments(
   edges: EdgeDescriptor[],
   positions: Record<string, NodePosition>,
   areaAnchorMembers?: Record<string, string[]>,
+  edgeScale = 1,
 ): EdgeSegment[] {
   const segments: EdgeSegment[] = [];
 
@@ -447,12 +555,13 @@ function computeEdgeSegments(
         Math.min(targetCenter.y + targetHalfHeight, clampedSourceY),
       );
 
+      const horizontalDirection = targetCenter.x >= sourceCenter.x ? 1 : -1;
       startPoint = {
-        x: sourceCenter.x + Math.max(source.width, 1) / 2,
+        x: sourceCenter.x + (Math.max(source.width, 1) / 2) * horizontalDirection,
         y: clampedSourceY,
       };
       collisionPoint = {
-        x: targetCenter.x - Math.max(target.width, 1) / 2,
+        x: targetCenter.x - (Math.max(target.width, 1) / 2) * horizontalDirection,
         y: clampedTargetY,
       };
     }
@@ -523,8 +632,11 @@ function computeEdgeSegments(
         : null;
 
     if (edge.relation === 'D') {
-      const rawCap = Math.min(Math.max(12, toCollisionLength * 0.35), 24);
-      const maxAvailable = Math.max(toCollisionLength - 8, 0);
+      const rawCap = Math.min(
+        Math.max(12 * edgeScale, toCollisionLength * 0.35),
+        24 * edgeScale,
+      );
+      const maxAvailable = Math.max(toCollisionLength - 8 * edgeScale, 0);
       const capLength = Math.min(rawCap, maxAvailable);
       if (capLength > 1) {
         if (targetNormal) {
@@ -544,12 +656,19 @@ function computeEdgeSegments(
     let arrowPath: string | null = null;
 
     if (edge.relation === 'I' && targetNormal) {
-      const maxApproach = Math.max(toCollisionLength - 4, 0);
-      const arrowLength = Math.min(Math.max(18, toCollisionLength * 0.45), maxApproach);
+      const maxApproach = Math.max(toCollisionLength - 4 * edgeScale, 0);
+      const baseArrowLength = Math.min(
+        Math.max(18, toCollisionLength * 0.45),
+        maxApproach,
+      );
+      const arrowLength = Math.min(baseArrowLength * edgeScale, maxApproach);
       if (arrowLength > 8) {
         endX = collisionX - targetNormal.x * arrowLength;
         endY = collisionY - targetNormal.y * arrowLength;
-        const arrowWidth = Math.min(Math.max(12, arrowLength * 0.62), 26);
+        const arrowWidth = Math.min(
+          Math.max(12 * edgeScale, arrowLength * 0.62),
+          26 * edgeScale,
+        );
         const unitTangentX = -targetNormal.y;
         const unitTangentY = targetNormal.x;
         const halfWidth = arrowWidth / 2;
@@ -589,6 +708,7 @@ function computeEdgeSegments(
         unitX,
         unitY,
         pathLength: length,
+        edgeScale,
         targetContact: { x: collisionX, y: collisionY },
       });
       const innerOffset = parallelInfo.innerOffset;
@@ -681,6 +801,7 @@ function computeEdgeSegments(
         normalX: targetNormal?.x ?? unitX,
         normalY: targetNormal?.y ?? unitY,
         effectiveLength: toCollisionLength,
+        edgeScale,
       });
       if (cap) {
         segment.capPath = cap;
@@ -1102,6 +1223,426 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
   };
 }
 
+function computeDetailSideByLevel(
+  layers: ProcessLayer[],
+  nodeColumns: Record<string, number>,
+): Record<number, DetailSide> {
+  const allColumns: number[] = [];
+  const columnsByLevel = new Map<number, number[]>();
+
+  layers.forEach((layer) => {
+    const levelColumns: number[] = [];
+    layer.areas.forEach((area) => {
+      area.objectTypes.forEach((objectType) => {
+        const column = nodeColumns[objectType];
+        if (!Number.isFinite(column)) return;
+        levelColumns.push(column);
+        allColumns.push(column);
+      });
+    });
+    columnsByLevel.set(layer.level, levelColumns);
+  });
+
+  const averageColumn =
+    allColumns.length > 0
+      ? allColumns.reduce((sum, value) => sum + value, 0) / allColumns.length
+      : 0;
+  const sortedLevels = Array.from(new Set(layers.map((layer) => layer.level))).sort(
+    (a, b) => a - b,
+  );
+  const sideByLevel: Record<number, DetailSide> = {};
+  let lastSide: DetailSide | null = null;
+  const epsilon = 1e-3;
+
+  sortedLevels.forEach((level) => {
+    const columns = columnsByLevel.get(level) ?? [];
+    let side: DetailSide = 'right';
+    if (columns.length > 0) {
+      const minColumn = Math.min(...columns);
+      const maxColumn = Math.max(...columns);
+      const leftDistance = averageColumn - minColumn;
+      const rightDistance = maxColumn - averageColumn;
+      if (leftDistance > rightDistance + epsilon) {
+        side = 'left';
+      } else if (rightDistance > leftDistance + epsilon) {
+        side = 'right';
+      } else if (lastSide) {
+        side = lastSide === 'left' ? 'right' : 'left';
+      }
+    } else if (lastSide) {
+      side = lastSide === 'left' ? 'right' : 'left';
+    }
+    sideByLevel[level] = side;
+    lastSide = side;
+  });
+
+  return sideByLevel;
+}
+
+function detailRectFromCenter(
+  center: Point2D,
+  size: { width: number; height: number },
+  id: string,
+): Rect {
+  const halfWidth = size.width / 2;
+  const halfHeight = size.height / 2;
+  return {
+    id,
+    left: center.x - halfWidth,
+    right: center.x + halfWidth,
+    top: center.y - halfHeight,
+    bottom: center.y + halfHeight,
+  };
+}
+
+function rectFromPosition(id: string, position?: NodePosition): Rect | null {
+  if (!position) return null;
+  return detailRectFromCenter(
+    { x: position.centerX, y: position.centerY },
+    { width: position.width, height: position.height },
+    id,
+  );
+}
+
+function rectsOverlap(a?: Rect | null, b?: Rect | null): boolean {
+  if (!a || !b) return false;
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function insetRect(rect: Rect, inset: number): Rect | null {
+  const left = rect.left + inset;
+  const right = rect.right - inset;
+  const top = rect.top + inset;
+  const bottom = rect.bottom - inset;
+  if (right <= left || bottom <= top) return null;
+  return { id: rect.id, left, right, top, bottom };
+}
+
+function boundsApproximatelyEqual(
+  a: { left: number; right: number; width: number } | null,
+  b: { left: number; right: number; width: number } | null,
+  tolerance = 0.5,
+): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.left - b.left) <= tolerance &&
+    Math.abs(a.right - b.right) <= tolerance &&
+    Math.abs(a.width - b.width) <= tolerance
+  );
+}
+
+function computeHorizontalBounds(
+  positions: Record<string, NodePosition>,
+  areaRects: Record<string, Rect>,
+): { left: number; right: number; width: number } | null {
+  let minLeft = Number.POSITIVE_INFINITY;
+  let maxRight = Number.NEGATIVE_INFINITY;
+
+  Object.values(areaRects).forEach((rect) => {
+    minLeft = Math.min(minLeft, rect.left);
+    maxRight = Math.max(maxRight, rect.right);
+  });
+
+  Object.values(positions).forEach((pos) => {
+    const left = pos.centerX - pos.width / 2;
+    const right = pos.centerX + pos.width / 2;
+    minLeft = Math.min(minLeft, left);
+    maxRight = Math.max(maxRight, right);
+  });
+
+  if (!Number.isFinite(minLeft) || !Number.isFinite(maxRight)) {
+    return null;
+  }
+
+  return { left: minLeft, right: maxRight, width: Math.max(0, maxRight - minLeft) };
+}
+
+function computeVerticalBounds(
+  positions: Record<string, NodePosition>,
+  areaRects: Record<string, Rect>,
+): { top: number; bottom: number; height: number } | null {
+  let minTop = Number.POSITIVE_INFINITY;
+  let maxBottom = Number.NEGATIVE_INFINITY;
+
+  Object.values(areaRects).forEach((rect) => {
+    minTop = Math.min(minTop, rect.top);
+    maxBottom = Math.max(maxBottom, rect.bottom);
+  });
+
+  Object.values(positions).forEach((pos) => {
+    const top = pos.centerY - pos.height / 2;
+    const bottom = pos.centerY + pos.height / 2;
+    minTop = Math.min(minTop, top);
+    maxBottom = Math.max(maxBottom, bottom);
+  });
+
+  if (!Number.isFinite(minTop) || !Number.isFinite(maxBottom)) {
+    return null;
+  }
+
+  return { top: minTop, bottom: maxBottom, height: Math.max(0, maxBottom - minTop) };
+}
+
+function layoutsApproximatelyEqual(
+  a: DetailLayoutState,
+  b: DetailLayoutState,
+  tolerance = 0.05,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => {
+    const pa = a[key];
+    const pb = b[key];
+    if (!pa || !pb) return false;
+    return (
+      Math.abs(pa.x - pb.x) <= tolerance &&
+      Math.abs(pa.y - pb.y) <= tolerance
+    );
+  });
+}
+
+function legendOffsetsEqual(
+  a: Record<number, number>,
+  b: Record<number, number>,
+): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((key) => {
+    const numericKey = Number(key);
+    return (a[numericKey] ?? 0) === (b[numericKey] ?? 0);
+  });
+}
+
+function computeLegendOffsets(
+  layers: ProcessLayer[],
+  areaRects: Record<string, Rect>,
+  detailNodes: DetailLayoutNode[],
+  detailLayout: DetailLayoutState,
+  _metrics: ProcessAreaMetrics,
+  legendRects?: Record<number, Rect>,
+): Record<number, number> {
+  const detailByArea = new Map<string, DetailLayoutNode>();
+  detailNodes.forEach((detail) => {
+    detailByArea.set(detail.areaId, detail);
+  });
+
+  const offsets: Record<number, number> = {};
+
+  layers.forEach((layer) => {
+    const legendRect = legendRects?.[layer.level];
+    const contractedLegend = legendRect ? insetRect(legendRect, LEGEND_HIDE_INSET) : null;
+
+    if (!contractedLegend) {
+      offsets[layer.level] = 0;
+      return;
+    }
+
+    const areaOverlapsLegend = layer.areas.some((area) =>
+      rectsOverlap(areaRects[area.id], contractedLegend),
+    );
+
+    const detailOverlapsLegend = layer.areas.some((area) => {
+      const detail = detailByArea.get(area.id);
+      const layoutPoint = detail ? detailLayout[area.id] : null;
+      if (!detail || !layoutPoint) return false;
+      const detailRect = detailRectFromCenter(
+        { x: layoutPoint.x, y: layoutPoint.y },
+        { width: detail.size.width, height: detail.size.height },
+        detail.id,
+      );
+      return rectsOverlap(detailRect, contractedLegend);
+    });
+
+    offsets[layer.level] = areaOverlapsLegend || detailOverlapsLegend ? 1 : 0;
+  });
+
+  return offsets;
+}
+
+function computeDetailLayout(
+  detailNodes: DetailLayoutNode[],
+  processAreas: Rect[],
+  previousLayout: DetailLayoutState,
+  metrics: ProcessAreaMetrics,
+  iterationScale = 1,
+): DetailLayoutState {
+  if (detailNodes.length === 0) return {};
+
+  const nodes = detailNodes.map((detail) => {
+    const preferredDirection = detail.preferredSide === 'left' ? -1 : 1;
+    const baseDistance =
+      detail.anchor.width / 2 + detail.size.width / 2 + metrics.detailOffset;
+    const targetX =
+      detail.anchor.centerX +
+      preferredDirection * Math.max(baseDistance, metrics.detailMinDistance);
+    const targetY = detail.anchor.centerY;
+    const previous = previousLayout[detail.areaId];
+
+    return {
+      ...detail,
+      x: Number.isFinite(previous?.x) ? previous!.x : targetX,
+      y: Number.isFinite(previous?.y) ? previous!.y : targetY,
+      targetX,
+      targetY,
+      vx: 0,
+      vy: 0,
+    };
+  });
+
+  const getRect = (node: typeof nodes[number]) =>
+    detailRectFromCenter(
+      { x: node.x, y: node.y },
+      { width: node.size.width, height: node.size.height },
+      node.id,
+    );
+
+  const totalIterations = Math.max(1, Math.round(DETAIL_ITERATIONS * iterationScale));
+
+  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
+    nodes.forEach((node) => {
+      node.vx = (node.vx + (node.targetX - node.x) * DETAIL_ANCHOR_SPRING) * DETAIL_DAMPING;
+      node.vy = (node.vy + (node.targetY - node.y) * DETAIL_ANCHOR_SPRING) * DETAIL_DAMPING;
+    });
+
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const minDx = (a.size.width + b.size.width) / 2 + metrics.detailCollisionPadding;
+        const minDy = (a.size.height + b.size.height) / 2 + metrics.detailCollisionPadding;
+        const overlapX = minDx - Math.abs(dx);
+        const overlapY = minDy - Math.abs(dy);
+
+        if (overlapX > 0 && overlapY > 0) {
+          const pushOnX = overlapX < overlapY;
+          const pushAmount = Math.min(overlapX, overlapY) * DETAIL_REPULSION;
+          if (pushOnX) {
+            const dirX = dx >= 0 ? 1 : -1;
+            a.vx += dirX * pushAmount;
+            b.vx -= dirX * pushAmount;
+          } else {
+            const dirY = dy >= 0 ? 1 : -1;
+            a.vy += dirY * pushAmount;
+            b.vy -= dirY * pushAmount;
+          }
+        } else {
+          const distance = Math.hypot(dx, dy);
+          const desiredRange = Math.max(minDx, minDy) * 1.35;
+          if (distance > 1e-3 && distance < desiredRange) {
+            const softness =
+              ((desiredRange - distance) / desiredRange) *
+              DETAIL_REPULSION *
+              0.45;
+            const ux = dx / distance;
+            const uy = dy / distance;
+            a.vx += ux * softness;
+            a.vy += uy * softness;
+            b.vx -= ux * softness;
+            b.vy -= uy * softness;
+          }
+        }
+      }
+    }
+
+    nodes.forEach((node) => {
+      const rect = getRect(node);
+      processAreas.forEach((area) => {
+        const expandedLeft = area.left - metrics.detailCollisionPadding;
+        const expandedRight = area.right + metrics.detailCollisionPadding;
+        const expandedTop = area.top - metrics.detailCollisionPadding;
+        const expandedBottom = area.bottom + metrics.detailCollisionPadding;
+        const overlapX = Math.min(rect.right, expandedRight) - Math.max(rect.left, expandedLeft);
+        const overlapY = Math.min(rect.bottom, expandedBottom) - Math.max(rect.top, expandedTop);
+        if (overlapX > 0 && overlapY > 0) {
+          const areaCenterX = (area.left + area.right) / 2;
+          const areaCenterY = (area.top + area.bottom) / 2;
+          if (overlapX < overlapY) {
+            const dir = node.x >= areaCenterX ? 1 : -1;
+            node.vx += dir * overlapX * DETAIL_OBSTACLE_PUSH;
+          } else {
+            const dir = node.y >= areaCenterY ? 1 : -1;
+            node.vy += dir * overlapY * DETAIL_OBSTACLE_PUSH;
+          }
+        }
+      });
+
+      node.x += node.vx;
+      node.y += node.vy;
+
+      if (!Number.isFinite(node.x)) node.x = node.targetX;
+      if (!Number.isFinite(node.y)) node.y = node.targetY;
+
+      const minX = node.size.width / 2 + metrics.detailMinDistance;
+      const minY = node.size.height / 2 + metrics.detailMinDistance;
+      node.x = Math.max(minX, node.x);
+      node.y = Math.max(minY, node.y);
+    });
+  }
+
+  // Final clean-up to make sure nothing overlaps after the simulation.
+  const resolveRectangleOverlap = (
+    rectA: Rect,
+    rectB: Rect,
+  ): { dx: number; dy: number } | null => {
+    const overlapX = Math.min(rectA.right, rectB.right) - Math.max(rectA.left, rectB.left);
+    const overlapY = Math.min(rectA.bottom, rectB.bottom) - Math.max(rectA.top, rectB.top);
+    if (overlapX > 0 && overlapY > 0) {
+      if (overlapX < overlapY) {
+        return { dx: overlapX * (rectA.left < rectB.left ? -0.5 : 0.5), dy: 0 };
+      }
+      return { dx: 0, dy: overlapY * (rectA.top < rectB.top ? -0.5 : 0.5) };
+    }
+    return null;
+  };
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (let i = 0; i < nodes.length; i += 1) {
+      const a = nodes[i];
+      const rectA = getRect(a);
+      processAreas.forEach((area) => {
+        const overlap = resolveRectangleOverlap(rectA, {
+          ...area,
+          left: area.left - metrics.detailCollisionPadding,
+          right: area.right + metrics.detailCollisionPadding,
+          top: area.top - metrics.detailCollisionPadding,
+          bottom: area.bottom + metrics.detailCollisionPadding,
+        });
+        if (overlap) {
+          a.x += overlap.dx * 2;
+          a.y += overlap.dy * 2;
+        }
+      });
+
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const b = nodes[j];
+        const rectB = getRect(b);
+        const overlap = resolveRectangleOverlap(rectA, rectB);
+        if (overlap) {
+          a.x += overlap.dx;
+          a.y += overlap.dy;
+          b.x -= overlap.dx;
+          b.y -= overlap.dy;
+        }
+      }
+    }
+  }
+
+  const layout: DetailLayoutState = {};
+  nodes.forEach((node) => {
+    layout[node.areaId] = {
+      x: Math.round(node.x * 100) / 100,
+      y: Math.round(node.y * 100) / 100,
+    };
+  });
+
+  return layout;
+}
+
 function computeLevelAssignments(data: TotemApiResponse): Map<string, number> {
   const nodes = new Set<string>();
 
@@ -1403,6 +1944,8 @@ function TotemVisualizer({
   height = '100%',
   backendBaseUrl = DEFAULT_BACKEND,
   reloadSignal,
+  title,
+  topInset = 0,
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1410,11 +1953,51 @@ function TotemVisualizer({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
+  const legendRefs = useRef<Record<number, HTMLElement | null>>({});
+  const areaRectsRef = useRef<Record<string, Rect>>({});
   const [edgeSegments, setEdgeSegments] = useState<EdgeSegment[]>([]);
   const [contentSize, setContentSize] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
   });
+  const resetScrollToCenter = useCallback(() => {
+    const container = scrollContainerRef.current;
+    const contentEl = contentRef.current;
+    if (!container || !contentEl) return;
+    const targetLeft = Math.max(0, (contentEl.scrollWidth - container.clientWidth) / 2);
+    const targetTop = Math.max(0, (contentEl.scrollHeight - container.clientHeight) / 2);
+    container.scrollTo({ left: targetLeft, top: targetTop });
+  }, []);
+  const centerCamera = useCallback(
+    (
+      hBounds: { left: number; right: number; width: number },
+      vBounds: { top: number; bottom: number; height: number },
+    ) => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+
+      const centerX = (hBounds.left + hBounds.right) / 2;
+      const centerY = (vBounds.top + vBounds.bottom) / 2;
+      const targetLeft = Math.max(
+        0,
+        centerX - container.clientWidth / 2 - CAMERA_PADDING,
+      );
+      const targetTop = Math.max(
+        0,
+        centerY - container.clientHeight / 2 - CAMERA_PADDING,
+      );
+
+      const maxLeft = Math.max(0, (contentRef.current?.scrollWidth ?? 0) - container.clientWidth);
+      const maxTop = Math.max(0, (contentRef.current?.scrollHeight ?? 0) - container.clientHeight);
+
+      container.scrollTo({
+        left: Math.min(targetLeft, maxLeft),
+        top: Math.min(targetTop, maxTop),
+        behavior: 'smooth',
+      });
+    },
+    [],
+  );
 
   const assignNodeRef = useCallback((type: string, element: HTMLElement | null) => {
     if (element) {
@@ -1423,8 +2006,135 @@ function TotemVisualizer({
       delete nodeRefs.current[type];
     }
   }, []);
+
+  const assignLegendRef = useCallback((level: number, element: HTMLElement | null) => {
+    if (element) {
+      legendRefs.current[level] = element;
+    } else {
+      delete legendRefs.current[level];
+    }
+  }, []);
   const [expandedAreas, setExpandedAreas] = useState<Record<string, boolean>>({});
   const [detailSizes, setDetailSizes] = useState<Record<string, { width: number; height: number }>>({});
+  const [detailLayout, setDetailLayout] = useState<DetailLayoutState>({});
+  const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
+  const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
+  const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
+  const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
+  const [useMockData, setUseMockData] = useState(false);
+  const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [autoZoomTrigger, setAutoZoomTrigger] = useState(0);
+  const layoutBoundsRef = useRef<typeof layoutBounds>(null);
+  const viewportWidthRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const lastAppliedAutoZoomRef = useRef(0);
+  const [verticalBounds, setVerticalBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
+  const verticalBoundsRef = useRef<typeof verticalBounds>(null);
+  const lastCenteredTriggerRef = useRef(0);
+  const [pendingCenter, setPendingCenter] = useState(0);
+  const smoothedProcessAreaScaleRef = useRef(DEFAULT_PROCESS_AREA_SCALE);
+  const zoomAnimationFrameRef = useRef<number | null>(null);
+  const zoomAnimationStateRef = useRef<{
+    from: number;
+    to: number;
+    start: number;
+    duration: number;
+  } | null>(null);
+
+  const handleProcessAreaScaleChange = useCallback((nextValue: number) => {
+    if (!Number.isFinite(nextValue)) return;
+    const clamped = Math.min(MAX_PROCESS_AREA_SCALE, Math.max(MIN_PROCESS_AREA_SCALE, nextValue));
+    setProcessAreaScale(clamped);
+  }, []);
+
+  useEffect(() => {
+    smoothedProcessAreaScaleRef.current = smoothedProcessAreaScale;
+  }, [smoothedProcessAreaScale]);
+
+  useEffect(() => {
+    if (zoomAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(zoomAnimationFrameRef.current);
+      zoomAnimationFrameRef.current = null;
+    }
+
+    const from = smoothedProcessAreaScaleRef.current;
+    const to = processAreaScale;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) {
+      setSmoothedProcessAreaScale(to);
+      smoothedProcessAreaScaleRef.current = to;
+      return;
+    }
+
+    const duration = to > from ? ZOOM_IN_DURATION_MS : ZOOM_OUT_DURATION_MS;
+    const start = performance.now();
+    zoomAnimationStateRef.current = { from, to, start, duration };
+
+    const step = (now: number) => {
+      const state = zoomAnimationStateRef.current;
+      if (!state) return;
+      const t = Math.min(1, (now - state.start) / Math.max(state.duration, 1));
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const next = state.from + (state.to - state.from) * eased;
+      setSmoothedProcessAreaScale(next);
+      smoothedProcessAreaScaleRef.current = next;
+      if (t < 1) {
+        zoomAnimationFrameRef.current = window.requestAnimationFrame(step);
+      } else {
+        zoomAnimationFrameRef.current = null;
+        zoomAnimationStateRef.current = null;
+        setSmoothedProcessAreaScale(state.to);
+        smoothedProcessAreaScaleRef.current = state.to;
+      }
+    };
+
+    zoomAnimationFrameRef.current = window.requestAnimationFrame(step);
+
+    return () => {
+      if (zoomAnimationFrameRef.current !== null) {
+        cancelAnimationFrame(zoomAnimationFrameRef.current);
+        zoomAnimationFrameRef.current = null;
+      }
+    };
+  }, [processAreaScale]);
+
+  const processAreaMetrics = useMemo(
+    () => buildProcessAreaMetrics(smoothedProcessAreaScale),
+    [smoothedProcessAreaScale],
+  );
+  const detailScale = useMemo(() => {
+    const scale = processAreaMetrics.scale;
+    if (!Number.isFinite(scale)) return DETAIL_SCALE_PIVOT;
+    if (scale <= DETAIL_SCALE_PIVOT) {
+      const ratio = Math.max(0, scale / DETAIL_SCALE_PIVOT);
+      return DETAIL_SCALE_PIVOT * Math.pow(ratio, DETAIL_SCALE_BELOW_EXPONENT);
+    }
+    const upperSpan = MAX_PROCESS_AREA_SCALE - DETAIL_SCALE_PIVOT;
+    if (upperSpan <= 0) return scale;
+    const ratio = Math.min(1, Math.max(0, (scale - DETAIL_SCALE_PIVOT) / upperSpan));
+    return DETAIL_SCALE_PIVOT + upperSpan * Math.pow(ratio, DETAIL_SCALE_ABOVE_EXPONENT);
+  }, [processAreaMetrics.scale]);
+  const horizontalPadding = Math.round(BASE_HORIZONTAL_PADDING * processAreaMetrics.scale);
+  const resolvedTopInset = Math.max(0, topInset ?? 0);
+  const contentPaddingTop = 32 + resolvedTopInset;
+  const computedHeight = resolveHeight(height);
+  const {
+    objectNodeWidth,
+    objectNodeMinHeight,
+    gridColumnGap,
+    gridRowGap,
+    columnWidth,
+    detailOffset,
+    processAreaPaddingY,
+    processAreaRadius,
+    objectNodePaddingX,
+    objectNodePaddingY,
+    objectNodeRadius,
+    objectNodeFontSize,
+    objectEmptyFontSize,
+    edgeStrokeScale,
+  } = processAreaMetrics;
 
   const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem) : []), [rawTotem]);
   const typeColorMap = useMemo(
@@ -1464,10 +2174,45 @@ function TotemVisualizer({
   }, [layers]);
   const layoutInfo = useMemo(() => prepareGridLayout(layers, allEdges), [layers, allEdges]);
   const totalColumns = Math.max(layoutInfo.totalColumns, 1);
-  const levelGridTemplate = `repeat(${totalColumns}, ${COLUMN_WIDTH}px)`;
-  const levelMinimumWidth = totalColumns * COLUMN_WIDTH;
+  const levelGridTemplate = `repeat(${totalColumns}, ${columnWidth}px)`;
+  const levelMinimumWidth = totalColumns * columnWidth;
   const areaPlacements = layoutInfo.areaPlacements;
   const nodeColumns = layoutInfo.nodeColumns;
+  const detailSideByLevel = useMemo(
+    () => computeDetailSideByLevel(layers, nodeColumns),
+    [layers, nodeColumns],
+  );
+  const contentPaddingLeft = useMemo(() => {
+    let requiredPadding = horizontalPadding;
+
+    layers.forEach((layer) => {
+      const side = detailSideByLevel[layer.level] ?? 'right';
+      if (side !== 'left') return;
+      layer.areas.forEach((area) => {
+        if (!expandedAreas[area.id]) return;
+        const baseDetailWidth = detailSizes[area.id]?.width ?? BASE_OBJECT_NODE_WIDTH;
+        const detailWidth = baseDetailWidth * detailScale;
+        const startColumn = areaPlacements[area.id]?.startColumn ?? 0;
+        const neededPadding = detailOffset + detailWidth - startColumn * columnWidth;
+        if (neededPadding > requiredPadding) {
+          requiredPadding = neededPadding;
+        }
+      });
+    });
+
+    return Math.max(horizontalPadding, requiredPadding);
+  }, [
+    layers,
+    detailSideByLevel,
+    expandedAreas,
+    detailSizes,
+    areaPlacements,
+    detailOffset,
+    objectNodeWidth,
+    columnWidth,
+    horizontalPadding,
+    detailScale,
+  ]);
   const detailEdgeSegments = useMemo(
     () => edgeSegments.filter((segment) => segment.relation === 'A'),
     [edgeSegments],
@@ -1476,6 +2221,18 @@ function TotemVisualizer({
     () => edgeSegments.filter((segment) => segment.relation !== 'A'),
     [edgeSegments],
   );
+  const legendColumnOffset = useMemo(() => {
+    const offsets = Object.values(legendOffsets);
+    if (offsets.length === 0) return 0;
+    const needsHide = offsets.some((value) => (value ?? 0) > 0.5);
+    if (needsHide) return 0;
+    return Math.max(0, ...offsets.filter((value) => Number.isFinite(value)));
+  }, [legendOffsets]);
+  const legendHidden = useMemo(
+    () => Object.values(legendOffsets).some((value) => (value ?? 0) > 0.5),
+    [legendOffsets],
+  );
+  const hasLayers = layers.length > 0;
   const toggleAreaDetail = useCallback((areaId: string) => {
     setExpandedAreas((prev) => {
       if (prev[areaId]) {
@@ -1526,9 +2283,87 @@ function TotemVisualizer({
   }, [fetchTotem, reloadSignal]);
 
   useEffect(() => {
+    setPendingCenter((value) => value + 1);
+    setProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
+    setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
+  }, [reloadSignal]);
+
+  useEffect(() => {
     setExpandedAreas({});
     setDetailSizes({});
+    setDetailLayout({});
+    setLegendOffsets({});
+    setProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
+    setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
+    setPendingCenter((value) => value + 1);
   }, [rawTotem?.tempgraph]);
+
+  useEffect(() => {
+    if (pendingCenter === 0) return;
+    if (!hasLayers) return;
+    resetScrollToCenter();
+    setPendingCenter(0);
+  }, [pendingCenter, hasLayers, contentSize.width, contentSize.height, resetScrollToCenter]);
+
+  useEffect(() => {
+    if (!autoZoomEnabled) return;
+    if (autoZoomTrigger === 0) return;
+    if (autoZoomTrigger === lastAppliedAutoZoomRef.current) return;
+    if (!layoutBounds) return;
+    if (!verticalBounds) return;
+    if (viewportWidth <= 0) return;
+    if (viewportHeight <= 0) return;
+    const currentScale = smoothedProcessAreaScale;
+    if (currentScale <= 0) return;
+
+    const safetyPadding = Math.max(horizontalPadding * 2, 48);
+    const availableWidth = Math.max(0, viewportWidth - safetyPadding);
+    const verticalPaddingAllowance = contentPaddingTop + 72; // matches paddingTop + paddingBottom
+    const availableHeight = Math.max(0, viewportHeight - verticalPaddingAllowance);
+    if (availableWidth <= 0 || availableHeight <= 0 || layoutBounds.width <= 0 || verticalBounds.height <= 0) return;
+
+    const ratioX = availableWidth / layoutBounds.width;
+    const ratioY = availableHeight / verticalBounds.height;
+    const ratio = Math.min(ratioX, ratioY);
+    const tolerance = 0.02; // deadzone to avoid jitter
+    if (ratio > 1 - tolerance && ratio < 1 + tolerance) {
+      // Scale is already acceptable; just center.
+      lastAppliedAutoZoomRef.current = autoZoomTrigger;
+      if (lastCenteredTriggerRef.current !== autoZoomTrigger) {
+        centerCamera(layoutBounds, verticalBounds);
+        lastCenteredTriggerRef.current = autoZoomTrigger;
+      }
+      return;
+    }
+
+    const targetScale = Math.min(
+      MAX_PROCESS_AREA_SCALE,
+      Math.max(MIN_PROCESS_AREA_SCALE, currentScale * ratio),
+    );
+
+    if (Math.abs(targetScale - processAreaScale) >= 0.003) {
+      handleProcessAreaScaleChange(targetScale);
+    }
+
+    lastAppliedAutoZoomRef.current = autoZoomTrigger;
+    if (lastCenteredTriggerRef.current !== autoZoomTrigger) {
+      centerCamera(layoutBounds, verticalBounds);
+      lastCenteredTriggerRef.current = autoZoomTrigger;
+    }
+  }, [
+    autoZoomEnabled,
+    autoZoomTrigger,
+    centerCamera,
+    handleProcessAreaScaleChange,
+    horizontalPadding,
+    layoutBounds,
+    contentPaddingTop,
+    processAreaScale,
+    smoothedProcessAreaScale,
+    viewportWidth,
+    viewportHeight,
+    verticalBounds,
+  ]);
 
   useLayoutEffect(() => {
     const contentEl = contentRef.current;
@@ -1545,6 +2380,7 @@ function TotemVisualizer({
         cancelAnimationFrame(animationFrame);
       }
       animationFrame = window.requestAnimationFrame(() => {
+        const isZooming = Boolean(zoomAnimationStateRef.current);
         if (!contentRef.current) return;
         const contentRect = contentRef.current.getBoundingClientRect();
         const positions: Record<string, NodePosition> = {};
@@ -1560,7 +2396,96 @@ function TotemVisualizer({
           };
         });
 
-        const segments = computeEdgeSegments(allEdges, positions, areaAnchorMembers);
+        const legendRects: Record<number, Rect> = {};
+        Object.entries(legendRefs.current).forEach(([levelKey, element]) => {
+          if (!element) return;
+          const rect = element.getBoundingClientRect();
+          const level = Number(levelKey);
+          legendRects[level] = {
+            id: `legend-${level}`,
+            left: rect.left - contentRect.left,
+            right: rect.right - contentRect.left,
+            top: rect.top - contentRect.top,
+            bottom: rect.bottom - contentRect.top,
+          };
+        });
+
+        const areaRects: Record<string, Rect> = {};
+        const detailNodes: DetailLayoutNode[] = [];
+
+        layers.forEach((layer) => {
+          layer.areas.forEach((area) => {
+            const anchorId = `${area.id}::anchor`;
+            const anchorPosition = positions[anchorId];
+            const areaRect = rectFromPosition(area.id, anchorPosition);
+            if (areaRect) {
+              areaRects[area.id] = areaRect;
+            }
+
+            if (!expandedAreas[area.id] || !anchorPosition) return;
+            const baseSize = detailSizes[area.id] ?? {
+              width: BASE_OBJECT_NODE_WIDTH,
+              height: BASE_OBJECT_NODE_MIN_HEIGHT,
+            };
+            const size = {
+              width: baseSize.width * detailScale,
+              height: baseSize.height * detailScale,
+            };
+            detailNodes.push({
+              id: `${area.id}::detail`,
+              areaId: area.id,
+              anchor: anchorPosition,
+              size,
+              preferredSide: detailSideByLevel[area.level] ?? 'right',
+            });
+          });
+        });
+
+        areaRectsRef.current = areaRects;
+
+        const computedLayout = computeDetailLayout(
+          detailNodes,
+          Object.values(areaRects),
+          isZooming ? {} : detailLayout,
+          processAreaMetrics,
+          isZooming ? 2.5 : 1,
+        );
+
+        if (isZooming || !layoutsApproximatelyEqual(detailLayout, computedLayout)) {
+          setDetailLayout(computedLayout);
+        }
+
+        const computedLegendOffsets = computeLegendOffsets(
+          layers,
+          areaRects,
+          detailNodes,
+          computedLayout,
+          processAreaMetrics,
+          legendRects,
+        );
+        if (!legendOffsetsEqual(legendOffsets, computedLegendOffsets)) {
+          setLegendOffsets(computedLegendOffsets);
+        }
+
+        const mergedPositions: Record<string, NodePosition> = { ...positions };
+
+        detailNodes.forEach((detail) => {
+          const layoutPoint = computedLayout[detail.areaId];
+          if (!layoutPoint) return;
+          mergedPositions[detail.id] = {
+            centerX: layoutPoint.x,
+            centerY: layoutPoint.y,
+            width: detail.size.width,
+            height: detail.size.height,
+          };
+        });
+
+        const segments = computeEdgeSegments(
+          allEdges,
+          mergedPositions,
+          areaAnchorMembers,
+          edgeStrokeScale,
+        );
         setEdgeSegments(segments);
         setContentSize({
           width: Math.max(
@@ -1572,6 +2497,43 @@ function TotemVisualizer({
             Math.ceil(contentRef.current.scrollHeight || contentRect.height),
           ),
         });
+
+        const baseBounds = computeHorizontalBounds(mergedPositions, areaRects);
+        const bounds = baseBounds;
+        const boundsChanged = !boundsApproximatelyEqual(layoutBoundsRef.current, bounds);
+        if (boundsChanged) {
+          layoutBoundsRef.current = bounds;
+          setLayoutBounds(bounds);
+          setAutoZoomTrigger((value) => value + 1);
+        }
+
+        const vBounds = computeVerticalBounds(mergedPositions, areaRects);
+        const vChanged =
+          !vBounds ||
+          !verticalBoundsRef.current ||
+          Math.abs((verticalBoundsRef.current?.top ?? 0) - (vBounds?.top ?? 0)) > 0.5 ||
+          Math.abs((verticalBoundsRef.current?.bottom ?? 0) - (vBounds?.bottom ?? 0)) > 0.5;
+        if (vChanged) {
+          verticalBoundsRef.current = vBounds;
+          setVerticalBounds(vBounds);
+          setAutoZoomTrigger((value) => value + 1);
+        }
+
+        const containerWidth = scrollContainerRef.current?.clientWidth ?? 0;
+        const widthChanged = Math.abs((viewportWidthRef.current ?? 0) - containerWidth) > 0.5;
+        if (widthChanged && Number.isFinite(containerWidth)) {
+          viewportWidthRef.current = containerWidth;
+          setViewportWidth(containerWidth);
+          setAutoZoomTrigger((value) => value + 1);
+        }
+
+        const containerHeight = scrollContainerRef.current?.clientHeight ?? 0;
+        const heightChanged = Math.abs((viewportHeightRef.current ?? 0) - containerHeight) > 0.5;
+        if (heightChanged && Number.isFinite(containerHeight)) {
+          viewportHeightRef.current = containerHeight;
+          setViewportHeight(containerHeight);
+          setAutoZoomTrigger((value) => value + 1);
+        }
       });
     };
 
@@ -1592,13 +2554,73 @@ function TotemVisualizer({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [allEdges, areaAnchorMembers, detailSizes, layers, rawTotem]);
-
-  const computedHeight = resolveHeight(height);
-  const hasLayers = layers.length > 0;
+  }, [
+    allEdges,
+    areaAnchorMembers,
+    detailLayout,
+    detailSideByLevel,
+    detailSizes,
+    expandedAreas,
+    legendOffsets,
+    layers,
+    processAreaMetrics,
+    rawTotem,
+  ]);
 
   return (
     <div className="relative flex-1" style={{ height: computedHeight, width: '100%' }}>
+      <div
+        style={{
+          position: 'absolute',
+          top: 16,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '6px 12px',
+          borderRadius: 9999,
+          border: '1px solid #E2E8F0',
+          background: '#FFFFFF',
+          boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
+        }}
+      >
+        <Slider
+          min={MIN_PROCESS_AREA_SCALE}
+          max={MAX_PROCESS_AREA_SCALE}
+          step={PROCESS_AREA_SCALE_STEP}
+          value={[processAreaScale]}
+          onValueChange={(values) => handleProcessAreaScaleChange(values?.[0] ?? DEFAULT_PROCESS_AREA_SCALE)}
+          style={{ width: 120 }}
+        />
+        <Button
+          type="button"
+          variant={autoZoomEnabled ? 'secondary' : 'outline'}
+          size="icon"
+          onClick={() => {
+            const next = !autoZoomEnabled;
+            setAutoZoomEnabled(next);
+            if (next) {
+              setAutoZoomTrigger((value) => value + 1);
+            }
+          }}
+          className="rounded-full h-9 w-9"
+          title={autoZoomEnabled ? 'Disable auto-zoom' : 'Enable auto-zoom'}
+        >
+          <ScanIcon className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant={useMockData ? 'secondary' : 'outline'}
+          size="icon"
+          onClick={() => setUseMockData((prev) => !prev)}
+          className="rounded-full h-9 w-9"
+          title={useMockData ? 'Use backend data' : 'Use mock data'}
+        >
+          <FlaskConicalIcon className="h-4 w-4" />
+        </Button>
+      </div>
       {!eventLogId && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-5 shadow-md">
@@ -1623,7 +2645,10 @@ function TotemVisualizer({
           style={{
             position: 'relative',
             minHeight: '100%',
-            padding: '32px 32px 72px',
+            paddingTop: contentPaddingTop,
+            paddingRight: horizontalPadding,
+            paddingBottom: 72,
+            paddingLeft: contentPaddingLeft,
             boxSizing: 'border-box',
           }}
         >
@@ -1642,13 +2667,13 @@ function TotemVisualizer({
               {[detailEdgeSegments, primaryEdgeSegments].map((group, groupIndex) =>
                 group.map((edge) => {
                   const strokeWidth =
-                    edge.relation === 'D'
+                    (edge.relation === 'D'
                       ? 3.2
                       : edge.relation === 'P'
                         ? 3
                         : edge.relation === 'A'
                           ? 2.2
-                          : 2.6;
+                          : 2.6) * edgeStrokeScale;
                   const strokeColor = edge.color ?? '#0F172A';
                   const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
                   return (
@@ -1725,6 +2750,7 @@ function TotemVisualizer({
                         gap: 24,
                         justifyContent: 'space-between',
                         alignItems: 'flex-start',
+                        position: 'relative',
                       }}
                     >
                       <div
@@ -1732,7 +2758,7 @@ function TotemVisualizer({
                           display: 'grid',
                           gridTemplateColumns: levelGridTemplate,
                           columnGap: 0,
-                          rowGap: GRID_ROW_GAP,
+                          rowGap: gridRowGap,
                           flex: 1,
                           minWidth: levelMinimumWidth,
                           alignItems: 'start',
@@ -1750,7 +2776,7 @@ function TotemVisualizer({
                               if (colA === colB) return a.localeCompare(b);
                               return colA - colB;
                             });
-                          const templateColumns = `repeat(${spanColumns}, ${OBJECT_NODE_WIDTH}px)`;
+                          const templateColumns = `repeat(${spanColumns}, ${objectNodeWidth}px)`;
                           const isExpanded = Boolean(expandedAreas[area.id]);
                           const areaAnchorId = `${area.id}::anchor`;
                           const detailNodeId = `${area.id}::detail`;
@@ -1761,24 +2787,43 @@ function TotemVisualizer({
                             gradientSamples: [],
                           });
                           const detailSize = detailSizes[area.id];
-                          const ocdfgWidth = detailSize?.width ?? OBJECT_NODE_WIDTH;
-                          const ocdfgHeight = detailSize?.height ?? OBJECT_NODE_MIN_HEIGHT;
+                          const baseDetailWidth = detailSize?.width ?? BASE_OBJECT_NODE_WIDTH;
+                          const baseDetailHeight = detailSize?.height ?? BASE_OBJECT_NODE_MIN_HEIGHT;
+                          const ocdfgWidth = baseDetailWidth * detailScale;
+                          const ocdfgHeight = baseDetailHeight * detailScale;
                           const detailData = selectDetailMock(area);
-                          const containerMinHeight = Math.max(
-                            OBJECT_NODE_MIN_HEIGHT + 32,
-                            isExpanded ? ocdfgHeight + 32 : OBJECT_NODE_MIN_HEIGHT + 32,
-                          );
+                          const detailSide = detailSideByLevel[area.level] ?? 'right';
+                          const detailCenter = detailLayout[area.id];
+                          const areaRect = areaRectsRef.current[area.id];
+                          const layoutLeft =
+                            detailCenter && areaRect
+                              ? detailCenter.x - areaRect.left - ocdfgWidth / 2
+                              : null;
+                          const layoutTop =
+                            detailCenter && areaRect
+                              ? detailCenter.y - areaRect.top - ocdfgHeight / 2
+                              : null;
+                          const fallbackPosition =
+                            detailSide === 'left'
+                              ? { right: `calc(100% + ${detailOffset}px)` }
+                              : { left: `calc(100% + ${detailOffset}px)` };
+                          const detailPosition =
+                            layoutLeft !== null && layoutTop !== null
+                              ? { left: layoutLeft, top: layoutTop, transform: 'none' as const }
+                              : { top: '50%', transform: 'translateY(-50%)', ...fallbackPosition };
+                          const containerMinHeight =
+                            objectNodeMinHeight + processAreaPaddingY * 2;
 
                           return (
                             <div
                               key={area.id}
                               style={{
                                 gridColumn: `${startColumn + 1} / span ${spanColumns}`,
-                                padding: `16px ${GRID_COLUMN_GAP / 2}px`,
+                                padding: `${processAreaPaddingY}px ${gridColumnGap / 2}px`,
                                 display: 'grid',
                                 gridTemplateColumns: templateColumns,
-                                columnGap: GRID_COLUMN_GAP,
-                                rowGap: GRID_ROW_GAP,
+                                columnGap: gridColumnGap,
+                                rowGap: gridRowGap,
                                 justifyItems: 'center',
                                 alignItems: 'start',
                                 position: 'relative',
@@ -1789,7 +2834,7 @@ function TotemVisualizer({
                                 style={{
                                   position: 'absolute',
                                   inset: 0,
-                                  borderRadius: 28,
+                                  borderRadius: processAreaRadius,
                                   background: PROCESS_AREA_BACKGROUND,
                                   border: `1px solid ${PROCESS_AREA_BORDER}`,
                                   boxShadow: PROCESS_AREA_INSET_SHADOW,
@@ -1806,7 +2851,7 @@ function TotemVisualizer({
                                 style={{
                                   position: 'absolute',
                                   inset: 0,
-                                  borderRadius: 28,
+                                  borderRadius: processAreaRadius,
                                   background: 'transparent',
                                   border: 'none',
                                   padding: 0,
@@ -1828,16 +2873,16 @@ function TotemVisualizer({
                                       key={objectType}
                                       ref={(element) => assignNodeRef(objectType, element)}
                                       style={{
-                                        padding: '16px 20px',
-                                        borderRadius: 18,
-                                        fontSize: 18,
+                                        padding: `${objectNodePaddingY}px ${objectNodePaddingX}px`,
+                                        borderRadius: objectNodeRadius,
+                                        fontSize: objectNodeFontSize,
                                         fontWeight: 600,
                                         color: readableColor,
                                         background: baseColor,
                                         border: `1px solid ${lighten(baseColor, 0.35)}`,
                                         lineHeight: 1.15,
-                                        width: OBJECT_NODE_WIDTH,
-                                        minHeight: OBJECT_NODE_MIN_HEIGHT,
+                                        width: objectNodeWidth,
+                                        minHeight: objectNodeMinHeight,
                                         boxSizing: 'border-box',
                                         display: 'flex',
                                         alignItems: 'center',
@@ -1856,7 +2901,7 @@ function TotemVisualizer({
                               ) : (
                                 <span
                                   style={{
-                                    fontSize: 15,
+                                    fontSize: objectEmptyFontSize,
                                     color: 'rgba(29, 78, 216, 0.65)',
                                     fontStyle: 'italic',
                                     gridColumn: '1 / -1',
@@ -1870,21 +2915,19 @@ function TotemVisualizer({
                               )}
                               {isExpanded && (
                                 <div
-                                  ref={(element) => assignNodeRef(detailNodeId, element)}
-                                  style={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: `calc(100% + ${GRID_COLUMN_GAP * 1.5}px)`,
-                                    transform: 'translateY(-50%)',
-                                    width: ocdfgWidth,
-                                    minWidth: OBJECT_NODE_WIDTH,
-                                    minHeight: OBJECT_NODE_MIN_HEIGHT,
-                                    height: ocdfgHeight,
-                                    borderRadius: 18,
-                                    border: `1.5px solid ${detailBorder}`,
-                                    background: 'transparent',
-                                    display: 'flex',
-                                    alignItems: 'stretch',
+                              ref={(element) => assignNodeRef(detailNodeId, element)}
+                              style={{
+                                position: 'absolute',
+                                ...detailPosition,
+                                width: ocdfgWidth,
+                                minWidth: ocdfgWidth,
+                                minHeight: ocdfgHeight,
+                                height: ocdfgHeight,
+                                borderRadius: objectNodeRadius,
+                                border: `1.5px solid ${detailBorder}`,
+                                background: 'transparent',
+                                display: 'flex',
+                                alignItems: 'stretch',
                                     justifyContent: 'center',
                                     zIndex: 1,
                                     boxSizing: 'border-box',
@@ -1892,33 +2935,48 @@ function TotemVisualizer({
                                     color: detailForeground,
                                     pointerEvents: 'none',
                                     overflow: 'hidden',
+                                    transition:
+                                      'width 220ms ease, height 220ms ease, left 220ms ease, top 220ms ease, right 220ms ease, transform 220ms ease',
+                                    willChange: 'width, height, left, top, right, transform',
                                   }}
                                 >
-                                  <OCDFGDetailVisualizer
-                                    height={ocdfgHeight}
-                                    data={detailData}
-                                    instanceId={`detail-${area.id}`}
-                                    typeColorOverrides={typeColorMap}
-                                    onSizeChange={(size) => {
-                                      setDetailSizes((prev) => {
-                                        const existing = prev[area.id];
-                                        if (
-                                          existing &&
-                                          existing.width === size.width &&
-                                          existing.height === size.height
-                                        ) {
-                                          return prev;
-                                        }
-                                        return {
-                                          ...prev,
-                                          [area.id]: {
-                                            width: size.width,
-                                            height: size.height,
-                                          },
-                                        };
-                                      });
+                                  <div
+                                    style={{
+                                      width: ocdfgWidth,
+                                      height: ocdfgHeight,
+                                      transform: 'none',
+                                      transformOrigin: 'top left',
+                                      transition:
+                                        'width 220ms ease, height 220ms ease',
+                                      willChange: 'width, height',
                                     }}
-                                  />
+                                  >
+                                    <OCDFGDetailVisualizer
+                                      height={ocdfgHeight}
+                                      data={detailData}
+                                      instanceId={`detail-${area.id}`}
+                                      typeColorOverrides={typeColorMap}
+                                      onSizeChange={(size) => {
+                                        setDetailSizes((prev) => {
+                                          const existing = prev[area.id];
+                                          if (
+                                            existing &&
+                                            existing.width === size.width &&
+                                            existing.height === size.height
+                                          ) {
+                                            return prev;
+                                          }
+                                          return {
+                                            ...prev,
+                                            [area.id]: {
+                                              width: size.width,
+                                              height: size.height,
+                                            },
+                                          };
+                                        });
+                                      }}
+                                    />
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -1927,13 +2985,22 @@ function TotemVisualizer({
                       </div>
 
                       <header
+                        ref={(element) => assignLegendRef(layer.level, element)}
+                        aria-hidden={legendHidden}
                         style={{
+                          position: 'absolute',
+                          right: 0,
+                          top: 0,
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'flex-end',
                           gap: 3,
                           color: '#0F172A',
                           minWidth: 120,
+                          paddingRight: LEGEND_RIGHT_PADDING,
+                          opacity: legendHidden ? 0 : 1,
+                          visibility: legendHidden ? 'hidden' : 'visible',
+                          pointerEvents: legendHidden ? 'none' : 'auto',
                         }}
                       >
                         <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>

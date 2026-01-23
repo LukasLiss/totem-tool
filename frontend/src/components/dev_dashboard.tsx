@@ -51,8 +51,10 @@ export function DevDashboard() {
       </header>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <Card className="@container/card">
-          <CardHeader className="items-center">
-            <CardTitle>Totem Visualizer</CardTitle>
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              Totem Visualizer
+            </CardTitle>
             <CardAction>
               <Button
                 variant="outline"
@@ -73,6 +75,7 @@ export function DevDashboard() {
                 height="100%"
                 backendBaseUrl="http://localhost:8000"
                 reloadSignal={totemReloadSignal}
+                title="Totem Visualizer"
               />
             </ReactFlowProvider>
           </CardContent>
@@ -99,16 +102,11 @@ export function DevDashboard() {
               </div>
             </CardFooter>
           </Card>
-          <Card className="@container/card">
-            <CardHeader>
-              <CardTitle>Object-Centric DFG</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[560px] p-0">
-              <ReactFlowProvider>
-                <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
-              </ReactFlowProvider>
-            </CardContent>
-          </Card>
+          <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
+            <ReactFlowProvider>
+              <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
+            </ReactFlowProvider>
+          </div>
         </div>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />
       </div>
