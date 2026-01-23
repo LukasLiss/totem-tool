@@ -9,6 +9,17 @@ import { type LayoutConfig, type LayoutInitData, sugiyama } from './ocdfgLayout/
 import { type Point, sampleCubicBezier } from './edgeGeometry';
 import type { LayoutNode } from './ocdfgLayout/LayoutState';
 import { DUMMY_TYPE } from './ocdfgLayout/LayoutState';
+import {
+  BUFFER_ZONE_MARGIN,
+  BUFFER_REPULSION_RADIUS,
+  LONGEST_TRACE_BEZIER_SAMPLES,
+  LONGEST_TRACE_BEZIER_HANDLE_SCALE,
+  LONGEST_TRACE_LANE_OFFSET,
+  CYCLE_BEND_MAGNITUDE,
+  type EdgeCurveState,
+  relaxPolylineAroundBuffers,
+  buildBufferRectsFromNodes,
+} from './edgeCurveGeneration';
 
 export type { DfgNode, DfgLink } from './NaiveOCDFGLayouting';
 
@@ -23,6 +34,7 @@ export interface LayoutRequest {
   config?: Partial<LayoutConfig>;
   activeTypes?: string[];
   typeTraceLimit?: Record<string, number>;
+  includeDebugOverlays?: boolean;
 }
 
 export interface DebugLayerInfo {
@@ -96,13 +108,8 @@ const LANE_TOLERANCE = 1e-3;
 const LAYER_MARKER_THICKNESS = 10;
 const LAYER_MARKER_PADDING = 60;
 const LAYER_MARKER_COLOR = 'rgba(255, 232, 138, 0.45)';
-// 25% smaller buffer margin to tighten collision boxes.
-const BUFFER_ZONE_MARGIN = 45 * 0.75; // 33.75px
+// Buffer constants now imported from edgeCurveGeneration.ts for algorithmic parity
 const BUFFER_ZONE_COLOR = LAYER_MARKER_COLOR;
-const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30 * 0.75; // 56.25px
-const LONGEST_TRACE_BEZIER_SAMPLES = 32;
-const LONGEST_TRACE_BEZIER_HANDLE_SCALE = 1.35;
-const LONGEST_TRACE_LANE_OFFSET = 12; // match rendered stroke thickness so parallel edges form clean lanes
 
 // Remember the last computed object-type column order per layout key so that
 // subsequent layouts (e.g. when toggling object types) can preserve ordering
@@ -286,7 +293,14 @@ export async function layoutOCDFGLongestTrace({
   activeTypes,
   direction = 'TB',
   layoutKey,
-}: Omit<LayoutRequest, 'mode' | 'config'> & { direction?: 'TB' | 'LR'; layoutKey?: string }): LayoutResult {
+  includeDebugOverlays = true,
+  ignoreTypesWithoutTraces = false,
+}: Omit<LayoutRequest, 'mode' | 'config'> & {
+  direction?: 'TB' | 'LR';
+  layoutKey?: string;
+  includeDebugOverlays?: boolean;
+  ignoreTypesWithoutTraces?: boolean;
+}): LayoutResult {
   console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges, direction: ${direction}`);
 
   return layoutWithLongestTrace(
@@ -298,6 +312,8 @@ export async function layoutOCDFGLongestTrace({
     activeTypes,
     direction,
     layoutKey,
+    includeDebugOverlays,
+    ignoreTypesWithoutTraces,
   );
 }
 
@@ -759,206 +775,8 @@ function addRelaxationMidpoints(points: Point[]): Point[] {
   return points.map(p => ({ ...p }));
 }
 
-function relaxPolylineAroundBuffers(
-  polyline: Point[],
-  buffers: BufferRect[],
-  sourceId?: string,
-  targetId?: string,
-): Point[] {
-  if (polyline.length < 2 || buffers.length === 0) {
-    return polyline.map(p => ({ ...p }));
-  }
-
-  // Only adjust simple straight edges; keep special polylines (e.g. cycles) as-is.
-  if (polyline.length !== 2) {
-    return polyline.map(p => ({ ...p }));
-  }
-
-  const [src, tgt] = polyline;
-  const allowedBuffers = buffers.filter(b => b.id !== sourceId && b.id !== targetId);
-  if (allowedBuffers.length === 0) {
-    return polyline.map(p => ({ ...p }));
-  }
-
-  const vx = tgt.x - src.x;
-  const vy = tgt.y - src.y;
-  const segLen = Math.hypot(vx, vy);
-  if (!Number.isFinite(segLen) || segLen < 1e-3) {
-    return polyline.map(p => ({ ...p }));
-  }
-
-  // Sample along the straight edge to detect which buffers it actually crosses.
-  const sampleTs = [0.15, 0.3, 0.45, 0.6, 0.75, 0.9];
-  const blockers: BufferRect[] = [];
-  const hitCounts = new Map<string, number>();
-
-  const isInside = (px: number, py: number, rect: BufferRect, pad = 4) =>
-    px >= rect.left - pad
-    && px <= rect.right + pad
-    && py >= rect.top - pad
-    && py <= rect.bottom + pad;
-
-  allowedBuffers.forEach((rect) => {
-    let hits = 0;
-    sampleTs.forEach((t) => {
-      const sx = src.x + vx * t;
-      const sy = src.y + vy * t;
-      if (isInside(sx, sy, rect)) {
-        hits += 1;
-      }
-    });
-    if (hits > 0) {
-      blockers.push(rect);
-      hitCounts.set(rect.id, hits);
-    }
-  });
-
-  if (blockers.length === 0) {
-    return polyline.map(p => ({ ...p }));
-  }
-
-  const longEdge = segLen > BUFFER_ZONE_MARGIN * 4;
-  const multiBlocker = blockers.length >= 2;
-  const spansBuffer = Array.from(hitCounts.values()).some(c => c >= 2);
-  const needsStrongerCurve = longEdge || multiBlocker || spansBuffer;
-
-  // Determine sideways direction that moves the edge away from blocking buffers.
-  const midForDirection = {
-    x: src.x + vx * 0.5,
-    y: src.y + vy * 0.5,
-  };
-  let dirX = 0;
-  let dirY = 0;
-  blockers.forEach((rect) => {
-    const cx = (rect.left + rect.right) / 2;
-    const cy = (rect.top + rect.bottom) / 2;
-    dirX += midForDirection.x - cx;
-    dirY += midForDirection.y - cy;
-  });
-
-  // If blockers are symmetric, fall back to a stable perpendicular.
-  if (Math.hypot(dirX, dirY) < 1e-3) {
-    dirX = -vy;
-    dirY = vx;
-  }
-
-  const dirLen = Math.hypot(dirX, dirY) || 1;
-  const nx = dirX / dirLen;
-  const ny = dirY / dirLen;
-
-  const baseOffset = BUFFER_REPULSION_RADIUS;
-  const offset = needsStrongerCurve ? baseOffset * 1.6 : baseOffset * 1.15;
-
-  // Longer edges get more bend points; each bend is eased so that
-  // the maximum offset is near the middle of the edge and fades
-  // smoothly towards the endpoints.
-  const lengthFactor = segLen / (BUFFER_ZONE_MARGIN * (needsStrongerCurve ? 1.3 : 1.8));
-  const maxSegments = needsStrongerCurve ? 4 : 3;
-  const minSegments = needsStrongerCurve ? 2 : 1;
-  let segmentCount = Math.floor(lengthFactor);
-  if (segmentCount < minSegments) segmentCount = minSegments;
-  if (segmentCount > maxSegments) segmentCount = maxSegments;
-
-  const bendTs: number[] = [];
-  for (let i = 1; i <= segmentCount; i += 1) {
-    bendTs.push(i / (segmentCount + 1));
-  }
-
-  const bends = bendTs.map((t) => {
-    // Smooth easing: 0 at endpoints, 1 at center.
-    const ease = Math.sin(Math.PI * t);
-    const localOffset = offset * ease;
-    return {
-      x: src.x + vx * t + nx * localOffset,
-      y: src.y + vy * t + ny * localOffset,
-    };
-  });
-
-  const bent = [src, ...bends, tgt];
-
-  // Second stage: if the edge still runs inside buffers for most of its length,
-  // nudge the bend points further away from the node rectangles themselves.
-  const samplePerSegment = 4;
-  let totalSamples = 0;
-  let insideBuffer = 0;
-
-  const rectContains = (px: number, py: number, rect: BufferRect, pad = 0) =>
-    px >= rect.left - pad
-    && px <= rect.right + pad
-    && py >= rect.top - pad
-    && py <= rect.bottom + pad;
-
-  for (let i = 0; i < bent.length - 1; i += 1) {
-    const a = bent[i];
-    const b = bent[i + 1];
-    for (let j = 1; j <= samplePerSegment; j += 1) {
-      const t = j / (samplePerSegment + 1);
-      const px = a.x + (b.x - a.x) * t;
-      const py = a.y + (b.y - a.y) * t;
-      totalSamples += 1;
-      if (buffers.some(rect => rectContains(px, py, rect, 0))) {
-        insideBuffer += 1;
-      }
-    }
-  }
-
-  const coverage = totalSamples > 0 ? insideBuffer / totalSamples : 0;
-  // If a significant fraction of the bent edge still runs through buffers,
-  // push it further away from node centers.
-  if (coverage <= 0.4) {
-    return bent;
-  }
-
-  // Compute a gentle repulsion direction from node centers for samples that are
-  // too close to the nodes (inner 40px around the node centers).
-  let repulseX = 0;
-  let repulseY = 0;
-
-  for (let i = 0; i < bent.length - 1; i += 1) {
-    const a = bent[i];
-    const b = bent[i + 1];
-    for (let j = 1; j <= samplePerSegment; j += 1) {
-      const t = j / (samplePerSegment + 1);
-      const px = a.x + (b.x - a.x) * t;
-      const py = a.y + (b.y - a.y) * t;
-
-      buffers.forEach((rect) => {
-        const cx = (rect.left + rect.right) / 2;
-        const cy = (rect.top + rect.bottom) / 2;
-        const innerHalfW = Math.max((rect.right - rect.left) / 2 - 40, 0);
-        const innerHalfH = Math.max((rect.bottom - rect.top) / 2 - 40, 0);
-        const inInner =
-          Math.abs(px - cx) <= innerHalfW
-          && Math.abs(py - cy) <= innerHalfH;
-        if (inInner) {
-          repulseX += px - cx;
-          repulseY += py - cy;
-        }
-      });
-    }
-  }
-
-  const repulseLen = Math.hypot(repulseX, repulseY);
-  if (repulseLen < 1e-3) {
-    return bent;
-  }
-
-  const rx = repulseX / repulseLen;
-  const ry = repulseY / repulseLen;
-  const extraOffset = BUFFER_REPULSION_RADIUS * 1.6;
-
-  const adjusted = bent.map((p, idx) => {
-    if (idx === 0 || idx === bent.length - 1) {
-      return { ...p };
-    }
-    return {
-      x: p.x + rx * extraOffset,
-      y: p.y + ry * extraOffset,
-    };
-  });
-
-  return adjusted;
-}
+// relaxPolylineAroundBuffers is now imported from edgeCurveGeneration.ts
+// for algorithmic parity between static layout and dynamic routing
 
 function getEndpointMargin(node: LayoutNode, isSource: boolean) {
   if (node.variant === 'start' || node.variant === 'end' || node.variant === 'center') {
@@ -1073,6 +891,8 @@ async function layoutWithLongestTrace(
   activeTypes?: string[],
   direction: 'TB' | 'LR' = 'TB',
   layoutKey?: string,
+  includeDebugOverlays = true,
+  ignoreTypesWithoutTraces = false,
 ): LayoutResult {
   console.log('[LONGEST TRACE] Starting longest trace layout');
 
@@ -1243,13 +1063,18 @@ async function layoutWithLongestTrace(
   const visibleNodeIds = new Set<string>(
     selectedTraces.flatMap(t => t.trace),
   );
+  const tracedTypes = new Set<string>(selectedTraces.map((t) => t.ownerType));
 
   const getNodeTypes = (nodeId: string): string[] => {
     const node = renderNodeById.get(nodeId);
     const data = node?.data as { types?: string[] } | undefined;
     const types = (data?.types ?? [])
       .filter((t): t is string => typeof t === 'string' && t.length > 0);
-    return activeTypeSet ? types.filter(type => activeTypeSet.has(type)) : types;
+    const filteredByTraces =
+      ignoreTypesWithoutTraces && tracedTypes.size > 0
+        ? types.filter((type) => tracedTypes.has(type))
+        : types;
+    return activeTypeSet ? filteredByTraces.filter(type => activeTypeSet.has(type)) : filteredByTraces;
   };
 
   const includedTypes = new Set<string>();
@@ -1262,6 +1087,10 @@ async function layoutWithLongestTrace(
       if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
       includedTypes.add(ownerType);
     });
+  }
+  if (ignoreTypesWithoutTraces && includedTypes.size === 0) {
+    // No traced types left; nothing to lay out.
+    return { nodes: [], edges: [], traceCounts };
   }
 
   type WeightMap = Map<string, Map<string, number>>;
@@ -2243,6 +2072,7 @@ async function layoutWithLongestTrace(
     const tgtPoint = { x: targetCenterX, y: targetCenterY };
     let polyline: Point[];
     let polylineKind: 'polyline' | 'bezier' = 'polyline';
+    let curveState: EdgeCurveState;
 
     const pairKeyStr = pairKey(edge.source, edge.target);
     const pair = bidirectional.get(pairKeyStr);
@@ -2252,7 +2082,7 @@ async function layoutWithLongestTrace(
       pair.backward.length > 0;
 
     if (isBidirectional) {
-      const bendDir = cycleBendDirection.get(pairKeyStr) ?? 1;
+      const bendDir = (cycleBendDirection.get(pairKeyStr) ?? 1) as 1 | -1;
       const ctrl = buildCyclePolyline(srcPoint, tgtPoint, bendDir);
       if (ctrl.length === 4) {
         polyline = sampleCubicBezier(
@@ -2266,6 +2096,13 @@ async function layoutWithLongestTrace(
       } else {
         polyline = ctrl;
       }
+      // Store curve state for dynamic routing
+      curveState = {
+        curveType: 'bidirectional',
+        bendDir,
+        sourceCenter: srcPoint,
+        targetCenter: tgtPoint,
+      };
     } else {
       const relaxed = relaxPolylineAroundBuffers(
         [srcPoint, tgtPoint],
@@ -2289,8 +2126,21 @@ async function layoutWithLongestTrace(
         };
         polyline = sampleCubicBezier(a, b, c, d, LONGEST_TRACE_BEZIER_SAMPLES);
         polylineKind = 'bezier';
+        // Store curve state with waypoints for collision-based routing
+        curveState = {
+          curveType: 'collision',
+          waypoints: relaxed,
+          sourceCenter: srcPoint,
+          targetCenter: tgtPoint,
+        };
       } else {
         polyline = relaxed;
+        // Straight edge - no collision detected
+        curveState = {
+          curveType: 'straight',
+          sourceCenter: srcPoint,
+          targetCenter: tgtPoint,
+        };
       }
     }
 
@@ -2301,6 +2151,7 @@ async function layoutWithLongestTrace(
         polyline,
         edgeKind: 'normal',
         polylineKind,
+        curveState, // NEW: Store curve state for dynamic routing
         sourceAnchorOffset: { x: 0, y: 0 },
         targetAnchorOffset: { x: 0, y: 0 },
       },
@@ -2492,12 +2343,21 @@ async function layoutWithLongestTrace(
       ),
     ).sort((a, b) => a - b);
 
-  const layerMarkers = buildLayerMarkers(axisPositions, visibleNodes, 'TB');
-  const bufferZones = buildBufferZones(visibleNodes, BUFFER_ZONE_MARGIN);
+  const layerMarkers = includeDebugOverlays ? buildLayerMarkers(axisPositions, visibleNodes, 'TB') : [];
+  const bufferZones = includeDebugOverlays ? buildBufferZones(visibleNodes, BUFFER_ZONE_MARGIN) : [];
+  const overlayAdjustedEdges = includeDebugOverlays
+    ? laneAdjustedEdges
+    : laneAdjustedEdges.map(edge => ({
+      ...edge,
+      data: {
+        ...(edge.data ?? {}),
+        overlayDebug: false,
+      },
+    }));
 
   return {
-    nodes: [...visibleNodes, ...bufferZones, ...layerMarkers],
-    edges: terminalFirst(laneAdjustedEdges),
+    nodes: includeDebugOverlays ? [...visibleNodes, ...bufferZones, ...layerMarkers] : [...visibleNodes],
+    edges: terminalFirst(overlayAdjustedEdges),
     traceCounts,
   };
 }

@@ -8,11 +8,14 @@
 import { sampleCubicBezier, type Point } from './edgeGeometry';
 
 // ========== CONSTANTS ==========
-// Shared with GraphLayouter; scaled down 25% to shrink buffer boxes.
-export const BUFFER_ZONE_MARGIN = 20 * 0.75; // 15px
-export const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 12 * 0.75; // 24px
+// CRITICAL: Must match GraphLayouter.tsx values exactly for algorithmic parity!
+// The previous mismatch (15px vs 33.75px) caused dynamic routing to produce different curves.
+export const BUFFER_ZONE_MARGIN = 45 * 0.75; // 33.75px - matches GraphLayouter
+export const BUFFER_REPULSION_RADIUS = BUFFER_ZONE_MARGIN + 30 * 0.75; // 56.25px - matches GraphLayouter
 export const LONGEST_TRACE_BEZIER_SAMPLES = 32;
 export const LONGEST_TRACE_BEZIER_HANDLE_SCALE = 1.35;
+export const LONGEST_TRACE_LANE_OFFSET = 12;
+export const CYCLE_BEND_MAGNITUDE = 32; // max(24, 64 * 0.5) for bidirectional edges
 
 // ========== TYPES ==========
 
@@ -38,6 +41,28 @@ export interface EdgeCurveParams {
   curvature2: number;     // 0.0-1.0: offset magnitude for P2
   direction2: number;     // -1.0 to 1.0: perpendicular offset direction (left/right)
   position2: number;      // 0.0-1.0: where along edge P2 is positioned (default ~0.67)
+}
+
+/**
+ * Minimal curve state for dynamic routing and smooth interpolation.
+ * Captures all information needed to recreate or interpolate a curve.
+ */
+export interface EdgeCurveState {
+  // Edge type discriminator
+  curveType: 'straight' | 'bidirectional' | 'collision';
+
+  // For bidirectional edges
+  bendDir?: 1 | -1;
+
+  // For collision-based curves (waypoints before bezier conversion)
+  waypoints?: Point[];
+
+  // Original computation endpoints (for detecting movement)
+  sourceCenter: Point;
+  targetCenter: Point;
+
+  // For parallel edges
+  laneOffset?: Point;
 }
 
 export type { Point };
@@ -586,4 +611,193 @@ export function generateBezierFromParams(
   };
 
   return { p0, p1, p2, p3 };
+}
+
+// ========== CURVE REGENERATION FOR DYNAMIC ROUTING ==========
+
+/**
+ * Regenerates a bidirectional (cycle) curve with the same algorithm as GraphLayouter.
+ * Uses control points at t=0.33 and t=0.66 with perpendicular offset.
+ */
+export function regenerateBidirectionalCurve(
+  src: Point,
+  tgt: Point,
+  bendDir: 1 | -1,
+  bendMagnitude: number = CYCLE_BEND_MAGNITUDE,
+): { polyline: Point[]; isCurved: boolean } {
+  const vx = tgt.x - src.x;
+  const vy = tgt.y - src.y;
+  const vLen = Math.hypot(vx, vy) || 1;
+
+  // Perpendicular normal (rotated 90°)
+  const nx = -vy / vLen;
+  const ny = vx / vLen;
+
+  // Control points at 1/3 and 2/3 along the edge (matches GraphLayouter buildCyclePolyline)
+  const ctrl1 = {
+    x: src.x + vx * 0.33 + nx * bendDir * bendMagnitude,
+    y: src.y + vy * 0.33 + ny * bendDir * bendMagnitude,
+  };
+  const ctrl2 = {
+    x: src.x + vx * 0.66 + nx * bendDir * bendMagnitude,
+    y: src.y + vy * 0.66 + ny * bendDir * bendMagnitude,
+  };
+
+  const polyline = sampleCubicBezier(src, ctrl1, ctrl2, tgt, LONGEST_TRACE_BEZIER_SAMPLES);
+  return { polyline, isCurved: true };
+}
+
+/**
+ * Regenerates a collision-avoiding curve using relaxPolylineAroundBuffers.
+ * Uses the exact same algorithm as GraphLayouter for parity.
+ */
+export function regenerateCollisionCurve(
+  src: Point,
+  tgt: Point,
+  buffers: BufferRect[],
+  sourceId: string,
+  targetId: string,
+): { polyline: Point[]; isCurved: boolean } {
+  const relaxed = relaxPolylineAroundBuffers([src, tgt], buffers, sourceId, targetId);
+
+  if (relaxed.length > 2) {
+    // Convert to bezier with handle scaling (matches GraphLayouter)
+    const a = relaxed[0];
+    const d = relaxed[relaxed.length - 1];
+    const innerStart = relaxed[1];
+    const innerEnd = relaxed[relaxed.length - 2];
+    const scale = LONGEST_TRACE_BEZIER_HANDLE_SCALE;
+
+    const b = {
+      x: a.x + (innerStart.x - a.x) * scale,
+      y: a.y + (innerStart.y - a.y) * scale,
+    };
+    const c = {
+      x: d.x + (innerEnd.x - d.x) * scale,
+      y: d.y + (innerEnd.y - d.y) * scale,
+    };
+
+    return {
+      polyline: sampleCubicBezier(a, b, c, d, LONGEST_TRACE_BEZIER_SAMPLES),
+      isCurved: true,
+    };
+  }
+
+  return { polyline: relaxed, isCurved: false };
+}
+
+/**
+ * Main API: Regenerates a curve from its parametric state with new endpoints.
+ * Uses the EXACT same algorithm as GraphLayouter for guaranteed parity.
+ */
+export function regenerateCurveFromState(
+  state: EdgeCurveState,
+  newSourceCenter: Point,
+  newTargetCenter: Point,
+  buffers: BufferRect[],
+  sourceId: string,
+  targetId: string,
+): { polyline: Point[]; isCurved: boolean; newState: EdgeCurveState } {
+  let result: { polyline: Point[]; isCurved: boolean };
+
+  switch (state.curveType) {
+    case 'straight':
+      result = { polyline: [newSourceCenter, newTargetCenter], isCurved: false };
+      break;
+
+    case 'bidirectional':
+      result = regenerateBidirectionalCurve(
+        newSourceCenter,
+        newTargetCenter,
+        state.bendDir ?? 1,
+        CYCLE_BEND_MAGNITUDE,
+      );
+      break;
+
+    case 'collision':
+      result = regenerateCollisionCurve(
+        newSourceCenter,
+        newTargetCenter,
+        buffers,
+        sourceId,
+        targetId,
+      );
+      break;
+
+    default:
+      result = { polyline: [newSourceCenter, newTargetCenter], isCurved: false };
+  }
+
+  // Apply lane offset if present
+  if (state.laneOffset && (state.laneOffset.x !== 0 || state.laneOffset.y !== 0)) {
+    result.polyline = result.polyline.map(p => ({
+      x: p.x + state.laneOffset!.x,
+      y: p.y + state.laneOffset!.y,
+    }));
+  }
+
+  // Return updated state with new endpoints
+  const newState: EdgeCurveState = {
+    ...state,
+    sourceCenter: newSourceCenter,
+    targetCenter: newTargetCenter,
+  };
+
+  return { ...result, newState };
+}
+
+/**
+ * Interpolates a polyline to follow new endpoints during node dragging.
+ * Uses scale + rotate transformation to preserve curve shape.
+ */
+export function interpolatePolyline(
+  points: Point[],
+  oldSrc: Point,
+  oldTgt: Point,
+  newSrc: Point,
+  newTgt: Point,
+): Point[] {
+  if (points.length < 2) return points;
+
+  const oldVec = { x: oldTgt.x - oldSrc.x, y: oldTgt.y - oldSrc.y };
+  const newVec = { x: newTgt.x - newSrc.x, y: newTgt.y - newSrc.y };
+
+  const oldLen = Math.hypot(oldVec.x, oldVec.y) || 1;
+  const newLen = Math.hypot(newVec.x, newVec.y) || 1;
+
+  // Scale factor
+  const scale = newLen / oldLen;
+
+  // Rotation angle
+  const oldAngle = Math.atan2(oldVec.y, oldVec.x);
+  const newAngle = Math.atan2(newVec.y, newVec.x);
+  const rotation = newAngle - oldAngle;
+
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+
+  return points.map((p, i) => {
+    // Keep endpoints pinned
+    if (i === 0) return { ...newSrc };
+    if (i === points.length - 1) return { ...newTgt };
+
+    // Transform relative to old source
+    const rel = { x: p.x - oldSrc.x, y: p.y - oldSrc.y };
+
+    // Scale
+    rel.x *= scale;
+    rel.y *= scale;
+
+    // Rotate
+    const rotated = {
+      x: rel.x * cos - rel.y * sin,
+      y: rel.x * sin + rel.y * cos,
+    };
+
+    // Translate to new source
+    return {
+      x: newSrc.x + rotated.x,
+      y: newSrc.y + rotated.y,
+    };
+  });
 }

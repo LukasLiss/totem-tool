@@ -1381,7 +1381,7 @@ function buildTerminalPlacementCandidates(
 
     const crossNeighbors = neighborDetails.map((detail) => detail.crossValue);
     const axisNeighbors = neighborDetails.map((detail) => detail.axisValue);
-    const barycenter = crossNeighbors.length > 0 ? average(crossNeighbors) : crossCenter;
+    let barycenter = crossNeighbors.length > 0 ? average(crossNeighbors) : crossCenter;
 
     const neighborLayers = neighborDetails.map((detail) => detail.layer);
 
@@ -1405,11 +1405,18 @@ function buildTerminalPlacementCandidates(
     // even if that neighbor is inside the core bounds (e.g., a shared node)
     const isMidLayer = hasBothDirections || (directionFactor < 0 && insideCore);
 
-    const preferredSide: 'left' | 'right' | 'center' | null = isMidLayer
+    let preferredSide: 'left' | 'right' | 'center' | null = isMidLayer
       ? (barycenter <= crossCenter ? 'left' : 'right')
       : null;
 
     const primaryNeighbor = neighborDetails[0] ?? null;
+
+    // In LR mode (horizontal flow), keep terminals aligned with their anchor column
+    // to avoid sideways wiggling when the cross-axis becomes vertical after swap.
+    if (!isVertical) {
+      barycenter = primaryNeighbor?.crossValue ?? barycenter;
+      preferredSide = 'center';
+    }
 
     return {
       node,

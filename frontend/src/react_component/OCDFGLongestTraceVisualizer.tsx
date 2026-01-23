@@ -23,7 +23,7 @@ import { BufferZoneDebug } from './BufferZoneDebug';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ShieldIcon } from 'lucide-react';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ShieldIcon, BugIcon, ZapIcon, Sun } from 'lucide-react';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -61,8 +61,11 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
-  const [interactionLocked, setInteractionLocked] = useState(false);
+  const [interactionLocked, setInteractionLocked] = useState(true);
+  const [showDebugOverlays, setShowDebugOverlays] = useState(false);
   const [showBufferZones, setShowBufferZones] = useState(false);
+  const [animateEdges, setAnimateEdges] = useState(false);
+  const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
   const layoutActiveTypesRef = useRef<string[] | null>(null);
   const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
   const layoutTraceLimitRef = useRef<string | null>(null);
@@ -136,6 +139,72 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
 
     return presence;
   }
+
+  const stripDebugNodes = useCallback((nodeList: Node[]) => {
+    return nodeList.filter((node) => {
+      const id = typeof node.id === 'string' ? node.id : '';
+      const type = typeof node.type === 'string' ? node.type : '';
+      const data = (node.data as { isBuffer?: boolean; isDummy?: boolean } | undefined) ?? {};
+      if (id.startsWith('debug-')) return false;
+      if (type.startsWith('debug')) return false;
+      if (data.isBuffer || data.isDummy) return false;
+      return true;
+    });
+  }, []);
+
+  const LEGEND_WIDTH = 300;
+  const LEGEND_MARGIN = 24;
+  const LEGEND_BUFFER = 120;
+  const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER;
+
+  const addLegendSpacer = useCallback((nodesIn: Node[]): Node[] => {
+    if (Object.keys(typeColors).length === 0) return nodesIn;
+    if (nodesIn.some(n => n.id === 'legend-spacer')) return nodesIn;
+    const baseY = nodesIn.length > 0
+      ? Math.min(...nodesIn.map(n => n.position?.y ?? 0)) - 40
+      : -40;
+    const spacer: Node = {
+      id: 'legend-spacer',
+      position: { x: -LEGEND_TOTAL, y: baseY },
+      width: LEGEND_TOTAL,
+      height: 10,
+      data: {},
+      selectable: false,
+      draggable: false,
+      type: 'ocdfgDefault',
+      style: {
+        opacity: 0,
+        pointerEvents: 'none',
+      },
+    };
+    return [...nodesIn, spacer];
+  }, [typeColors, LEGEND_TOTAL]);
+
+  const shiftForLegend = useCallback(
+    (nodesIn: Node[], edgesIn: Edge[]) => {
+      // Legend is always on the left for this visualizer; shift graph to the right of it.
+      if (Object.keys(typeColors).length === 0) {
+        return { nodes: nodesIn, edges: edgesIn };
+      }
+      // Apply a fixed positive shift so the graph always starts to the right of the legend.
+      const shift = LEGEND_TOTAL + 16;
+
+      const shiftedNodes = nodesIn.map(n => n.position
+        ? { ...n, position: { ...n.position, x: n.position.x + shift } }
+        : n);
+      const shiftedEdges = edgesIn.map(e => {
+        const data = e.data as { polyline?: Array<{ x?: number; y?: number }> } | undefined;
+        const polyline = Array.isArray(data?.polyline)
+          ? data!.polyline.map(p => ({ ...p, x: (p?.x ?? 0) + shift }))
+          : undefined;
+        return polyline
+          ? { ...e, data: { ...(e.data ?? {}), polyline } }
+          : e;
+      });
+      return { nodes: shiftedNodes, edges: shiftedEdges };
+    },
+    [typeColors],
+  );
 
   useEffect(() => {
     fetch('http://127.0.0.1:8000/api/ocdfg/')
@@ -377,6 +446,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       typeTraceLimit,
       activeTypes,
       layoutKey,
+      includeDebugOverlays: showDebugOverlays,
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
@@ -408,8 +478,10 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         });
       }
 
-      setBaseNodes(layoutedNodes);
-      setBaseEdges(layoutedEdges);
+      const shifted = shiftForLegend(layoutedNodes, layoutedEdges);
+      const spacedNodes = addLegendSpacer(shifted.nodes);
+      setBaseNodes(spacedNodes);
+      setBaseEdges(shifted.edges);
       if (layoutedNodes.length > 0) {
         const availability = computeTypeAvailability(
           layoutedNodes,
@@ -431,11 +503,12 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
       }
       window.requestAnimationFrame(() => fitView({
-        padding: { top: 50, right: 50, bottom: 50, left: 350 }, // Extra left padding for legend
+        padding: { top: 50, right: 50, bottom: 50, left: 50 },
+        offset: { x: LEGEND_TOTAL, y: 0 },
         duration: 200
       }));
     }).catch(console.error);
-  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey]);
+  }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey, showDebugOverlays, shiftForLegend]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -444,7 +517,9 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       return;
     }
 
-    const availability = computeTypeAvailability(baseNodes, baseEdges, Object.keys(typeColors));
+    const nodesForVisibility = showDebugOverlays ? baseNodes : stripDebugNodes(baseNodes);
+
+    const availability = computeTypeAvailability(nodesForVisibility, baseEdges, Object.keys(typeColors));
     if (!initialAvailabilityRef.current) {
       initialAvailabilityRef.current = availability;
     }
@@ -459,7 +534,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     initialAvailabilityRef.current = mergedAvailability;
     setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
 
-    const resolvedNodes = baseNodes.map((node) => {
+    const resolvedNodes = nodesForVisibility.map((node) => {
       const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
       const baseHidden = node.hidden === true;
       const hasVisibleType = nodeTypes.length === 0
@@ -480,11 +555,28 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
       if (blockedByType) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
-    });
+    }).map(edge => ({
+      ...edge,
+      animated: animateEdges,
+      data: {
+        ...(edge.data ?? {}),
+        overlayDebug: showDebugOverlays
+          ? (edge.data as Record<string, unknown>)?.overlayDebug ?? false
+          : false,
+        dimmed:
+          dimTerminalEdges
+          && (
+            (edge.data as { sourceVariant?: string } | undefined)?.sourceVariant === 'start'
+            || (edge.data as { sourceVariant?: string } | undefined)?.sourceVariant === 'end'
+            || (edge.data as { targetVariant?: string } | undefined)?.targetVariant === 'start'
+            || (edge.data as { targetVariant?: string } | undefined)?.targetVariant === 'end'
+          ),
+      },
+    }));
 
     setNodes(resolvedNodes);
     setEdges(filteredEdges);
-  }, [baseNodes, baseEdges, typeVisibility, typeColors]);
+  }, [baseNodes, baseEdges, typeVisibility, typeColors, showDebugOverlays, animateEdges, dimTerminalEdges, stripDebugNodes]);
 
   useEffect(() => {
     if (!typeAvailability) return;
@@ -583,7 +675,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         zoomOnPinch={!interactionLocked}
         zoomOnScroll={!interactionLocked}
       >
-        <BufferZoneDebug enabled={showBufferZones} />
+        <BufferZoneDebug enabled={showDebugOverlays && showBufferZones} />
       </ReactFlow>
 
       <div
@@ -762,13 +854,44 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
           </Button>
           <Button
             type="button"
+            variant={showDebugOverlays ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setShowDebugOverlays((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={showDebugOverlays ? 'Hide debug overlays' : 'Show debug overlays'}
+          >
+            <BugIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
             variant={showBufferZones ? 'secondary' : 'outline'}
             size="icon"
             onClick={() => setShowBufferZones((prev) => !prev)}
             className="rounded-full h-9 w-9"
             title={showBufferZones ? 'Hide buffer zones' : 'Show buffer zones (debug)'}
+            disabled={!showDebugOverlays}
           >
             <ShieldIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={animateEdges ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setAnimateEdges((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={animateEdges ? 'Disable edge animation' : 'Enable edge animation'}
+          >
+            <ZapIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={dimTerminalEdges ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setDimTerminalEdges((prev) => !prev)}
+            className="rounded-full h-9 w-9"
+            title={dimTerminalEdges ? 'Undim terminal edges' : 'Dim edges touching start/end'}
+          >
+            <Sun className="h-4 w-4" />
           </Button>
         </div>
       </div>

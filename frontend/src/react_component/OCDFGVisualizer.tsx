@@ -22,7 +22,7 @@ import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-react';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, BugIcon, ZapIcon, Sun } from 'lucide-react';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -92,17 +92,26 @@ function coerceNumeric(value: unknown) {
 
 function measureGraphSize(
   renderNodes: Node[],
+  renderEdges: Edge[],
   padding: number,
   fallbackWidth: number,
   fallbackHeight: number,
 ) {
-  const visible = renderNodes.filter(
-    (node) =>
-      node.hidden !== true &&
-      node.position &&
-      Number.isFinite(node.position.x) &&
-      Number.isFinite(node.position.y),
-  );
+  const visible = renderNodes
+    .map((node) => {
+      // XYFlow keeps measured sizes on runtime nodes; fall back to declared sizes otherwise.
+      const positionSource = (node as any).positionAbsolute ?? node.position;
+      const x = coerceNumeric(positionSource?.x);
+      const y = coerceNumeric(positionSource?.y);
+      return {
+        node,
+        x,
+        y,
+      };
+    })
+    .filter((entry) =>
+      entry.node.hidden !== true && Number.isFinite(entry.x) && Number.isFinite(entry.y),
+    );
 
   if (visible.length === 0) {
     return null;
@@ -113,21 +122,23 @@ function measureGraphSize(
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
 
-  visible.forEach((node) => {
-    const x = coerceNumeric(node.position?.x) ?? 0;
-    const y = coerceNumeric(node.position?.y) ?? 0;
+  visible.forEach(({ node, x, y }) => {
     const style = node.style as {
       width?: unknown;
       height?: unknown;
       minWidth?: unknown;
       minHeight?: unknown;
     } | undefined;
+    const measuredWidth = coerceNumeric((node as any).measured?.width);
+    const measuredHeight = coerceNumeric((node as any).measured?.height);
     const rawWidth =
+      measuredWidth ??
       coerceNumeric(node.width) ??
       coerceNumeric(style?.width) ??
       coerceNumeric(style?.minWidth) ??
       fallbackWidth;
     const rawHeight =
+      measuredHeight ??
       coerceNumeric(node.height) ??
       coerceNumeric(style?.height) ??
       coerceNumeric(style?.minHeight) ??
@@ -135,10 +146,25 @@ function measureGraphSize(
     const width = Math.max(1, rawWidth);
     const height = Math.max(1, rawHeight);
 
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x + width);
-    maxY = Math.max(maxY, y + height);
+    minX = Math.min(minX, x ?? 0);
+    minY = Math.min(minY, y ?? 0);
+    maxX = Math.max(maxX, (x ?? 0) + width);
+    maxY = Math.max(maxY, (y ?? 0) + height);
+  });
+
+  // Incorporate edge polylines so self-loops or long bends are accounted for.
+  renderEdges.forEach((edge) => {
+    const data = edge.data as { polyline?: Array<{ x?: number; y?: number }>; arrowPath?: string } | undefined;
+    const polyline = Array.isArray(data?.polyline) ? data!.polyline : [];
+    polyline.forEach((pt) => {
+      const px = coerceNumeric(pt?.x);
+      const py = coerceNumeric(pt?.y);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+      minX = Math.min(minX, px);
+      minY = Math.min(minY, py);
+      maxX = Math.max(maxX, px);
+      maxY = Math.max(maxY, py);
+    });
   });
 
   if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
@@ -254,8 +280,11 @@ function OCDFGVisualizer({
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
-  const [interactionLocked, setInteractionLocked] = useState(false);
-  const [autoInteractionLocked, setAutoInteractionLocked] = useState(false);
+  const [interactionLocked, setInteractionLocked] = useState(true);
+  const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
+  const [showDebugOverlays, setShowDebugOverlays] = useState(false);
+  const [animateEdges, setAnimateEdges] = useState(false);
+  const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
   const [measuredGraphSize, setMeasuredGraphSize] = useState<{ width: number; height: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const layoutActiveTypesRef = useRef<string[] | null>(null);
@@ -264,6 +293,7 @@ function OCDFGVisualizer({
   const typeTraceLimitCacheRef = useRef<Record<string, number>>({});
   const resolvedVariant = variant ?? 'full';
   const variantPreset = VARIANT_PRESETS[resolvedVariant] ?? VARIANT_PRESETS.full;
+  const autoFitView = true;
   const paddingForSize = variantPreset.padding;
   const fallbackNodeWidth = variantPreset.nodeWidth;
   const fallbackNodeHeight = Math.max(variantPreset.minHeightBase, variantPreset.nodeWidth * 0.36);
@@ -275,12 +305,18 @@ function OCDFGVisualizer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow({ id: reactFlowId } as any);
   const { fitView } = reactFlow;
+  // Layout reserve for legend on the left
+  const LEGEND_WIDTH = 300;
+  const LEGEND_MARGIN = 24;
+  const LEGEND_BUFFER = 120;
+  const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER; // total space to keep free on the left
   const fitViewOptions = useMemo(() => {
-    if (resolvedVariant === 'detail') {
+    if (resolvedVariant === 'detail' || hideChrome) {
       return { padding: DETAIL_FIT_PADDING, offset: { x: 0, y: 0 } };
     }
-    return { padding: 0.15, offset: { x: 120, y: 0 } };
-  }, [resolvedVariant]);
+    const leftOffset = LEGEND_TOTAL * 0.7;
+    return { padding: 0.15, offset: { x: leftOffset, y: 0 } };
+  }, [resolvedVariant, hideChrome, LEGEND_TOTAL]);
   const fitViewWithOffset = useCallback(() => fitView(fitViewOptions as any), [fitView, fitViewOptions]);
   const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
   const nodeTypes = useMemo(
@@ -362,9 +398,82 @@ function OCDFGVisualizer({
     });
   }, []);
 
+  const nodesRef = useRef<Node[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+
+  const addLegendSpacer = useCallback((nodesIn: Node[]): Node[] => {
+    if (hideChrome || Object.keys(typeColors).length === 0) return nodesIn;
+    if (nodesIn.some(n => n.id === 'legend-spacer')) return nodesIn;
+    const baseY = nodesIn.length > 0
+      ? Math.min(...nodesIn.map(n => n.position?.y ?? 0)) - 40
+      : -40;
+    const spacer: Node = {
+      id: 'legend-spacer',
+      position: { x: -LEGEND_TOTAL, y: baseY },
+      width: LEGEND_TOTAL,
+      height: 10,
+      data: {},
+      selectable: false,
+      draggable: false,
+      type: 'ocdfgDefault',
+      style: {
+        opacity: 0,
+        pointerEvents: 'none',
+      },
+    };
+    return [...nodesIn, spacer];
+  }, [hideChrome, typeColors, LEGEND_TOTAL]);
+
+  const shiftForLegend = useCallback(
+    (nodesIn: Node[], edgesIn: Edge[]) => {
+      // Only shift when the left legend is visible.
+      if (hideChrome || Object.keys(typeColors).length === 0) {
+        return { nodes: nodesIn, edges: edgesIn };
+      }
+      // Apply a fixed positive shift so the graph always starts to the right of the legend.
+      const shift = LEGEND_TOTAL + 16; // include outer margin
+
+      const shiftedNodes = nodesIn.map(n => n.position
+        ? { ...n, position: { ...n.position, x: n.position.x + shift } }
+        : n);
+      const shiftedEdges = edgesIn.map(e => {
+        const data = e.data as { polyline?: Array<{ x?: number; y?: number }> } | undefined;
+        const polyline = Array.isArray(data?.polyline)
+          ? data!.polyline.map(p => ({ ...p, x: (p?.x ?? 0) + shift }))
+          : undefined;
+        return polyline
+          ? { ...e, data: { ...(e.data ?? {}), polyline } }
+          : e;
+      });
+      return { nodes: shiftedNodes, edges: shiftedEdges };
+    },
+    [hideChrome, typeColors],
+  );
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
   const reportGraphSize = useCallback(
-    (renderNodes: Node[]) => {
-      const measured = measureGraphSize(renderNodes, paddingForSize, fallbackNodeWidth, fallbackNodeHeight);
+    (renderNodes?: Node[], renderEdges?: Edge[]) => {
+      const nodesToMeasure =
+        (renderNodes && renderNodes.length > 0 && renderNodes) ||
+        nodesRef.current;
+      const edgesToMeasure =
+        (renderEdges && renderEdges.length > 0 && renderEdges) ||
+        edgesRef.current;
+
+      const measured = measureGraphSize(
+        nodesToMeasure,
+        edgesToMeasure ?? [],
+        paddingForSize,
+        fallbackNodeWidth,
+        fallbackNodeHeight,
+      );
       if (!measured) return;
       const previous = lastReportedSizeRef.current;
       if (previous && previous.width === measured.width && previous.height === measured.height) {
@@ -418,7 +527,7 @@ function OCDFGVisualizer({
   }, [updateAutoInteractionLock]);
 
   useEffect(() => {
-    if (resolvedVariant !== 'detail') return;
+    if (!autoFitView) return;
     if (!measuredGraphSize) return;
     if (containerSize.width <= 0 || containerSize.height <= 0) return;
     if (nodes.length === 0) return;
@@ -434,6 +543,7 @@ function OCDFGVisualizer({
     nodes.length,
     fitView,
     fitViewOptions,
+    autoFitView,
   ]);
 
   useEffect(() => {
@@ -750,6 +860,8 @@ function OCDFGVisualizer({
       activeTypes,
       direction: layoutDirection,
       layoutKey: reactFlowId,
+      includeDebugOverlays: showDebugOverlays,
+      ignoreTypesWithoutTraces: resolvedVariant === 'detail',
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
@@ -781,14 +893,18 @@ function OCDFGVisualizer({
         });
       }
 
-      const cleanedNodes = resolvedVariant === 'detail' ? stripDebugNodes(layoutedNodes) : layoutedNodes;
+      const cleanedNodes = (resolvedVariant === 'detail' || !showDebugOverlays)
+        ? stripDebugNodes(layoutedNodes)
+        : layoutedNodes;
       const { nodes: directedNodes, edges: directedEdges } = transformLayoutDirection(
         cleanedNodes,
         layoutedEdges,
         layoutDirection,
       );
-      setBaseNodes(directedNodes);
-      setBaseEdges(directedEdges);
+      const shifted = shiftForLegend(directedNodes, directedEdges);
+      const spacedNodes = addLegendSpacer(shifted.nodes);
+      setBaseNodes(spacedNodes);
+      setBaseEdges(shifted.edges);
       if (directedNodes.length > 0) {
         const availability = computeTypeAvailability(
           directedNodes,
@@ -809,7 +925,9 @@ function OCDFGVisualizer({
         initialAvailabilityRef.current = mergedAvailability;
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
       }
-      window.requestAnimationFrame(() => fitViewWithOffset());
+      if (autoFitView) {
+        window.requestAnimationFrame(() => fitViewWithOffset());
+      }
     }).catch(console.error);
   }, [
     typeVisibility,
@@ -824,6 +942,10 @@ function OCDFGVisualizer({
     layoutDirection,
     transformLayoutDirection,
     reactFlowId,
+    autoFitView,
+    reportGraphSize,
+    showDebugOverlays,
+    shiftForLegend,
   ]);
 
   useEffect(() => {
@@ -834,7 +956,9 @@ function OCDFGVisualizer({
       return;
     }
 
-    const availability = computeTypeAvailability(baseNodes, baseEdges, Object.keys(typeColors));
+    const nodesForVisibility = showDebugOverlays ? baseNodes : stripDebugNodes(baseNodes);
+
+    const availability = computeTypeAvailability(nodesForVisibility, baseEdges, Object.keys(typeColors));
     if (!initialAvailabilityRef.current) {
       initialAvailabilityRef.current = availability;
     }
@@ -849,7 +973,7 @@ function OCDFGVisualizer({
     initialAvailabilityRef.current = mergedAvailability;
     setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
 
-    const resolvedNodes = baseNodes.map((node) => {
+    const resolvedNodes = nodesForVisibility.map((node) => {
       const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
       const baseHidden = node.hidden === true;
       const hasVisibleType = nodeTypes.length === 0
@@ -870,12 +994,29 @@ function OCDFGVisualizer({
       const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
       if (blockedByType) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
-    });
+    }).map(edge => ({
+      ...edge,
+      animated: animateEdges,
+      data: {
+        ...(edge.data ?? {}),
+        overlayDebug: showDebugOverlays
+          ? (edge.data as Record<string, unknown>)?.overlayDebug ?? false
+          : false,
+        dimmed:
+          dimTerminalEdges
+          && (
+            (edge.data as { sourceVariant?: string } | undefined)?.sourceVariant === 'start'
+            || (edge.data as { sourceVariant?: string } | undefined)?.sourceVariant === 'end'
+            || (edge.data as { targetVariant?: string } | undefined)?.targetVariant === 'start'
+            || (edge.data as { targetVariant?: string } | undefined)?.targetVariant === 'end'
+          ),
+      },
+    }));
 
     setNodes(resolvedNodes);
     setEdges(filteredEdges);
-    reportGraphSize(resolvedNodes);
-  }, [baseNodes, baseEdges, typeVisibility, typeColors, reportGraphSize]);
+    reportGraphSize(resolvedNodes, filteredEdges);
+  }, [baseNodes, baseEdges, typeVisibility, typeColors, reportGraphSize, showDebugOverlays, animateEdges, dimTerminalEdges, stripDebugNodes]);
 
   useEffect(() => {
     if (!typeAvailability) return;
@@ -969,7 +1110,7 @@ function OCDFGVisualizer({
         onMoveEnd={resolvedVariant === 'detail' ? updateAutoInteractionLock : undefined}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
-        fitView
+        fitView={autoFitView}
         fitViewOptions={fitViewOptions}
         proOptions={{ hideAttribution: true }}
         minZoom={0.25}
@@ -1173,6 +1314,36 @@ function OCDFGVisualizer({
               title={interactionLocked ? 'Unlock interactions' : 'Lock interactions'}
             >
               {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+            </Button>
+            <Button
+              type="button"
+              variant={showDebugOverlays ? 'secondary' : 'outline'}
+              size="icon"
+              onClick={() => setShowDebugOverlays((prev) => !prev)}
+              className="rounded-full h-9 w-9"
+              title={showDebugOverlays ? 'Hide debug overlays' : 'Show debug overlays'}
+            >
+              <BugIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant={animateEdges ? 'secondary' : 'outline'}
+              size="icon"
+              onClick={() => setAnimateEdges((prev) => !prev)}
+              className="rounded-full h-9 w-9"
+              title={animateEdges ? 'Disable edge animation' : 'Enable edge animation'}
+            >
+              <ZapIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant={dimTerminalEdges ? 'secondary' : 'outline'}
+              size="icon"
+              onClick={() => setDimTerminalEdges((prev) => !prev)}
+              className="rounded-full h-9 w-9"
+              title={dimTerminalEdges ? 'Undim terminal edges' : 'Dim edges touching start/end'}
+            >
+              <Sun className="h-4 w-4" />
             </Button>
           </div>
         </div>

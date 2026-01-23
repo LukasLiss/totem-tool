@@ -29,6 +29,7 @@ type EdgeData = {
   targetAnchorOffset?: { x: number; y: number };
   overlayDebug?: boolean;
   polylineKind?: 'polyline' | 'bezier';
+  dimmed?: boolean;
 };
 
 const DEFAULT_COLOR = '#2563EB';
@@ -435,6 +436,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const targetGeometry = resolveNodeGeometry(reactFlow.getNode(target));
   const isSelfLoop = data?.edgeKind === 'selfLoop';
   const overlayDebug = data?.overlayDebug === true;
+  const dimmed = data?.dimmed === true;
   const sourceOffset = data?.sourceAnchorOffset ?? { x: 0, y: 0 };
   const targetOffset = data?.targetAnchorOffset ?? { x: 0, y: 0 };
 
@@ -655,16 +657,18 @@ const OcdfgEdge = memo(function OcdfgEdge({
 
   const path = useMemo(() => roundedPath(trimmedPolyline, 30), [trimmedPolyline]);
 
+  const dimOpacity = dimmed ? 0.38 : 1;
+
   const baseStyle = useMemo(
     () => ({
       ...style,
       stroke: '#CBD5E1',
       strokeWidth: backgroundStrokeWidth,
-      strokeOpacity: 0.55,
+      strokeOpacity: 0.55 * dimOpacity,
       strokeLinecap: 'round' as const,
       strokeLinejoin: 'round' as const,
     }),
-    [style, backgroundStrokeWidth],
+    [style, backgroundStrokeWidth, dimOpacity],
   );
 
   // Detect if source or target node is being dragged to disable CSS transitions
@@ -678,8 +682,9 @@ const OcdfgEdge = memo(function OcdfgEdge({
     const classes = ['ocdfg-edge'];
     if (animated) classes.push('animated');
     if (isDragging) classes.push('dragging');
+    if (dimmed) classes.push('dimmed');
     return classes.join(' ');
-  }, [animated, isDragging]);
+  }, [animated, isDragging, dimmed]);
 
   return (
     <g className={edgeClassName}>
@@ -691,7 +696,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
           strokeWidth={backgroundStrokeWidth + 14}
           strokeLinecap="round"
           strokeLinejoin="round"
-          style={{ pointerEvents: 'none' }}
+          style={{ pointerEvents: 'none', opacity: 0.6 * dimOpacity }}
         />
       )}
 
@@ -720,7 +725,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
             strokeLinecap="round"
             strokeLinejoin="round"
             className="ocdfg-edge-stripe"
-            style={{ stroke: color }}
+            style={{ stroke: color, opacity: dimOpacity }}
           />
         );
       })}
@@ -731,7 +736,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
             className="ocdfg-arrow-head"
             d={arrowGeometry.path}
             fill={headColor}
-            opacity={0.95}
+            opacity={0.95 * dimOpacity}
             style={{ animation: 'none', strokeDasharray: 'none' }}
           />
           <path
@@ -740,7 +745,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
             fill="none"
             stroke="#F8FAFC"
             strokeWidth={Math.max(1.2, arrowScale)}
-            opacity={0.95}
+            opacity={0.95 * dimOpacity}
             style={{ animation: 'none', strokeDasharray: 'none' }}
           />
         </>
