@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { ScanIcon, FlaskConicalIcon } from 'lucide-react';
+import { ScanIcon, FlaskConicalIcon, BrainIcon } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import {
@@ -16,7 +16,18 @@ import {
   type OcdfgMockData,
 } from '@/mocks/ocdfgDetailMock';
 
+type MlpaLayerArea = {
+  objectTypes: string[];
+  eventTypes: string[];
+};
+
+type MlpaLayer = {
+  level: number;
+  areas: MlpaLayerArea[];
+};
+
 type TotemApiResponse = {
+  layers?: MlpaLayer[];
   tempgraph: {
     nodes?: string[];
     [relation: string]: string[] | string[][];
@@ -24,6 +35,92 @@ type TotemApiResponse = {
   type_relations?: Array<string[]>;
   all_event_types?: string[];
   object_type_to_event_types?: Record<string, string[]>;
+};
+
+const TOTEM_MOCK: TotemApiResponse = {
+  layers: [
+    {
+      level: 0,
+      areas: [
+        { objectTypes: ['Company'], eventTypes: ['Establish Company', 'Close Company'] },
+      ],
+    },
+    {
+      level: 1,
+      areas: [
+        { objectTypes: ['Factory', 'Warehouse'], eventTypes: ['Start Production', 'Maintain Equipment', 'Store Inventory', 'Dispatch Inventory'] },
+        { objectTypes: ['HR'], eventTypes: ['Hire Worker', 'Process Contract'] },
+      ],
+    },
+    {
+      level: 2,
+      areas: [
+        { objectTypes: ['Worker'], eventTypes: ['Staff Shift', 'Relocate Worker'] },
+      ],
+    },
+    {
+      level: 3,
+      areas: [
+        { objectTypes: ['Order', 'Item'], eventTypes: ['Create Order', 'Complete Order', 'Package Item', 'Ship Item'] },
+      ],
+    },
+  ],
+  tempgraph: {
+    nodes: ['Company', 'Factory', 'Warehouse', 'HR', 'Worker', 'Order', 'Item'],
+    D: [
+      ['Order', 'Worker'],
+      ['Item', 'Worker'],
+      ['Worker', 'Factory'],
+      ['Item', 'Warehouse'],
+      ['HR', 'Company'],
+      ['Factory', 'Company'],
+      ['Warehouse', 'Company'],
+    ],
+    P: [
+      ['Factory', 'Warehouse'],
+      ['Warehouse', 'Factory'],
+      ['HR', 'Worker'],
+      ['Worker', 'HR'],
+    ],
+    I: [['Order', 'Item']],
+  },
+  type_relations: [
+    ['Company', 'Factory'],
+    ['Company', 'Warehouse'],
+    ['Company', 'Worker'],
+    ['Factory', 'Warehouse'],
+    ['Factory', 'Worker'],
+    ['HR', 'Order'],
+    ['HR', 'Worker'],
+    ['Item', 'Worker'],
+    ['Order', 'Item'],
+    ['Order', 'Worker'],
+  ],
+  all_event_types: [
+    'Close Company',
+    'Complete Order',
+    'Create Order',
+    'Dispatch Inventory',
+    'Establish Company',
+    'Hire Worker',
+    'Maintain Equipment',
+    'Package Item',
+    'Process Contract',
+    'Relocate Worker',
+    'Ship Item',
+    'Staff Shift',
+    'Start Production',
+    'Store Inventory',
+  ],
+  object_type_to_event_types: {
+    Company: ['Establish Company', 'Close Company'],
+    Factory: ['Start Production', 'Maintain Equipment'],
+    Warehouse: ['Store Inventory', 'Dispatch Inventory'],
+    HR: ['Hire Worker', 'Process Contract'],
+    Worker: ['Staff Shift', 'Relocate Worker'],
+    Order: ['Create Order', 'Complete Order'],
+    Item: ['Package Item', 'Ship Item'],
+  },
 };
 
 type ProcessAreaDefinition = {
@@ -1854,11 +1951,11 @@ function computeProcessAreas(
   const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
 
   sortedLevels.forEach((level) => {
-    const nodes = nodesByLevel.get(level)?.slice().sort((a, b) => a.localeCompare(b)) ?? [];
+    const nodesAtLevel = nodesByLevel.get(level)?.slice().sort((a, b) => a.localeCompare(b)) ?? [];
     const seen = new Set<string>();
     let areaIndex = 0;
 
-    nodes.forEach((node) => {
+    nodesAtLevel.forEach((node) => {
       if (seen.has(node)) return;
       const stack = [node];
       const group: string[] = [];
@@ -1888,7 +1985,7 @@ function computeProcessAreas(
       areaIndex += 1;
     });
 
-    if (nodes.length === 0 && !areas.some((area) => area.level === level)) {
+    if (nodesAtLevel.length === 0 && !areas.some((area) => area.level === level)) {
       areas.push({
         id: `process-area-${level}-empty`,
         level,
@@ -1901,9 +1998,31 @@ function computeProcessAreas(
   return areas;
 }
 
-function buildLayers(data: TotemApiResponse): ProcessLayer[] {
+function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
+  // Use pre-computed layers from the backend MLPA algorithm
+  if (!data.layers || data.layers.length === 0) return [];
+
+  // Sort layers by level descending (highest level first for display)
+  const sortedApiLayers = [...data.layers].sort((a, b) => b.level - a.level);
+
+  return sortedApiLayers.map((mlpaLayer) => ({
+    level: mlpaLayer.level,
+    areas: mlpaLayer.areas.map((mlpaArea, areaIndex) => ({
+      id: `level-${mlpaLayer.level}-area-${areaIndex}-${mlpaArea.objectTypes.join('-')}`,
+      level: mlpaLayer.level,
+      label: mlpaArea.objectTypes.length === 1
+        ? mlpaArea.objectTypes[0]
+        : mlpaArea.objectTypes.join(' & '),
+      objectTypes: mlpaArea.objectTypes,
+    })),
+  }));
+}
+
+function buildLayersFromFrontend(data: TotemApiResponse): ProcessLayer[] {
+  // Use frontend's greedy MLPA-like algorithm
   const levels = computeLevelAssignments(data);
   if (levels.size === 0) return [];
+
   const areas = computeProcessAreas(levels, data.type_relations);
   const areasByLevel = new Map<number, ProcessAreaDefinition[]>();
 
@@ -1923,6 +2042,13 @@ function buildLayers(data: TotemApiResponse): ProcessLayer[] {
     level,
     areas: areasByLevel.get(level) ?? [],
   }));
+}
+
+function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
+  if (useBackendMlpa && data.layers && data.layers.length > 0) {
+    return buildLayersFromBackend(data);
+  }
+  return buildLayersFromFrontend(data);
 }
 
 function selectDetailMock(area: ProcessAreaDefinition): OcdfgMockData {
@@ -2021,7 +2147,8 @@ function TotemVisualizer({
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
-  const [useMockData, setUseMockData] = useState(false);
+  const [useMockData, setUseMockData] = useState(true);
+  const [useBackendMlpa, setUseBackendMlpa] = useState(true);
   const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -2136,7 +2263,7 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem) : []), [rawTotem]);
+  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, useBackendMlpa) : []), [rawTotem, useBackendMlpa]);
   const typeColorMap = useMemo(
     () => mapTypesToColors(rawTotem?.tempgraph?.nodes ?? []),
     [rawTotem?.tempgraph?.nodes],
@@ -2249,12 +2376,26 @@ function TotemVisualizer({
       return;
     }
 
+    // Use mock data if toggle is enabled
+    if (useMockData) {
+      setRawTotem(TOTEM_MOCK);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
+    // Clear stale mock data so the legend/process areas reflect the new backend result as soon as it arrives
+    setRawTotem(null);
     try {
       const token = localStorage.getItem('access_token');
+      // Choose endpoint based on MLPA toggle
+      const endpoint = useBackendMlpa
+        ? `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
+        : `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`;
       const response = await fetch(
-        `${backendBaseUrl}/api/eventlogs/${eventLogId}/discover_totem/`,
+        endpoint,
         {
           headers: {
             'Content-Type': 'application/json',
@@ -2276,11 +2417,11 @@ function TotemVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId]);
+  }, [backendBaseUrl, eventLogId, useMockData, useBackendMlpa]);
 
   useEffect(() => {
     fetchTotem();
-  }, [fetchTotem, reloadSignal]);
+  }, [fetchTotem, reloadSignal, useMockData, useBackendMlpa]);
 
   useEffect(() => {
     setPendingCenter((value) => value + 1);
@@ -2297,6 +2438,15 @@ function TotemVisualizer({
     setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
     setPendingCenter((value) => value + 1);
   }, [rawTotem?.tempgraph]);
+
+  // Also reset layout/legend when switching between mock data and backend variants
+  useEffect(() => {
+    setExpandedAreas({});
+    setDetailSizes({});
+    setDetailLayout({});
+    setLegendOffsets({});
+    setPendingCenter((value) => value + 1);
+  }, [useMockData, useBackendMlpa]);
 
   useEffect(() => {
     if (pendingCenter === 0) return;
@@ -2619,6 +2769,16 @@ function TotemVisualizer({
           title={useMockData ? 'Use backend data' : 'Use mock data'}
         >
           <FlaskConicalIcon className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant={useBackendMlpa ? 'secondary' : 'outline'}
+          size="icon"
+          onClick={() => setUseBackendMlpa((prev) => !prev)}
+          className="rounded-full h-9 w-9"
+          title={useBackendMlpa ? 'Using backend MLPA (ILP)' : 'Using frontend MLPA (greedy)'}
+        >
+          <BrainIcon className="h-4 w-4" />
         </Button>
       </div>
       {!eventLogId && (

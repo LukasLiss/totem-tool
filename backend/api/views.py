@@ -253,17 +253,24 @@ class EventLogViewSet(viewsets.ModelViewSet):
     def discover_mlpa(self, request, pk=None):
         """API endpoint to perform MLPA discovery on a given event log.
         It applies totem discovery first, then MLPA discovery."""
-        # the address would be like /api/eventlogs/{id}/discover_mlpa/ ?
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            cache_key = f"mlpa_discovery_{user_file.pk}"
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
             ocel = _build_ocel_from_path(user_file.file.path)
             totem = totemDiscovery(ocel)
             process_view = mlpaDiscovery(totem)
-            return Response(process_view, status=status.HTTP_200_OK)
+            serialized = _serialize_mlpa(process_view, totem)
+
+            cache.set(cache_key, serialized, timeout=3600)
+            return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -363,6 +370,47 @@ def _serialize_totem(totem: Totem) -> dict:
         "type_relations": type_relations,
         "all_event_types": all_event_types,
         "object_type_to_event_types": object_type_to_event_types,
+    }
+
+
+def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
+    """
+    Convert MLPA output into a JSON-serializable structure for the frontend.
+
+    MLPA returns: {level: [(object_types_set, event_types_set), ...], ...}
+    We convert to: {layers: [{level, areas: [{objectTypes, eventTypes}]}], ...}
+    """
+    layers = []
+
+    # Sort levels (they are floats like 0.0, 1.0, 2.0)
+    sorted_levels = sorted(process_view.keys())
+
+    for level in sorted_levels:
+        areas = []
+        for object_types_set, event_types_set in process_view[level]:
+            # Convert sets to sorted lists for JSON serialization
+            object_types = sorted(list(object_types_set)) if isinstance(object_types_set, set) else list(object_types_set)
+            event_types = sorted(list(event_types_set)) if isinstance(event_types_set, set) else list(event_types_set)
+
+            areas.append({
+                "objectTypes": object_types,
+                "eventTypes": event_types,
+            })
+
+        layers.append({
+            "level": int(level),  # Convert float to int for cleaner JSON
+            "areas": areas,
+        })
+
+    # Also include the serialized totem data for edge information
+    totem_data = _serialize_totem(totem)
+
+    return {
+        "layers": layers,
+        "tempgraph": totem_data["tempgraph"],
+        "type_relations": totem_data["type_relations"],
+        "all_event_types": totem_data["all_event_types"],
+        "object_type_to_event_types": totem_data["object_type_to_event_types"],
     }
 
 
