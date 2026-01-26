@@ -2471,9 +2471,32 @@ function TotemVisualizer({
           setAllOcdfgNodes((prev) => prev ?? payload.all_nodes);
         }
 
+        const registerNodes = (payload?.all_nodes && payload.all_nodes.length > 0
+          ? payload.all_nodes
+          : allOcdfgNodes) as OcdfgNodeSummary[] | null;
+
+        const enrichedGraph =
+          registerNodes && registerNodes.length > 0
+            ? {
+                ...graph,
+                nodes: graph.nodes.map((node) => {
+                  const registerNode = registerNodes.find((n) => n.id === node.id);
+                  const mergedTypes = Array.from(
+                    new Set([...(node.types ?? []), ...((registerNode?.types as string[]) ?? [])]),
+                  );
+                  return {
+                    ...node,
+                    types: mergedTypes,
+                    object_type: node.object_type ?? registerNode?.object_type ?? null,
+                    role: node.role ?? registerNode?.role ?? null,
+                  };
+                }),
+              }
+            : graph;
+
         setDetailCache((prev) => ({
           ...prev,
-          [areaId]: graph as OcdfgGraph,
+          [areaId]: enrichedGraph as OcdfgGraph,
         }));
         if (payload?.filter_error) {
           setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
