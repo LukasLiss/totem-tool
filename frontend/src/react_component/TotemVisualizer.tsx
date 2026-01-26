@@ -253,11 +253,11 @@ const PROCESS_AREA_INSET_SHADOW = 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)';
 const DETAIL_EDGE_STROKE = 'rgba(37, 99, 235, 0.35)';
 const BASE_DETAIL_COLLISION_PADDING = 12;
 const DETAIL_ANCHOR_SPRING = 0.12;
-const DETAIL_REPULSION = 0.38;
-const DETAIL_OBSTACLE_PUSH = 0.55;
-const DETAIL_DAMPING = 0.82;
-const DETAIL_ITERATIONS = 60;
-const BASE_DETAIL_MIN_DISTANCE = 24;
+const DETAIL_REPULSION = 0.65; // stronger separation between detail nodes
+const DETAIL_OBSTACLE_PUSH = 0.9; // push harder off anchors/process areas
+const DETAIL_DAMPING = 0.78; // slightly less damping so they can move apart faster
+const DETAIL_ITERATIONS = 85; // more relaxation passes
+const BASE_DETAIL_MIN_DISTANCE = 36; // larger minimum clearance
 const LEVEL_LEGEND_GAP = 24;
 const LEGEND_RIGHT_PADDING = 32;
 const LEGEND_HIDE_INSET = 12; // pixels the intruder must cross into the legend before hiding
@@ -2154,7 +2154,7 @@ function TotemVisualizer({
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
   const [useMockData, setUseMockData] = useState(true);
-  const [useBackendMlpa, setUseBackendMlpa] = useState(true);
+  const [useBackendMlpa, setUseBackendMlpa] = useState(false);
   const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -2250,7 +2250,6 @@ function TotemVisualizer({
   }, [processAreaMetrics.scale]);
   const horizontalPadding = Math.round(BASE_HORIZONTAL_PADDING * processAreaMetrics.scale);
   const resolvedTopInset = Math.max(0, topInset ?? 0);
-  const contentPaddingTop = 32 + resolvedTopInset;
   const computedHeight = resolveHeight(height);
   const {
     objectNodeWidth,
@@ -2270,6 +2269,12 @@ function TotemVisualizer({
   } = processAreaMetrics;
 
   const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, useBackendMlpa) : []), [rawTotem, useBackendMlpa]);
+  const levelCount = layers.length;
+  const extraTopPadding = useMemo(() => {
+    const deficit = Math.max(0, 4 - levelCount);
+    return Math.min(180, deficit * 60); // push down when few levels; capped
+  }, [levelCount]);
+  const contentPaddingTop = 32 + resolvedTopInset + extraTopPadding;
   const typeColorMap = useMemo(
     () => mapTypesToColors(rawTotem?.tempgraph?.nodes ?? []),
     [rawTotem?.tempgraph?.nodes],
