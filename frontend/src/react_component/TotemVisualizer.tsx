@@ -6,6 +6,7 @@ import { Slider } from '@/components/ui/slider';
 import { ScanIcon, FlaskConicalIcon, BrainIcon } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
+import type { OcdfgGraph } from './OCDFGVisualizer';
 import {
   orderItemOcdfgMock,
   hrWorkerOcdfgMock,
@@ -203,6 +204,7 @@ type DetailLayoutNode = {
   preferredSide: DetailSide;
 };
 type DetailLayoutState = Record<string, Point2D>;
+type OcdfgNodeSummary = { id: string; types?: string[]; role?: string | null; object_type?: string | null };
 type ProcessAreaMetrics = {
   scale: number;
   objectNodeWidth: number;
@@ -2143,6 +2145,10 @@ function TotemVisualizer({
   const [expandedAreas, setExpandedAreas] = useState<Record<string, boolean>>({});
   const [detailSizes, setDetailSizes] = useState<Record<string, { width: number; height: number }>>({});
   const [detailLayout, setDetailLayout] = useState<DetailLayoutState>({});
+  const [detailCache, setDetailCache] = useState<Record<string, OcdfgGraph>>({});
+  const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
+  const [detailError, setDetailError] = useState<Record<string, string | undefined>>({});
+  const [allOcdfgNodes, setAllOcdfgNodes] = useState<OcdfgNodeSummary[] | null>(null);
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -2360,16 +2366,6 @@ function TotemVisualizer({
     [legendOffsets],
   );
   const hasLayers = layers.length > 0;
-  const toggleAreaDetail = useCallback((areaId: string) => {
-    setExpandedAreas((prev) => {
-      if (prev[areaId]) {
-        const { [areaId]: _removed, ...rest } = prev;
-        return rest;
-      }
-      return { ...prev, [areaId]: true };
-    });
-  }, []);
-
   const fetchTotem = useCallback(async () => {
     if (!eventLogId) {
       setRawTotem(null);
@@ -2419,6 +2415,103 @@ function TotemVisualizer({
     }
   }, [backendBaseUrl, eventLogId, useMockData, useBackendMlpa]);
 
+  const fetchDetailOcdfg = useCallback(
+    async (area: ProcessAreaDefinition) => {
+      const areaId = area.id;
+
+      if (!eventLogId) {
+        setDetailError((prev) => ({
+          ...prev,
+          [areaId]: 'No event log selected',
+        }));
+        return;
+      }
+
+      // Mock mode stays on existing behaviour
+      if (useMockData) {
+        setDetailCache((prev) => ({
+          ...prev,
+          [areaId]: selectDetailMock(area),
+        }));
+        return;
+      }
+
+      // Avoid duplicate requests
+      setDetailLoading((prev) => {
+        if (prev[areaId]) return prev;
+        return { ...prev, [areaId]: true };
+      });
+      setDetailError((prev) => ({ ...prev, [areaId]: undefined }));
+
+      try {
+        const token = localStorage.getItem('access_token');
+        const objectTypes = encodeURIComponent(area.objectTypes.join(','));
+        const response = await fetch(
+          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          },
+        );
+
+        const payload: { dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string } & Partial<OcdfgGraph> =
+          await response.json();
+        if (!response.ok) {
+          const errMsg = payload?.filter_error || payload?.error || `Backend responded with ${response.status}`;
+          throw new Error(errMsg);
+        }
+        const graph = payload?.dfg ?? { nodes: (payload as any)?.nodes, links: (payload as any)?.links };
+        if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) {
+          throw new Error('Invalid OCDFG payload');
+        }
+
+        if (Array.isArray(payload?.all_nodes) && payload.all_nodes.length > 0) {
+          setAllOcdfgNodes((prev) => prev ?? payload.all_nodes);
+        }
+
+        setDetailCache((prev) => ({
+          ...prev,
+          [areaId]: graph as OcdfgGraph,
+        }));
+        if (payload?.filter_error) {
+          setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
+        }
+      } catch (err) {
+        console.error('[TotemVisualizer] Failed to load detail OCDFG', err);
+        setDetailError((prev) => ({
+          ...prev,
+          [areaId]: err instanceof Error ? err.message : 'Failed to load OCDFG',
+        }));
+      } finally {
+        setDetailLoading((prev) => {
+          const { [areaId]: _removed, ...rest } = prev;
+          return rest;
+        });
+      }
+    },
+    [backendBaseUrl, eventLogId, useMockData],
+  );
+
+  const toggleAreaDetail = useCallback(
+    (area: ProcessAreaDefinition) => {
+      setExpandedAreas((prev) => {
+        const alreadyOpen = prev[area.id];
+        if (alreadyOpen) {
+          const { [area.id]: _removed, ...rest } = prev;
+          return rest;
+        }
+        // Kick off detail fetch on first open
+        if (!detailCache[area.id] && !detailLoading[area.id]) {
+          fetchDetailOcdfg(area);
+        }
+        return { ...prev, [area.id]: true };
+      });
+    },
+    [detailCache, detailLoading, fetchDetailOcdfg],
+  );
+
   useEffect(() => {
     fetchTotem();
   }, [fetchTotem, reloadSignal, useMockData, useBackendMlpa]);
@@ -2433,11 +2526,22 @@ function TotemVisualizer({
     setExpandedAreas({});
     setDetailSizes({});
     setDetailLayout({});
+    setDetailCache({});
+    setDetailLoading({});
+    setDetailError({});
+    setAllOcdfgNodes(null);
     setLegendOffsets({});
     setProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
     setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
     setPendingCenter((value) => value + 1);
   }, [rawTotem?.tempgraph]);
+
+  useEffect(() => {
+    setDetailCache({});
+    setDetailLoading({});
+    setDetailError({});
+    setAllOcdfgNodes(null);
+  }, [eventLogId, useMockData, useBackendMlpa]);
 
   // Also reset layout/legend when switching between mock data and backend variants
   useEffect(() => {
@@ -2951,7 +3055,10 @@ function TotemVisualizer({
                           const baseDetailHeight = detailSize?.height ?? BASE_OBJECT_NODE_MIN_HEIGHT;
                           const ocdfgWidth = baseDetailWidth * detailScale;
                           const ocdfgHeight = baseDetailHeight * detailScale;
-                          const detailData = selectDetailMock(area);
+                          const cachedDetail = detailCache[area.id];
+                          const loadingDetail = Boolean(detailLoading[area.id]);
+                          const errorDetail = detailError[area.id];
+                          const detailData = useMockData ? selectDetailMock(area) : cachedDetail;
                           const detailSide = detailSideByLevel[area.level] ?? 'right';
                           const detailCenter = detailLayout[area.id];
                           const areaRect = areaRectsRef.current[area.id];
@@ -3005,7 +3112,7 @@ function TotemVisualizer({
                               <button
                                 type="button"
                                 ref={(element) => assignNodeRef(areaAnchorId, element)}
-                                onClick={() => toggleAreaDetail(area.id)}
+                                onClick={() => toggleAreaDetail(area)}
                                 aria-pressed={isExpanded}
                                 aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${area.label}`}
                                 style={{
@@ -3075,25 +3182,25 @@ function TotemVisualizer({
                               )}
                               {isExpanded && (
                                 <div
-                              ref={(element) => assignNodeRef(detailNodeId, element)}
-                              style={{
-                                position: 'absolute',
-                                ...detailPosition,
-                                width: ocdfgWidth,
-                                minWidth: ocdfgWidth,
-                                minHeight: ocdfgHeight,
-                                height: ocdfgHeight,
-                                borderRadius: objectNodeRadius,
-                                border: `1.5px solid ${detailBorder}`,
-                                background: 'transparent',
-                                display: 'flex',
-                                alignItems: 'stretch',
+                                  ref={(element) => assignNodeRef(detailNodeId, element)}
+                                  style={{
+                                    position: 'absolute',
+                                    ...detailPosition,
+                                    width: ocdfgWidth,
+                                    minWidth: ocdfgWidth,
+                                    minHeight: ocdfgHeight,
+                                    height: ocdfgHeight,
+                                    borderRadius: objectNodeRadius,
+                                    border: `1.5px solid ${detailBorder}`,
+                                    background: 'transparent',
+                                    display: 'flex',
+                                    alignItems: 'stretch',
                                     justifyContent: 'center',
                                     zIndex: 1,
                                     boxSizing: 'border-box',
                                     boxShadow: 'inset 0 0 12px 3px rgba(37, 99, 235, 0.08)',
                                     color: detailForeground,
-                                    pointerEvents: 'none',
+                                    pointerEvents: 'auto',
                                     overflow: 'hidden',
                                     transition:
                                       'width 220ms ease, height 220ms ease, left 220ms ease, top 220ms ease, right 220ms ease, transform 220ms ease',
@@ -3106,36 +3213,113 @@ function TotemVisualizer({
                                       height: ocdfgHeight,
                                       transform: 'none',
                                       transformOrigin: 'top left',
-                                      transition:
-                                        'width 220ms ease, height 220ms ease',
+                                      transition: 'width 220ms ease, height 220ms ease',
                                       willChange: 'width, height',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      pointerEvents: 'auto',
                                     }}
                                   >
-                                    <OCDFGDetailVisualizer
-                                      height={ocdfgHeight}
-                                      data={detailData}
-                                      instanceId={`detail-${area.id}`}
-                                      typeColorOverrides={typeColorMap}
-                                      onSizeChange={(size) => {
-                                        setDetailSizes((prev) => {
-                                          const existing = prev[area.id];
-                                          if (
-                                            existing &&
-                                            existing.width === size.width &&
-                                            existing.height === size.height
-                                          ) {
-                                            return prev;
-                                          }
-                                          return {
-                                            ...prev,
-                                            [area.id]: {
-                                              width: size.width,
-                                              height: size.height,
-                                            },
-                                          };
-                                        });
-                                      }}
-                                    />
+                                    {useMockData ? (
+                                      <OCDFGDetailVisualizer
+                                        height={ocdfgHeight}
+                                        data={detailData}
+                                        instanceId={`detail-${area.id}`}
+                                        typeColorOverrides={typeColorMap}
+                                        onSizeChange={(size) => {
+                                          setDetailSizes((prev) => {
+                                            const existing = prev[area.id];
+                                            if (
+                                              existing &&
+                                              existing.width === size.width &&
+                                              existing.height === size.height
+                                            ) {
+                                              return prev;
+                                            }
+                                            return {
+                                              ...prev,
+                                              [area.id]: {
+                                                width: size.width,
+                                                height: size.height,
+                                              },
+                                            };
+                                          });
+                                        }}
+                                      />
+                                    ) : loadingDetail ? (
+                                      <div
+                                        style={{
+                                          fontSize: 12,
+                                          color: '#475569',
+                                          padding: '8px 10px',
+                                          textAlign: 'center',
+                                        }}
+                                      >
+                                        Loading OCDFG…
+                                      </div>
+                                    ) : errorDetail ? (
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          flexDirection: 'column',
+                                          gap: 6,
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          textAlign: 'center',
+                                          padding: '8px 10px',
+                                          fontSize: 12,
+                                          color: '#B91C1C',
+                                        }}
+                                      >
+                                        <span>{errorDetail}</span>
+                                        <Button
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={() => fetchDetailOcdfg(area)}
+                                          style={{ pointerEvents: 'auto' }}
+                                        >
+                                          Retry
+                                        </Button>
+                                      </div>
+                                    ) : detailData ? (
+                                      <OCDFGDetailVisualizer
+                                        height={ocdfgHeight}
+                                        data={detailData}
+                                        instanceId={`detail-${area.id}`}
+                                        typeColorOverrides={typeColorMap}
+                                        onSizeChange={(size) => {
+                                          setDetailSizes((prev) => {
+                                            const existing = prev[area.id];
+                                            if (
+                                              existing &&
+                                              existing.width === size.width &&
+                                              existing.height === size.height
+                                            ) {
+                                              return prev;
+                                            }
+                                            return {
+                                              ...prev,
+                                              [area.id]: {
+                                                width: size.width,
+                                                height: size.height,
+                                              },
+                                            };
+                                          });
+                                        }}
+                                      />
+                                    ) : (
+                                      <div
+                                        style={{
+                                          fontSize: 12,
+                                          color: '#475569',
+                                          padding: '8px 10px',
+                                          textAlign: 'center',
+                                        }}
+                                      >
+                                        Tap to load OCDFG
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               )}

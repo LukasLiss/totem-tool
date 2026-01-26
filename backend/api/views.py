@@ -9,6 +9,7 @@ from .serializers import EventLogSerializer, DashboardSerializer
 from django.db.models import Max
 
 from totem_lib.ocdfg import OCDFG, CCDFG
+import polars as pl
 from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.ocvariants import find_variants, calculate_layout
 from totem_lib.totem import totemDiscovery, mlpaDiscovery, Totem
@@ -310,6 +311,32 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
         raise ValueError(f"Unsupported file type: {ext}")
 
     return ObjectCentricEventLog(events=events_df, objects=objects_df)
+
+
+def _filter_ocel_by_object_types(ocel: ObjectCentricEventLog, object_types: set[str]) -> ObjectCentricEventLog:
+    """
+    Lightweight filter for our in-house OCEL representation.
+    Keeps objects whose _objType is in object_types and events that reference at least one kept object.
+    """
+    if not object_types:
+        return ocel
+
+    filtered_objects = ocel.objects.filter(pl.col("_objType").is_in(list(object_types)))
+
+    if filtered_objects.is_empty():
+        return ObjectCentricEventLog(events=ocel.events.slice(0, 0), objects=filtered_objects)
+
+    kept_ids = set(filtered_objects.select("_objId").to_series().to_list())
+
+    # Keep events that reference at least one kept object
+    filtered_events = ocel.events.filter(
+        pl.col("_objects")
+        .list.eval(pl.element().is_in(list(kept_ids)))
+        .list.any()
+        .fill_null(False)
+    )
+
+    return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
 
 def _serialize_totem(totem: Totem) -> dict:
@@ -1589,6 +1616,12 @@ def OCDFGViewSet(request):
     if not file_id:
         return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
     
+    # Optional object-type filter (comma-separated)
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
+    
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
     
@@ -1603,11 +1636,43 @@ def OCDFGViewSet(request):
             return Response({"error": f"Failed to load OCEL from file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     try:
-        ocdfg = OCDFG.from_ocel(ocel)
-        # build a json response from the dfg that is a OCDFG-object
-        dfg_json = nx.node_link_data(ocdfg)
+        # Full OCDFG (unfiltered) for register
+        ocdfg_full = OCDFG.from_ocel(ocel)
+        dfg_json_full = nx.node_link_data(ocdfg_full)
+        all_nodes = [
+            {
+                "id": n.get("id"),
+                "types": n.get("types", []),
+                "role": n.get("role"),
+                "object_type": n.get("object_type"),
+            }
+            for n in dfg_json_full.get("nodes", [])
+        ]
 
-        return Response({"dfg": dfg_json}, status=status.HTTP_200_OK)
+        # Filtered OCEL if object types specified
+        filter_error = None
+        if object_type_filter:
+            try:
+                filtered_ocel = _filter_ocel_by_object_types(ocel, object_type_filter)
+
+                # If filtering removes everything, return an empty OCDFG instead of raising
+                if filtered_ocel.events is None or len(filtered_ocel.events) == 0 or filtered_ocel.events.is_empty():
+                    dfg_json = {"directed": True, "multigraph": False, "graph": {"kind": "ocdfg"}, "nodes": [], "links": []}
+                else:
+                    ocdfg_filtered = OCDFG.from_ocel(filtered_ocel)
+                    dfg_json = nx.node_link_data(ocdfg_filtered)
+            except Exception as e:
+                # Gracefully fall back to unfiltered graph to avoid frontend breakage, but surface warning
+                filter_error = f"Failed to compute filtered OCDFG: {e}"
+                dfg_json = dfg_json_full
+        else:
+            dfg_json = dfg_json_full
+
+        response_payload = {"dfg": dfg_json, "all_nodes": all_nodes}
+        if filter_error:
+            response_payload["filter_error"] = filter_error
+
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
