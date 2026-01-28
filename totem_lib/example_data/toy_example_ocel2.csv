@@ -1,0 +1,8 @@
+﻿id,activity,timestamp,ot:oder,ot:item,ea:billable,ea:area
+e1,place order,2026-01-22T09:57:28+0000,o1,i1#part-of{"price": "5€"}/i2#part-of{"price": "15€"},no,
+e2,pick item,2026-01-23T09:57:28+0000,,i1,no,outdoor
+e3,produce item,2026-01-24T09:57:28+0000,,i2#target,no,indoor
+,,2026-01-25T09:57:28+0000,,i1{“price”: ”50€”},,
+e4,send order,2026-01-26T09:57:28+0000,o1,i1/i2,yes,
+o1,o2o,2026-01-27T09:57:28+0000,,i1#has/i2#has,,
+i2,o2o,2026-01-28T09:57:28+0000,,i1#add-on,,

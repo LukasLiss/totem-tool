@@ -1,8 +1,14 @@
 # TOTeM-Tool Quick Start
 
+## Quick Environment Setup
+Run the bootstrap script
+```bash
+npm run setup-env
+```
+
 ## ✅ What's Done
 Your TOTeM-Tool project is completely set up with:
-- Django backend with virtual environment
+- Django backend with virtual environment (contains PyInstaller and totem_lib)
 - React frontend 
 - Electron desktop wrapper
 - Build scripts for Windows executable
@@ -26,6 +32,8 @@ npm run electron-dev
 ```bash
 cd backend
 source venv/Scripts/activate
+# OR: venv\Scripts\activate   # On Windows CMD
+# OR: source ./venv/bin/activate # On Unix Systems, e.g. Linux or MacOS
 python manage.py runserver 8000
 ```
 

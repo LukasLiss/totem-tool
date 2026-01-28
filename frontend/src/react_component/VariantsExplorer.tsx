@@ -1,8 +1,23 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
-  AlignLeft, Download, Filter, MinusCircle, PlusCircle
+  MinusCircle, PlusCircle
 } from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* =========================
    Types shared with callers
@@ -37,75 +52,6 @@ export type Variant = {
   signature_hash: string;
   graph: VariantGraph;
 };
-
-/* ========== minimalist UI wrappers (no shadcn) ========== */
-type BasicChildrenProps = { className?: string; children?: React.ReactNode };
-
-const Card: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className="rounded-md border" style={{ borderColor: "#E2E8F0" }}>
-    <div className={className}>{children}</div>
-  </div>
-);
-const CardHeader: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className={className} style={{ padding: "12px 16px" }}>{children}</div>
-);
-const CardContent: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className={className} style={{ padding: "12px 16px" }}>{children}</div>
-);
-const CardTitle: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 18, fontWeight: 600, color: "#0F172A" }}>{children}</div>
-);
-
-type ButtonProps = {
-  children?: React.ReactNode;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-  title?: string;
-  size?: "md" | "icon" | "sm";
-  variant?: "solid" | "ghost";
-  className?: string;
-};
-const Button: React.FC<ButtonProps> = ({
-  children, onClick, title, size = "md", variant = "solid", className = ""
-}) => {
-  const pad = size === "icon" ? "6px" : "6px 10px";
-  const bg = variant === "ghost" ? "transparent" : "#2563EB";
-  const col = variant === "ghost" ? "#0F172A" : "#fff";
-  const brd = variant === "ghost" ? "#E2E8F0" : "transparent";
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className={className}
-      style={{
-        padding: pad, background: bg, color: col,
-        border: "1px solid " + brd, borderRadius: 8, lineHeight: 1
-      }}
-    >
-      {children}
-    </button>
-  );
-};
-
-/* slider wrapper (expects onValueChange([number])) */
-type SliderProps = {
-  value: [number];
-  min: number;
-  max: number;
-  step: number;
-  onValueChange: (vals: [number]) => void;
-  className?: string;
-};
-const Slider: React.FC<SliderProps> = ({ value, min, max, step, onValueChange, className = "" }) => (
-  <input
-    type="range"
-    className={className}
-    min={min}
-    max={max}
-    step={step}
-    value={value[0]}
-    onChange={(e) => onValueChange([Number(e.target.value)])}
-  />
-);
 
 /* ========== colors/tokens ========== */
 const ACTOR_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#8B5CF6", "#F43F5E"];
@@ -156,87 +102,109 @@ const chevronClip = (tipPx: number = 16): string =>
            0 100%,
            ${tipPx}px 50%)`;
 
-/*
-  REMOVED: The computePositions function is no longer needed
-  as the layout is now calculated by the backend.
-*/
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
   variants: Variant[];
+  leadingType?: string;
+  availableTypes?: string[];
+  onLeadingTypeChange?: (type: string) => void;
   typeColors?: Record<string, string>;
-  laneHeight?: number;
   colWidth?: number;
 };
 
 export default function VariantsExplorer({
   variants,
+  leadingType = "",
+  availableTypes = [],
+  onLeadingTypeChange,
   typeColors,
-  laneHeight = 40,
   colWidth = 120,
 }: VariantsExplorerProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
   const [query, setQuery] = useState<string>("");
-  const [minSupport, setMinSupport] = useState<number>(0);
 
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return variants
-      .filter((v) => v.support >= minSupport)
       .filter((v) => q ? (String(v.id).toLowerCase().includes(q) || v.signature.toLowerCase().includes(q)) : true)
       .sort((a, b) => b.support - a.support);
-  }, [variants, minSupport, query]);
+  }, [variants, query]);
 
   return (
     <Card className="w-full">
       <CardHeader className="pb-2">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <CardTitle>Object-Centric Variants</CardTitle>
+          {onLeadingTypeChange ? (
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-semibold">Perspective:</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="min-w-[150px] justify-between">
+                    {leadingType}
+                    <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[200px]">
+                  <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuRadioGroup value={leadingType} onValueChange={onLeadingTypeChange}>
+                    {availableTypes.length > 0 ? (
+                      availableTypes.map((type) => (
+                        <DropdownMenuRadioItem key={type} value={type}>
+                          {type}
+                        </DropdownMenuRadioItem>
+                      ))
+                    ) : (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
+                    )}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ) : (
+            <div className="text-lg font-semibold">Object-Centric Variants</div>
+          )}
 
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             {/* Zoom */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ZoomOut size={16} color={UI.textSecondary} />
+              <ZoomOut size={16} className="text-muted-foreground" />
               <Slider
-                value={[zoom]} min={0.5} max={2} step={0.1}
+                value={[zoom]}
+                min={0.5}
+                max={2}
+                step={0.1}
                 onValueChange={(v) => setZoom(v[0])}
                 className="w-40"
               />
-              <ZoomIn size={16} color={UI.textSecondary} />
+              <ZoomIn size={16} className="text-muted-foreground" />
             </div>
 
-            {/* Label mode toggle */}
-            <div style={{ display: "flex", gap: 6, background: UI.mutedBG, border: `1px solid ${UI.border}`, borderRadius: 8, padding: 2 }}>
-              <Button variant="ghost" onClick={() => setLabelMode("compact")} title="Compact labels">
-                <AlignLeft size={14} /> <span style={{ marginLeft: 4 }}>Compact</span>
-              </Button>
-              <Button variant="ghost" onClick={() => setLabelMode("full")} title="Full labels">Full</Button>
-            </div>
-
-            {/* Search */}
-            <div style={{ position: "relative" }}>
-              <Search size={14} color={UI.textSecondary} style={{ position: "absolute", left: 8, top: 10 }} />
-              <input
-                placeholder="Filter by id or signature…"
-                style={{ padding: "8px 8px 8px 28px", width: 260, border: `1px solid ${UI.border}`, borderRadius: 8 }}
-                value={query} onChange={(e) => setQuery(e.target.value)}
-                aria-label="Filter variants"
+            {/* Label mode toggle - Switch */}
+            <div className="flex items-center gap-2">
+              <Label htmlFor="label-mode" className="text-sm font-medium">
+                Compact Labels
+              </Label>
+              <Switch
+                id="label-mode"
+                checked={labelMode === "compact"}
+                onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
               />
             </div>
 
-            {/* Min support */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Filter size={16} color={UI.textSecondary} />
-              <input
-                type="number" min={0}
-                style={{ width: 100, padding: "6px 8px", border: `1px solid ${UI.border}`, borderRadius: 8 }}
-                value={String(minSupport)}
-                onChange={(e) => setMinSupport(Math.max(0, Number(e.target.value || 0)))}
-                placeholder="Min support"
-                aria-label="Minimum support"
+            {/* Search */}
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Filter by id or signature…"
+                className="pl-9 w-[260px]"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Filter variants"
               />
             </div>
           </div>
@@ -252,7 +220,6 @@ export default function VariantsExplorer({
               totalSupport={totalSupport}
               zoom={zoom}
               labelMode={labelMode}
-              laneHeight={laneHeight}
               colWidth={colWidth}
               typeColorsOverride={typeColors}
             />
@@ -281,13 +248,12 @@ type VariantRowProps = {
   totalSupport: number;
   zoom: number;
   labelMode: "compact" | "full";
-  laneHeight: number;
   colWidth: number;
   typeColorsOverride?: Record<string, string>;
 };
 
 function VariantRow({
-  v, totalSupport, zoom, labelMode, laneHeight, colWidth, typeColorsOverride
+  v, totalSupport, zoom, labelMode, colWidth, typeColorsOverride
 }: VariantRowProps) {
   const [expanded, setExpanded] = useState<boolean>(false);
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
@@ -364,16 +330,18 @@ function VariantRow({
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
   });
 
-  const colsCount = cols;
-  const visibleRowCount = lanesByType.reduce((acc, [t, objs]) =>
-    acc + (collapsedTypes.has(t) ? 1 : objs.length) + 1, 0);
+  // Each type gets exactly one lane, regardless of how many objects it has
+  const visibleRowCount = lanesByType.length;
+  // Fixed height for each type lane to match legend boxes
+  const typeLaneHeight = 48;
 
   return (
     <div style={{ border: `1px solid ${UI.border}`, borderRadius: 8 }}>
       <CardHeader className="py-2">
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <Button
-            variant="ghost" size="icon"
+            variant="ghost"
+            size="icon"
             onClick={() => setExpanded(e => !e)}
             title={expanded ? "Collapse variant" : "Expand variant"}
           >
@@ -394,8 +362,8 @@ function VariantRow({
             {v.support}
           </div>
 
-          <div style={{ color: UI.textPrimary }}>
-            Variant <span style={{ fontFamily: "ui-monospace, monospace" }}>{String(v.id)}</span>
+          <div style={{ color: UI.textPrimary, fontFamily: "ui-monospace, monospace", marginLeft: 42 }}>
+            {String(v.id)}
           </div>
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
@@ -408,58 +376,67 @@ function VariantRow({
             >
               signature: {v.signature}
             </div>
-            <Button variant="ghost" size="icon" title="Export (stub)">
-              <Download size={16} />
-            </Button>
           </div>
         </div>
       </CardHeader>
 
       {expanded && (
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 pb-6">
           <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
             {/* legend */}
             <div style={{ width: 256, flexShrink: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: UI.textSecondary }}>Object types</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {lanesByType.map(([type, objs]) => {
-                  const collapsed = collapsedTypes.has(type);
-                  const tColor = typeColor[type];
-                  return (
-                    <div key={type} style={{ border: `1px solid ${UI.border}`, borderRadius: 8, padding: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ height: 12, width: 12, borderRadius: 3, background: tColor }} />
-                          <div style={{ fontSize: 14, fontWeight: 600, color: UI.textPrimary }}>{type}</div>
-                        </div>
-                        <Button
-                          size="sm" variant="ghost" onClick={() => toggleType(type)}
-                          title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
-                        >
-                          {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
-                        </Button>
-                      </div>
-                      {!collapsed && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 20 }}>
-                          {objs.map((o, i) => (
-                            <div key={o.id} style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ height: 8, width: 16, borderRadius: 3, background: shade(tColor, 0.15 * (i % 5)) }} />
-                              <span
-                                title={o.label || o.id}
-                                style={{
-                                  color: UI.textSecondary, maxWidth: 160,
-                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                                }}
-                              >
-                                {o.label || o.id}
-                              </span>
+              <div
+                style={{
+                  border: `1px solid ${UI.border}`,
+                  borderRadius: 8,
+                  height: visibleRowCount * typeLaneHeight + (visibleRowCount - 1) * 12 + 32,
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 16, paddingBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
+                  {lanesByType.map(([type]) => {
+                    const collapsed = collapsedTypes.has(type);
+                    const tColor = typeColor[type];
+                    return (
+                      <div
+                        key={type}
+                        style={{
+                          border: `1px solid ${UI.border}`,
+                          borderRadius: 8,
+                          padding: 8,
+                          height: `${typeLaneHeight}px`,
+                          display: "flex",
+                          alignItems: "center"
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{
+                              height: 12,
+                              width: 12,
+                              borderRadius: 3,
+                              background: collapsed ? UI.textSecondary : tColor,
+                              opacity: collapsed ? 0.5 : 1
+                            }} />
+                            <div style={{
+                              fontSize: 14,
+                              fontWeight: 600,
+                              color: collapsed ? UI.textSecondary : UI.textPrimary,
+                              opacity: collapsed ? 0.5 : 1
+                            }}>
+                              {type}
                             </div>
-                          ))}
+                          </div>
+                          <Button
+                            size="sm" variant="ghost" onClick={() => toggleType(type)}
+                            title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
+                          >
+                            {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
+                          </Button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -471,147 +448,114 @@ function VariantRow({
                   borderRadius: 8,
                   overflow: "auto",
                   width: "100%",
-                  marginTop: 25   
               }}
               aria-label={`Variant ${v.id} visualization`}
             >
-              <div style={{ minWidth: "100%", height: visibleRowCount * laneHeight + GUTTER }}>
+              <div style={{ minWidth: "100%", height: visibleRowCount * typeLaneHeight + (visibleRowCount - 1) * 12 + 32, paddingTop: 16, paddingBottom: 16 }}>
                 <div
                   style={{
                     position: "absolute",
-                    top: GUTTER,
+                    top: 16,
                     left: GUTTER,
                     right: 0,
-                    bottom: 0,
+                    bottom: 16,
                     display: "grid",
                     gridTemplateColumns: gridTemplateCols,
-                    gridAutoRows: `${laneHeight}px`,
+                    gridAutoRows: `${typeLaneHeight}px`,
                     columnGap: "12px",
+                    rowGap: "12px",
                   }}
                 >
-                  {/* lane lines */}
-                  {(() => {
-                    const acc: { row: number; els: React.ReactNode[] } = { row: 0, els: [] };
-                    for (const [type, objs] of lanesByType) {
-                      const collapsed = collapsedTypes.has(type);
-                      if (!collapsed) {
-                        for (const o of objs) {
-                          acc.row += 1;
-                          acc.els.push(
-                            <div
-                              key={`lane-${o.id}`}
-                              style={{
-                                gridColumn: `1 / span ${colsCount}`,
-                                gridRow: `${acc.row}`,
-                                borderBottom: `1px dashed ${UI.border}`
-                              }}
-                            />
-                          );
-                        }
-                        acc.row += 1;
-                        acc.els.push(<div key={`gap-${type}`} style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}` }} />);
-                      } else {
-                        acc.row += 1;
-                        acc.els.push(
-                          <div
-                            key={`sep-${type}`}
-                            style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}`, borderBottom: `1px solid ${UI.border}` }}
-                          />
-                        );
-                      }
+                  {/* events - all events for each type in one lane */}
+                  {lanesByType.map(([type, objs], typeIdx) => {
+                    if (collapsedTypes.has(type)) return null;
+
+                    // Collect all events for this type from all objects
+                    const allTypeEvents: PositionedEvent[] = [];
+                    for (const o of objs) {
+                      const events = laneEvents.get(o.id) || [];
+                      allTypeEvents.push(...events);
                     }
-                    return acc.els;
-                  })()}
 
-                  {/* events */}
-                  {(() => {
-                    const acc: { row: number; els: React.ReactNode[] } = { row: 0, els: [] };
-                    for (const [type, objs] of lanesByType) {
-                      if (collapsedTypes.has(type)) { acc.row += 1; continue; }
-                      for (const o of objs) {
-                        acc.row += 1;
-                        const events = (laneEvents.get(o.id) || []).slice().sort((a, b) => a.xStart - b.xStart);
-                        for (let i = 0; i < events.length; i++) {
-                          const ev = events[i];
-                          const colStart = ev.xStart + 1;
-                          const span = Math.max(1, ev.xEnd - ev.xStart + 1);
-                          const isShared = ev.objectIds.length > 1;
-                          const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
-                          const background = gradientFor(objects, typeColor, ev.objectIds);
-                          const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nPos: [${ev.xStart}..${ev.xEnd}]`;
+                    // Sort by position and remove duplicates (same event on multiple objects)
+                    const uniqueEvents = allTypeEvents
+                      .filter((ev, idx, arr) => arr.findIndex(e => e.id === ev.id) === idx)
+                      .sort((a, b) => a.xStart - b.xStart);
 
-                          // compute once per event — OUTSIDE JSX
-                          const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
+                    return uniqueEvents.map((ev, i) => {
+                      const colStart = ev.xStart + 1;
+                      const span = Math.max(1, ev.xEnd - ev.xStart + 1);
+                      const isShared = ev.objectIds.length > 1;
+                      const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
+                      const background = gradientFor(objects, typeColor, ev.objectIds);
+                      const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nPos: [${ev.xStart}..${ev.xEnd}]`;
+                      const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
 
-                          acc.els.push(
+                      return (
+                        <div
+                          key={`${type}-${ev.id}-${i}`}
+                          title={title}
+                          style={{
+                            gridColumn: `${colStart} / span ${span}`,
+                            gridRow: `${typeIdx + 1}`,
+                            background,
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            position: "relative",
+                            userSelect: "none",
+                            fontSize: 12,
+                            clipPath: chevronClip(tipPx),
+                            WebkitClipPath: chevronClip(tipPx),
+                            overflow: "hidden",
+                            paddingRight: tipPx,
+                          }}
+                          aria-label={`${label} (${type})${isShared ? " (shared)" : ""}`}
+                        >
+                          {isShared && (
                             <div
-                              key={`${o.id}-${ev.id}-${i}`}
-                              title={title}
+                              aria-hidden
                               style={{
-                                gridColumn: `${colStart} / span ${span}`,
-                                gridRow: `${acc.row}`,
-                                background,
-                                color: "#fff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                position: "relative",
-                                userSelect: "none",
-                                fontSize: 12,
+                                position: "absolute",
+                                inset: 0,
+                                opacity: 0.25,
+                                backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
                                 clipPath: chevronClip(tipPx),
                                 WebkitClipPath: chevronClip(tipPx),
-                                overflow: "hidden",
-                                paddingRight: tipPx,
                               }}
-                              aria-label={`${label} on ${o.id}${isShared ? " (shared)" : ""}`}
+                            />
+                          )}
+
+                          <span
+                            style={{
+                              padding: "2px 8px",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {label}
+                          </span>
+
+                          {isShared && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                right: Math.max(4, Math.round(tipPx * 0.8)),
+                                top: 4,
+                                fontSize: 10,
+                                opacity: 0.8,
+                              }}
+                              aria-hidden
                             >
-                              {isShared && (
-                                <div
-                                  aria-hidden
-                                  style={{
-                                    position: "absolute",
-                                    inset: 0,
-                                    opacity: 0.25,
-                                    backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
-                                    clipPath: chevronClip(tipPx),
-                                    WebkitClipPath: chevronClip(tipPx),
-                                  }}
-                                />
-                              )}
-
-                              <span
-                                style={{
-                                  padding: "2px 8px",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {label}
-                              </span>
-
-                              {isShared && (
-                                <div
-                                  style={{
-                                    position: "absolute",
-                                    right: Math.max(4, Math.round(tipPx * 0.8)), // nudge away from the chevron tip
-                                    top: 4,
-                                    fontSize: 10,
-                                    opacity: 0.8,
-                                  }}
-                                  aria-hidden
-                                >
-                                  ⇄
-                                </div>
-                              )}
+                              ⇄
                             </div>
-                          );
-                        }
-                      }
-                      acc.row += 1;
-                    }
-                    return acc.els;
-                  })()}
+                          )}
+                        </div>
+                      );
+                    });
+                  })}
                 </div>
               </div>
             </div>

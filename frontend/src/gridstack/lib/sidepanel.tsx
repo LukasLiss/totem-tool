@@ -44,24 +44,24 @@ const SidePanel: React.FC = () => {
   }, [grid]);
 
   return (
-    <div className="sidepanel col-md-2 d-none d-md-block">
-      <div id="trash" className="sidepanel-item">
-        <Trash/>
+    <div className="sidepanel col-md-2 d-none d-md-block p-2 ">
+      <div id="trash" className="sidepanel-item flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/trash.png" width="50" height="50"/>
         <div>Drop here to remove!</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item number-events">
-        <CirclePlus/>
+      <div className="grid-stack-item sidepanel-item number-events flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/numbers.jpg" width="100" height="70"/>
         <div>Number of Events</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item text-box">
-        <CirclePlus/>
+      <div className="grid-stack-item sidepanel-item text-box flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/text.jpg" width="100" height="50"/>
         <div>Text Box</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item image-component">
-        <CirclePlus/>
+      <div className="grid-stack-item sidepanel-item image-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/adgu8l.jpg" width="100" height="50"/>
         <div>Image Component</div>
       </div>
     </div>

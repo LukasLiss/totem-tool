@@ -60,9 +60,11 @@ export function FileUploadValidator() {
       (type?.ext === "sqlite" || type?.ext === "db") &&
       (file.name.toLowerCase().endsWith(".sqlite") ||
         file.name.toLowerCase().endsWith(".db"));
+    const isCsv =
+      type?.ext === "csv" || file.name.toLowerCase().endsWith(".csv");
 
-    if (!(isJson || isXml || isSqlite)){
-        toast.error("Invalid file type", {description:"Please enter 'json','xml' or 'sqlite'."});
+    if (!(isJson || isXml || isSqlite || isCsv)){
+        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', or 'csv'."});
         return false;
     }
     

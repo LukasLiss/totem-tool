@@ -8,24 +8,22 @@ from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, 
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
-from totem_lib.ocdfg import OCDFG, CCDFG
-from totem_lib.ocel import ObjectCentricEventLog
-from totem_lib.ocvariants import find_variants, calculate_layout
-from totem_lib.totem import totemDiscovery, mlpaDiscovery
+from totem_lib import OCDFG, CCDFG, ObjectCentricEventLog, calculate_layout, totemDiscovery, mlpaDiscovery
+from totem_lib.variants.ocvariants import find_variants
+from totem_lib.ocel.importer import (
+    load_events_from_sqlite, load_objects_from_sqlite,
+    load_events_from_json, load_objects_from_json,
+    load_events_from_xml, load_objects_from_xml,
+    import_ocel_from_csv,
+)
 import networkx as nx
 
 from collections import defaultdict
 
-from totem_lib.ocel import load_events_from_sqlite, load_events_from_json, load_events_from_xml
 from django.core.cache import cache
 
 import os
 from hashlib import sha1
-from totem_lib.ocel import (
-    load_events_from_sqlite, load_objects_from_sqlite,
-    load_events_from_json,   load_objects_from_json,
-    load_events_from_xml,    load_objects_from_xml,
-)
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
 
@@ -67,19 +65,35 @@ class EventLogViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        
-        if user_file.file.path.split('.')[-1] == 'sqlite':
-            OCEL = load_events_from_sqlite(user_file.file.path)
-            processed = OCEL["_eventId"].n_unique()
-        elif user_file.file.path.split('.')[-1] == 'json':
-            OCEL = load_events_from_json(user_file.file.path)
-            processed = OCEL["_eventId"].n_unique()
-        elif user_file.file.path.split('.')[-1] == 'xml':
-            OCEL = load_events_from_xml(user_file.file.path)
-            processed = OCEL["_eventId"].n_unique()
-        else:
-            return Response({"error": "Unsupported file format"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+            processed = len(ocel.events.unique(subset='_eventId'))
+        except Exception as e:
+            return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return Response(processed, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def object_types(self, request, pk=None):
+        """Returns the list of object types present in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                # We reuse the utility function that handles file format detection
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response(ocel.object_types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -248,23 +262,25 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
 # TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
-    
+
     ext = os.path.splitext(path)[1].lower()
     if ext in (".sqlite", ".db"):
         events_df  = load_events_from_sqlite(path)
         objects_df = load_objects_from_sqlite(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".json":
         events_df  = load_events_from_json(path)
         objects_df = load_objects_from_json(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".xml":
         events_df  = load_events_from_xml(path)
         objects_df = load_objects_from_xml(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
+    elif ext == ".csv":
+        # CSV importer returns the complete ObjectCentricEventLog with attributes
+        log = import_ocel_from_csv(path)
     else:
-        raise ValueError(f"Unsupported file type: {ext}")
-
-    log = ObjectCentricEventLog()
-    log.events = events_df
-    log.object_df = objects_df
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .csv")
 
     return log
 
@@ -1419,9 +1435,23 @@ def variants(request):
         print(f"CACHE HIT for file_id: {file_id}. Using cached OCEL object.")
 
     try:
-        leading_object_type = "Transport Document"  #request.query_params.get("leading_type", "Handling Unit")
+        leading_object_type = request.query_params.get("leading_type")
+
+        # If no leading_type provided or it doesn't exist, use first alphabetically sorted type
+        if not leading_object_type or leading_object_type not in ocel.object_types:
+            if ocel.object_types and len(ocel.object_types) > 0:
+                leading_object_type = sorted(ocel.object_types)[0]
+            else:
+                return Response({
+                    "variants": [],
+                    "object_types": []
+                }, status=status.HTTP_200_OK)
+
         mined = find_variants(ocel, leading_type=leading_object_type)
     except Exception as e:
+        import traceback
+        print(f"ERROR in find_variants: {e}")
+        traceback.print_exc()
         return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     out = []
@@ -1456,7 +1486,10 @@ def variants(request):
             },
         })
 
-    return Response({"variants": out}, status=status.HTTP_200_OK)
+    return Response({
+        "variants": out,
+        "object_types": ocel.object_types
+    }, status=status.HTTP_200_OK)
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
