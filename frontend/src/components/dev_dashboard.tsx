@@ -1,4 +1,5 @@
-import { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
+import { RefreshCcw } from "lucide-react";
 import {
   Card,
   CardAction,
@@ -10,14 +11,17 @@ import {
 } from "@/components/ui/card"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
 import VariantsExplorer, { type Variant } from "@/react_component/VariantsExplorer";
+import TotemVisualizer from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
   const [processedResult, setProcessedResult] = useState(null);
+  const [totemReloadSignal, setTotemReloadSignal] = useState(0);
 
   // Variant Explorer state
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -125,6 +129,36 @@ export function DevDashboard() {
     <div>
       <SidebarTrigger/>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              Totem Visualizer
+            </CardTitle>
+            <CardAction>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setTotemReloadSignal((value) => value + 1)}
+                disabled={!selectedFile?.id}
+                className="flex items-center gap-2"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                Reload
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="h-[600px] p-0">
+            <ReactFlowProvider>
+              <TotemVisualizer
+                eventLogId={selectedFile?.id}
+                height="100%"
+                backendBaseUrl="http://localhost:8000"
+                reloadSignal={totemReloadSignal}
+                title="Totem Visualizer"
+              />
+            </ReactFlowProvider>
+          </CardContent>
+        </Card>
         <div className="grid auto-rows-min gap-4 *:data-[slot=card]:bg-card dark:*:data-[slot=card]:bg-card *:data-[slot=card]:shadow-xs">
           <Card className="@container/card max-w-sm">
             <CardHeader>
@@ -133,47 +167,23 @@ export function DevDashboard() {
                 {processedResult ?? "—"}
               </CardTitle>
               <CardAction>
-                
+
               </CardAction>
             </CardHeader>
-            
+            <CardFooter className="flex-col items-start gap-1.5 text-sm">
+              <div className="line-clamp-1 flex gap-2 font-medium">
+                Trending up this month
+              </div>
+              <div className="text-muted-foreground">
+                Visitors for the last 6 months
+              </div>
+            </CardFooter>
           </Card>
-          <Card className="@container/card">
-            <CardHeader>
-              <CardTitle>Object-Centric DFG</CardTitle>
-              <CardDescription>
-                Interactive visualization of the discovered object-centric DFG.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="h-[560px] p-0">
-              <ReactFlowProvider>
-                <OCDFGVisualizer height="100%" />
-              </ReactFlowProvider>
-            </CardContent>
-          </Card>
-          <Card className="@container/card">
-            <CardHeader>
-              <CardTitle>Variant Explorer</CardTitle>
-            </CardHeader>
-            <CardContent className="min-h-[400px]">
-              {!selectedFile && <p className="text-muted-foreground">No file selected</p>}
-              {variantStatus === "loading" && <div>Loading variants…</div>}
-              {variantStatus === "error" && (
-                <div style={{ color: "crimson", fontWeight: 600 }}>
-                  Something went wrong! {errorMsg && <span>({errorMsg})</span>}
-                </div>
-              )}
-              {variantStatus === "empty" && <div>No variants.</div>}
-              {variantStatus === "ready" && (
-                <VariantsExplorer
-                  variants={variants}
-                  leadingType={leadingType}
-                  availableTypes={availableTypes}
-                  onLeadingTypeChange={setLeadingType}
-                />
-              )}
-            </CardContent>
-          </Card>
+          <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
+            <ReactFlowProvider>
+              <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
+            </ReactFlowProvider>
+          </div>
         </div>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />
       </div>

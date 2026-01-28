@@ -12,6 +12,7 @@ export interface DfgLink {
   target: string;
   weight?: number;
   owners?: string[];
+  ownerTypes?: string[];
   weights?: Record<string, number>;
 }
 

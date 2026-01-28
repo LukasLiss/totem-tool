@@ -1,13 +1,21 @@
 import { memo, useMemo } from 'react';
 import { BaseEdge, useReactFlow } from '@xyflow/react';
 import type { EdgeProps, Node } from '@xyflow/react';
-import { roundedPath, trimPolyline, type Point } from '../utils/edgeGeometry';
+import {
+  pointAlongPolylineFromEnd,
+  smoothPolyline,
+  roundedPath,
+  trimPolyline,
+  type Point,
+  sampleCubicBezier,
+} from '../utils/edgeGeometry';
 
 type NodeVariant = 'start' | 'end' | 'center';
 
 type EdgeData = {
   polyline?: Point[];
   owners?: string[];
+  ownerTypes?: string[];
   colors?: Record<string, string>;
   parallelIndex?: number;
   parallelCount?: number;
@@ -17,12 +25,18 @@ type EdgeData = {
   frequency?: number;
   thicknessFactor?: number;
   frequencyNormalized?: number;
+  sourceAnchorOffset?: { x: number; y: number };
+  targetAnchorOffset?: { x: number; y: number };
+  overlayDebug?: boolean;
+  polylineKind?: 'polyline' | 'bezier';
+  dimmed?: boolean;
 };
 
 const DEFAULT_COLOR = '#2563EB';
 const DEFAULT_NODE_WIDTH = 180;
 const DEFAULT_NODE_HEIGHT = 72;
 const EPSILON = 1e-6;
+const POINT_TOLERANCE = 0.5;
 
 function buildFallbackPolyline(
   sourceX: number,
@@ -43,9 +57,132 @@ function clampPolylineToEndpoints(points: Point[], source: Point, target: Point)
   if (points.length === 0) return [];
   if (points.length === 1) return [{ ...source }];
   const result = points.map(point => ({ ...point }));
-  result[0] = { ...source };
-  result[result.length - 1] = { ...target };
+  if (pointsAreClose(result[0], source)) {
+    result[0] = { ...source };
+  }
+  if (pointsAreClose(result[result.length - 1], target)) {
+    result[result.length - 1] = { ...target };
+  }
   return result;
+}
+
+function pointsAreClose(a?: Point, b?: Point, tolerance = POINT_TOLERANCE) {
+  if (!a || !b) return false;
+  return Math.abs(a.x - b.x) <= tolerance && Math.abs(a.y - b.y) <= tolerance;
+}
+
+function pointOnNodeBoundary(
+  point: Point | undefined,
+  geometry: { center: Point; size: { width: number; height: number } },
+  tolerance = POINT_TOLERANCE,
+) {
+  if (!point) {
+    return false;
+  }
+  const halfWidth = geometry.size.width / 2;
+  const halfHeight = geometry.size.height / 2;
+  const dx = Math.abs(point.x - geometry.center.x);
+  const dy = Math.abs(point.y - geometry.center.y);
+  const onVertical = Math.abs(dx - halfWidth) <= tolerance && dy <= halfHeight + tolerance;
+  const onHorizontal = Math.abs(dy - halfHeight) <= tolerance && dx <= halfWidth + tolerance;
+  return onVertical || onHorizontal;
+}
+
+function isOutsideRect(
+  point: Point | undefined,
+  geometry: { center: Point; size: { width: number; height: number } },
+  tolerance = 0,
+) {
+  if (!point) return false;
+  const halfWidth = geometry.size.width / 2 + tolerance;
+  const halfHeight = geometry.size.height / 2 + tolerance;
+  const dx = Math.abs(point.x - geometry.center.x);
+  const dy = Math.abs(point.y - geometry.center.y);
+  return dx > halfWidth || dy > halfHeight;
+}
+
+function intersectSegmentWithRect(
+  outside: Point,
+  inside: Point,
+  geometry: { center: Point; size: { width: number; height: number } },
+): Point | null {
+  const halfWidth = geometry.size.width / 2;
+  const halfHeight = geometry.size.height / 2;
+  const left = geometry.center.x - halfWidth;
+  const right = geometry.center.x + halfWidth;
+  const top = geometry.center.y - halfHeight;
+  const bottom = geometry.center.y + halfHeight;
+
+  const dx = inside.x - outside.x;
+  const dy = inside.y - outside.y;
+  const EPS = 1e-9;
+
+  let tEnter = 0;
+  let tLeave = 1;
+
+  const clip = (p: number, q: number) => {
+    if (Math.abs(p) < EPS) {
+      return q >= 0;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > tLeave) return false;
+      if (r > tEnter) tEnter = r;
+    } else {
+      if (r < tEnter) return false;
+      if (r < tLeave) tLeave = r;
+    }
+    return true;
+  };
+
+  if (
+    !clip(-dx, outside.x - left)
+    || !clip(dx, right - outside.x)
+    || !clip(-dy, outside.y - top)
+    || !clip(dy, bottom - outside.y)
+  ) {
+    return null;
+  }
+
+  return {
+    x: outside.x + dx * tEnter,
+    y: outside.y + dy * tEnter,
+  };
+}
+
+function clipTailToRect(
+  points: Point[],
+  geometry: { center: Point; size: { width: number; height: number } },
+): Point[] {
+  if (points.length < 2) return points;
+
+  let crossingIndex = -1;
+  for (let i = points.length - 2; i >= 0; i -= 1) {
+    const currentlyOutside = isOutsideRect(points[i], geometry);
+    const nextInsideOrOnEdge = !isOutsideRect(points[i + 1], geometry);
+    if (currentlyOutside && nextInsideOrOnEdge) {
+      crossingIndex = i;
+      break;
+    }
+  }
+
+  if (crossingIndex === -1) {
+    return points;
+  }
+
+  const entry = intersectSegmentWithRect(
+    points[crossingIndex],
+    points[crossingIndex + 1],
+    geometry,
+  );
+
+  if (!entry) {
+    return points;
+  }
+
+  const trimmed = points.slice(0, crossingIndex + 1);
+  trimmed.push(entry);
+  return trimmed;
 }
 
 function calculateCollisionPoint(tail: Point, head: Point, headWidth: number, headHeight: number): Point {
@@ -97,11 +234,7 @@ function buildArrowHead(tip: Point, prev: Point, scale: number): ArrowGeometry |
   const uy = dy / length;
 
   const desiredLength = 16 * scale;
-  const maxLength = Math.max(length - EPSILON, 0);
-  if (maxLength < EPSILON) {
-    return null;
-  }
-  const arrowLength = Math.min(desiredLength, maxLength);
+  const arrowLength = Math.min(desiredLength, length);
   const arrowWidth = Math.min(10 * scale, Math.max(arrowLength * 0.6, 4 * scale));
   const halfWidth = arrowWidth / 2;
 
@@ -288,6 +421,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
   data,
   selected,
   animated,
+  source,
   sourceX,
   sourceY,
   targetX,
@@ -298,28 +432,134 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const owners = data?.owners && data.owners.length > 0 ? data.owners : ['default'];
   const colorMap = data?.colors ?? {};
   const reactFlow = useReactFlow();
+  const sourceGeometry = resolveNodeGeometry(reactFlow.getNode(source));
   const targetGeometry = resolveNodeGeometry(reactFlow.getNode(target));
   const isSelfLoop = data?.edgeKind === 'selfLoop';
+  const overlayDebug = data?.overlayDebug === true;
+  const dimmed = data?.dimmed === true;
+  const sourceOffset = data?.sourceAnchorOffset ?? { x: 0, y: 0 };
+  const targetOffset = data?.targetAnchorOffset ?? { x: 0, y: 0 };
 
   const polyline = useMemo(() => {
     if (isSelfLoop && targetGeometry) {
       return buildSelfLoopPolyline(targetGeometry);
     }
-    const basePoints = (data?.polyline && data.polyline.length >= 2)
+
+    // Compute base polyline points
+    let basePoints: Point[];
+
+    // DISABLED: Parametric edge rendering was causing massive backwards bending artifacts
+    // because it recomputed curves differently than GraphLayouter. Using pre-computed polyline instead.
+    // if (data?.curveParams) {
+    //   ... dynamic collision detection code removed ...
+    // }
+
+    // Use pre-computed polyline from GraphLayouter (always)
+    // Lane offsets for parallel edges are already baked into the polyline by GraphLayouter
+    basePoints = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
-    const clamped = clampPolylineToEndpoints(
-      basePoints,
-      { x: sourceX, y: sourceY },
-      { x: targetX, y: targetY },
-    );
+
+    // For edges that opt into center anchoring, ensure endpoints track the node
+    // positions even when nodes move. Otherwise, clamp the stored polyline to
+    // the current handle endpoints.
+    const useNodeCenters = data?.sourceAnchorOffset !== undefined;
+    const clampedBase = useNodeCenters
+      ? basePoints.map((point, index) => {
+          if (index === 0) {
+            return { x: sourceX + sourceOffset.x, y: sourceY + sourceOffset.y };
+          } else if (index === basePoints.length - 1) {
+            return { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
+          }
+
+          // Proportional stretching: transform intermediate points to follow node movement
+          // This makes curved edges stay smooth during node dragging
+          const originalSrc = basePoints[0];
+          const originalTgt = basePoints[basePoints.length - 1];
+          const newSrc = { x: sourceX + sourceOffset.x, y: sourceY + sourceOffset.y };
+          const newTgt = { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
+
+          // Calculate original position relative to endpoints (0 to 1 range)
+          const originalVector = {
+            x: originalTgt.x - originalSrc.x,
+            y: originalTgt.y - originalSrc.y,
+          };
+
+          // Avoid division by zero for perfectly aligned endpoints
+          const relX =
+            Math.abs(originalVector.x) > 0.001
+              ? (point.x - originalSrc.x) / originalVector.x
+              : 0.5;
+          const relY =
+            Math.abs(originalVector.y) > 0.001
+              ? (point.y - originalSrc.y) / originalVector.y
+              : 0.5;
+
+          // Apply same relative position to new endpoints
+          const newVector = {
+            x: newTgt.x - newSrc.x,
+            y: newTgt.y - newSrc.y,
+          };
+
+          return {
+            x: newSrc.x + relX * newVector.x,
+            y: newSrc.y + relY * newVector.y,
+          };
+        })
+      : clampPolylineToEndpoints(
+          basePoints,
+          { x: sourceX, y: sourceY },
+          { x: targetX, y: targetY },
+        );
+
+    // Adjust both endpoints so the polyline enters and leaves the node on the
+    // rectangle boundary, avoiding paths that cut through node interiors. This
+    // makes edges look more "side-attached" on strongly horizontal segments.
+    let clamped = clampedBase;
+
+    if (sourceGeometry && clamped.length >= 2) {
+      const currentSource = clamped[0];
+      const nextPoint = clamped[1];
+      if (!pointOnNodeBoundary(currentSource, sourceGeometry)) {
+        // For lane-offset edges, use the offset center for collision calculation
+        const offsetCenter = {
+          x: sourceGeometry.center.x + sourceOffset.x,
+          y: sourceGeometry.center.y + sourceOffset.y,
+        };
+        const collisionFromSource = calculateCollisionPoint(
+          nextPoint,
+          offsetCenter,
+          sourceGeometry.size.width,
+          sourceGeometry.size.height,
+        );
+        clamped = clamped.map((point, index) => {
+          if (index === 0) {
+            return collisionFromSource;
+          }
+          return { ...point };
+        });
+      }
+    }
+
     if (!targetGeometry || clamped.length < 2) {
       return clamped;
     }
+
+    const currentTarget = clamped[clamped.length - 1];
+    const isBentEdge = data?.polylineKind === 'bezier';
+    if (!isBentEdge && pointOnNodeBoundary(currentTarget, targetGeometry)) {
+      return clamped;
+    }
+
     const approachPoint = clamped[clamped.length - 2];
+    // For lane-offset edges, use the offset center for collision calculation
+    const targetOffsetCenter = {
+      x: targetGeometry.center.x + targetOffset.x,
+      y: targetGeometry.center.y + targetOffset.y,
+    };
     const collision = calculateCollisionPoint(
       approachPoint,
-      targetGeometry.center,
+      targetOffsetCenter,
       targetGeometry.size.width,
       targetGeometry.size.height,
     );
@@ -329,14 +569,55 @@ const OcdfgEdge = memo(function OcdfgEdge({
       }
       return { ...point };
     });
-    return adjusted;
-  }, [isSelfLoop, data?.polyline, targetGeometry, sourceX, sourceY, targetX, targetY]);
+    const clipped = clipTailToRect(adjusted, targetGeometry);
+    return clipped;
+  }, [
+    isSelfLoop,
+    data?.polyline,
+    data?.polylineKind,
+    data?.sourceAnchorOffset,
+    sourceGeometry,
+    targetGeometry,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourceOffset.x,
+    sourceOffset.y,
+    targetOffset.x,
+    targetOffset.y,
+  ]);
 
-  const thicknessFactorRaw = typeof data?.thicknessFactor === 'number' && Number.isFinite(data.thicknessFactor)
-    ? Math.min(2, Math.max(0.5, data.thicknessFactor))
-    : 1;
-  const baseStroke = Math.max(6, owners.length * 3);
-  const strokeBase = baseStroke * thicknessFactorRaw;
+  const polylineLength = useMemo(() => {
+    if (polyline.length < 2) return 0;
+    let len = 0;
+    for (let i = 0; i < polyline.length - 1; i += 1) {
+      const a = polyline[i];
+      const b = polyline[i + 1];
+      len += Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    return len;
+  }, [polyline]);
+
+  const smoothingIterations = useMemo(() => {
+    // Skip smoothing for bezier curves (already smooth)
+    if (data?.polylineKind === 'bezier') {
+      return 0;
+    }
+    if (polylineLength > 900) return 2;
+    if (polylineLength > 450) return 1;
+    return 0;
+  }, [polylineLength, data?.polylineKind]);
+
+  const smoothedPolyline = useMemo(
+    () => (smoothingIterations > 0 ? smoothPolyline(polyline, smoothingIterations) : polyline),
+    [polyline, smoothingIterations],
+  );
+
+  // Fixed thickness: always 12px (thicknessFactor = 2 for base stroke of 6)
+  const thicknessFactorRaw = 2;
+  const baseStroke = 6; // Fixed base stroke
+  const strokeBase = baseStroke * thicknessFactorRaw; // = 12px
   const tailOwner = owners[0];
   const headOwner = owners[owners.length - 1];
   const tailColor = tailOwner && tailOwner !== 'default'
@@ -349,40 +630,76 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const selectionStrokeWidth = strokeBase + 6 * thicknessFactorRaw;
   const minOwnerWidth = 2.5 * thicknessFactorRaw;
   const arrowScale = Math.min(2.2, (strokeBase + 6 * thicknessFactorRaw) / 8);
-  const arrowTip = polyline.length > 0
-    ? polyline[polyline.length - 1]
+  const desiredArrowLength = 16 * arrowScale;
+  const arrowTip = smoothedPolyline.length > 0
+    ? smoothedPolyline[smoothedPolyline.length - 1]
     : null;
-  const arrowPrev = polyline.length > 1
-    ? polyline[polyline.length - 2]
-    : arrowTip;
+  const arrowBase = useMemo(
+    () => (desiredArrowLength > 0
+      ? pointAlongPolylineFromEnd(smoothedPolyline, desiredArrowLength)
+      : null),
+    [smoothedPolyline, desiredArrowLength],
+  );
+  const arrowPrev = arrowBase
+    ?? (smoothedPolyline.length > 1
+      ? smoothedPolyline[smoothedPolyline.length - 2]
+      : arrowTip);
   const arrowGeometry = useMemo(
     () => (arrowTip && arrowPrev ? buildArrowHead(arrowTip, arrowPrev, arrowScale) : null),
     [arrowTip, arrowPrev, arrowScale],
   );
   const trimmedPolyline = useMemo(() => {
     if (!arrowGeometry) {
-      return polyline;
+      return smoothedPolyline;
     }
-    const trimAmount = arrowGeometry.length * 0.9;
-    return trimPolyline(polyline, 0, trimAmount);
-  }, [polyline, arrowGeometry]);
+    return trimPolyline(smoothedPolyline, 0, arrowGeometry.length);
+  }, [smoothedPolyline, arrowGeometry]);
 
   const path = useMemo(() => roundedPath(trimmedPolyline, 30), [trimmedPolyline]);
+
+  const dimOpacity = dimmed ? 0.38 : 1;
 
   const baseStyle = useMemo(
     () => ({
       ...style,
       stroke: '#CBD5E1',
       strokeWidth: backgroundStrokeWidth,
-      strokeOpacity: 0.55,
+      strokeOpacity: 0.55 * dimOpacity,
       strokeLinecap: 'round' as const,
       strokeLinejoin: 'round' as const,
     }),
-    [style, backgroundStrokeWidth],
+    [style, backgroundStrokeWidth, dimOpacity],
   );
 
+  // Detect if source or target node is being dragged to disable CSS transitions
+  const isDragging = useMemo(() => {
+    const sourceNode = reactFlow.getNode(source);
+    const targetNode = reactFlow.getNode(target);
+    return (sourceNode?.dragging === true) || (targetNode?.dragging === true);
+  }, [reactFlow, source, target, sourceX, sourceY, targetX, targetY]);
+
+  const edgeClassName = useMemo(() => {
+    const classes = ['ocdfg-edge'];
+    if (animated) classes.push('animated');
+    if (isDragging) classes.push('dragging');
+    if (dimmed) classes.push('dimmed');
+    return classes.join(' ');
+  }, [animated, isDragging, dimmed]);
+
   return (
-    <g className={`ocdfg-edge${animated ? ' animated' : ''}`}>
+    <g className={edgeClassName}>
+      {overlayDebug && (
+        <path
+          d={path}
+          fill="none"
+          stroke="rgba(236, 72, 153, 0.6)" // pink highlighter
+          strokeWidth={backgroundStrokeWidth + 14}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ pointerEvents: 'none', opacity: 0.6 * dimOpacity }}
+        />
+      )}
+
       <BaseEdge
         path={path}
         style={baseStyle}
@@ -408,20 +725,28 @@ const OcdfgEdge = memo(function OcdfgEdge({
             strokeLinecap="round"
             strokeLinejoin="round"
             className="ocdfg-edge-stripe"
-            style={{ stroke: color }}
+            style={{ stroke: color, opacity: dimOpacity }}
           />
         );
       })}
 
       {arrowGeometry?.path && (
         <>
-          <path d={arrowGeometry.path} fill={headColor} opacity={0.95} />
           <path
+            className="ocdfg-arrow-head"
+            d={arrowGeometry.path}
+            fill={headColor}
+            opacity={0.95 * dimOpacity}
+            style={{ animation: 'none', strokeDasharray: 'none' }}
+          />
+          <path
+            className="ocdfg-arrow-head"
             d={arrowGeometry.path}
             fill="none"
             stroke="#F8FAFC"
             strokeWidth={Math.max(1.2, arrowScale)}
-            opacity={0.95}
+            opacity={0.95 * dimOpacity}
+            style={{ animation: 'none', strokeDasharray: 'none' }}
           />
         </>
       )}
