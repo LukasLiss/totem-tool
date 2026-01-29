@@ -293,6 +293,7 @@ export default function VariantsExplorer({
 
         if (!cancelled) {
           setVariants(arr ?? []);
+          {console.log(arr)}
           setStatus(arr && arr.length ? "ready" : "empty");
           onVariantsLoad?.(arr ?? []);
         }
@@ -319,7 +320,7 @@ export default function VariantsExplorer({
       .sort((a, b) => b.support - a.support);
   }, [variants, query]);
 
-  console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
+  //console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
 
   return (
     <Card className="w-full">
