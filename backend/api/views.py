@@ -602,12 +602,18 @@ def discover_totem_mock(request, pk: int):
     return Response(payload, status=status.HTTP_200_OK)
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def variants(request):
-    
+
     file_id = request.query_params.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Verify user has access to this file
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)

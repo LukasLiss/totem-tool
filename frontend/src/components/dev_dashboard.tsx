@@ -16,28 +16,14 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
-import VariantsExplorer, { type Variant } from "@/react_component/VariantsExplorer";
+import VariantsExplorer from "@/react_component/VariantsExplorer";
 import TotemVisualizer from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
   const [processedResult, setProcessedResult] = useState(null);
   const [totemReloadSignal, setTotemReloadSignal] = useState(0);
 
-  // Variant Explorer state
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [variantStatus, setVariantStatus] =
-    useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
-  const [leadingType, setLeadingType] = useState<string>("");
-
   const { selectedFile } = useContext(SelectedFileContext);
-
-  // Reset leading type when file changes
-  useEffect(() => {
-    setLeadingType("");
-    setAvailableTypes([]);
-  }, [selectedFile]);
 
   useEffect(() => {
     const handleProcessFile = async () => {
@@ -59,72 +45,6 @@ export function DevDashboard() {
     handleProcessFile();
   }, [selectedFile]);
 
-  // Fetch variants
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      const filePath = (selectedFile as any)?.file as string | undefined;
-      const fileId = (selectedFile as any)?.id as number | undefined;
-
-      let qs =
-        fileId != null
-          ? `?file_id=${fileId}`
-          : filePath
-            ? `?file_path=${encodeURIComponent(filePath)}`
-            : "";
-
-      // Only add leading_type parameter if it's set
-      if (qs && leadingType) {
-        qs += `&leading_type=${encodeURIComponent(leadingType)}`;
-      }
-
-      setVariantStatus("loading");
-      setErrorMsg("");
-
-      try {
-        const url = `/api/variants/${qs}`;
-        console.debug("GET", url);
-
-        const res = await fetch(url, { credentials: "include" });
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-        const ct = res.headers.get("content-type") || "";
-        if (!ct.includes("application/json")) {
-          const text = await res.text();
-          throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
-        }
-
-        const data = await res.json();
-
-        // Extract available object types if provided
-        if (data.object_types && Array.isArray(data.object_types)) {
-          setAvailableTypes(data.object_types);
-
-          // If leadingType is not set, auto-select the first alphabetically sorted type
-          if (!leadingType && data.object_types.length > 0) {
-            const sortedTypes = [...data.object_types].sort();
-            setLeadingType(sortedTypes[0]);
-            return; // Exit early to trigger re-fetch with selected type
-          }
-        }
-
-        const arr: Variant[] = Array.isArray(data) ? data : data.variants;
-
-        if (!cancelled) {
-          setVariants(arr ?? []);
-          setVariantStatus(arr && arr.length ? "ready" : "empty");
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          setVariantStatus("error");
-          setErrorMsg(e?.message ? String(e.message) : "Unknown error while loading variants.");
-        }
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [selectedFile, leadingType]);
   return (
     <div>
       <SidebarTrigger/>
@@ -185,6 +105,22 @@ export function DevDashboard() {
             </ReactFlowProvider>
           </div>
         </div>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              Variants Explorer
+            </CardTitle>
+            <CardDescription>
+              Object-centric variant analysis
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <VariantsExplorer
+              fileId={selectedFile?.id}
+              colWidth={120}
+            />
+          </CardContent>
+        </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />
       </div>
     </div>

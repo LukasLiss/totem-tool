@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
   MinusCircle, PlusCircle
@@ -105,27 +105,165 @@ const chevronClip = (tipPx: number = 16): string =>
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
-  variants: Variant[];
-  leadingType?: string;
-  availableTypes?: string[];
-  onLeadingTypeChange?: (type: string) => void;
-  typeColors?: Record<string, string>;
-  colWidth?: number;
+  fileId?: number;                                // Event log file ID
+  automaticLoading?: boolean;                     // Auto-load variants (default: false)
+  onVariantsLoad?: (variants: Variant[]) => void; // Optional callback when variants load
+  typeColors?: Record<string, string>;            // UI customization
+  colWidth?: number;                              // Column width (default: 120)
 };
 
 export default function VariantsExplorer({
-  variants,
-  leadingType = "",
-  availableTypes = [],
-  onLeadingTypeChange,
+  fileId,
+  automaticLoading = false,
+  onVariantsLoad,
   typeColors,
   colWidth = 120,
 }: VariantsExplorerProps) {
+  // Component state
+  const [variants, setVariants] = useState<Variant[]>([]);
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [leadingType, setLeadingType] = useState<string>("");
+  const [hasStartedLoading, setHasStartedLoading] = useState<boolean>(false);
+
+  // UI state
   const [zoom, setZoom] = useState<number>(1);
   const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
   const [query, setQuery] = useState<string>("");
 
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
+
+  // Fetch object types when fileId changes
+  useEffect(() => {
+    if (!fileId) {
+      setAvailableTypes([]);
+      setLeadingType("");
+      setHasStartedLoading(false);
+      setStatus("idle");
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      setHasStartedLoading(false); // Reset loading state for new file
+      setStatus("idle");
+
+      try {
+        const token = localStorage.getItem("access_token");
+        if (!token) {
+          throw new Error("Not authenticated");
+        }
+
+        const url = `/api/files/${fileId}/object_types/`;
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (res.status === 401) {
+          throw new Error("UNAUTHORIZED");
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+        const objectTypes: string[] = await res.json();
+
+        if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
+          setAvailableTypes(objectTypes);
+
+          // Auto-select first type alphabetically
+          const sortedTypes = [...objectTypes].sort();
+          setLeadingType(sortedTypes[0]);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          console.error("Failed to load object types:", e);
+          setErrorMsg(e?.message || "Failed to load object types");
+          setStatus("error");
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fileId]);
+
+  // Fetch variants when fileId or leadingType changes
+  useEffect(() => {
+    if (!fileId) {
+      setVariants([]);
+      setStatus("idle");
+      setErrorMsg("");
+      return;
+    }
+
+    // Wait for object types to be loaded and leadingType to be selected
+    if (!leadingType) {
+      return;
+    }
+
+    // Only fetch if automaticLoading is true OR user has manually started loading
+    if (!automaticLoading && !hasStartedLoading) {
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      const qs = `?file_id=${fileId}&leading_type=${encodeURIComponent(leadingType)}`;
+
+      setStatus("loading");
+      setErrorMsg("");
+
+      try {
+        const token = localStorage.getItem("access_token");
+        if (!token) {
+          throw new Error("Not authenticated");
+        }
+
+        const url = `/api/variants/${qs}`;
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (res.status === 401) {
+          throw new Error("UNAUTHORIZED");
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          const text = await res.text();
+          throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
+        }
+
+        const data = await res.json();
+        const arr: Variant[] = Array.isArray(data) ? data : data.variants;
+
+        if (!cancelled) {
+          setVariants(arr ?? []);
+          setStatus(arr && arr.length ? "ready" : "empty");
+          onVariantsLoad?.(arr ?? []);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMsg(e?.message || "Unknown error while loading variants.");
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fileId, leadingType, automaticLoading, hasStartedLoading, onVariantsLoad]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -138,36 +276,32 @@ export default function VariantsExplorer({
     <Card className="w-full">
       <CardHeader className="pb-2">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          {onLeadingTypeChange ? (
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">Perspective:</span>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="min-w-[150px] justify-between">
-                    {leadingType}
-                    <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[200px]">
-                  <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuRadioGroup value={leadingType} onValueChange={onLeadingTypeChange}>
-                    {availableTypes.length > 0 ? (
-                      availableTypes.map((type) => (
-                        <DropdownMenuRadioItem key={type} value={type}>
-                          {type}
-                        </DropdownMenuRadioItem>
-                      ))
-                    ) : (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
-                    )}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ) : (
-            <div className="text-lg font-semibold">Object-Centric Variants</div>
-          )}
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-semibold">Perspective:</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="min-w-[150px] justify-between">
+                  {leadingType || "Select type"}
+                  <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[200px]">
+                <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={leadingType} onValueChange={setLeadingType}>
+                  {availableTypes.length > 0 ? (
+                    availableTypes.map((type) => (
+                      <DropdownMenuRadioItem key={type} value={type}>
+                        {type}
+                      </DropdownMenuRadioItem>
+                    ))
+                  ) : (
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
+                  )}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             {/* Zoom */}
@@ -211,24 +345,96 @@ export default function VariantsExplorer({
         </div>
       </CardHeader>
 
-      <CardContent className="pt-2">
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {filtered.map((v) => (
-            <VariantRow
-              key={v.signature_hash}
-              v={v}
-              totalSupport={totalSupport}
-              zoom={zoom}
-              labelMode={labelMode}
-              colWidth={colWidth}
-              typeColorsOverride={typeColors}
-            />
-          ))}
-          {filtered.length === 0 && (
-            <div style={{ fontSize: 12, color: UI.textSecondary }}>No variants match your filters.</div>
-          )}
-        </div>
-      </CardContent>
+      {/* Idle state - no file selected */}
+      {status === "idle" && !fileId && (
+        <CardContent className="pt-2">
+          <div className="text-sm text-muted-foreground">
+            Select a file to view variants
+          </div>
+        </CardContent>
+      )}
+
+      {/* Manual loading state - waiting for user to start */}
+      {!automaticLoading && !hasStartedLoading && fileId && leadingType && status === "idle" && (
+        <CardContent className="pt-2">
+          <div className="flex flex-col gap-3 items-center py-4">
+            <div className="text-sm text-muted-foreground text-center">
+              Variant computation can take some time for large event logs.
+              <br />
+              Click below when ready to start the analysis.
+            </div>
+            <Button
+              onClick={() => setHasStartedLoading(true)}
+              className="min-w-[200px]"
+            >
+              Start Variant Computation
+            </Button>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Loading state */}
+      {status === "loading" && (
+        <CardContent className="pt-2">
+          <div className="flex items-center gap-2">
+            <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+            <span className="text-sm">Loading variants...</span>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Error state */}
+      {status === "error" && (
+        <CardContent className="pt-2">
+          <div className="flex flex-col gap-2">
+            <div className="text-sm text-red-600 font-semibold">
+              Failed to load variants
+            </div>
+            {errorMsg && (
+              <div className="text-xs text-red-500">{errorMsg}</div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLeadingType("")}
+              className="w-fit"
+            >
+              Retry
+            </Button>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Empty state */}
+      {status === "empty" && (
+        <CardContent className="pt-2">
+          <div className="text-sm text-muted-foreground">
+            No variants found for this file
+          </div>
+        </CardContent>
+      )}
+
+      {/* Ready state - show variants */}
+      {status === "ready" && (
+        <CardContent className="pt-2">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {filtered.map((v) => (
+              <VariantRow
+                key={v.signature_hash}
+                v={v}
+                totalSupport={totalSupport}
+                zoom={zoom}
+                labelMode={labelMode}
+                colWidth={colWidth}
+                typeColorsOverride={typeColors}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <div style={{ fontSize: 12, color: UI.textSecondary }}>No variants match your filters.</div>
+            )}
+          </div>
+        </CardContent>
+      )}
     </Card>
   );
 }
