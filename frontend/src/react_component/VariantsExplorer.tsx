@@ -110,6 +110,7 @@ type VariantsExplorerProps = {
   onVariantsLoad?: (variants: Variant[]) => void; // Optional callback when variants load
   typeColors?: Record<string, string>;            // UI customization
   colWidth?: number;                              // Column width (default: 120)
+  embedded?: boolean;                             // When true, removes outer Card wrapper
 };
 
 export default function VariantsExplorer({
@@ -118,6 +119,7 @@ export default function VariantsExplorer({
   onVariantsLoad,
   typeColors,
   colWidth = 120,
+  embedded = false,
 }: VariantsExplorerProps) {
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -322,8 +324,10 @@ export default function VariantsExplorer({
 
   //console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
 
+  const Wrapper = embedded ? 'div' : Card;
+
   return (
-    <Card className="w-full">
+    <Wrapper className="w-full">
       <CardHeader className="pb-2">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
           <div className="flex items-center gap-2">
@@ -485,7 +489,7 @@ export default function VariantsExplorer({
           </div>
         </CardContent>
       )}
-    </Card>
+    </Wrapper>
   );
 }
 
@@ -812,6 +816,7 @@ function VariantRow({
                             clipPath: chevronClip(tipPx),
                             WebkitClipPath: chevronClip(tipPx),
                             overflow: "hidden",
+                            paddingLeft: tipPx,
                             paddingRight: tipPx,
                           }}
                           aria-label={`${label} (${lane.type})${isShared ? " (shared)" : ""}`}
@@ -826,6 +831,7 @@ function VariantRow({
                                 backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
                                 clipPath: chevronClip(tipPx),
                                 WebkitClipPath: chevronClip(tipPx),
+                                zIndex: 0,
                               }}
                             />
                           )}
@@ -836,6 +842,8 @@ function VariantRow({
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
+                              position: "relative",
+                              zIndex: 1,
                             }}
                           >
                             {label}

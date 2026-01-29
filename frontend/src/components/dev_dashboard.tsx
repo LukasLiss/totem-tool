@@ -116,10 +116,11 @@ export function DevDashboard() {
               Object-centric variant analysis
             </CardDescription>
           </CardHeader>
-          <CardContent className="p-0">
+          <CardContent className="p-0 pb-0">
             <VariantsExplorer
               fileId={selectedFile?.id}
               colWidth={120}
+              embedded={true}
             />
           </CardContent>
         </Card>
