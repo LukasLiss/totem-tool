@@ -56,10 +56,23 @@ const VARIANT_PRESETS = {
   },
 } as const;
 
-// Define specific types for the data we expect from the backend
+export type TraceVariant = {
+  trace: string[];  // List of activity names in order
+  count: number;    // Number of object instances with this trace
+  objects: string[]; // Object IDs that followed this trace
+};
+
+// Trace variants per object type
+export type TraceVariantsPerType = Record<string, {
+  variants: TraceVariant[];
+  total_objects: number;
+}>;
+
+
 export type OcdfgGraph = {
   nodes: DfgNode[];
   links: DfgLink[];
+  trace_variants?: TraceVariantsPerType;
 };
 
 interface DfgData {
@@ -276,7 +289,7 @@ function OCDFGVisualizer({
   const [typeTraceMax, setTypeTraceMax] = useState<Record<string, number>>({});
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
-  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
+  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[]; trace_variants?: TraceVariantsPerType } | null>(null);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
@@ -551,6 +564,7 @@ function OCDFGVisualizer({
       setDfgData({
         nodes: Array.isArray(data.nodes) ? data.nodes : [],
         links: Array.isArray(data.links) ? data.links : [],
+        trace_variants: data.trace_variants,
       });
       return;
     }
@@ -862,6 +876,7 @@ function OCDFGVisualizer({
       layoutKey: reactFlowId,
       includeDebugOverlays: showDebugOverlays,
       ignoreTypesWithoutTraces: resolvedVariant === 'detail',
+      backendTraceVariants: dfgData.trace_variants,
     }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;

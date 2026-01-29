@@ -15,6 +15,7 @@ import {
   relaxPolylineAroundBuffers,
   buildBufferRectsFromNodes,
 } from './edgeCurveGeneration';
+import type { TraceVariantsPerType } from '../react_component/OCDFGVisualizer';
 
 export type { DfgNode, DfgLink } from './NaiveOCDFGLayouting';
 
@@ -27,6 +28,7 @@ export interface LayoutRequest {
   activeTypes?: string[];
   typeTraceLimit?: Record<string, number>;
   includeDebugOverlays?: boolean;
+  backendTraceVariants?: TraceVariantsPerType;
 }
 
 export interface DebugLayerInfo {
@@ -239,6 +241,7 @@ export async function layoutOCDFGLongestTrace({
   layoutKey,
   includeDebugOverlays = true,
   ignoreTypesWithoutTraces = false,
+  backendTraceVariants,
 }: LayoutRequest & {
   direction?: 'TB' | 'LR';
   layoutKey?: string;
@@ -257,6 +260,7 @@ export async function layoutOCDFGLongestTrace({
     layoutKey,
     includeDebugOverlays,
     ignoreTypesWithoutTraces,
+    backendTraceVariants,
   );
 }
 
@@ -320,6 +324,7 @@ async function layoutWithLongestTrace(
   layoutKey?: string,
   includeDebugOverlays = true,
   ignoreTypesWithoutTraces = false,
+  backendTraceVariants?: TraceVariantsPerType,
 ): LayoutResult {
   console.log('[LONGEST TRACE] Starting longest trace layout');
 
@@ -334,103 +339,12 @@ async function layoutWithLongestTrace(
     return { nodes: [], edges: [] };
   }
 
-  // Build a map of edges by their owners (object instances)
-  // For each owner, we'll track which edges they followed
-  const ownerEdges = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
-  const ownerTypeByOwner = new Map<string, string>();
-
-  dfgLinks.forEach(link => {
-    const ownerPairs = resolveOwnerPairs(link);
-    ownerPairs.forEach(({ owner, type }) => {
-      if (activeTypeSet && !activeTypeSet.has(type)) {
-        return;
-      }
-      if (!ownerTypeByOwner.has(owner)) {
-        ownerTypeByOwner.set(owner, type);
-      }
-      if (!ownerEdges.has(owner)) {
-        ownerEdges.set(owner, []);
-      }
-      ownerEdges.get(owner)!.push({ source: link.source, target: link.target, link });
-    });
-  });
-
-  console.log(`[LONGEST TRACE] Found ${ownerEdges.size} unique object instances`);
-
-  // For each owner, reconstruct all possible traces (simple paths) and collect them
+  // Type for trace information
   type TraceInfo = {
     trace: string[];
     owner: string;
     length: number;
   };
-  const allTraces: TraceInfo[] = [];
-
-  ownerEdges.forEach((edges, owner) => {
-    // Build adjacency list for this owner's edges
-    const adjacency = new Map<string, string[]>();
-    const incomingCount = new Map<string, number>();
-    const allNodes = new Set<string>();
-
-    edges.forEach(({ source, target }) => {
-      if (!adjacency.has(source)) {
-        adjacency.set(source, []);
-      }
-      adjacency.get(source)!.push(target);
-
-      incomingCount.set(target, (incomingCount.get(target) || 0) + 1);
-      if (!incomingCount.has(source)) {
-        incomingCount.set(source, 0);
-      }
-      allNodes.add(source);
-      allNodes.add(target);
-    });
-
-    // Find the start node (node with no incoming edges)
-    const startNodes = Array.from(allNodes).filter(node => (incomingCount.get(node) || 0) === 0);
-    const seeds = startNodes.length > 0 ? startNodes : Array.from(allNodes);
-
-    const pathLimit = 500;
-    const uniquePaths = new Set<string>();
-
-    const dfs = (current: string, path: string[], visited: Set<string>) => {
-      if (path.length > pathLimit) {
-        console.warn(`[LONGEST TRACE] Path limit reached for owner ${owner}, stopping expansion.`);
-        uniquePaths.add(path.join('->'));
-        return;
-      }
-      const nextList = adjacency.get(current) ?? [];
-      const available = nextList.filter(n => !visited.has(n));
-      if (available.length === 0) {
-        uniquePaths.add(path.join('->'));
-        return;
-      }
-      available.forEach((next) => {
-        visited.add(next);
-        path.push(next);
-        dfs(next, path, visited);
-        path.pop();
-        visited.delete(next);
-      });
-    };
-
-    seeds.forEach((start) => {
-      const visited = new Set<string>([start]);
-      dfs(start, [start], visited);
-    });
-
-    uniquePaths.forEach((pathKey) => {
-      const trace = pathKey.split('->').filter(Boolean);
-      if (trace.length === 0) return;
-      allTraces.push({
-        trace,
-        owner,
-        length: trace.length,
-      });
-    });
-  });
-
-  // Sort traces by length (descending)
-  allTraces.sort((a, b) => b.length - a.length);
 
   const traceLimitMap = new Map<string, number>();
   if (typeTraceLimit) {
@@ -441,21 +355,185 @@ async function layoutWithLongestTrace(
     });
   }
 
-  const tracesByType = new Map<string, TraceInfo[]>();
-  allTraces.forEach((t) => {
-    if (t.trace.length === 0) return;
-    const ownerType = ownerTypeByOwner.get(t.owner) ?? t.owner;
-    if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
-    if (!tracesByType.has(ownerType)) {
-      tracesByType.set(ownerType, []);
-    }
-    tracesByType.get(ownerType)!.push({ ...t });
-  });
+  
+  const validNodeIds = new Set(dfgNodes.map(n => n.id));
 
+  const tracesByType = new Map<string, TraceInfo[]>();
   const traceCounts: Record<string, number> = {};
-  tracesByType.forEach((traces, type) => {
-    traceCounts[type] = traces.length;
-  });
+
+  if (backendTraceVariants && Object.keys(backendTraceVariants).length > 0) {
+    console.log('[LONGEST TRACE] Using backend trace variants (actual OCEL traces)');
+
+    Object.entries(backendTraceVariants).forEach(([objectType, typeData]) => {
+      if (activeTypeSet && !activeTypeSet.has(objectType)) return;
+      if (!typeData.variants || typeData.variants.length === 0) return;
+
+      const traces: TraceInfo[] = [];
+
+      typeData.variants.forEach((variant, variantIndex) => {
+        if (!variant.trace || variant.trace.length === 0) return;
+
+        // Debug: Log the raw backend trace
+        console.log(`[TRACE DEBUG] Backend trace for ${objectType} variant ${variantIndex}:`, variant.trace);
+        console.log(`[TRACE DEBUG] Trace has ${variant.trace.length} elements, unique: ${new Set(variant.trace).size}`);
+
+        // Build the full trace including start/end nodes
+        // Backend traces contain activity names; we add start/end markers
+        const startNodeId = `__start__:${objectType}`;
+        const endNodeId = `__end__:${objectType}`;
+
+        // Build trace: start -> activities -> end
+        const fullTrace: string[] = [];
+
+        // Add start node if it exists in the graph
+        if (validNodeIds.has(startNodeId)) {
+          fullTrace.push(startNodeId);
+        }
+
+        // Add activity nodes (only those that exist in the graph)
+        variant.trace.forEach(activity => {
+          if (validNodeIds.has(activity)) {
+            fullTrace.push(activity);
+          }
+        });
+
+        // Add end node if it exists in the graph
+        if (validNodeIds.has(endNodeId)) {
+          fullTrace.push(endNodeId);
+        }
+
+        if (fullTrace.length === 0) return;
+
+        // Debug: Log the full trace with start/end nodes
+        console.log(`[TRACE DEBUG] Full trace for ${objectType} variant ${variantIndex}:`, fullTrace);
+        const hasSelfLoop = fullTrace.some((node, i) => i > 0 && fullTrace[i - 1] === node);
+        console.log(`[TRACE DEBUG] Contains self-loop: ${hasSelfLoop}`);
+
+        // Create one TraceInfo entry per variant
+        // Use a synthetic owner ID based on object type and variant index
+        traces.push({
+          trace: fullTrace,
+          owner: `${objectType}_variant_${variantIndex}`,
+          length: fullTrace.length,
+        });
+      });
+
+      if (traces.length > 0) {
+        // Sort by length (descending) - longest traces first
+        traces.sort((a, b) => b.length - a.length);
+        tracesByType.set(objectType, traces);
+        traceCounts[objectType] = traces.length;
+      }
+    });
+
+    console.log(`[LONGEST TRACE] Loaded ${Array.from(tracesByType.values()).flat().length} traces from backend for ${tracesByType.size} object types`);
+  } else {
+    // Fallback: compute traces via DFS on graph structure (legacy behavior)
+    console.log('[LONGEST TRACE] No backend trace variants, falling back to DFS computation');
+
+    // Build a map of edges by their owners (object instances)
+    const ownerEdges = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
+    const ownerTypeByOwner = new Map<string, string>();
+
+    dfgLinks.forEach(link => {
+      const ownerPairs = resolveOwnerPairs(link);
+      ownerPairs.forEach(({ owner, type }) => {
+        if (activeTypeSet && !activeTypeSet.has(type)) {
+          return;
+        }
+        if (!ownerTypeByOwner.has(owner)) {
+          ownerTypeByOwner.set(owner, type);
+        }
+        if (!ownerEdges.has(owner)) {
+          ownerEdges.set(owner, []);
+        }
+        ownerEdges.get(owner)!.push({ source: link.source, target: link.target, link });
+      });
+    });
+
+    console.log(`[LONGEST TRACE] Found ${ownerEdges.size} unique object instances`);
+
+    const allTraces: TraceInfo[] = [];
+
+    ownerEdges.forEach((edges, owner) => {
+      const adjacency = new Map<string, string[]>();
+      const incomingCount = new Map<string, number>();
+      const allNodes = new Set<string>();
+
+      edges.forEach(({ source, target }) => {
+        if (!adjacency.has(source)) {
+          adjacency.set(source, []);
+        }
+        adjacency.get(source)!.push(target);
+
+        incomingCount.set(target, (incomingCount.get(target) || 0) + 1);
+        if (!incomingCount.has(source)) {
+          incomingCount.set(source, 0);
+        }
+        allNodes.add(source);
+        allNodes.add(target);
+      });
+
+      const startNodes = Array.from(allNodes).filter(node => (incomingCount.get(node) || 0) === 0);
+      const seeds = startNodes.length > 0 ? startNodes : Array.from(allNodes);
+
+      const pathLimit = 500;
+      const uniquePaths = new Set<string>();
+
+      const dfs = (current: string, path: string[], visited: Set<string>) => {
+        if (path.length > pathLimit) {
+          console.warn(`[LONGEST TRACE] Path limit reached for owner ${owner}, stopping expansion.`);
+          uniquePaths.add(path.join('->'));
+          return;
+        }
+        const nextList = adjacency.get(current) ?? [];
+        const available = nextList.filter(n => !visited.has(n));
+        if (available.length === 0) {
+          uniquePaths.add(path.join('->'));
+          return;
+        }
+        available.forEach((next) => {
+          visited.add(next);
+          path.push(next);
+          dfs(next, path, visited);
+          path.pop();
+          visited.delete(next);
+        });
+      };
+
+      seeds.forEach((start) => {
+        const visited = new Set<string>([start]);
+        dfs(start, [start], visited);
+      });
+
+      uniquePaths.forEach((pathKey) => {
+        const trace = pathKey.split('->').filter(Boolean);
+        if (trace.length === 0) return;
+        allTraces.push({
+          trace,
+          owner,
+          length: trace.length,
+        });
+      });
+    });
+
+    // Sort traces by length (descending)
+    allTraces.sort((a, b) => b.length - a.length);
+
+    allTraces.forEach((t) => {
+      if (t.trace.length === 0) return;
+      const ownerType = ownerTypeByOwner.get(t.owner) ?? t.owner;
+      if (activeTypeSet && !activeTypeSet.has(ownerType)) return;
+      if (!tracesByType.has(ownerType)) {
+        tracesByType.set(ownerType, []);
+      }
+      tracesByType.get(ownerType)!.push({ ...t });
+    });
+
+    tracesByType.forEach((traces, type) => {
+      traceCounts[type] = traces.length;
+    });
+  }
 
   const selectedTraces: Array<TraceInfo & { ownerType: string; index: number }> = [];
   Array.from(tracesByType.entries()).forEach(([type, traces]) => {
@@ -1363,11 +1441,24 @@ async function layoutWithLongestTrace(
   const traceEdgeSets = traceSequences.map((trace) => {
     const set = new Set<string>();
     for (let i = 0; i < trace.length - 1; i += 1) {
-      set.add(`${trace[i]}->${trace[i + 1]}`);
+      const edgeKey = `${trace[i]}->${trace[i + 1]}`;
+      set.add(edgeKey);
+      // Debug: Log self-loops being added
+      if (trace[i] === trace[i + 1]) {
+        console.log(`[TRACE DEBUG] Adding self-loop edge to traceEdgeSets: ${edgeKey}`);
+      }
     }
     return set;
   });
   const traceOwnerTypes = selectedTraces.map(t => t.ownerType);
+
+  // Debug: Check if any trace contains self-loops
+  traceSequences.forEach((trace, idx) => {
+    const hasSelfLoop = trace.some((node, i) => i > 0 && trace[i - 1] === node);
+    if (hasSelfLoop) {
+      console.log(`[TRACE DEBUG] traceSequences[${idx}] contains self-loop:`, trace);
+    }
+  });
 
   traceEdgeSets.slice(0, 5).forEach((set, idx) => {
     if (set.size > 0) {
@@ -1379,13 +1470,26 @@ async function layoutWithLongestTrace(
   // If an edge has multiple object types, create separate edges for each type
   const splitEdgesByObjectType: Edge[] = [];
 
+  // debug: Log all self-loop edges in renderEdges
+  const selfLoopEdges = renderEdges.filter(e => e.source === e.target);
+  if (selfLoopEdges.length > 0) {
+    console.log(`[SELF-LOOP DEBUG] Found ${selfLoopEdges.length} self-loop edges in renderEdges:`, selfLoopEdges.map(e => `${e.source}->${e.target}`));
+    selfLoopEdges.forEach(e => {
+      const edgeKey = `${e.source}->${e.target}`;
+      const inTrace = traceEdgeSets.some(set => set.has(edgeKey));
+      console.log(`[SELF-LOOP DEBUG] Edge ${edgeKey}: inTrace=${inTrace}, data=`, e.data);
+    });
+  }
+
   renderEdges.forEach(edge => {
     const edgeKey = `${edge.source}->${edge.target}`;
 
     const membership = traceEdgeSets.map(set => set.has(edgeKey));
     const inAnyTrace = membership.some(Boolean);
+    const forceIncludeSelfLoop = edge.source === edge.target;
 
-    if (!inAnyTrace) {
+
+    if (!inAnyTrace && !forceIncludeSelfLoop) {
       return; // Skip edges not in selected traces
     }
 
@@ -1407,9 +1511,11 @@ async function layoutWithLongestTrace(
       if (activeTypeSet && !activeTypeSet.has(objectType)) {
         return;
       }
-      const matchesTraceType = membership.some((isInTrace, traceIdx) =>
-        isInTrace && objectType === traceOwnerTypes[traceIdx],
-      );
+      const matchesTraceType = forceIncludeSelfLoop
+        ? (!activeTypeSet || activeTypeSet.has(objectType))
+        : membership.some((isInTrace, traceIdx) =>
+            isInTrace && objectType === traceOwnerTypes[traceIdx],
+          );
 
       if (matchesTraceType) {
         splitEdgesByObjectType.push({
@@ -1571,12 +1677,15 @@ async function layoutWithLongestTrace(
       }
     }
 
+    // Detect self-loops (edge where source === target)
+    const isSelfLoop = edge.source === edge.target;
+
     return {
       ...edge,
       data: {
         ...edge.data,
         polyline,
-        edgeKind: 'normal',
+        edgeKind: isSelfLoop ? 'selfLoop' : 'normal',
         polylineKind,
         curveState, // NEW: Store curve state for dynamic routing
         sourceAnchorOffset: { x: 0, y: 0 },

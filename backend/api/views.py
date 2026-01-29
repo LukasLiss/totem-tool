@@ -339,6 +339,82 @@ def _filter_ocel_by_object_types(ocel: ObjectCentricEventLog, object_types: set[
     return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
 
+def _extract_trace_variants_per_type(ocel: ObjectCentricEventLog, object_types: set[str]) -> dict:
+    """
+    Extract actual trace variants from the OCEL for each object type.
+
+    For each object type, filters the log to only that type and extracts
+    the activity sequence (trace) for each object instance. Identical traces
+    are grouped as variants.
+
+    Returns:
+        Dict mapping object_type -> {
+            "variants": [
+                {"trace": ["activity1", "activity2", ...], "count": N, "objects": ["obj1", ...]},
+                ...
+            ],
+            "total_objects": M
+        }
+    """
+    from collections import defaultdict
+
+    result = {}
+
+    # Build lookup: object_id -> object_type
+    obj_type_map = dict(ocel.objects.select(["_objId", "_objType"]).iter_rows())
+
+    # Build lookup: object_id -> list of (timestamp, activity) tuples
+    obj_events = defaultdict(list)
+    for row in ocel.events.iter_rows(named=True):
+        activity = row["_activity"]
+        timestamp = row["_timestampUnix"]
+        objects_in_event = row["_objects"] or []
+        for obj_id in objects_in_event:
+            obj_events[obj_id].append((timestamp, activity))
+
+    for obj_type in object_types:
+        # Get all objects of this type
+        type_objects = ocel.objects.filter(
+            pl.col("_objType") == obj_type
+        ).select("_objId").to_series().to_list()
+
+        if not type_objects:
+            result[obj_type] = {"variants": [], "total_objects": 0}
+            continue
+
+        # For each object, extract its trace (activity sequence sorted by time)
+        trace_to_objects = defaultdict(list)
+        for obj_id in type_objects:
+            events = obj_events.get(obj_id, [])
+            if not events:
+                continue
+            # Sort by timestamp and extract activity sequence
+            sorted_events = sorted(events, key=lambda x: x[0])
+            trace = tuple(activity for _, activity in sorted_events)
+            trace_to_objects[trace].append(obj_id)
+
+        # Convert to list of variants, sorted by count (descending)
+        variants = []
+        for trace, objects in trace_to_objects.items():
+            variants.append({
+                "trace": list(trace),
+                "count": len(objects),
+                "objects": objects
+            })
+        variants.sort(key=lambda v: v["count"], reverse=True)
+
+        result[obj_type] = {
+            "variants": variants,
+            "total_objects": len(type_objects)
+        }
+
+        # Debug: Print trace variants
+        if variants:
+            print(f"[TRACE_VARIANTS] {obj_type}: {len(variants)} variants, first trace: {variants[0]['trace']}")
+
+    return result
+
+
 def _serialize_totem(totem: Totem) -> dict:
     """
     Convert a Totem object into a JSON-serializable structure matching the frontend contract.
@@ -1651,6 +1727,7 @@ def OCDFGViewSet(request):
 
         # Filtered OCEL if object types specified
         filter_error = None
+        trace_variants = None
         if object_type_filter:
             try:
                 filtered_ocel = _filter_ocel_by_object_types(ocel, object_type_filter)
@@ -1661,6 +1738,9 @@ def OCDFGViewSet(request):
                 else:
                     ocdfg_filtered = OCDFG.from_ocel(filtered_ocel)
                     dfg_json = nx.node_link_data(ocdfg_filtered)
+
+                # Extract actual trace variants from the OCEL per object type
+                trace_variants = _extract_trace_variants_per_type(ocel, object_type_filter)
             except Exception as e:
                 # Gracefully fall back to unfiltered graph to avoid frontend breakage, but surface warning
                 filter_error = f"Failed to compute filtered OCDFG: {e}"
@@ -1668,9 +1748,21 @@ def OCDFGViewSet(request):
         else:
             dfg_json = dfg_json_full
 
+        # Always compute trace_variants if not already computed
+        # Use all object types from the OCEL when no filter is specified
+        if trace_variants is None:
+            try:
+                all_object_types = set(ocel.objects.select("_objType").to_series().unique().to_list())
+                if all_object_types:
+                    trace_variants = _extract_trace_variants_per_type(ocel, all_object_types)
+            except Exception as e:
+                print(f"[OCDFG] Failed to compute trace variants: {e}")
+
         response_payload = {"dfg": dfg_json, "all_nodes": all_nodes}
         if filter_error:
             response_payload["filter_error"] = filter_error
+        if trace_variants:
+            response_payload["trace_variants"] = trace_variants
 
         return Response(response_payload, status=status.HTTP_200_OK)
 

@@ -2461,7 +2461,7 @@ function TotemVisualizer({
           },
         );
 
-        const payload: { dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string } & Partial<OcdfgGraph> =
+        const payload: { dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph> =
           await response.json();
         if (!response.ok) {
           const errMsg = payload?.filter_error || payload?.error || `Backend responded with ${response.status}`;
@@ -2480,7 +2480,7 @@ function TotemVisualizer({
           ? payload.all_nodes
           : allOcdfgNodes) as OcdfgNodeSummary[] | null;
 
-        const enrichedGraph =
+        const enrichedGraph: OcdfgGraph =
           registerNodes && registerNodes.length > 0
             ? {
                 ...graph,
@@ -2496,12 +2496,14 @@ function TotemVisualizer({
                     role: node.role ?? registerNode?.role ?? null,
                   };
                 }),
+                // Include trace variants from backend
+                trace_variants: payload?.trace_variants,
               }
-            : graph;
+            : { ...graph, trace_variants: payload?.trace_variants };
 
         setDetailCache((prev) => ({
           ...prev,
-          [areaId]: enrichedGraph as OcdfgGraph,
+          [areaId]: enrichedGraph,
         }));
         if (payload?.filter_error) {
           setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));

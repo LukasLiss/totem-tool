@@ -14,6 +14,7 @@ import {
   type DfgNode,
   type DfgLink,
 } from '../utils/GraphLayouter';
+import type { TraceVariantsPerType } from './OCDFGVisualizer';
 import { mapTypesToColors } from '../utils/objectColors';
 import OcdfgEdge from './OcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
@@ -33,7 +34,9 @@ interface DfgData {
   dfg: {
     nodes: DfgNode[];
     links: DfgLink[];
+    trace_variants?: TraceVariantsPerType;
   };
+  trace_variants?: TraceVariantsPerType;
 }
 
 interface OCDFGLongestTraceVisualizerProps {
@@ -57,7 +60,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   const [typeTraceMax, setTypeTraceMax] = useState<Record<string, number>>({});
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
-  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[] } | null>(null);
+  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[]; trace_variants?: TraceVariantsPerType } | null>(null);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
@@ -211,7 +214,9 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       .then((response) => response.json())
       .then((data: DfgData) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
-        setDfgData({ nodes: dfgNodes, links: dfgLinks });
+        // Accept trace variants from either the dfg payload or top-level.
+        const traceVariants = data.dfg?.trace_variants ?? data.trace_variants;
+        setDfgData({ nodes: dfgNodes, links: dfgLinks, trace_variants: traceVariants });
 
         const allTypes = Array.from(
           new Set(dfgNodes.flatMap(node => node.types ?? [])),
@@ -438,16 +443,17 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       return;
     }
 
-    layoutOCDFGLongestTrace({
-      renderNodes: rawNodes,
-      renderEdges: rawEdges,
-      dfgNodes: dfgData.nodes,
-      dfgLinks: dfgData.links,
-      typeTraceLimit,
-      activeTypes,
-      layoutKey,
-      includeDebugOverlays: showDebugOverlays,
-    }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
+      layoutOCDFGLongestTrace({
+        renderNodes: rawNodes,
+        renderEdges: rawEdges,
+        dfgNodes: dfgData.nodes,
+        dfgLinks: dfgData.links,
+        backendTraceVariants: dfgData.trace_variants,
+        typeTraceLimit,
+        activeTypes,
+        layoutKey,
+        includeDebugOverlays: showDebugOverlays,
+      }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
       if (traceCounts) {
         const prevMaxSnapshot = typeTraceMax;
         setTypeTraceMax((prev) => {

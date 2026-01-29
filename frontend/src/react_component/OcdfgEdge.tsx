@@ -276,7 +276,12 @@ function resolveNodeGeometry(node: Node | undefined) {
   };
 }
 
-function buildSelfLoopPolyline(geometry: { center: Point; size: { width: number; height: number } }): Point[] {
+// TODO: schoener ineinander verschachteln bei mehreren self-loops machen
+function buildSelfLoopPolyline(
+  geometry: { center: Point; size: { width: number; height: number } },
+  laneIndex: number = 0,
+  laneCount: number = 1,
+): Point[] {
   const { center, size } = geometry;
   const halfWidth = size.width / 2;
   const halfHeight = size.height / 2;
@@ -413,6 +418,15 @@ function buildSelfLoopPolyline(geometry: { center: Point; size: { width: number;
       points.push({ x, y });
     }
   }
+  // If multiple self-loops exist, scale the entire curve toward the center to keep concentric rings.
+  if (laneCount > 1 && laneIndex > 0) {
+    const scale = Math.max(0.5, 1 - laneIndex * 0.2);
+    return points.map(p => ({
+      x: center.x + (p.x - center.x) * scale,
+      y: center.y + (p.y - center.y) * scale,
+    }));
+  }
+
   return points;
 }
 
@@ -442,7 +456,9 @@ const OcdfgEdge = memo(function OcdfgEdge({
 
   const polyline = useMemo(() => {
     if (isSelfLoop && targetGeometry) {
-      return buildSelfLoopPolyline(targetGeometry);
+      const laneIdx = (data?.parallelIndex ?? 0);
+      const laneCount = (data?.parallelCount ?? 1);
+      return buildSelfLoopPolyline(targetGeometry, laneIdx, laneCount);
     }
 
     // Compute base polyline points
