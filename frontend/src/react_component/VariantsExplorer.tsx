@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
   MinusCircle, PlusCircle
@@ -132,6 +132,14 @@ export default function VariantsExplorer({
   const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
   const [query, setQuery] = useState<string>("");
 
+  // Track current fileId to detect stale closures
+  const fileIdRef = useRef<number | undefined>(fileId);
+
+  // Update ref whenever fileId changes
+  useEffect(() => {
+    fileIdRef.current = fileId;
+  }, [fileId]);
+
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
 
   // Fetch object types when fileId changes
@@ -141,22 +149,34 @@ export default function VariantsExplorer({
       setLeadingType("");
       setHasStartedLoading(false);
       setStatus("idle");
+      setVariants([]);
+      setErrorMsg("");
       return;
     }
 
+    // SYNCHRONOUS state reset BEFORE async work
+    setHasStartedLoading(false);  // Reset loading flag immediately
+    setStatus("idle");            // Reset status immediately
+    setLeadingType("");           // Clear old leading type immediately
+    setVariants([]);              // Clear old variants immediately
+    setErrorMsg("");              // Clear old errors immediately
+
+    const currentFileId = fileId;  // Capture fileId in closure
     let cancelled = false;
 
     (async () => {
-      setHasStartedLoading(false); // Reset loading state for new file
-      setStatus("idle");
-
       try {
+        // Check if we're still on the same file before proceeding
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, abort this stale closure
+        }
+
         const token = localStorage.getItem("access_token");
         if (!token) {
           throw new Error("Not authenticated");
         }
 
-        const url = `/api/files/${fileId}/object_types/`;
+        const url = `/api/files/${currentFileId}/object_types/`;
         const res = await fetch(url, {
           credentials: "include",
           headers: {
@@ -173,6 +193,11 @@ export default function VariantsExplorer({
 
         const objectTypes: string[] = await res.json();
 
+        // Check again after async operation
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed during fetch, abort
+        }
+
         if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
           setAvailableTypes(objectTypes);
 
@@ -181,6 +206,11 @@ export default function VariantsExplorer({
           setLeadingType(sortedTypes[0]);
         }
       } catch (e: any) {
+        // Check again before setting error
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, don't show error from old file
+        }
+
         if (!cancelled) {
           console.error("Failed to load object types:", e);
           setErrorMsg(e?.message || "Failed to load object types");
@@ -211,10 +241,17 @@ export default function VariantsExplorer({
       return;
     }
 
+    const currentFileId = fileId;  // Capture fileId in closure
+    const currentLeadingType = leadingType;  // Capture leadingType in closure
     let cancelled = false;
 
     (async () => {
-      const qs = `?file_id=${fileId}&leading_type=${encodeURIComponent(leadingType)}`;
+      // CRITICAL: Check if we're still on the same file before setting status="loading"
+      if (fileIdRef.current !== currentFileId) {
+        return;  // File changed, abort this stale closure
+      }
+
+      const qs = `?file_id=${currentFileId}&leading_type=${encodeURIComponent(currentLeadingType)}`;
 
       setStatus("loading");
       setErrorMsg("");
@@ -249,12 +286,22 @@ export default function VariantsExplorer({
         const data = await res.json();
         const arr: Variant[] = Array.isArray(data) ? data : data.variants;
 
+        // Check again after async operation
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed during fetch, abort
+        }
+
         if (!cancelled) {
           setVariants(arr ?? []);
           setStatus(arr && arr.length ? "ready" : "empty");
           onVariantsLoad?.(arr ?? []);
         }
       } catch (e: any) {
+        // Check again before setting error
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, don't show error from old file
+        }
+
         if (!cancelled) {
           setStatus("error");
           setErrorMsg(e?.message || "Unknown error while loading variants.");
@@ -263,7 +310,7 @@ export default function VariantsExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [fileId, leadingType, automaticLoading, hasStartedLoading, onVariantsLoad]);
+  }, [leadingType, automaticLoading, hasStartedLoading, onVariantsLoad]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -271,6 +318,8 @@ export default function VariantsExplorer({
       .filter((v) => q ? (String(v.id).toLowerCase().includes(q) || v.signature.toLowerCase().includes(q)) : true)
       .sort((a, b) => b.support - a.support);
   }, [variants, query]);
+
+  console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
 
   return (
     <Card className="w-full">
