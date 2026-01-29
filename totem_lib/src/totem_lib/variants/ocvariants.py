@@ -98,7 +98,7 @@ def calculate_layout(variant, ocel):
     for obj in obj_details:
         y_mappings[obj["id"]] = y_counter
         lane_info[y_counter] = {
-            "id": f"type::{obj['type']}",
+            "id": f"lane::{y_counter}::{obj['type']}",  # Unique ID per lane
             "type": obj["type"],
             "label": obj["type"],
         }
@@ -109,13 +109,8 @@ def calculate_layout(variant, ocel):
 
     # Final Serialization: Build the lists for the JSON response.
     nodes = []
-    unique_lanes = []
-    seen_lane_ids = set()
-    for lane in lane_info.values():
-        if lane["id"] not in seen_lane_ids:
-            unique_lanes.append(lane)
-            seen_lane_ids.add(lane["id"])
-    objects_for_lanes = unique_lanes
+    # Each lane is unique (one per object instance), so include all of them
+    objects_for_lanes = [lane_info[i] for i in range(len(lane_info))]
 
     for node_id, data in G.nodes(data=True):
         object_ids_for_node = set()
