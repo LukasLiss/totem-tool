@@ -189,6 +189,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
         props = { text: (node as any).text || "Enter text here", font_size: 14 };  // Read from node.text
+      } else if (component_name === "VariantsComponent") {
+        props = {
+          automatic_loading: (node as any).automatic_loading ?? false,
+          leading_object_type: (node as any).leading_object_type ?? '',
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -268,8 +273,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w: item.w,
             h: item.h,
             content,  // Keep for GridStack compatibility
-            text: item.text,  // Add text for component data
+            text: item.text,
             component_name: item.component_name,
+            color: item.color,
+            font_size: item.font_size,
+            image: item.image,
+            automatic_loading: item.automatic_loading,
+            leading_object_type: item.leading_object_type,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -280,6 +290,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
               (node as any).image = item.image; // For ImageComponent
+              (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
+              (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
             }
           }
           // Set data attribute for persistence

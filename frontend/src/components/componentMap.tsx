@@ -15,6 +15,16 @@ import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
+import VariantsExplorer from '@/react_component/VariantsExplorer';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -24,9 +34,12 @@ interface ComponentProps {
     font_size?: number;
     color?: string;
     image?: string;
+    automatic_loading?: boolean;
+    leading_object_type?: string;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
+  selectedFile?: { id: number; [key: string]: any }; // Selected event log file
 }
 
 
@@ -191,10 +204,126 @@ const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode =
 };
 
 
+// VariantsComponent: Wrapper for VariantsExplorer with configurable settings
+const VariantsComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  // Local state for form values
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [loadingTypes, setLoadingTypes] = useState(false);
+
+  // Sync with node when it changes
+  useEffect(() => {
+    setAutomaticLoading(node.automatic_loading ?? false);
+    setLeadingType(node.leading_object_type ?? '');
+  }, [node.automatic_loading, node.leading_object_type]);
+
+  // Fetch object types when file changes (for edit mode dropdown)
+  useEffect(() => {
+    if (!selectedFile?.id || !isEditMode) return;
+
+    const fetchTypes = async () => {
+      setLoadingTypes(true);
+      const token = localStorage.getItem('access_token');
+      try {
+        const res = await fetch(`/api/files/${selectedFile.id}/object_types/`, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const types = await res.json();
+          setAvailableTypes(types.sort());
+        }
+      } catch (err) {
+        console.error('Failed to fetch object types:', err);
+      } finally {
+        setLoadingTypes(false);
+      }
+    };
+    fetchTypes();
+  }, [selectedFile?.id, isEditMode]);
+
+  // Handlers for form changes
+  const handleAutomaticLoadingChange = (checked: boolean) => {
+    setAutomaticLoading(checked);
+    onUpdate?.({ automatic_loading: checked } as any);
+  };
+
+  const handleLeadingTypeChange = (value: string) => {
+    setLeadingType(value);
+    onUpdate?.({ leading_object_type: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Configuration form
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>Variants Explorer Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Automatic Loading Toggle */}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="auto-loading">Automatic variant computation</Label>
+            <Switch
+              id="auto-loading"
+              checked={automaticLoading}
+              onCheckedChange={handleAutomaticLoadingChange}
+            />
+          </div>
+
+          {/* Leading Object Type Dropdown */}
+          <div className="space-y-2">
+            <Label>Leading object type</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  {leadingType || 'Select object type (optional)'}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-56">
+                <DropdownMenuRadioGroup value={leadingType} onValueChange={handleLeadingTypeChange}>
+                  <DropdownMenuRadioItem value="">None (use default)</DropdownMenuRadioItem>
+                  {availableTypes.map((type) => (
+                    <DropdownMenuRadioItem key={type} value={type}>{type}</DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {loadingTypes && <p className="text-sm text-muted-foreground">Loading types...</p>}
+            {!selectedFile?.id && <p className="text-sm text-muted-foreground">Select a file to see available types</p>}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render VariantsExplorer with stored settings
+  return (
+    <Card className="w-full h-full rounded-none overflow-auto">
+      <CardContent className="p-0 h-full">
+        <VariantsExplorer
+          fileId={selectedFile?.id}
+          embedded={true}
+          automaticLoading={automaticLoading}
+          defaultLeadingType={leadingType || undefined}
+        />
+      </CardContent>
+    </Card>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
   NumberOfEventsComponent,
   ImageComponent,
+  VariantsComponent,
   // Add more as needed, e.g., ChartComponent: ChartComponent,
 };

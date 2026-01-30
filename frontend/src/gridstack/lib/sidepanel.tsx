@@ -39,7 +39,16 @@ const SidePanel: React.FC = () => {
       },
       [{ h: 2, w: 2, content: "Image Component", component_name: "ImageComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
     );
-    
+
+    GridStack.setupDragIn(
+      ".sidepanel .variants-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', order: 0 }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -63,6 +72,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item image-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/adgu8l.jpg" width="100" height="50"/>
         <div>Image Component</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/variants.svg" width="100" height="50"/>
+        <div>Variants Explorer</div>
       </div>
     </div>
   );

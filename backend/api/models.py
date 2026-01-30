@@ -74,3 +74,8 @@ class ImageComponent(DashboardComponent):
     image = models.ImageField(upload_to=project_directory_path)
 
 
+class VariantsComponent(DashboardComponent):
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    leading_object_type = models.CharField(max_length=100, null=True, blank=True)
+
+

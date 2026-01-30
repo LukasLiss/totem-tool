@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -351,6 +351,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(NumberofEventsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'ImageComponent':
                 components.append(ImageComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'VariantsComponent':
+                components.append(VariantsComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -407,6 +409,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item['h'],
                     component_name=component_name,
                     image=item.get('image', None),
+                )
+            elif component_name == 'VariantsComponent':
+                VariantsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    automatic_loading=item.get('automatic_loading', False),
+                    leading_object_type=item.get('leading_object_type', ''),
                 )
             # Add more as needed
 

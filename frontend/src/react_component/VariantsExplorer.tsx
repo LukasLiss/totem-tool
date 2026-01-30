@@ -111,6 +111,7 @@ type VariantsExplorerProps = {
   typeColors?: Record<string, string>;            // UI customization
   colWidth?: number;                              // Column width (default: 120)
   embedded?: boolean;                             // When true, removes outer Card wrapper
+  defaultLeadingType?: string;                    // Pre-select this type if provided and valid
 };
 
 export default function VariantsExplorer({
@@ -120,6 +121,7 @@ export default function VariantsExplorer({
   typeColors,
   colWidth = 120,
   embedded = false,
+  defaultLeadingType,
 }: VariantsExplorerProps) {
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -203,9 +205,13 @@ export default function VariantsExplorer({
         if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
           setAvailableTypes(objectTypes);
 
-          // Auto-select first type alphabetically
-          const sortedTypes = [...objectTypes].sort();
-          setLeadingType(sortedTypes[0]);
+          // Use defaultLeadingType if provided and valid, otherwise auto-select first type alphabetically
+          if (defaultLeadingType && objectTypes.includes(defaultLeadingType)) {
+            setLeadingType(defaultLeadingType);
+          } else {
+            const sortedTypes = [...objectTypes].sort();
+            setLeadingType(sortedTypes[0]);
+          }
         }
       } catch (e: any) {
         // Check again before setting error
