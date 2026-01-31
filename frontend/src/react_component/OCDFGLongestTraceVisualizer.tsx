@@ -58,6 +58,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   const [typeAvailability, setTypeAvailability] = useState<Record<string, boolean>>({});
   const [typeTraceLimit, setTypeTraceLimit] = useState<Record<string, number>>({});
   const [typeTraceMax, setTypeTraceMax] = useState<Record<string, number>>({});
+  const [typeArcOrder, setTypeArcOrder] = useState<Record<string, string[]>>({});
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
   const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[]; trace_variants?: TraceVariantsPerType } | null>(null);
@@ -221,18 +222,6 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         const allTypes = Array.from(
           new Set(dfgNodes.flatMap(node => node.types ?? [])),
         );
-        const ownersByType = new Map<string, Set<string>>();
-        dfgLinks.forEach((link) => {
-          resolveOwnerPairs(link).forEach(({ owner, type }) => {
-            if (!ownersByType.has(type)) ownersByType.set(type, new Set());
-            ownersByType.get(type)!.add(owner);
-          });
-        });
-        const initialTraceMax = Object.fromEntries(
-          allTypes.map((type) => [type, ownersByType.get(type)?.size ?? 0]),
-        );
-        setTypeTraceMax(initialTraceMax);
-        setTypeTraceLimit(initialTraceMax);
         const colors = mapTypesToColors(allTypes);
         setTypeColors(colors);
         const initialAvailability = Object.fromEntries(allTypes.map(type => [type, true]));
@@ -452,38 +441,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         typeTraceLimit,
         activeTypes,
         layoutKey,
-        includeDebugOverlays: showDebugOverlays,
-      }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
-      if (traceCounts) {
-        const prevMaxSnapshot = typeTraceMax;
-        setTypeTraceMax((prev) => {
-          const next: Record<string, number> = { ...prev };
-          let changed = false;
-          Object.entries(traceCounts).forEach(([type, count]) => {
-            if (next[type] !== count) {
-              next[type] = count;
-              changed = true;
-            }
-          });
-          return changed ? next : prev;
-        });
-        setTypeTraceLimit((prev) => {
-          const next: Record<string, number> = { ...prev };
-          let changed = false;
-          Object.entries(traceCounts).forEach(([type, count]) => {
-            const prevMax = prevMaxSnapshot[type];
-            const current = prev[type];
-            const shouldAutoExpand = current === undefined || current === prevMax;
-            const desired = shouldAutoExpand ? count : Math.min(Math.max(0, current ?? count), count);
-            if (desired !== current) {
-              next[type] = desired;
-              changed = true;
-            }
-          });
-          return changed ? next : prev;
-        });
-      }
-
+      includeDebugOverlays: showDebugOverlays,
+    }).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       const shifted = shiftForLegend(layoutedNodes, layoutedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
       setBaseNodes(spacedNodes);
@@ -540,6 +499,18 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     initialAvailabilityRef.current = mergedAvailability;
     setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
 
+    // Build allowed edges per type by arc frequency ordering
+    const allowedEdgeIds = new Set<string>();
+    if (Object.keys(typeArcOrder).length === 0) {
+      baseEdges.forEach(edge => allowedEdgeIds.add(edge.id));
+    } else {
+      Object.entries(typeArcOrder).forEach(([type, ids]) => {
+        const max = ids.length;
+        const limit = Math.min(Math.max(0, typeTraceLimit[type] ?? max), max);
+        ids.slice(0, limit).forEach(id => allowedEdgeIds.add(id));
+      });
+    }
+
     const resolvedNodes = nodesForVisibility.map((node) => {
       const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
       const baseHidden = node.hidden === true;
@@ -560,7 +531,12 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       );
       const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
       if (blockedByType) return false;
-      return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
+      const nodesVisible = visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
+      if (!nodesVisible) return false;
+
+      // Arc-based filtering: keep edge if no ownerTypes OR any owner type keeps it.
+      if (ownerTypes.length === 0) return true;
+      return allowedEdgeIds.has(edge.id);
     }).map(edge => ({
       ...edge,
       animated: animateEdges,
@@ -582,7 +558,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
 
     setNodes(resolvedNodes);
     setEdges(filteredEdges);
-  }, [baseNodes, baseEdges, typeVisibility, typeColors, showDebugOverlays, animateEdges, dimTerminalEdges, stripDebugNodes]);
+  }, [baseNodes, baseEdges, typeVisibility, typeColors, typeArcOrder, typeTraceLimit, showDebugOverlays, animateEdges, dimTerminalEdges, stripDebugNodes]);
 
   useEffect(() => {
     if (!typeAvailability) return;
@@ -628,19 +604,23 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
 
   const handleTraceLimitChange = (type: string, value: number) => {
     const max = typeTraceMax[type] ?? 0;
-    const clamped = Math.min(Math.max(0, Math.round(value)), max);
+    const desired = Math.min(Math.max(0, Math.round(value)), max);
     const prevLimit = typeTraceLimit[type] ?? max;
+    // Enforce single-step change per slider event to drop exactly one arc per move.
+    const next = desired === prevLimit
+      ? prevLimit
+      : (desired > prevLimit ? prevLimit + 1 : prevLimit - 1);
 
-    if (clamped === 0) {
+    if (next === 0) {
       typeTraceLimitCacheRef.current[type] = prevLimit;
       setTypeVisibility(prev => (prev[type] === false ? prev : { ...prev, [type]: false }));
     }
 
-    if (clamped > 0) {
+    if (next > 0) {
       setTypeVisibility(prev => ({ ...prev, [type]: true }));
     }
 
-    setTypeTraceLimit(prev => ({ ...prev, [type]: clamped }));
+    setTypeTraceLimit(prev => ({ ...prev, [type]: next }));
   };
 
   useEffect(() => {
@@ -659,6 +639,51 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       return changed ? next : prev;
     });
   }, [typeTraceMax]);
+
+  useEffect(() => {
+    if (Object.keys(typeArcOrder).length === 0) return;
+    const arcCounts = Object.fromEntries(
+      Object.entries(typeArcOrder).map(([type, ids]) => [type, ids.length]),
+    );
+    setTypeTraceMax(arcCounts);
+    setTypeTraceLimit((prev) => {
+      const next: Record<string, number> = { ...prev };
+      let changed = false;
+      Object.entries(arcCounts).forEach(([type, max]) => {
+        const current = prev[type];
+        const desired = current === undefined ? max : Math.min(Math.max(0, current), max);
+        if (desired !== current) {
+          next[type] = desired;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [typeArcOrder]);
+
+  // Recompute arc order from layouted edges to ensure IDs align with rendered edges.
+  useEffect(() => {
+    if (baseEdges.length === 0) return;
+    const edgesByType: Record<string, Edge[]> = {};
+    baseEdges.forEach((edge) => {
+      const owners = resolveOwnerTypes(edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined);
+      owners.forEach((type) => {
+        if (!edgesByType[type]) edgesByType[type] = [];
+        edgesByType[type].push(edge);
+      });
+    });
+    const arcOrder: Record<string, string[]> = {};
+    Object.entries(edgesByType).forEach(([type, edges]) => {
+      const sorted = edges.slice().sort((a, b) => {
+        const fa = Number((a.data as { frequency?: number } | undefined)?.frequency) || 0;
+        const fb = Number((b.data as { frequency?: number } | undefined)?.frequency) || 0;
+        if (fb !== fa) return fb - fa;
+        return String(a.id).localeCompare(String(b.id));
+      });
+      arcOrder[type] = sorted.map(e => String(e.id));
+    });
+    setTypeArcOrder(arcOrder);
+  }, [baseEdges]);
 
   return (
     <div style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}>
@@ -796,8 +821,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
                             onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
                             disabled={sliderDisabled}
                           />
-                          <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
-                            {sliderValue}/{max} traces
+                          <span style={{ fontSize: 12, color: '#475569', minWidth: 90, textAlign: 'right' }}>
+                            {sliderValue}/{max} Arcs
                           </span>
                         </div>
                       </div>
