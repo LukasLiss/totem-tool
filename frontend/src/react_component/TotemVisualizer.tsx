@@ -365,12 +365,14 @@ const OBSTACLE_PADDING = 8; // Padding around nodes for routing
 function buildSpatialIndex(
   positions: Record<string, NodePosition>,
   areaRects?: Record<string, ObstacleRect>,
+  excludeNodeIds?: Set<string>,
 ): SpatialIndex {
   const nodeObstacles: Obstacle[] = [];
   const areaObstacles: Obstacle[] = [];
 
-  // Add all nodes as obstacles with padding
+  // Add all nodes as obstacles with padding (except excluded ones like detail nodes)
   for (const [id, pos] of Object.entries(positions)) {
+    if (excludeNodeIds?.has(id)) continue;
     const halfW = pos.width / 2 + OBSTACLE_PADDING;
     const halfH = pos.height / 2 + OBSTACLE_PADDING;
     nodeObstacles.push({
@@ -478,7 +480,18 @@ function routeCrossesObstacles(
     const p1 = waypoints[i];
     const p2 = waypoints[i + 1];
 
+    // Check node obstacles
     for (const obstacle of index.nodeObstacles) {
+      if (excludeSet.has(obstacle.id)) continue;
+      if (crossed.some((o) => o.id === obstacle.id)) continue;
+
+      if (segmentIntersectsRect(p1, p2, obstacle.rect)) {
+        crossed.push(obstacle);
+      }
+    }
+
+    // Check area obstacles (process areas)
+    for (const obstacle of index.areaObstacles) {
       if (excludeSet.has(obstacle.id)) continue;
       if (crossed.some((o) => o.id === obstacle.id)) continue;
 
@@ -521,14 +534,14 @@ function scoreRoute(
 
   // Penalty for crossing nodes (very high)
   const crossedNodes = routeCrossesObstacles(waypoints, index, excludeIds);
-  score += crossedNodes.length * 500;
+  score += crossedNodes.length * 10;
 
   // Penalty for route length (encourages shorter routes)
-  score += calculateRouteLength(waypoints) * 0; //0.5;
+  score += calculateRouteLength(waypoints) * 1; //0.5;
 
   // Penalty for number of bends (high penalty to prefer simpler L-shapes)
   const numBends = Math.max(0, waypoints.length - 2);
-  score += numBends * 150;
+  score += numBends * 350;
 
   return score;
 }
@@ -702,6 +715,50 @@ function generateThreeSegmentRoute(
 }
 
 /**
+ * Generates a C-shape (U-shape) route that exits and enters from the same side.
+ * Used for routing around obstacles when L-shapes would cross them.
+ */
+function generateCShapeRoute(
+  source: NodePosition,
+  target: NodePosition,
+  side: 'left' | 'right',
+  index: SpatialIndex,
+  excludeIds: string[],
+  sourceOffset = 0,
+  targetOffset = 0,
+): Point2D[] {
+  const startPoint = getAttachmentPointOnSide(source, side, sourceOffset);
+  const endPoint = getAttachmentPointOnSide(target, side, targetOffset);
+
+  // Find the leftmost/rightmost obstacle edge to route around
+  const allObstacles = [...index.nodeObstacles, ...index.areaObstacles].filter(
+    (o) => !excludeIds.includes(o.id),
+  );
+
+  let routeX: number;
+  if (side === 'left') {
+    // Route to the left of all obstacles
+    const leftmostEdge = Math.min(
+      startPoint.x,
+      endPoint.x,
+      ...allObstacles.map((o) => o.rect.left),
+    );
+    routeX = leftmostEdge - 40; // 40px clearance
+  } else {
+    // Route to the right of all obstacles
+    const rightmostEdge = Math.max(
+      startPoint.x,
+      endPoint.x,
+      ...allObstacles.map((o) => o.rect.right),
+    );
+    routeX = rightmostEdge + 40;
+  }
+
+  // C-shape: horizontal out, vertical, horizontal back in
+  return [startPoint, { x: routeX, y: startPoint.y }, { x: routeX, y: endPoint.y }, endPoint];
+}
+
+/**
  * Checks if a given exit/entry combination is valid for the node positions.
  */
 function isValidExitEntryCombination(
@@ -836,6 +893,27 @@ function findBestRoute(
         });
       }
     }
+  }
+
+  // Try C-shapes (same-side exit/entry for obstacle avoidance)
+  const cShapeSides: Array<'left' | 'right'> = ['left', 'right'];
+  for (const side of cShapeSides) {
+    const cRoute = generateCShapeRoute(
+      source,
+      target,
+      side,
+      index,
+      excludeIds,
+      sourceOffset,
+      targetOffset,
+    );
+    const cScore = scoreRoute(cRoute, index, excludeIds);
+    candidates.push({
+      waypoints: cRoute,
+      sourceExit: side,
+      targetEntry: side,
+      score: cScore,
+    });
   }
 
   // Return the candidate with the lowest score
@@ -1448,12 +1526,23 @@ function computeEdgeSegments(
   edges: EdgeDescriptor[],
   positions: Record<string, NodePosition>,
   areaAnchorMembers?: Record<string, string[]>,
+  areaRects?: Record<string, Rect>,
+  detailNodeIds?: Set<string>,
   edgeScale = 1,
 ): EdgeSegment[] {
   const segments: EdgeSegment[] = [];
 
-  // Build spatial index for obstacle-aware routing
-  const spatialIndex = buildSpatialIndex(positions);
+  // Build spatial index for obstacle-aware routing (nodes + process areas)
+  // Detail nodes are excluded - they render above edges and shouldn't affect routing
+  const obstacleAreaRects: Record<string, ObstacleRect> | undefined = areaRects
+    ? Object.fromEntries(
+        Object.entries(areaRects).map(([id, rect]) => [
+          id,
+          { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        ]),
+      )
+    : undefined;
+  const spatialIndex = buildSpatialIndex(positions, obstacleAreaRects, detailNodeIds);
 
   // Build attachment tracker to calculate offsets for overlapping edges
   const attachmentTracker = buildAttachmentTracker(edges, positions);
@@ -1515,7 +1604,19 @@ function computeEdgeSegments(
 
     const centerDx = targetCenter.x - sourceCenter.x;
     const centerDy = targetCenter.y - sourceCenter.y;
-    const treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
+    let treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
+
+    // Check if a "straight" path would cross NODE obstacles - if so, use routing instead
+    // We only check nodes here, not areas - edges within the same area should stay straight
+    if (treatAsStraight && !isAreaDetailEdge) {
+      const straightPath = [startPoint, collisionPoint];
+      const crossedObstacles = routeCrossesObstacles(straightPath, spatialIndex, [edge.from, edge.to]);
+      // Only force routing if we cross actual NODES, not just area boundaries
+      const crossedNodes = crossedObstacles.filter((o) => o.type === 'node');
+      if (crossedNodes.length > 0) {
+        treatAsStraight = false; // Force routing to avoid obstacles
+      }
+    }
 
     // Store the best route waypoints for multi-segment paths
     let routeWaypoints: Point2D[] | null = null;
@@ -2172,10 +2273,70 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
     nodeColumns[key] = value;
   });
 
+  // Build a map of nodeId -> areaId for routing complexity evaluation
+  const nodeAreaMap = new Map<string, string>();
+  layers.forEach((layer) => {
+    layer.areas.forEach((area) => {
+      area.objectTypes.forEach((objectType) => {
+        nodeAreaMap.set(objectType, area.id);
+      });
+    });
+  });
+
   const evaluateCrossings = (columns: Record<string, number>) => {
     let total = 0;
     edges.forEach((edge) => {
+      // Existing: count intermediate node obstacles
       total += countIntermediateObstacles(edge, columns, nodeLevelIndex, nodesByLevelIndex);
+
+      // New: add penalty for routing complexity when crossing areas
+      const sourceLevel = nodeLevelIndex.get(edge.from);
+      const targetLevel = nodeLevelIndex.get(edge.to);
+      const sourceCol = columns[edge.from];
+      const targetCol = columns[edge.to];
+      const sourceArea = nodeAreaMap.get(edge.from);
+      const targetArea = nodeAreaMap.get(edge.to);
+
+      if (
+        sourceLevel !== undefined &&
+        targetLevel !== undefined &&
+        sourceCol !== undefined &&
+        targetCol !== undefined &&
+        sourceArea !== targetArea &&
+        sourceLevel !== targetLevel
+      ) {
+        // Edge crosses area boundaries - check if horizontal routing is needed
+        const colDiff = Math.abs(sourceCol - targetCol);
+
+        // Check if there are obstacles in intermediate levels at the column range
+        const minCol = Math.min(sourceCol, targetCol);
+        const maxCol = Math.max(sourceCol, targetCol);
+        const minLevel = Math.min(sourceLevel, targetLevel);
+        const maxLevel = Math.max(sourceLevel, targetLevel);
+
+        let hasBlockingObstacle = false;
+        for (let level = minLevel + 1; level < maxLevel; level++) {
+          const nodesAtLevel = nodesByLevelIndex.get(level) ?? [];
+          for (const nodeId of nodesAtLevel) {
+            if (nodeId === edge.from || nodeId === edge.to) continue;
+            const nodeCol = columns[nodeId];
+            if (nodeCol !== undefined && nodeCol >= minCol && nodeCol <= maxCol) {
+              hasBlockingObstacle = true;
+              break;
+            }
+          }
+          if (hasBlockingObstacle) break;
+        }
+
+        // If there's a blocking obstacle AND significant horizontal distance,
+        // add a penalty (encourages moving nodes to align better)
+        // Cost of 1 = roughly equivalent to 1 intermediate node crossing
+        if (hasBlockingObstacle && colDiff > 0) {
+          // Penalty increases with horizontal distance
+          // Moving a node 1 column reduces this penalty significantly
+          total += colDiff * 0.4;
+        }
+      }
     });
     return total;
   };
@@ -2192,7 +2353,7 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
     });
 
     let globalScore = evaluateCrossings(nodeColumns);
-    const deltas = [0, -1, 1, -2, 2];
+    const deltas = [0, -1, 1, -2, 2, -3, 3, -4, 4];
 
     for (let iteration = 0; iteration < 4; iteration += 1) {
       let improved = false;
@@ -3791,10 +3952,15 @@ function TotemVisualizer({
           };
         });
 
+        // Create set of detail node IDs to exclude from obstacle routing
+        const detailNodeIds = new Set(detailNodes.map((d) => d.id));
+
         const segments = computeEdgeSegments(
           allEdges,
           mergedPositions,
           areaAnchorMembers,
+          areaRects,
+          detailNodeIds,
           edgeStrokeScale,
         );
         setEdgeSegments(segments);
@@ -4265,7 +4431,7 @@ function TotemVisualizer({
                                     display: 'flex',
                                     alignItems: 'stretch',
                                     justifyContent: 'center',
-                                    zIndex: 1,
+                                    zIndex: 10,
                                     boxSizing: 'border-box',
                                     boxShadow: 'inset 0 0 12px 3px rgba(37, 99, 235, 0.08)',
                                     color: detailForeground,
