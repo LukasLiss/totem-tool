@@ -170,9 +170,31 @@ type EdgeSegment = {
   capPath?: string;
   arrowPath?: string;
   color?: string;
+  debugWaypoints?: Array<{ x: number; y: number }>; // For debugging
 };
 
 type Point2D = { x: number; y: number };
+
+type NodeSide = 'top' | 'bottom' | 'left' | 'right';
+
+// Priority for edge ordering when spreading attachments: P gets center, then D, I, A
+const RELATION_PRIORITY: Record<RelationType, number> = {
+  P: 0,
+  D: 1,
+  I: 2,
+  A: 3,
+};
+
+type AttachmentInfo = {
+  edge: EdgeDescriptor;
+  side: NodeSide;
+};
+
+type AttachmentTracker = {
+  // Map from "nodeId-side" to list of edges attaching there
+  targetAttachments: Map<string, EdgeDescriptor[]>;
+  sourceAttachments: Map<string, EdgeDescriptor[]>; // Only 'P' edges tracked here
+};
 
 type LevelNodeDescriptor = {
   id: string;
@@ -205,6 +227,24 @@ type DetailLayoutNode = {
 };
 type DetailLayoutState = Record<string, Point2D>;
 type OcdfgNodeSummary = { id: string; types?: string[]; role?: string | null; object_type?: string | null };
+
+// Spatial index types for obstacle-aware edge routing
+type ObstacleRect = { left: number; top: number; right: number; bottom: number };
+type Obstacle = { id: string; rect: ObstacleRect; type: 'node' | 'area' };
+type SpatialIndex = {
+  obstacles: Obstacle[];
+  nodeObstacles: Obstacle[];
+  areaObstacles: Obstacle[];
+};
+
+// Route candidate for multi-option routing
+type RouteCandidate = {
+  waypoints: Point2D[];
+  sourceExit: NodeSide;
+  targetEntry: NodeSide;
+  score: number;
+};
+
 type ProcessAreaMetrics = {
   scale: number;
   objectNodeWidth: number;
@@ -315,6 +355,552 @@ function lighten(hex: string, factor = 0.7) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
+// ========== SPATIAL INDEX & COLLISION DETECTION ==========
+
+const OBSTACLE_PADDING = 8; // Padding around nodes for routing
+
+/**
+ * Builds a spatial index of all obstacles (nodes and process areas) for edge routing.
+ */
+function buildSpatialIndex(
+  positions: Record<string, NodePosition>,
+  areaRects?: Record<string, ObstacleRect>,
+): SpatialIndex {
+  const nodeObstacles: Obstacle[] = [];
+  const areaObstacles: Obstacle[] = [];
+
+  // Add all nodes as obstacles with padding
+  for (const [id, pos] of Object.entries(positions)) {
+    const halfW = pos.width / 2 + OBSTACLE_PADDING;
+    const halfH = pos.height / 2 + OBSTACLE_PADDING;
+    nodeObstacles.push({
+      id,
+      rect: {
+        left: pos.centerX - halfW,
+        right: pos.centerX + halfW,
+        top: pos.centerY - halfH,
+        bottom: pos.centerY + halfH,
+      },
+      type: 'node',
+    });
+  }
+
+  // Add process areas as obstacles if provided
+  if (areaRects) {
+    for (const [id, rect] of Object.entries(areaRects)) {
+      areaObstacles.push({ id, rect, type: 'area' });
+    }
+  }
+
+  return {
+    obstacles: [...nodeObstacles, ...areaObstacles],
+    nodeObstacles,
+    areaObstacles,
+  };
+}
+
+/**
+ * Tests if a line segment intersects a rectangle.
+ * Uses parametric line intersection with all 4 edges.
+ */
+function segmentIntersectsRect(
+  p1: Point2D,
+  p2: Point2D,
+  rect: ObstacleRect,
+  shrinkAmount = 2, // Shrink rect slightly to avoid false positives at boundaries
+): boolean {
+  const left = rect.left + shrinkAmount;
+  const right = rect.right - shrinkAmount;
+  const top = rect.top + shrinkAmount;
+  const bottom = rect.bottom - shrinkAmount;
+
+  // Quick bounding box check
+  const minX = Math.min(p1.x, p2.x);
+  const maxX = Math.max(p1.x, p2.x);
+  const minY = Math.min(p1.y, p2.y);
+  const maxY = Math.max(p1.y, p2.y);
+
+  if (maxX < left || minX > right || maxY < top || minY > bottom) {
+    return false;
+  }
+
+  // Check if either endpoint is inside the rectangle
+  const pointInRect = (p: Point2D) =>
+    p.x > left && p.x < right && p.y > top && p.y < bottom;
+
+  if (pointInRect(p1) || pointInRect(p2)) {
+    return true;
+  }
+
+  // Check intersection with each edge using parametric line equation
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+
+  // Helper to check if segment crosses a vertical line at x between yMin and yMax
+  const crossesVertical = (x: number, yMin: number, yMax: number): boolean => {
+    if (Math.abs(dx) < 1e-9) return false;
+    const t = (x - p1.x) / dx;
+    if (t < 0 || t > 1) return false;
+    const y = p1.y + t * dy;
+    return y >= yMin && y <= yMax;
+  };
+
+  // Helper to check if segment crosses a horizontal line at y between xMin and xMax
+  const crossesHorizontal = (y: number, xMin: number, xMax: number): boolean => {
+    if (Math.abs(dy) < 1e-9) return false;
+    const t = (y - p1.y) / dy;
+    if (t < 0 || t > 1) return false;
+    const x = p1.x + t * dx;
+    return x >= xMin && x <= xMax;
+  };
+
+  return (
+    crossesVertical(left, top, bottom) ||
+    crossesVertical(right, top, bottom) ||
+    crossesHorizontal(top, left, right) ||
+    crossesHorizontal(bottom, left, right)
+  );
+}
+
+/**
+ * Checks if a route (series of waypoints) crosses any obstacles.
+ * Returns the list of obstacles that are crossed.
+ */
+function routeCrossesObstacles(
+  waypoints: Point2D[],
+  index: SpatialIndex,
+  excludeIds: string[],
+): Obstacle[] {
+  const crossed: Obstacle[] = [];
+  const excludeSet = new Set(excludeIds);
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const p1 = waypoints[i];
+    const p2 = waypoints[i + 1];
+
+    for (const obstacle of index.nodeObstacles) {
+      if (excludeSet.has(obstacle.id)) continue;
+      if (crossed.some((o) => o.id === obstacle.id)) continue;
+
+      if (segmentIntersectsRect(p1, p2, obstacle.rect)) {
+        crossed.push(obstacle);
+      }
+    }
+  }
+
+  return crossed;
+}
+
+/**
+ * Calculates the total length of a route.
+ */
+function calculateRouteLength(waypoints: Point2D[]): number {
+  let length = 0;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    length += Math.hypot(
+      waypoints[i + 1].x - waypoints[i].x,
+      waypoints[i + 1].y - waypoints[i].y,
+    );
+  }
+  return length;
+}
+
+/**
+ * Scores a route candidate. Lower scores are better.
+ * Penalties:
+ * - Node crossing: 500 per node crossed
+ * - Route length: 0.5 per pixel
+ * - Number of bends: 15ß per bend
+ */
+function scoreRoute(
+  waypoints: Point2D[],
+  index: SpatialIndex,
+  excludeIds: string[],
+): number {
+  let score = 0;
+
+  // Penalty for crossing nodes (very high)
+  const crossedNodes = routeCrossesObstacles(waypoints, index, excludeIds);
+  score += crossedNodes.length * 500;
+
+  // Penalty for route length (encourages shorter routes)
+  score += calculateRouteLength(waypoints) * 0; //0.5;
+
+  // Penalty for number of bends (high penalty to prefer simpler L-shapes)
+  const numBends = Math.max(0, waypoints.length - 2);
+  score += numBends * 150;
+
+  return score;
+}
+
+// ========== MULTI-OPTION ROUTE GENERATION ==========
+
+/**
+ * Helper to check if a side is horizontal (left/right).
+ */
+function isHorizontalSide(side: NodeSide): boolean {
+  return side === 'left' || side === 'right';
+}
+
+/**
+ * Gets the attachment point on a specific side of a node.
+ */
+function getAttachmentPointOnSide(
+  node: NodePosition,
+  side: NodeSide,
+  offset = 0,
+): Point2D {
+  const halfW = node.width / 2;
+  const halfH = node.height / 2;
+
+  switch (side) {
+    case 'top':
+      return { x: node.centerX + offset, y: node.centerY - halfH };
+    case 'bottom':
+      return { x: node.centerX + offset, y: node.centerY + halfH };
+    case 'left':
+      return { x: node.centerX - halfW, y: node.centerY + offset };
+    case 'right':
+      return { x: node.centerX + halfW, y: node.centerY + offset };
+  }
+}
+
+/**
+ * Generates an L-shape route with specific exit/entry sides.
+ * Returns waypoints: [start, corner, end]
+ */
+function generateLShapeRoute(
+  source: NodePosition,
+  target: NodePosition,
+  sourceExit: NodeSide,
+  targetEntry: NodeSide,
+  sourceOffset = 0,
+  targetOffset = 0,
+): Point2D[] {
+  const startPoint = getAttachmentPointOnSide(source, sourceExit, sourceOffset);
+  const endPoint = getAttachmentPointOnSide(target, targetEntry, targetOffset);
+
+  // Determine corner based on exit/entry orientations
+  const sourceHorizontal = isHorizontalSide(sourceExit);
+  const targetHorizontal = isHorizontalSide(targetEntry);
+
+  if (sourceHorizontal === targetHorizontal) {
+    // Same orientation - need 3-segment route (handled elsewhere)
+    // For now, create a reasonable L-shape
+    const midX = (startPoint.x + endPoint.x) / 2;
+    const midY = (startPoint.y + endPoint.y) / 2;
+    if (sourceHorizontal) {
+      return [startPoint, { x: midX, y: startPoint.y }, { x: midX, y: endPoint.y }, endPoint];
+    } else {
+      return [startPoint, { x: startPoint.x, y: midY }, { x: endPoint.x, y: midY }, endPoint];
+    }
+  }
+
+  // Different orientations - true L-shape
+  let corner: Point2D;
+  if (sourceHorizontal) {
+    // Exit horizontal, enter vertical → corner at (endX, startY)
+    corner = { x: endPoint.x, y: startPoint.y };
+  } else {
+    // Exit vertical, enter horizontal → corner at (startX, endY)
+    corner = { x: startPoint.x, y: endPoint.y };
+  }
+
+  return [startPoint, corner, endPoint];
+}
+
+/**
+ * Generates a 3-segment route that goes around obstacles.
+ * Creates S-shape or Z-shape routes.
+ */
+function generateThreeSegmentRoute(
+  source: NodePosition,
+  target: NodePosition,
+  sourceExit: NodeSide,
+  targetEntry: NodeSide,
+  index: SpatialIndex,
+  excludeIds: string[],
+  sourceOffset = 0,
+  targetOffset = 0,
+): Point2D[] {
+  const startPoint = getAttachmentPointOnSide(source, sourceExit, sourceOffset);
+  const endPoint = getAttachmentPointOnSide(target, targetEntry, targetOffset);
+
+  const sourceHorizontal = isHorizontalSide(sourceExit);
+
+  // Determine the intermediate routing channel
+  // Try routing above, below, left, or right of the direct path
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+
+  // Calculate potential detour distances
+  const detourAmount = Math.max(60, Math.min(Math.abs(dx), Math.abs(dy)) * 0.4);
+
+  const candidates: Point2D[][] = [];
+
+  if (sourceHorizontal) {
+    // Source exits horizontally
+    // Try routing via a horizontal channel above or below
+    const midY1 = startPoint.y - detourAmount; // above
+    const midY2 = startPoint.y + detourAmount; // below
+
+    // Route above
+    candidates.push([
+      startPoint,
+      { x: startPoint.x + (dx > 0 ? detourAmount : -detourAmount), y: startPoint.y },
+      { x: startPoint.x + (dx > 0 ? detourAmount : -detourAmount), y: midY1 },
+      { x: endPoint.x, y: midY1 },
+      endPoint,
+    ]);
+
+    // Route below
+    candidates.push([
+      startPoint,
+      { x: startPoint.x + (dx > 0 ? detourAmount : -detourAmount), y: startPoint.y },
+      { x: startPoint.x + (dx > 0 ? detourAmount : -detourAmount), y: midY2 },
+      { x: endPoint.x, y: midY2 },
+      endPoint,
+    ]);
+  } else {
+    // Source exits vertically
+    // Try routing via a vertical channel left or right
+    const midX1 = startPoint.x - detourAmount; // left
+    const midX2 = startPoint.x + detourAmount; // right
+
+    // Route left
+    candidates.push([
+      startPoint,
+      { x: startPoint.x, y: startPoint.y + (dy > 0 ? detourAmount : -detourAmount) },
+      { x: midX1, y: startPoint.y + (dy > 0 ? detourAmount : -detourAmount) },
+      { x: midX1, y: endPoint.y },
+      endPoint,
+    ]);
+
+    // Route right
+    candidates.push([
+      startPoint,
+      { x: startPoint.x, y: startPoint.y + (dy > 0 ? detourAmount : -detourAmount) },
+      { x: midX2, y: startPoint.y + (dy > 0 ? detourAmount : -detourAmount) },
+      { x: midX2, y: endPoint.y },
+      endPoint,
+    ]);
+  }
+
+  // Score all candidates and return the best one
+  let bestRoute = candidates[0];
+  let bestScore = scoreRoute(bestRoute, index, excludeIds);
+
+  for (let i = 1; i < candidates.length; i++) {
+    const score = scoreRoute(candidates[i], index, excludeIds);
+    if (score < bestScore) {
+      bestScore = score;
+      bestRoute = candidates[i];
+    }
+  }
+
+  return bestRoute;
+}
+
+/**
+ * Checks if a given exit/entry combination is valid for the node positions.
+ */
+function isValidExitEntryCombination(
+  source: NodePosition,
+  target: NodePosition,
+  sourceExit: NodeSide,
+  targetEntry: NodeSide,
+): boolean {
+  const dx = target.centerX - source.centerX;
+  const dy = target.centerY - source.centerY;
+
+  // Reject clearly nonsensical combinations
+  // e.g., exiting right when target is to the left
+  if (sourceExit === 'right' && dx < -source.width) return false;
+  if (sourceExit === 'left' && dx > source.width) return false;
+  if (sourceExit === 'bottom' && dy < -source.height) return false;
+  if (sourceExit === 'top' && dy > source.height) return false;
+
+  // Similar checks for target entry
+  if (targetEntry === 'left' && dx < -target.width) return false;
+  if (targetEntry === 'right' && dx > target.width) return false;
+  if (targetEntry === 'top' && dy < -target.height) return false;
+  if (targetEntry === 'bottom' && dy > target.height) return false;
+
+  return true;
+}
+
+/**
+ * Finds the best route between two nodes.
+ * Strategy: Prefer the default L-shape from determineLShapeConfig.
+ * Only explore alternatives if the default crosses a node.
+ */
+function findBestRoute(
+  source: NodePosition,
+  target: NodePosition,
+  sourceId: string,
+  targetId: string,
+  index: SpatialIndex,
+  sourceOffset = 0,
+  targetOffset = 0,
+): RouteCandidate {
+  const excludeIds = [sourceId, targetId];
+
+  // First, try the default L-shape from determineLShapeConfig
+  // This gives predictable, clean routing for most cases
+  const defaultConfig = determineLShapeConfig(
+    { x: source.centerX, y: source.centerY },
+    { x: target.centerX, y: target.centerY },
+  );
+
+  const defaultRoute = generateLShapeRoute(
+    source,
+    target,
+    defaultConfig.sourceExit,
+    defaultConfig.targetEntry,
+    sourceOffset,
+    targetOffset,
+  );
+
+  const defaultCrossings = routeCrossesObstacles(defaultRoute, index, excludeIds);
+
+  // If the default L-shape doesn't cross any nodes, use it directly
+  if (defaultCrossings.length === 0) {
+    return {
+      waypoints: defaultRoute,
+      sourceExit: defaultConfig.sourceExit,
+      targetEntry: defaultConfig.targetEntry,
+      score: 0, // Perfect score for default route with no crossings
+    };
+  }
+
+  // Default route crosses nodes - search for alternatives
+  const SIDES: NodeSide[] = ['top', 'bottom', 'left', 'right'];
+  const candidates: RouteCandidate[] = [];
+
+  // Add the default route as a candidate (fallback if nothing better found)
+  candidates.push({
+    waypoints: defaultRoute,
+    sourceExit: defaultConfig.sourceExit,
+    targetEntry: defaultConfig.targetEntry,
+    score: scoreRoute(defaultRoute, index, excludeIds),
+  });
+
+  // Try alternative exit/entry combinations
+  for (const sourceExit of SIDES) {
+    for (const targetEntry of SIDES) {
+      // Skip the default combination (already added)
+      if (sourceExit === defaultConfig.sourceExit && targetEntry === defaultConfig.targetEntry) {
+        continue;
+      }
+
+      if (!isValidExitEntryCombination(source, target, sourceExit, targetEntry)) {
+        continue;
+      }
+
+      // Generate L-shape route for this combination
+      const lRoute = generateLShapeRoute(
+        source,
+        target,
+        sourceExit,
+        targetEntry,
+        sourceOffset,
+        targetOffset,
+      );
+      const lScore = scoreRoute(lRoute, index, excludeIds);
+      candidates.push({
+        waypoints: lRoute,
+        sourceExit,
+        targetEntry,
+        score: lScore,
+      });
+
+      // If this L-shape also crosses obstacles, try 3-segment route
+      const crossedObstacles = routeCrossesObstacles(lRoute, index, excludeIds);
+      if (crossedObstacles.length > 0) {
+        const sRoute = generateThreeSegmentRoute(
+          source,
+          target,
+          sourceExit,
+          targetEntry,
+          index,
+          excludeIds,
+          sourceOffset,
+          targetOffset,
+        );
+        const sScore = scoreRoute(sRoute, index, excludeIds);
+        candidates.push({
+          waypoints: sRoute,
+          sourceExit,
+          targetEntry,
+          score: sScore,
+        });
+      }
+    }
+  }
+
+  // Return the candidate with the lowest score
+  return candidates.reduce((best, current) =>
+    current.score < best.score ? current : best,
+  );
+}
+
+/**
+ * Builds a smooth curved path from waypoints.
+ * Converts orthogonal waypoints into smooth Bezier curves.
+ */
+function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
+  if (waypoints.length < 2) {
+    return '';
+  }
+
+  if (waypoints.length === 2) {
+    return `M ${waypoints[0].x} ${waypoints[0].y} L ${waypoints[1].x} ${waypoints[1].y}`;
+  }
+
+  // For 3+ points, create smooth curves through the corners
+  const parts: string[] = [`M ${waypoints[0].x} ${waypoints[0].y}`];
+
+  for (let i = 1; i < waypoints.length - 1; i++) {
+    const prev = waypoints[i - 1];
+    const curr = waypoints[i];
+    const next = waypoints[i + 1];
+
+    // Calculate corner radius based on segment lengths
+    const lenBefore = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    const lenAfter = Math.hypot(next.x - curr.x, next.y - curr.y);
+    const cornerRadius = Math.min(lenBefore * 0.4, lenAfter * 0.4, 40);
+
+    // Calculate points along segments where curve should start/end
+    const beforeDir = {
+      x: (curr.x - prev.x) / lenBefore,
+      y: (curr.y - prev.y) / lenBefore,
+    };
+    const afterDir = {
+      x: (next.x - curr.x) / lenAfter,
+      y: (next.y - curr.y) / lenAfter,
+    };
+
+    const curveStart = {
+      x: curr.x - beforeDir.x * cornerRadius,
+      y: curr.y - beforeDir.y * cornerRadius,
+    };
+    const curveEnd = {
+      x: curr.x + afterDir.x * cornerRadius,
+      y: curr.y + afterDir.y * cornerRadius,
+    };
+
+    // Line to the curve start, then quadratic Bezier through the corner
+    parts.push(`L ${curveStart.x} ${curveStart.y}`);
+    parts.push(`Q ${curr.x} ${curr.y} ${curveEnd.x} ${curveEnd.y}`);
+  }
+
+  // Line to the final point
+  const last = waypoints[waypoints.length - 1];
+  parts.push(`L ${last.x} ${last.y}`);
+
+  return parts.join(' ');
+}
+
 function extractEdges(tempgraph?: TotemApiResponse['tempgraph']): EdgeDescriptor[] {
   if (!tempgraph) return [];
   const edges: EdgeDescriptor[] = [];
@@ -375,7 +961,8 @@ function buildParallelBars({
   unitY,
   pathLength,
   edgeScale,
-  targetContact: _targetContact,
+  sourceNormal,
+  targetNormal,
 }: {
   startX: number;
   startY: number;
@@ -385,7 +972,8 @@ function buildParallelBars({
   unitY: number;
   pathLength: number;
   edgeScale: number;
-  targetContact?: Point2D;
+  sourceNormal?: Point2D;
+  targetNormal?: Point2D;
 }): {
   bars: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   innerOffset: number | null;
@@ -401,8 +989,18 @@ function buildParallelBars({
     20 * edgeScale,
   );
   const halfPerp = barHeight;
-  const perpX = -unitY;
-  const perpY = unitX;
+
+  // Default perpendicular based on edge direction
+  const defaultPerpX = -unitY;
+  const defaultPerpY = unitX;
+
+  // Calculate perpendiculars from the box normals (tangent to box edge)
+  // The tangent to a normal (nx, ny) is (-ny, nx)
+  const sourcePerpX = sourceNormal ? -sourceNormal.y : defaultPerpX;
+  const sourcePerpY = sourceNormal ? sourceNormal.x : defaultPerpY;
+  const targetPerpX = targetNormal ? -targetNormal.y : defaultPerpX;
+  const targetPerpY = targetNormal ? targetNormal.x : defaultPerpY;
+
   const maxOffset = Math.max(0, effectiveLength - 0.75);
   const outerOffset = 0;
   const minGap = Math.max(
@@ -463,49 +1061,247 @@ function buildParallelBars({
     uniqueOffsets.length = 2;
   }
 
-  const positions: Array<Point2D> = [];
-  const addPosition = (point: Point2D) => {
+  // Track positions with their type (near source or near target)
+  const barPositions: Array<{ point: Point2D; nearSource: boolean }> = [];
+  const addPosition = (point: Point2D, nearSource: boolean) => {
     if (
-      positions.some(
-        (existing) => Math.hypot(existing.x - point.x, existing.y - point.y) <= tolerance,
+      barPositions.some(
+        (existing) => Math.hypot(existing.point.x - point.x, existing.point.y - point.y) <= tolerance,
       )
     ) {
       return;
     }
-    positions.push(point);
+    barPositions.push({ point, nearSource });
   };
 
   uniqueOffsets.forEach((offset) => {
-    addPosition({
-      x: startX + unitX * offset,
-      y: startY + unitY * offset,
-    });
-    addPosition({
-      x: endX - unitX * offset,
-      y: endY - unitY * offset,
-    });
+    addPosition(
+      { x: startX + unitX * offset, y: startY + unitY * offset },
+      true, // near source
+    );
+    addPosition(
+      { x: endX - unitX * offset, y: endY - unitY * offset },
+      false, // near target
+    );
   });
 
-  if (positions.length === 0) {
-    addPosition({ x: startX, y: startY });
-    addPosition({ x: endX, y: endY });
+  if (barPositions.length === 0) {
+    addPosition({ x: startX, y: startY }, true);
+    addPosition({ x: endX, y: endY }, false);
   }
 
   const innerLimit = uniqueOffsets.length >= 2 ? uniqueOffsets[uniqueOffsets.length - 1] : null;
-  const trimmedPositions = positions.slice(0, 4);
+  const trimmedPositions = barPositions.slice(0, 4);
 
   return {
-    bars: trimmedPositions.map((point) => ({
-      x1: point.x + perpX * halfPerp,
-      y1: point.y + perpY * halfPerp,
-      x2: point.x - perpX * halfPerp,
-      y2: point.y - perpY * halfPerp,
-    })),
+    bars: trimmedPositions.map(({ point, nearSource }) => {
+      // Use source perpendicular for bars near source, target perpendicular for bars near target
+      const perpX = nearSource ? sourcePerpX : targetPerpX;
+      const perpY = nearSource ? sourcePerpY : targetPerpY;
+      return {
+        x1: point.x + perpX * halfPerp,
+        y1: point.y + perpY * halfPerp,
+        x2: point.x - perpX * halfPerp,
+        y2: point.y - perpY * halfPerp,
+      };
+    }),
     innerOffset: innerLimit,
   };
 }
 
 const COLLISION_EPSILON = 1e-5;
+
+/**
+ * Determines which side of a node a point is on (or closest to)
+ */
+function determineNodeSide(
+  point: Point2D,
+  center: Point2D,
+  width: number,
+  height: number,
+): NodeSide {
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  const halfW = width / 2;
+  const halfH = height / 2;
+
+  // Check if point is on an edge (within tolerance)
+  const onVerticalEdge = Math.abs(Math.abs(dx) - halfW) < 2;
+  const onHorizontalEdge = Math.abs(Math.abs(dy) - halfH) < 2;
+
+  if (onVerticalEdge && !onHorizontalEdge) {
+    return dx > 0 ? 'right' : 'left';
+  }
+  if (onHorizontalEdge && !onVerticalEdge) {
+    return dy > 0 ? 'bottom' : 'top';
+  }
+
+  // Fallback: determine by which edge is closer (normalized)
+  const normalizedDx = Math.abs(dx) / halfW;
+  const normalizedDy = Math.abs(dy) / halfH;
+
+  if (normalizedDx > normalizedDy) {
+    return dx > 0 ? 'right' : 'left';
+  }
+  return dy > 0 ? 'bottom' : 'top';
+}
+
+/**
+ * L-shape configuration for edge routing.
+ * Every curved edge is conceptually an L-shaped path with a horizontal and vertical segment.
+ */
+type LShapeConfig = {
+  sourceExit: NodeSide;
+  targetEntry: NodeSide;
+  isHorizontalFirst: boolean;
+};
+
+/**
+ * Determines the L-shape configuration for an edge based on source/target positions.
+ *
+ * Rule: Think of the edge as an L with a horizontal (—) and vertical (|) segment.
+ * - If dx and dy have OPPOSITE signs → Horizontal-first (source exits side, target enters top/bottom)
+ * - If dx and dy have SAME signs → Vertical-first (source exits top/bottom, target enters side)
+ */
+function determineLShapeConfig(
+  sourceCenter: Point2D,
+  targetCenter: Point2D,
+): LShapeConfig {
+  const dx = targetCenter.x - sourceCenter.x;
+  const dy = targetCenter.y - sourceCenter.y;
+
+  // Handle edge cases where dx or dy is near zero
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+    // Nodes are nearly overlapping, use default
+    return { sourceExit: 'bottom', targetEntry: 'top', isHorizontalFirst: false };
+  }
+  if (Math.abs(dx) < 1) {
+    // Purely vertical - treat as vertical-first
+    return {
+      sourceExit: dy > 0 ? 'bottom' : 'top',
+      targetEntry: dy > 0 ? 'top' : 'bottom',
+      isHorizontalFirst: false,
+    };
+  }
+  if (Math.abs(dy) < 1) {
+    // Purely horizontal - treat as horizontal-first
+    return {
+      sourceExit: dx > 0 ? 'right' : 'left',
+      targetEntry: dx > 0 ? 'left' : 'right',
+      isHorizontalFirst: true,
+    };
+  }
+
+  // Same signs = horizontal-first, opposite signs = vertical-first
+  // This makes edges bend AWAY from the diagonal, routing through empty space
+  const isHorizontalFirst = (dx > 0) === (dy > 0);
+
+  if (isHorizontalFirst) {
+    // L-shape: horizontal from source, then vertical to target
+    // Source exits from left/right side, target enters from top/bottom
+    return {
+      sourceExit: dx > 0 ? 'right' : 'left',
+      targetEntry: dy > 0 ? 'top' : 'bottom',
+      isHorizontalFirst: true,
+    };
+  } else {
+    // L-shape: vertical from source, then horizontal to target
+    // Source exits from top/bottom, target enters from left/right side
+    return {
+      sourceExit: dy > 0 ? 'bottom' : 'top',
+      targetEntry: dx > 0 ? 'left' : 'right',
+      isHorizontalFirst: false,
+    };
+  }
+}
+
+/**
+ * Predicts which side an edge will attach to based on L-shape routing logic.
+ */
+function predictAttachmentSide(
+  sourceCenter: Point2D,
+  targetCenter: Point2D,
+  isSource: boolean,
+): NodeSide {
+  const config = determineLShapeConfig(sourceCenter, targetCenter);
+  return isSource ? config.sourceExit : config.targetEntry;
+}
+
+/**
+ * Builds a tracker of which edges attach to which node sides
+ */
+function buildAttachmentTracker(
+  edges: EdgeDescriptor[],
+  positions: Record<string, NodePosition>,
+): AttachmentTracker {
+  const targetAttachments = new Map<string, EdgeDescriptor[]>();
+  const sourceAttachments = new Map<string, EdgeDescriptor[]>();
+
+  for (const edge of edges) {
+    const source = positions[edge.from];
+    const target = positions[edge.to];
+    if (!source || !target) continue;
+
+    const sourceCenter = { x: source.centerX, y: source.centerY };
+    const targetCenter = { x: target.centerX, y: target.centerY };
+
+    // Predict target attachment side
+    const targetSide = predictAttachmentSide(sourceCenter, targetCenter, false);
+    const targetKey = `${edge.to}-${targetSide}`;
+    if (!targetAttachments.has(targetKey)) {
+      targetAttachments.set(targetKey, []);
+    }
+    targetAttachments.get(targetKey)!.push(edge);
+
+    // Only track source attachments for 'P' edges
+    if (edge.relation === 'P') {
+      const sourceSide = predictAttachmentSide(sourceCenter, targetCenter, true);
+      const sourceKey = `${edge.from}-${sourceSide}`;
+      if (!sourceAttachments.has(sourceKey)) {
+        sourceAttachments.set(sourceKey, []);
+      }
+      sourceAttachments.get(sourceKey)!.push(edge);
+    }
+  }
+
+  // Sort each attachment list by priority (P first, then D, I, A)
+  const sortByPriority = (a: EdgeDescriptor, b: EdgeDescriptor) =>
+    RELATION_PRIORITY[a.relation] - RELATION_PRIORITY[b.relation];
+
+  for (const list of targetAttachments.values()) {
+    list.sort(sortByPriority);
+  }
+  for (const list of sourceAttachments.values()) {
+    list.sort(sortByPriority);
+  }
+
+  return { targetAttachments, sourceAttachments };
+}
+
+/**
+ * Calculates the offset for an edge's attachment point
+ */
+function getAttachmentOffset(
+  edge: EdgeDescriptor,
+  attachmentList: EdgeDescriptor[] | undefined,
+  nodeSize: number,
+  edgeScale: number,
+): number {
+  if (!attachmentList || attachmentList.length <= 1) {
+    return 0;
+  }
+
+  const index = attachmentList.findIndex((e) => e.id === edge.id);
+  if (index === -1) return 0;
+
+  const count = attachmentList.length;
+  const maxSpread = Math.min(nodeSize * 0.5, 40 * edgeScale);
+  const spacing = Math.min(maxSpread / Math.max(count - 1, 1), 16 * edgeScale);
+  const totalSpan = spacing * (count - 1);
+  const startOffset = -totalSpan / 2;
+
+  return startOffset + index * spacing;
+}
 
 function calculateNodeCollisionPoint(
   tail: Point2D,
@@ -541,6 +1337,52 @@ function calculateNodeCollisionPoint(
     x: head.x + t * deltaX,
     y: head.y + t * deltaY,
   };
+}
+
+/**
+ * Calculates the inward-facing normal perpendicular to the box edge
+ * at the collision point. This ensures arrow heads and parallel bars
+ * are always perpendicular/parallel to the node boundary.
+ */
+function calculatePerpendicularBoxNormal(
+  tail: Point2D,
+  head: Point2D,
+  headWidth: number,
+  headHeight: number,
+): Point2D {
+  const deltaX = tail.x - head.x;
+  const deltaY = tail.y - head.y;
+
+  const halfWidth = Math.max(headWidth / 2, COLLISION_EPSILON);
+  const halfHeight = Math.max(headHeight / 2, COLLISION_EPSILON);
+
+  // Pure vertical approach - hitting top or bottom edge
+  if (Math.abs(deltaX) < COLLISION_EPSILON) {
+    return { x: 0, y: deltaY > 0 ? -1 : 1 };
+  }
+
+  // Pure horizontal approach - hitting left or right edge
+  if (Math.abs(deltaY) < COLLISION_EPSILON) {
+    return { x: deltaX > 0 ? -1 : 1, y: 0 };
+  }
+
+  // Calculate which edge is hit first
+  const tHorizontal = Math.abs(halfHeight / deltaY);
+  const tVertical = Math.abs(halfWidth / deltaX);
+
+  if (tVertical < tHorizontal) {
+    // Hitting left or right edge - normal is horizontal
+    return { x: deltaX > 0 ? -1 : 1, y: 0 };
+  } else if (tHorizontal < tVertical) {
+    // Hitting top or bottom edge - normal is vertical
+    return { x: 0, y: deltaY > 0 ? -1 : 1 };
+  } else {
+    // Hitting corner exactly - use diagonal normal (normalized)
+    const cornerNormalX = deltaX > 0 ? -1 : 1;
+    const cornerNormalY = deltaY > 0 ? -1 : 1;
+    const cornerMag = Math.SQRT2;
+    return { x: cornerNormalX / cornerMag, y: cornerNormalY / cornerMag };
+  }
 }
 
 function shouldRenderStraightSegment(dx: number, dy: number, lengthOverride?: number): boolean {
@@ -610,6 +1452,12 @@ function computeEdgeSegments(
 ): EdgeSegment[] {
   const segments: EdgeSegment[] = [];
 
+  // Build spatial index for obstacle-aware routing
+  const spatialIndex = buildSpatialIndex(positions);
+
+  // Build attachment tracker to calculate offsets for overlapping edges
+  const attachmentTracker = buildAttachmentTracker(edges, positions);
+
   edges.forEach((edge) => {
     const source = positions[edge.from];
     const target = positions[edge.to];
@@ -669,35 +1517,133 @@ function computeEdgeSegments(
     const centerDy = targetCenter.y - sourceCenter.y;
     const treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
 
+    // Store the best route waypoints for multi-segment paths
+    let routeWaypoints: Point2D[] | null = null;
+
     if (!treatAsStraight && !isAreaDetailEdge) {
-      let directionX = centerDx;
-      if (Math.abs(directionX) < 1e-3) {
-        directionX = collisionPoint.x - startPoint.x;
-      }
-      if (Math.abs(directionX) < 1e-3) {
-        directionX = 1;
-      }
-      const horizontalSign = directionX >= 0 ? 1 : -1;
-
-      let directionY = centerDy;
-      if (Math.abs(directionY) < 1e-3) {
-        directionY = collisionPoint.y - startPoint.y;
-      }
-      if (Math.abs(directionY) < 1e-3) {
-        directionY = 1;
-      }
-      const verticalSign = directionY >= 0 ? 1 : -1;
-
       const sourceHalfHeight = Math.max(source.height, 1) / 2;
+      const sourceHalfWidth = Math.max(source.width, 1) / 2;
       const targetHalfWidth = Math.max(target.width, 1) / 2;
-      startPoint = {
-        x: sourceCenter.x,
-        y: sourceCenter.y + verticalSign * sourceHalfHeight,
-      };
-      collisionPoint = {
-        x: targetCenter.x - horizontalSign * targetHalfWidth,
-        y: targetCenter.y,
-      };
+      const targetHalfHeight = Math.max(target.height, 1) / 2;
+
+      // Use multi-option routing to find the best path that avoids obstacles
+      const bestRoute = findBestRoute(
+        source,
+        target,
+        edge.from,
+        edge.to,
+        spatialIndex,
+      );
+
+      const sourceSide = bestRoute.sourceExit;
+      const targetSide = bestRoute.targetEntry;
+
+      const sourceKey = `${edge.from}-${sourceSide}`;
+      const targetKey = `${edge.to}-${targetSide}`;
+
+      // Calculate offsets based on which side we're attaching to
+      let sourceOffset = 0;
+      let targetOffset = 0;
+
+      if (isHorizontalSide(sourceSide)) {
+        // Source exits horizontally (left/right)
+        sourceOffset =
+          edge.relation === 'P'
+            ? getAttachmentOffset(
+                edge,
+                attachmentTracker.sourceAttachments.get(sourceKey),
+                sourceHalfHeight * 2,
+                edgeScale,
+              )
+            : 0;
+      } else {
+        // Source exits vertically (top/bottom)
+        sourceOffset =
+          edge.relation === 'P'
+            ? getAttachmentOffset(
+                edge,
+                attachmentTracker.sourceAttachments.get(sourceKey),
+                sourceHalfWidth * 2,
+                edgeScale,
+              )
+            : 0;
+      }
+
+      if (isHorizontalSide(targetSide)) {
+        // Target enters horizontally (left/right)
+        targetOffset = getAttachmentOffset(
+          edge,
+          attachmentTracker.targetAttachments.get(targetKey),
+          targetHalfHeight * 2,
+          edgeScale,
+        );
+      } else {
+        // Target enters vertically (top/bottom)
+        targetOffset = getAttachmentOffset(
+          edge,
+          attachmentTracker.targetAttachments.get(targetKey),
+          targetHalfWidth * 2,
+          edgeScale,
+        );
+      }
+
+      // Re-generate the best route with offsets applied
+      const finalRoute = findBestRoute(
+        source,
+        target,
+        edge.from,
+        edge.to,
+        spatialIndex,
+        sourceOffset,
+        targetOffset,
+      );
+
+      routeWaypoints = finalRoute.waypoints;
+
+      // Set start and collision points from the route
+      if (routeWaypoints.length >= 2) {
+        startPoint = routeWaypoints[0];
+        collisionPoint = routeWaypoints[routeWaypoints.length - 1];
+      }
+    } else if (treatAsStraight && !isAreaDetailEdge) {
+      // For straight edges, apply offsets based on which side the collision points hit
+      const sourceSide = determineNodeSide(startPoint, sourceCenter, source.width, source.height);
+      const targetSide = determineNodeSide(collisionPoint, targetCenter, target.width, target.height);
+
+      const sourceKey = `${edge.from}-${sourceSide}`;
+      const targetKey = `${edge.to}-${targetSide}`;
+
+      // Source offset: only for 'P' edges
+      const sourceOffset =
+        edge.relation === 'P'
+          ? getAttachmentOffset(
+              edge,
+              attachmentTracker.sourceAttachments.get(sourceKey),
+              sourceSide === 'left' || sourceSide === 'right' ? source.height : source.width,
+              edgeScale,
+            )
+          : 0;
+
+      // Target offset: for all edges
+      const targetOffset = getAttachmentOffset(
+        edge,
+        attachmentTracker.targetAttachments.get(targetKey),
+        targetSide === 'left' || targetSide === 'right' ? target.height : target.width,
+        edgeScale,
+      );
+
+      // Apply offsets perpendicular to the side
+      if (sourceSide === 'left' || sourceSide === 'right') {
+        startPoint = { x: startPoint.x, y: startPoint.y + sourceOffset };
+      } else {
+        startPoint = { x: startPoint.x + sourceOffset, y: startPoint.y };
+      }
+
+      if (targetSide === 'left' || targetSide === 'right') {
+        collisionPoint = { x: collisionPoint.x, y: collisionPoint.y + targetOffset };
+      } else {
+        collisionPoint = { x: collisionPoint.x + targetOffset, y: collisionPoint.y };
+      }
     }
 
     let startX = startPoint.x;
@@ -719,16 +1665,21 @@ function computeEdgeSegments(
     let dependentBase: Point2D | null = null;
     let dependentTip: Point2D | null = null;
 
-    const normalVectorX = targetCenter.x - collisionX;
-    const normalVectorY = targetCenter.y - collisionY;
-    const normalMagnitude = Math.hypot(normalVectorX, normalVectorY);
-    const targetNormal =
-      normalMagnitude > 0
-        ? {
-            x: normalVectorX / normalMagnitude,
-            y: normalVectorY / normalMagnitude,
-          }
-        : null;
+    // Calculate perpendicular normals to the box edges for proper arrow/bar orientation
+    // Source normal: perpendicular to the source node's exit edge (based on actual exit point)
+    const sourceNormal = calculatePerpendicularBoxNormal(
+      startPoint,
+      sourceCenter,
+      Math.max(source.width, 1),
+      Math.max(source.height, 1),
+    );
+    // Target normal: perpendicular to the target node's entry edge (based on actual entry point)
+    const targetNormal = calculatePerpendicularBoxNormal(
+      collisionPoint,
+      targetCenter,
+      Math.max(target.width, 1),
+      Math.max(target.height, 1),
+    );
 
     if (edge.relation === 'D') {
       const rawCap = Math.min(
@@ -738,23 +1689,16 @@ function computeEdgeSegments(
       const maxAvailable = Math.max(toCollisionLength - 8 * edgeScale, 0);
       const capLength = Math.min(rawCap, maxAvailable);
       if (capLength > 1) {
-        if (targetNormal) {
-          endX = collisionX - targetNormal.x * capLength;
-          endY = collisionY - targetNormal.y * capLength;
-          dependentBase = { x: endX, y: endY };
-          dependentTip = { x: collisionX, y: collisionY };
-        } else {
-          endX = collisionX - dirToCollisionX * capLength;
-          endY = collisionY - dirToCollisionY * capLength;
-          dependentBase = { x: endX, y: endY };
-          dependentTip = { x: collisionX, y: collisionY };
-        }
+        endX = collisionX - dirToCollisionX * capLength;
+        endY = collisionY - dirToCollisionY * capLength;
+        dependentBase = { x: endX, y: endY };
+        dependentTip = { x: collisionX, y: collisionY };
       }
     }
 
     let arrowPath: string | null = null;
 
-    if (edge.relation === 'I' && targetNormal) {
+    if (edge.relation === 'I') {
       const maxApproach = Math.max(toCollisionLength - 4 * edgeScale, 0);
       const baseArrowLength = Math.min(
         Math.max(18, toCollisionLength * 0.45),
@@ -808,7 +1752,8 @@ function computeEdgeSegments(
         unitY,
         pathLength: length,
         edgeScale,
-        targetContact: { x: collisionX, y: collisionY },
+        sourceNormal,
+        targetNormal,
       });
       const innerOffset = parallelInfo.innerOffset;
       if (
@@ -848,7 +1793,43 @@ function computeEdgeSegments(
       const c2x = endX - direction * arcMagnitude * 0.65;
       const c2y = endY;
       path = `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`;
+    } else if (routeWaypoints && routeWaypoints.length > 2) {
+      // Multi-segment route: use smooth curved path through waypoints
+      // For parallel edges, we need to handle the truncation for bars
+      if (truncatedForParallel && routeWaypoints.length >= 2) {
+        // Truncate the first and last segments for the parallel bars
+        const innerOffset = parallelInfo?.innerOffset ?? 0;
+        if (innerOffset > 0) {
+          // Adjust first waypoint
+          const firstDir = {
+            x: routeWaypoints[1].x - routeWaypoints[0].x,
+            y: routeWaypoints[1].y - routeWaypoints[0].y,
+          };
+          const firstLen = Math.hypot(firstDir.x, firstDir.y);
+          if (firstLen > innerOffset * 2) {
+            routeWaypoints[0] = {
+              x: routeWaypoints[0].x + (firstDir.x / firstLen) * innerOffset,
+              y: routeWaypoints[0].y + (firstDir.y / firstLen) * innerOffset,
+            };
+          }
+          // Adjust last waypoint
+          const lastIdx = routeWaypoints.length - 1;
+          const lastDir = {
+            x: routeWaypoints[lastIdx - 1].x - routeWaypoints[lastIdx].x,
+            y: routeWaypoints[lastIdx - 1].y - routeWaypoints[lastIdx].y,
+          };
+          const lastLen = Math.hypot(lastDir.x, lastDir.y);
+          if (lastLen > innerOffset * 2) {
+            routeWaypoints[lastIdx] = {
+              x: routeWaypoints[lastIdx].x + (lastDir.x / lastLen) * innerOffset,
+              y: routeWaypoints[lastIdx].y + (lastDir.y / lastLen) * innerOffset,
+            };
+          }
+        }
+      }
+      path = buildCurvedPathFromWaypoints(routeWaypoints);
     } else {
+      // Simple 2-point route or straight edge: use original curved path logic
       const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
       if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
         pathSegments.push(`L ${startX} ${startY}`);
@@ -883,6 +1864,7 @@ function computeEdgeSegments(
       relation: edge.relation,
       path,
       color: edge.color,
+      debugWaypoints: routeWaypoints ? [...routeWaypoints] : undefined,
     };
 
     if (edge.relation === 'P') {
@@ -1257,6 +2239,51 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
         });
       }
       if (!improved) break;
+    }
+
+    // Additional optimization: try swapping adjacent nodes within the same level
+    // This can find improvements that individual shifts cannot achieve
+    for (let swapIteration = 0; swapIteration < 3; swapIteration += 1) {
+      let swapImproved = false;
+      for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
+        const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
+        if (nodesAtLevel.length < 2) continue;
+
+        // Sort nodes by their current column position
+        const sortedNodes = [...nodesAtLevel].sort(
+          (a, b) => (nodeColumns[a] ?? 0) - (nodeColumns[b] ?? 0),
+        );
+
+        // Try swapping adjacent pairs
+        for (let i = 0; i < sortedNodes.length - 1; i += 1) {
+          const nodeA = sortedNodes[i];
+          const nodeB = sortedNodes[i + 1];
+          const colA = nodeColumns[nodeA];
+          const colB = nodeColumns[nodeB];
+
+          if (colA === undefined || colB === undefined) continue;
+
+          // Temporarily swap columns
+          nodeColumns[nodeA] = colB;
+          nodeColumns[nodeB] = colA;
+
+          const swappedScore = evaluateCrossings(nodeColumns);
+
+          if (swappedScore + 1e-6 < globalScore) {
+            // Swap improved the score, keep it
+            globalScore = swappedScore;
+            swapImproved = true;
+            // Update sorted order for next iteration
+            sortedNodes[i] = nodeB;
+            sortedNodes[i + 1] = nodeA;
+          } else {
+            // Revert the swap
+            nodeColumns[nodeA] = colA;
+            nodeColumns[nodeB] = colB;
+          }
+        }
+      }
+      if (!swapImproved) break;
     }
 
     nodesByLevelIndex.forEach((nodeIds) => {
@@ -2996,6 +4023,18 @@ function TotemVisualizer({
                       {edge.arrowPath && (
                         <path d={edge.arrowPath} fill={strokeColor} stroke="none" />
                       )}
+                      {/* Debug waypoints - yellow dots */}
+                      {edge.debugWaypoints?.map((wp, wpIndex) => (
+                        <circle
+                          key={`${edge.id}-wp-${wpIndex}`}
+                          cx={wp.x}
+                          cy={wp.y}
+                          r={6}
+                          fill="#FBBF24"
+                          stroke="#F59E0B"
+                          strokeWidth={2}
+                        />
+                      ))}
                     </g>
                   );
                 }),
