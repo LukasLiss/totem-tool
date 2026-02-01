@@ -171,11 +171,37 @@ type EdgeSegment = {
   arrowPath?: string;
   color?: string;
   debugWaypoints?: Array<{ x: number; y: number }>; // For debugging
+  crossesNode?: boolean;
+  crossingPoints?: Array<{ x: number; y: number }>;
+  renderStart?: Point2D;
+  renderEnd?: Point2D;
 };
 
 type Point2D = { x: number; y: number };
 
 type NodeSide = 'top' | 'bottom' | 'left' | 'right';
+
+// Discrete attachment slots for each side
+type HorizontalSlot = 'left' | 'center' | 'right'; // For top/bottom sides (3 positions)
+type VerticalSlot = 'top' | 'center' | 'bottom'; // For left/right sides (3 positions, center used for single edge)
+
+type AttachmentSlot = {
+  side: NodeSide;
+  slot: HorizontalSlot | VerticalSlot;
+};
+
+// Slot positions as fractions of the node dimension
+const HORIZONTAL_SLOT_POSITIONS: Record<HorizontalSlot, number> = {
+  left: -0.3, // 30% left of center
+  center: 0, // center
+  right: 0.3, // 30% right of center
+};
+
+const VERTICAL_SLOT_POSITIONS: Record<VerticalSlot, number> = {
+  top: -0.3, // 30% above center
+  center: 0, // center (used when only 1 edge)
+  bottom: 0.3, // 30% below center
+};
 
 // Priority for edge ordering when spreading attachments: P gets center, then D, I, A
 const RELATION_PRIORITY: Record<RelationType, number> = {
@@ -194,6 +220,9 @@ type AttachmentTracker = {
   // Map from "nodeId-side" to list of edges attaching there
   targetAttachments: Map<string, EdgeDescriptor[]>;
   sourceAttachments: Map<string, EdgeDescriptor[]>; // Only 'P' edges tracked here
+  // Combined map: ALL edges (both incoming and outgoing) per node-side
+  // Used for port assignment so incoming/outgoing edges don't share same port
+  allAttachments: Map<string, EdgeDescriptor[]>;
 };
 
 type LevelNodeDescriptor = {
@@ -358,6 +387,15 @@ function lighten(hex: string, factor = 0.7) {
 // ========== SPATIAL INDEX & COLLISION DETECTION ==========
 
 const OBSTACLE_PADDING = 8; // Padding around nodes for routing
+const NODE_CROSSING_SAMPLE_STEP = 6; // px between samples along a path
+const NODE_EXIT_TOLERANCE = 4; // px allowed inside source/target box right after exit/entry
+const NODE_HIT_EXPAND = 0.5; // expands node rect slightly for conservative detection
+const ROW_ALIGNMENT_TOLERANCE = 6; // px tolerance to treat nodes as same row
+const COLUMN_ALIGNMENT_TOLERANCE = 20; // px tolerance to treat nodes as same column by X-position
+
+type PathSegment =
+  | { type: 'line'; from: Point2D; to: Point2D; length: number }
+  | { type: 'quad'; from: Point2D; control: Point2D; to: Point2D; length: number };
 
 /**
  * Builds a spatial index of all obstacles (nodes and process areas) for edge routing.
@@ -504,6 +542,162 @@ function routeCrossesObstacles(
   return crossed;
 }
 
+function pointInsideRectInclusive(p: Point2D, rect: ObstacleRect, expand = 0): boolean {
+  return (
+    p.x >= rect.left - expand &&
+    p.x <= rect.right + expand &&
+    p.y >= rect.top - expand &&
+    p.y <= rect.bottom + expand
+  );
+}
+
+function buildPathSegmentsFromWaypoints(waypoints: Point2D[]): PathSegment[] {
+  if (waypoints.length < 2) return [];
+  if (waypoints.length === 2) {
+    const [from, to] = waypoints;
+    const length = Math.hypot(to.x - from.x, to.y - from.y);
+    return [{ type: 'line', from, to, length }];
+  }
+
+  const segments: PathSegment[] = [];
+  let currentStart = waypoints[0];
+
+  for (let i = 1; i < waypoints.length - 1; i++) {
+    const prev = waypoints[i - 1];
+    const curr = waypoints[i];
+    const next = waypoints[i + 1];
+
+    const lenBefore = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    const lenAfter = Math.hypot(next.x - curr.x, next.y - curr.y);
+    const cornerRadius = Math.min(lenBefore * 0.4, lenAfter * 0.4, 40);
+
+    const beforeDir = {
+      x: (curr.x - prev.x) / Math.max(lenBefore, 1e-6),
+      y: (curr.y - prev.y) / Math.max(lenBefore, 1e-6),
+    };
+    const afterDir = {
+      x: (next.x - curr.x) / Math.max(lenAfter, 1e-6),
+      y: (next.y - curr.y) / Math.max(lenAfter, 1e-6),
+    };
+
+    const curveStart = {
+      x: curr.x - beforeDir.x * cornerRadius,
+      y: curr.y - beforeDir.y * cornerRadius,
+    };
+    const curveEnd = {
+      x: curr.x + afterDir.x * cornerRadius,
+      y: curr.y + afterDir.y * cornerRadius,
+    };
+
+    const lineLength = Math.hypot(curveStart.x - currentStart.x, curveStart.y - currentStart.y);
+    if (lineLength > 0.5) {
+      segments.push({ type: 'line', from: currentStart, to: curveStart, length: lineLength });
+    }
+
+    const quadLength =
+      Math.hypot(curveStart.x - curr.x, curveStart.y - curr.y) +
+      Math.hypot(curveEnd.x - curr.x, curveEnd.y - curr.y);
+    segments.push({ type: 'quad', from: curveStart, control: curr, to: curveEnd, length: quadLength });
+
+    currentStart = curveEnd;
+  }
+
+  const last = waypoints[waypoints.length - 1];
+  const finalLength = Math.hypot(last.x - currentStart.x, last.y - currentStart.y);
+  if (finalLength > 0.5) {
+    segments.push({ type: 'line', from: currentStart, to: last, length: finalLength });
+  }
+
+  return segments;
+}
+
+function sampleQuadraticPoint(p0: Point2D, p1: Point2D, p2: Point2D, t: number): Point2D {
+  const oneMinusT = 1 - t;
+  const x = oneMinusT * oneMinusT * p0.x + 2 * oneMinusT * t * p1.x + t * t * p2.x;
+  const y = oneMinusT * oneMinusT * p0.y + 2 * oneMinusT * t * p1.y + t * t * p2.y;
+  return { x, y };
+}
+
+function samplePathSegments(
+  segments: PathSegment[],
+  step = NODE_CROSSING_SAMPLE_STEP,
+): { samples: Array<{ point: Point2D; distance: number }>; totalLength: number } {
+  const samples: Array<{ point: Point2D; distance: number }> = [];
+  let distance = 0;
+
+  if (segments.length === 0) {
+    return { samples, totalLength: 0 };
+  }
+
+  // Seed with the very first point
+  const first = segments[0].type === 'line' ? segments[0].from : segments[0].from;
+  samples.push({ point: { ...first }, distance });
+
+  segments.forEach((segment) => {
+    const segLength = Math.max(segment.length, 0);
+    const minSteps = 4;
+    const steps = segment.type === 'line'
+      ? Math.max(minSteps, Math.ceil(segLength / Math.max(step, 1e-3)))
+      : Math.max(minSteps, Math.ceil(segLength / Math.max(step * 0.75, 1e-3)));
+
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      let point: Point2D;
+      if (segment.type === 'line') {
+        point = {
+          x: segment.from.x + (segment.to.x - segment.from.x) * t,
+          y: segment.from.y + (segment.to.y - segment.from.y) * t,
+        };
+      } else {
+        point = sampleQuadraticPoint(segment.from, segment.control, segment.to, t);
+      }
+      const increment =
+        segment.type === 'line'
+          ? segLength / steps
+          : segLength / steps; // approximate; adequate for collision sampling
+      distance += increment;
+      samples.push({ point, distance });
+    }
+  });
+
+  return { samples, totalLength: distance };
+}
+
+function detectNodeCrossings(
+  samples: Array<{ point: Point2D; distance: number }>,
+  totalLength: number,
+  nodeRects: Array<{ id: string; rect: ObstacleRect }>,
+  sourceId: string,
+  targetId: string,
+): { crosses: boolean; points: Point2D[] } {
+  const hits: Point2D[] = [];
+
+  for (const sample of samples) {
+    const distFromStart = sample.distance;
+    const distFromEnd = Math.max(totalLength - distFromStart, 0);
+
+    for (const node of nodeRects) {
+      const isSource = node.id === sourceId;
+      const isTarget = node.id === targetId;
+
+      // Allow a tiny escape distance when leaving or entering the endpoint node
+      if (isSource && distFromStart <= NODE_EXIT_TOLERANCE) continue;
+      if (isTarget && distFromEnd <= NODE_EXIT_TOLERANCE) continue;
+
+      if (pointInsideRectInclusive(sample.point, node.rect, NODE_HIT_EXPAND)) {
+        hits.push(sample.point);
+        // Capture only a few points to render markers
+        if (hits.length >= 4) {
+          return { crosses: true, points: hits };
+        }
+        break;
+      }
+    }
+  }
+
+  return { crosses: hits.length > 0, points: hits };
+}
+
 /**
  * Calculates the total length of a route.
  */
@@ -537,11 +731,29 @@ function scoreRoute(
   score += crossedNodes.length * 10;
 
   // Penalty for route length (encourages shorter routes)
-  score += calculateRouteLength(waypoints) * 1; //0.5;
+  score += calculateRouteLength(waypoints) * 0; //0.5;
 
   // Penalty for number of bends (high penalty to prefer simpler L-shapes)
   const numBends = Math.max(0, waypoints.length - 2);
   score += numBends * 350;
+
+  // Penalty for bend points (intermediate waypoints) inside process areas
+  // This encourages routes to keep their bends outside of areas
+  for (let i = 1; i < waypoints.length - 1; i++) {
+    const wp = waypoints[i];
+    for (const area of index.areaObstacles) {
+      if (excludeIds.includes(area.id)) continue;
+      // Check if waypoint is inside this area
+      if (
+        wp.x > area.rect.left &&
+        wp.x < area.rect.right &&
+        wp.y > area.rect.top &&
+        wp.y < area.rect.bottom
+      ) {
+        score += 100; // Penalty per waypoint inside an area
+      }
+    }
+  }
 
   return score;
 }
@@ -556,7 +768,7 @@ function isHorizontalSide(side: NodeSide): boolean {
 }
 
 /**
- * Gets the attachment point on a specific side of a node.
+ * Gets the attachment point on a specific side of a node (legacy - uses continuous offset).
  */
 function getAttachmentPointOnSide(
   node: NodePosition,
@@ -576,6 +788,369 @@ function getAttachmentPointOnSide(
     case 'right':
       return { x: node.centerX + halfW, y: node.centerY + offset };
   }
+}
+
+/**
+ * Gets the attachment point using discrete slots.
+ * - Top/Bottom sides have 3 slots: left, center, right
+ * - Left/Right sides have 2 slots: top, bottom
+ */
+function getAttachmentPoint(node: NodePosition, attachment: AttachmentSlot): Point2D {
+  const halfW = node.width / 2;
+  const halfH = node.height / 2;
+
+  switch (attachment.side) {
+    case 'top': {
+      const slot = attachment.slot as HorizontalSlot;
+      const offsetX = HORIZONTAL_SLOT_POSITIONS[slot] * node.width;
+      return { x: node.centerX + offsetX, y: node.centerY - halfH };
+    }
+    case 'bottom': {
+      const slot = attachment.slot as HorizontalSlot;
+      const offsetX = HORIZONTAL_SLOT_POSITIONS[slot] * node.width;
+      return { x: node.centerX + offsetX, y: node.centerY + halfH };
+    }
+    case 'left': {
+      const slot = attachment.slot as VerticalSlot;
+      const offsetY = VERTICAL_SLOT_POSITIONS[slot] * node.height;
+      return { x: node.centerX - halfW, y: node.centerY + offsetY };
+    }
+    case 'right': {
+      const slot = attachment.slot as VerticalSlot;
+      const offsetY = VERTICAL_SLOT_POSITIONS[slot] * node.height;
+      return { x: node.centerX + halfW, y: node.centerY + offsetY };
+    }
+  }
+}
+
+/**
+ * Assigns a slot based on edge index and total edges on that side.
+ * Uses center when there's only one edge, otherwise distributes across available slots.
+ */
+function assignSlot(
+  side: NodeSide,
+  edgeIndex: number,
+  totalEdges: number,
+): HorizontalSlot | VerticalSlot {
+  // Single edge (or untracked edge) on any side uses center
+  // totalEdges can be 0 for non-'P' edges that aren't tracked in sourceAttachments
+  if (totalEdges <= 1) {
+    return 'center';
+  }
+
+  // Multiple edges: use non-center slots only to spread them apart
+  if (side === 'top' || side === 'bottom') {
+    // 2 non-center horizontal slots (left/right)
+    const slots: HorizontalSlot[] = ['left', 'right'];
+    return slots[edgeIndex % 2];
+  } else {
+    // 2 non-center vertical slots (top/bottom)
+    const slots: VerticalSlot[] = ['top', 'bottom'];
+    return slots[edgeIndex % 2];
+  }
+}
+
+/**
+ * Port constraints map: edgeId-source or edgeId-target → forced port
+ * Used to enforce single-edge center and straight-edge same-port rules
+ */
+type PortConstraints = Map<string, HorizontalSlot | VerticalSlot>;
+
+/**
+ * Computes port constraints for all edges based on hard rules:
+ * 1. Single edge on a side → MUST use center (considering BOTH incoming and outgoing)
+ * 2. Straight edges → MUST use same port at both ends
+ */
+function computePortConstraints(
+  edges: EdgeDescriptor[],
+  routes: Map<string, RouteCandidate>,
+  attachments: AttachmentTracker,
+): PortConstraints {
+  const constraints: PortConstraints = new Map();
+
+  // Pass 1: Single-edge sides get center constraint
+  // Use allAttachments to check if there's truly only ONE edge (either direction) on this side
+  for (const [key, edgeList] of attachments.allAttachments) {
+    if (edgeList.length === 1) {
+      const edge = edgeList[0];
+      const route = routes.get(edge.id);
+      if (!route) continue;
+
+      // Determine if this edge is source or target at this node-side
+      const [nodeId, side] = key.split('-');
+      const isSource = edge.from === nodeId;
+      const isTarget = edge.to === nodeId;
+
+      if (isSource) {
+        constraints.set(edge.id + '-source', 'center');
+      }
+      if (isTarget) {
+        constraints.set(edge.id + '-target', 'center');
+      }
+    }
+  }
+
+  // Pass 2: Straight edges propagate center constraint to other end
+  // Iterate until no more changes (handles chains of straight edges)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of edges) {
+      const route = routes.get(edge.id);
+      const isStraight = route && route.waypoints.length === 2;
+
+      if (isStraight) {
+        const sourceKey = edge.id + '-source';
+        const targetKey = edge.id + '-target';
+
+        // If target is center-constrained, source must be center too
+        if (constraints.get(targetKey) === 'center' && !constraints.has(sourceKey)) {
+          constraints.set(sourceKey, 'center');
+          changed = true;
+        }
+        // If source is center-constrained, target must be center too
+        if (constraints.get(sourceKey) === 'center' && !constraints.has(targetKey)) {
+          constraints.set(targetKey, 'center');
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return constraints;
+}
+
+/**
+ * Gets the position for sorting edges to minimize crossings.
+ *
+ * Key insight: For L-shaped edges, the waypoint (bend point) often has the same Y
+ * as the target (for horizontal entry). So sorting by waypoint doesn't work.
+ *
+ * Instead, sort by the OTHER endpoint position:
+ * - For target attachments (edges entering): use SOURCE position
+ * - For source attachments (edges leaving): use TARGET position
+ *
+ * This determines where the edge "comes from" or "goes to" visually.
+ */
+function getPositionForSorting(
+  edge: EdgeDescriptor,
+  positions: Record<string, NodePosition>,
+  isSourceAttachment: boolean,
+): { x: number; y: number } {
+  const source = positions[edge.from];
+  const target = positions[edge.to];
+
+  if (!source || !target) {
+    return { x: 0, y: 0 };
+  }
+
+  // Use the OTHER endpoint for sorting:
+  // - For edges entering a node (target attachment): sort by source position
+  // - For edges leaving a node (source attachment): sort by target position
+  if (isSourceAttachment) {
+    return { x: target.centerX, y: target.centerY };
+  } else {
+    return { x: source.centerX, y: source.centerY };
+  }
+}
+
+/**
+ * Sorts edges by their waypoint position for optimal port assignment.
+ * - For left/right sides: sort by Y (lower Y → top port)
+ * - For top/bottom sides: sort by X (lower X → left port)
+ */
+/**
+ * Sorts edges by the position of their other endpoint to minimize crossings.
+ *
+ * For edges entering/leaving from the same side, we want to assign ports
+ * such that edges don't cross. The key insight:
+ *
+ * - For RIGHT side: edges from upper-left should use top port, lower-right should use bottom
+ * - For LEFT side: edges from upper-right should use top port, lower-left should use bottom
+ * - For TOP side: edges from upper-left should use left port, upper-right should use right
+ * - For BOTTOM side: edges from lower-left should use left port, lower-right should use right
+ *
+ * We achieve this by sorting by Y primarily, with X as tiebreaker for similar Y values.
+ */
+function sortEdgesByPosition(
+  edgesToSort: EdgeDescriptor[],
+  side: NodeSide,
+  positions: Record<string, NodePosition>,
+  isSourceAttachment: boolean,
+): EdgeDescriptor[] {
+  return [...edgesToSort].sort((a, b) => {
+    const posA = getPositionForSorting(a, positions, isSourceAttachment);
+    const posB = getPositionForSorting(b, positions, isSourceAttachment);
+
+    if (side === 'left' || side === 'right') {
+      // Vertical slots: sort by Y (lower Y → top port)
+      // Tiebreaker: for similar Y, use X to minimize crossings
+      const yDiff = posA.y - posB.y;
+      if (Math.abs(yDiff) < 20) {
+        // Similar Y values - use X as tiebreaker
+        // For RIGHT side: lower X (further left) → top port (to avoid crossing with edges from right)
+        // For LEFT side: higher X (further right) → top port (to avoid crossing with edges from left)
+        if (side === 'right') {
+          return posA.x - posB.x; // Lower X → top
+        } else {
+          return posB.x - posA.x; // Higher X → top
+        }
+      }
+      return yDiff;
+    } else {
+      // Horizontal slots: sort by X (lower X → left port)
+      // Tiebreaker: for similar X, use Y to minimize crossings
+      const xDiff = posA.x - posB.x;
+      if (Math.abs(xDiff) < 20) {
+        // Similar X values - use Y as tiebreaker
+        // For TOP side: lower Y (further up) → left port
+        // For BOTTOM side: higher Y (further down) → left port
+        if (side === 'top') {
+          return posA.y - posB.y; // Lower Y → left
+        } else {
+          return posB.y - posA.y; // Higher Y → left
+        }
+      }
+      return xDiff;
+    }
+  });
+}
+
+/**
+ * Assigns a port for an edge based on constraints and position-based optimization.
+ *
+ * Hard constraints (always enforced):
+ * 1. If edge has a constraint in the map → use that port
+ * 2. Single edge on side → center (handled by constraints)
+ * 3. Straight edges → same port at both ends (handled by constraints)
+ *
+ * Optimization (for unconstrained edges):
+ * - Sort by other endpoint position (source for target attachments, target for source)
+ * - Assign ports to minimize crossings
+ * - Use all 3 ports if center is available, or top/bottom if center is taken
+ */
+function assignPort(
+  side: NodeSide,
+  edge: EdgeDescriptor,
+  edgesOnSameSide: EdgeDescriptor[],
+  constraints: PortConstraints,
+  positions: Record<string, NodePosition>,
+  isSourceAttachment: boolean,
+): HorizontalSlot | VerticalSlot {
+  const constraintKey = edge.id + (isSourceAttachment ? '-source' : '-target');
+
+  // If this edge has a constraint, return it
+  if (constraints.has(constraintKey)) {
+    return constraints.get(constraintKey)!;
+  }
+
+  // Find which edges on this side are constrained to center
+  const constrainedToCenterEdges = edgesOnSameSide.filter((e) => {
+    const key = e.id + (isSourceAttachment ? '-source' : '-target');
+    return constraints.get(key) === 'center';
+  });
+  const centerTaken = constrainedToCenterEdges.length > 0;
+
+  // Get unconstrained edges (excluding those constrained to center)
+  const unconstrainedEdges = edgesOnSameSide.filter((e) => {
+    const key = e.id + (isSourceAttachment ? '-source' : '-target');
+    return !constraints.has(key);
+  });
+
+  // If this edge is not in the unconstrained list, it's constrained - shouldn't happen but be safe
+  if (!unconstrainedEdges.find((e) => e.id === edge.id)) {
+    return 'center';
+  }
+
+  // Sort unconstrained edges by the position of their other endpoint
+  const sorted = sortEdgesByPosition(unconstrainedEdges, side, positions, isSourceAttachment);
+  const index = sorted.findIndex((e) => e.id === edge.id);
+
+  if (index === -1) return 'center';
+
+  // Assign ports based on sorted position
+  if (side === 'left' || side === 'right') {
+    // Vertical slots: top, center, bottom
+    if (centerTaken) {
+      // Center is taken, use only top/bottom
+      const slots: VerticalSlot[] = ['top', 'bottom'];
+      return slots[index % 2];
+    } else {
+      // Center is available, use all 3 slots
+      const slots: VerticalSlot[] = ['top', 'center', 'bottom'];
+      return slots[Math.min(index, 2)];
+    }
+  } else {
+    // Horizontal slots: left, center, right
+    if (centerTaken) {
+      // Center is taken, use only left/right
+      const slots: HorizontalSlot[] = ['left', 'right'];
+      return slots[index % 2];
+    } else {
+      // Center is available, use all 3 slots
+      const slots: HorizontalSlot[] = ['left', 'center', 'right'];
+      return slots[Math.min(index, 2)];
+    }
+  }
+}
+
+/**
+ * Chooses matching slots for straight edges to ensure perfect horizontal/vertical lines.
+ * Returns null if nodes are not aligned for a straight edge.
+ */
+function chooseStraightEdgeSlots(
+  source: NodePosition,
+  target: NodePosition,
+): { sourceSlot: AttachmentSlot; targetSlot: AttachmentSlot } | null {
+  const dx = target.centerX - source.centerX;
+  const dy = target.centerY - source.centerY;
+
+  // Check if mostly horizontal (can use right→left)
+  if (Math.abs(dx) > Math.abs(dy) * 2 && dx > source.width / 2 + target.width / 2) {
+    // Target is to the right - exit right, enter left
+    // Determine which vertical slot based on relative Y position
+    const relativeY = dy / source.height;
+    const slot: VerticalSlot = relativeY < -0.15 ? 'top' : relativeY > 0.15 ? 'bottom' : 'center';
+    return {
+      sourceSlot: { side: 'right', slot },
+      targetSlot: { side: 'left', slot }, // Same slot for straight line
+    };
+  }
+
+  // Check if mostly horizontal going left
+  if (Math.abs(dx) > Math.abs(dy) * 2 && dx < -(source.width / 2 + target.width / 2)) {
+    // Target is to the left - exit left, enter right
+    const relativeY = dy / source.height;
+    const slot: VerticalSlot = relativeY < -0.15 ? 'top' : relativeY > 0.15 ? 'bottom' : 'center';
+    return {
+      sourceSlot: { side: 'left', slot },
+      targetSlot: { side: 'right', slot },
+    };
+  }
+
+  // Check if mostly vertical going down (can use bottom→top)
+  if (Math.abs(dy) > Math.abs(dx) * 2 && dy > source.height / 2 + target.height / 2) {
+    const relativeX = dx / source.width;
+    const slot: HorizontalSlot =
+      relativeX < -0.15 ? 'left' : relativeX > 0.15 ? 'right' : 'center';
+    return {
+      sourceSlot: { side: 'bottom', slot },
+      targetSlot: { side: 'top', slot }, // Same slot for straight line
+    };
+  }
+
+  // Check if mostly vertical going up (can use top→bottom)
+  if (Math.abs(dy) > Math.abs(dx) * 2 && dy < -(source.height / 2 + target.height / 2)) {
+    const relativeX = dx / source.width;
+    const slot: HorizontalSlot =
+      relativeX < -0.15 ? 'left' : relativeX > 0.15 ? 'right' : 'center';
+    return {
+      sourceSlot: { side: 'top', slot },
+      targetSlot: { side: 'bottom', slot },
+    };
+  }
+
+  return null; // Not suitable for straight edge
 }
 
 /**
@@ -1041,6 +1616,9 @@ function buildParallelBars({
   edgeScale,
   sourceNormal,
   targetNormal,
+  targetUnitX,
+  targetUnitY,
+  targetPathLength,
 }: {
   startX: number;
   startY: number;
@@ -1052,11 +1630,17 @@ function buildParallelBars({
   edgeScale: number;
   sourceNormal?: Point2D;
   targetNormal?: Point2D;
+  targetUnitX?: number;
+  targetUnitY?: number;
+  targetPathLength?: number;
 }): {
   bars: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   innerOffset: number | null;
 } {
-  const effectiveLength = Math.max(pathLength, 1);
+  // Use separate lengths for source and target segment calculations
+  const sourceEffectiveLength = Math.max(pathLength, 1);
+  const targetEffectiveLength = Math.max(targetPathLength ?? pathLength, 1);
+  const effectiveLength = Math.min(sourceEffectiveLength, targetEffectiveLength);
   if (!Number.isFinite(effectiveLength) || effectiveLength <= 0) {
     return { bars: [], innerOffset: null };
   }
@@ -1152,14 +1736,18 @@ function buildParallelBars({
     barPositions.push({ point, nearSource });
   };
 
+  // Use source segment direction for source bars, target segment direction for target bars
+  const tUnitX = targetUnitX ?? unitX;
+  const tUnitY = targetUnitY ?? unitY;
+
   uniqueOffsets.forEach((offset) => {
     addPosition(
       { x: startX + unitX * offset, y: startY + unitY * offset },
-      true, // near source
+      true, // near source - use source segment direction
     );
     addPosition(
-      { x: endX - unitX * offset, y: endY - unitY * offset },
-      false, // near target
+      { x: endX - tUnitX * offset, y: endY - tUnitY * offset },
+      false, // near target - use target segment direction
     );
   });
 
@@ -1314,6 +1902,7 @@ function buildAttachmentTracker(
 ): AttachmentTracker {
   const targetAttachments = new Map<string, EdgeDescriptor[]>();
   const sourceAttachments = new Map<string, EdgeDescriptor[]>();
+  const allAttachments = new Map<string, EdgeDescriptor[]>();
 
   for (const edge of edges) {
     const source = positions[edge.from];
@@ -1323,23 +1912,36 @@ function buildAttachmentTracker(
     const sourceCenter = { x: source.centerX, y: source.centerY };
     const targetCenter = { x: target.centerX, y: target.centerY };
 
-    // Predict target attachment side
+    // Predict attachment sides
+    const sourceSide = predictAttachmentSide(sourceCenter, targetCenter, true);
     const targetSide = predictAttachmentSide(sourceCenter, targetCenter, false);
+    const sourceKey = `${edge.from}-${sourceSide}`;
     const targetKey = `${edge.to}-${targetSide}`;
+
+    // Track target attachments (all edges)
     if (!targetAttachments.has(targetKey)) {
       targetAttachments.set(targetKey, []);
     }
     targetAttachments.get(targetKey)!.push(edge);
 
-    // Only track source attachments for 'P' edges
+    // Track source attachments (P edges only)
     if (edge.relation === 'P') {
-      const sourceSide = predictAttachmentSide(sourceCenter, targetCenter, true);
-      const sourceKey = `${edge.from}-${sourceSide}`;
       if (!sourceAttachments.has(sourceKey)) {
         sourceAttachments.set(sourceKey, []);
       }
       sourceAttachments.get(sourceKey)!.push(edge);
     }
+
+    // Track ALL attachments (both source and target, all edge types)
+    if (!allAttachments.has(sourceKey)) {
+      allAttachments.set(sourceKey, []);
+    }
+    allAttachments.get(sourceKey)!.push(edge);
+
+    if (!allAttachments.has(targetKey)) {
+      allAttachments.set(targetKey, []);
+    }
+    allAttachments.get(targetKey)!.push(edge);
   }
 
   // Sort each attachment list by priority (P first, then D, I, A)
@@ -1352,8 +1954,75 @@ function buildAttachmentTracker(
   for (const list of sourceAttachments.values()) {
     list.sort(sortByPriority);
   }
+  for (const list of allAttachments.values()) {
+    list.sort(sortByPriority);
+  }
 
-  return { targetAttachments, sourceAttachments };
+  return { targetAttachments, sourceAttachments, allAttachments };
+}
+
+/**
+ * Builds attachment tracker using ACTUAL route sides (not predicted).
+ * This ensures edges are grouped by their real attachment points.
+ */
+function buildAttachmentTrackerFromRoutes(
+  edges: EdgeDescriptor[],
+  routes: Map<string, RouteCandidate>,
+): AttachmentTracker {
+  const targetAttachments = new Map<string, EdgeDescriptor[]>();
+  const sourceAttachments = new Map<string, EdgeDescriptor[]>();
+  const allAttachments = new Map<string, EdgeDescriptor[]>();
+
+  const sortByPriority = (a: EdgeDescriptor, b: EdgeDescriptor) =>
+    RELATION_PRIORITY[a.relation] - RELATION_PRIORITY[b.relation];
+
+  edges.forEach((edge) => {
+    const route = routes.get(edge.id);
+    if (!route) return;
+
+    const { sourceExit, targetEntry } = route;
+    const sourceKey = `${edge.from}-${sourceExit}`;
+    const targetKey = `${edge.to}-${targetEntry}`;
+
+    // Track target attachments (all edges)
+    if (!targetAttachments.has(targetKey)) {
+      targetAttachments.set(targetKey, []);
+    }
+    targetAttachments.get(targetKey)!.push(edge);
+
+    // Track source attachments (P edges only)
+    if (edge.relation === 'P') {
+      if (!sourceAttachments.has(sourceKey)) {
+        sourceAttachments.set(sourceKey, []);
+      }
+      sourceAttachments.get(sourceKey)!.push(edge);
+    }
+
+    // Track ALL attachments (both source and target, all edge types)
+    // This is used for port assignment so incoming/outgoing edges don't overlap
+    if (!allAttachments.has(sourceKey)) {
+      allAttachments.set(sourceKey, []);
+    }
+    allAttachments.get(sourceKey)!.push(edge);
+
+    if (!allAttachments.has(targetKey)) {
+      allAttachments.set(targetKey, []);
+    }
+    allAttachments.get(targetKey)!.push(edge);
+  });
+
+  // Sort by relation priority
+  for (const list of targetAttachments.values()) {
+    list.sort(sortByPriority);
+  }
+  for (const list of sourceAttachments.values()) {
+    list.sort(sortByPriority);
+  }
+  for (const list of allAttachments.values()) {
+    list.sort(sortByPriority);
+  }
+
+  return { targetAttachments, sourceAttachments, allAttachments };
 }
 
 /**
@@ -1529,6 +2198,8 @@ function computeEdgeSegments(
   areaRects?: Record<string, Rect>,
   detailNodeIds?: Set<string>,
   edgeScale = 1,
+  nodeColumns?: Record<string, number>,
+  nodeAreaMap?: Map<string, string>,
 ): EdgeSegment[] {
   const segments: EdgeSegment[] = [];
 
@@ -1543,9 +2214,174 @@ function computeEdgeSegments(
       )
     : undefined;
   const spatialIndex = buildSpatialIndex(positions, obstacleAreaRects, detailNodeIds);
+  const nodeRectsForCollision: Array<{ id: string; rect: ObstacleRect }> = Object.entries(
+    positions,
+  )
+    .filter(
+      ([id]) =>
+        !detailNodeIds?.has(id) &&
+        !id.endsWith('::detail') &&
+        !id.endsWith('::anchor'),
+  )
+    .map(([id, pos]) => {
+      const halfW = pos.width / 2;
+      const halfH = pos.height / 2;
+      return {
+        id,
+        rect: {
+          left: pos.centerX - halfW,
+          right: pos.centerX + halfW,
+          top: pos.centerY - halfH,
+          bottom: pos.centerY + halfH,
+        },
+      };
+    });
 
-  // Build attachment tracker to calculate offsets for overlapping edges
-  const attachmentTracker = buildAttachmentTracker(edges, positions);
+  const columnHasBlockingNode = (
+    column: number,
+    sourceId: string,
+    targetId: string,
+    positionsMap: Record<string, NodePosition>,
+  ) => {
+    if (!nodeColumns) return false;
+    const sourcePos = positionsMap[sourceId];
+    const targetPos = positionsMap[targetId];
+    if (!sourcePos || !targetPos) return false;
+
+    // Compute the actual attachment points (center of top/bottom edge)
+    const sourceIsAbove = sourcePos.centerY < targetPos.centerY;
+    const startPoint: Point2D = {
+      x: sourcePos.centerX,
+      y: sourceIsAbove ? sourcePos.centerY + sourcePos.height / 2 : sourcePos.centerY - sourcePos.height / 2,
+    };
+    const endPoint: Point2D = {
+      x: targetPos.centerX,
+      y: sourceIsAbove ? targetPos.centerY - targetPos.height / 2 : targetPos.centerY + targetPos.height / 2,
+    };
+
+    for (const [nodeId, col] of Object.entries(nodeColumns)) {
+      if (col !== column) continue;
+      if (nodeId === sourceId || nodeId === targetId) continue;
+      const pos = positionsMap[nodeId];
+      if (!pos) continue;
+      if (detailNodeIds?.has(nodeId) || nodeId.endsWith('::detail') || nodeId.endsWith('::anchor')) continue;
+
+      // Compute node's bounding box with OBSTACLE_PADDING to match spatialIndex
+      const halfW = pos.width / 2 + OBSTACLE_PADDING;
+      const halfH = pos.height / 2 + OBSTACLE_PADDING;
+      const nodeRect: ObstacleRect = {
+        left: pos.centerX - halfW,
+        right: pos.centerX + halfW,
+        top: pos.centerY - halfH,
+        bottom: pos.centerY + halfH,
+      };
+
+      if (segmentIntersectsRect(startPoint, endPoint, nodeRect)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const rowHasBlockingNode = (
+    sourceId: string,
+    targetId: string,
+    positionsMap: Record<string, NodePosition>,
+  ) => {
+    const sourcePos = positionsMap[sourceId];
+    const targetPos = positionsMap[targetId];
+    if (!sourcePos || !targetPos) return false;
+
+    // Compute the actual attachment points (center of left/right edge)
+    const sourceIsLeft = sourcePos.centerX < targetPos.centerX;
+    const startPoint: Point2D = {
+      x: sourceIsLeft ? sourcePos.centerX + sourcePos.width / 2 : sourcePos.centerX - sourcePos.width / 2,
+      y: sourcePos.centerY,
+    };
+    const endPoint: Point2D = {
+      x: sourceIsLeft ? targetPos.centerX - targetPos.width / 2 : targetPos.centerX + targetPos.width / 2,
+      y: targetPos.centerY,
+    };
+
+    for (const [nodeId, pos] of Object.entries(positionsMap)) {
+      if (nodeId === sourceId || nodeId === targetId) continue;
+      if (detailNodeIds?.has(nodeId) || nodeId.endsWith('::detail') || nodeId.endsWith('::anchor')) continue;
+
+      // Compute node's bounding box with OBSTACLE_PADDING to match spatialIndex
+      const halfW = pos.width / 2 + OBSTACLE_PADDING;
+      const halfH = pos.height / 2 + OBSTACLE_PADDING;
+      const nodeRect: ObstacleRect = {
+        left: pos.centerX - halfW,
+        right: pos.centerX + halfW,
+        top: pos.centerY - halfH,
+        bottom: pos.centerY + halfH,
+      };
+
+      if (segmentIntersectsRect(startPoint, endPoint, nodeRect)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Check for blocking nodes based on actual X-position (not logical column index)
+  // Uses actual line segment intersection to match routeCrossesObstacles behavior
+  const columnHasBlockingNodeByPosition = (
+    sourceId: string,
+    targetId: string,
+    positionsMap: Record<string, NodePosition>,
+  ) => {
+    const sourcePos = positionsMap[sourceId];
+    const targetPos = positionsMap[targetId];
+    if (!sourcePos || !targetPos) return false;
+
+    // Compute the actual attachment points (center of top/bottom edge)
+    const sourceIsAbove = sourcePos.centerY < targetPos.centerY;
+    const startPoint: Point2D = {
+      x: sourcePos.centerX,
+      y: sourceIsAbove ? sourcePos.centerY + sourcePos.height / 2 : sourcePos.centerY - sourcePos.height / 2,
+    };
+    const endPoint: Point2D = {
+      x: targetPos.centerX,
+      y: sourceIsAbove ? targetPos.centerY - targetPos.height / 2 : targetPos.centerY + targetPos.height / 2,
+    };
+
+    // Check each node for intersection with the line segment
+    for (const [nodeId, pos] of Object.entries(positionsMap)) {
+      if (nodeId === sourceId || nodeId === targetId) continue;
+      if (detailNodeIds?.has(nodeId) || nodeId.endsWith('::detail') || nodeId.endsWith('::anchor')) continue;
+
+      // Compute node's bounding box with OBSTACLE_PADDING to match spatialIndex
+      const halfW = pos.width / 2 + OBSTACLE_PADDING;
+      const halfH = pos.height / 2 + OBSTACLE_PADDING;
+      const nodeRect: ObstacleRect = {
+        left: pos.centerX - halfW,
+        right: pos.centerX + halfW,
+        top: pos.centerY - halfH,
+        bottom: pos.centerY + halfH,
+      };
+
+      // Use the same intersection check as routeCrossesObstacles
+      if (segmentIntersectsRect(startPoint, endPoint, nodeRect)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // ============================================================
+  // PASS 1: Compute all routes FIRST (before building attachment tracker)
+  // This allows us to group edges by their ACTUAL route sides, not predicted sides
+  // ============================================================
+  const edgeRoutes = new Map<string, RouteCandidate>();
+  const edgeMetadata = new Map<
+    string,
+    {
+      treatAsStraight: boolean;
+      isAreaDetailEdge: boolean;
+      straightSlots?: { sourceSlot: AttachmentSlot; targetSlot: AttachmentSlot };
+    }
+  >();
 
   edges.forEach((edge) => {
     const source = positions[edge.from];
@@ -1571,7 +2407,223 @@ function computeEdgeSegments(
     let startPoint: Point2D = { ...sourceExitDefault };
     let collisionPoint: Point2D = { ...targetEntryDefault };
 
+    const centerDx = targetCenter.x - sourceCenter.x;
+    const centerDy = targetCenter.y - sourceCenter.y;
+    let treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
+    let forcedStraightSlots: { sourceSlot: AttachmentSlot; targetSlot: AttachmentSlot } | null = null;
+
+    // STEP 1: force straight edges for same column/row with clear path
+    const sameColumnByIndex =
+      nodeColumns &&
+      nodeColumns[edge.from] !== undefined &&
+      nodeColumns[edge.to] !== undefined &&
+      nodeColumns[edge.from] === nodeColumns[edge.to];
+    // Also check by actual X-position alignment
+    const sameColumnByPosition = Math.abs(sourceCenter.x - targetCenter.x) <= COLUMN_ALIGNMENT_TOLERANCE;
+    const sameRow = Math.abs(sourceCenter.y - targetCenter.y) <= ROW_ALIGNMENT_TOLERANCE;
+
+    if (!isAreaDetailEdge) {
+      // Check same column: either by logical index OR by position alignment
+      const sameColumnNoBlocker =
+        (sameColumnByIndex && !columnHasBlockingNode(nodeColumns![edge.from]!, edge.from, edge.to, positions)) ||
+        (sameColumnByPosition && !columnHasBlockingNodeByPosition(edge.from, edge.to, positions));
+      if (sameColumnNoBlocker) {
+        treatAsStraight = true;
+        const sourceSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'bottom', slot: 'center' }
+            : { side: 'top', slot: 'center' };
+        const targetSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'top', slot: 'center' }
+            : { side: 'bottom', slot: 'center' };
+        forcedStraightSlots = { sourceSlot, targetSlot };
+        startPoint = getAttachmentPoint(source, sourceSlot);
+        collisionPoint = getAttachmentPoint(target, targetSlot);
+      } else if (
+        sameRow &&
+        !rowHasBlockingNode(edge.from, edge.to, positions)
+      ) {
+        treatAsStraight = true;
+        const sourceSlot: AttachmentSlot =
+          targetCenter.x >= sourceCenter.x
+            ? { side: 'right', slot: 'center' }
+            : { side: 'left', slot: 'center' };
+        const targetSlot: AttachmentSlot =
+          targetCenter.x >= sourceCenter.x
+            ? { side: 'left', slot: 'center' }
+            : { side: 'right', slot: 'center' };
+        forcedStraightSlots = { sourceSlot, targetSlot };
+        startPoint = getAttachmentPoint(source, sourceSlot);
+        collisionPoint = getAttachmentPoint(target, targetSlot);
+      }
+    }
+
+    // Inter-area special case: same column and no blocking nodes -> force vertical straight edge
+    const sourceArea = nodeAreaMap?.get(edge.from);
+    const targetArea = nodeAreaMap?.get(edge.to);
+    const isInterAreaEdge = Boolean(sourceArea && targetArea && sourceArea !== targetArea);
+    if (!isAreaDetailEdge && isInterAreaEdge) {
+      const sourceCol = nodeColumns?.[edge.from];
+      const targetCol = nodeColumns?.[edge.to];
+      const sameColByIdx = sourceCol !== undefined && targetCol !== undefined && sourceCol === targetCol;
+      const interAreaSameColumnNoBlocker =
+        (sameColByIdx && !columnHasBlockingNode(sourceCol!, edge.from, edge.to, positions)) ||
+        (sameColumnByPosition && !columnHasBlockingNodeByPosition(edge.from, edge.to, positions));
+      if (interAreaSameColumnNoBlocker) {
+        treatAsStraight = true;
+        const sourceSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'bottom', slot: 'center' }
+            : { side: 'top', slot: 'center' };
+        const targetSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'top', slot: 'center' }
+            : { side: 'bottom', slot: 'center' };
+        forcedStraightSlots = { sourceSlot, targetSlot };
+      }
+    }
+
+    // Check if a "straight" path would cross NODE obstacles
+    if (treatAsStraight && !isAreaDetailEdge) {
+      const straightPath = [startPoint, collisionPoint];
+      const crossedObstacles = routeCrossesObstacles(straightPath, spatialIndex, [edge.from, edge.to]);
+      const crossedNodes = crossedObstacles.filter((o) => o.type === 'node');
+      if (crossedNodes.length > 0) {
+        treatAsStraight = false;
+      }
+    }
+
+    if (!treatAsStraight && !isAreaDetailEdge) {
+      // Compute and store the route
+      let bestRoute = findBestRoute(source, target, edge.from, edge.to, spatialIndex);
+
+      // Fallback: inter-area, same column, no blockers → force straight if routing failed
+      const fallbackSourceArea = nodeAreaMap?.get(edge.from);
+      const fallbackTargetArea = nodeAreaMap?.get(edge.to);
+      const fallbackSourceCol = nodeColumns?.[edge.from];
+      const fallbackTargetCol = nodeColumns?.[edge.to];
+      const fallbackSameColByIdx = fallbackSourceCol !== undefined && fallbackTargetCol !== undefined && fallbackSourceCol === fallbackTargetCol;
+      const canForceStraight =
+        fallbackSourceArea &&
+        fallbackTargetArea &&
+        fallbackSourceArea !== fallbackTargetArea &&
+        ((fallbackSameColByIdx && !columnHasBlockingNode(fallbackSourceCol!, edge.from, edge.to, positions)) ||
+         (sameColumnByPosition && !columnHasBlockingNodeByPosition(edge.from, edge.to, positions)));
+
+      if ((!Number.isFinite(bestRoute.score) || bestRoute.score === Infinity) && canForceStraight) {
+        const sourceSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'bottom', slot: 'center' }
+            : { side: 'top', slot: 'center' };
+        const targetSlot: AttachmentSlot =
+          targetCenter.y >= sourceCenter.y
+            ? { side: 'top', slot: 'center' }
+            : { side: 'bottom', slot: 'center' };
+        const straightPath = [
+          getAttachmentPoint(source, sourceSlot),
+          getAttachmentPoint(target, targetSlot),
+        ];
+        const crossings = routeCrossesObstacles(straightPath, spatialIndex, [edge.from, edge.to]);
+        if (!crossings.some((o) => o.type === 'node')) {
+          bestRoute = {
+            waypoints: straightPath,
+            sourceExit: sourceSlot.side,
+            targetEntry: targetSlot.side,
+            score: 0,
+          };
+          treatAsStraight = true;
+          forcedStraightSlots = { sourceSlot, targetSlot };
+        }
+      }
+
+      edgeRoutes.set(edge.id, bestRoute);
+      edgeMetadata.set(edge.id, { treatAsStraight: treatAsStraight, isAreaDetailEdge: false, straightSlots: forcedStraightSlots ?? undefined });
+    } else if (treatAsStraight && !isAreaDetailEdge) {
+      // For straight edges, create a synthetic route to track attachment sides
+      const straightSlots = forcedStraightSlots ?? chooseStraightEdgeSlots(source, target);
+      if (straightSlots) {
+        const syntheticRoute: RouteCandidate = {
+          waypoints: [
+            getAttachmentPoint(source, straightSlots.sourceSlot),
+            getAttachmentPoint(target, straightSlots.targetSlot),
+          ],
+          sourceExit: straightSlots.sourceSlot.side,
+          targetEntry: straightSlots.targetSlot.side,
+          score: 0,
+        };
+        edgeRoutes.set(edge.id, syntheticRoute);
+        edgeMetadata.set(edge.id, {
+          treatAsStraight: true,
+          isAreaDetailEdge: false,
+          straightSlots,
+        });
+      } else {
+        // Fallback for straight edges without good slots
+        const sourceSide = determineNodeSide(startPoint, sourceCenter, source.width, source.height);
+        const targetSide = determineNodeSide(
+          collisionPoint,
+          targetCenter,
+          target.width,
+          target.height,
+        );
+        const syntheticRoute: RouteCandidate = {
+          waypoints: [startPoint, collisionPoint],
+          sourceExit: sourceSide,
+          targetEntry: targetSide,
+          score: 0,
+        };
+        edgeRoutes.set(edge.id, syntheticRoute);
+        edgeMetadata.set(edge.id, { treatAsStraight: true, isAreaDetailEdge: false });
+      }
+    } else {
+      // Area detail edge - use predicted sides
+      const sourceSide = predictAttachmentSide(sourceCenter, targetCenter, true);
+      const targetSide = predictAttachmentSide(sourceCenter, targetCenter, false);
+      const syntheticRoute: RouteCandidate = {
+        waypoints: [startPoint, collisionPoint],
+        sourceExit: sourceSide,
+        targetEntry: targetSide,
+        score: 0,
+      };
+      edgeRoutes.set(edge.id, syntheticRoute);
+      edgeMetadata.set(edge.id, { treatAsStraight: false, isAreaDetailEdge: true });
+    }
+  });
+
+  // ============================================================
+  // PASS 2: Build attachment tracker from ACTUAL routes
+  // ============================================================
+  const attachmentTracker = buildAttachmentTrackerFromRoutes(edges, edgeRoutes);
+
+  // ============================================================
+  // PASS 3: Compute port constraints
+  // - Single edge on side → center
+  // - Straight edges → same port at both ends
+  // ============================================================
+  const portConstraints = computePortConstraints(edges, edgeRoutes, attachmentTracker);
+
+  // ============================================================
+  // PASS 4: Assign ports and build edge segments
+  // ============================================================
+  edges.forEach((edge) => {
+    const source = positions[edge.from];
+    const target = positions[edge.to];
+    if (!source || !target) return;
+
+    const metadata = edgeMetadata.get(edge.id);
+    const bestRoute = edgeRoutes.get(edge.id);
+    if (!metadata || !bestRoute) return;
+
+    const { treatAsStraight, isAreaDetailEdge, straightSlots } = metadata;
+    const sourceCenter: Point2D = { x: source.centerX, y: source.centerY };
+    const targetCenter: Point2D = { x: target.centerX, y: target.centerY };
+
+    let startPoint: Point2D;
+    let collisionPoint: Point2D;
+
     if (isAreaDetailEdge) {
+      // Handle area detail edges as before
       const memberIds = areaAnchorMembers?.[edge.from] ?? [];
       const memberCenters = memberIds
         .map((member) => positions[member])
@@ -1600,150 +2652,81 @@ function computeEdgeSegments(
         x: targetCenter.x - (Math.max(target.width, 1) / 2) * horizontalDirection,
         y: clampedTargetY,
       };
-    }
-
-    const centerDx = targetCenter.x - sourceCenter.x;
-    const centerDy = targetCenter.y - sourceCenter.y;
-    let treatAsStraight = isAreaDetailEdge ? false : shouldRenderStraightSegment(centerDx, centerDy);
-
-    // Check if a "straight" path would cross NODE obstacles - if so, use routing instead
-    // We only check nodes here, not areas - edges within the same area should stay straight
-    if (treatAsStraight && !isAreaDetailEdge) {
-      const straightPath = [startPoint, collisionPoint];
-      const crossedObstacles = routeCrossesObstacles(straightPath, spatialIndex, [edge.from, edge.to]);
-      // Only force routing if we cross actual NODES, not just area boundaries
-      const crossedNodes = crossedObstacles.filter((o) => o.type === 'node');
-      if (crossedNodes.length > 0) {
-        treatAsStraight = false; // Force routing to avoid obstacles
+    } else if (treatAsStraight) {
+      // Handle straight edges
+      if (straightSlots) {
+        startPoint = getAttachmentPoint(source, straightSlots.sourceSlot);
+        collisionPoint = getAttachmentPoint(target, straightSlots.targetSlot);
+      } else {
+        // Fallback
+        const sourceSide = bestRoute.sourceExit;
+        const targetSide = bestRoute.targetEntry;
+        const sourceSlotValue: HorizontalSlot | VerticalSlot =
+          sourceSide === 'top' || sourceSide === 'bottom' ? 'center' : 'top';
+        const targetSlotValue: HorizontalSlot | VerticalSlot =
+          targetSide === 'top' || targetSide === 'bottom' ? 'center' : 'top';
+        startPoint = getAttachmentPoint(source, { side: sourceSide, slot: sourceSlotValue });
+        collisionPoint = getAttachmentPoint(target, { side: targetSide, slot: targetSlotValue });
       }
-    }
-
-    // Store the best route waypoints for multi-segment paths
-    let routeWaypoints: Point2D[] | null = null;
-
-    if (!treatAsStraight && !isAreaDetailEdge) {
-      const sourceHalfHeight = Math.max(source.height, 1) / 2;
-      const sourceHalfWidth = Math.max(source.width, 1) / 2;
-      const targetHalfWidth = Math.max(target.width, 1) / 2;
-      const targetHalfHeight = Math.max(target.height, 1) / 2;
-
-      // Use multi-option routing to find the best path that avoids obstacles
-      const bestRoute = findBestRoute(
-        source,
-        target,
-        edge.from,
-        edge.to,
-        spatialIndex,
-      );
-
+    } else {
+      // Handle routed (bent) edges - assign slots using route info
       const sourceSide = bestRoute.sourceExit;
       const targetSide = bestRoute.targetEntry;
 
       const sourceKey = `${edge.from}-${sourceSide}`;
       const targetKey = `${edge.to}-${targetSide}`;
 
-      // Calculate offsets based on which side we're attaching to
-      let sourceOffset = 0;
-      let targetOffset = 0;
+      // Get ALL edges on each side (both incoming and outgoing)
+      // This ensures incoming/outgoing edges don't share the same port
+      const allSourceEdges = attachmentTracker.allAttachments.get(sourceKey) ?? [];
+      const allTargetEdges = attachmentTracker.allAttachments.get(targetKey) ?? [];
 
-      if (isHorizontalSide(sourceSide)) {
-        // Source exits horizontally (left/right)
-        sourceOffset =
-          edge.relation === 'P'
-            ? getAttachmentOffset(
-                edge,
-                attachmentTracker.sourceAttachments.get(sourceKey),
-                sourceHalfHeight * 2,
-                edgeScale,
-              )
-            : 0;
-      } else {
-        // Source exits vertically (top/bottom)
-        sourceOffset =
-          edge.relation === 'P'
-            ? getAttachmentOffset(
-                edge,
-                attachmentTracker.sourceAttachments.get(sourceKey),
-                sourceHalfWidth * 2,
-                edgeScale,
-              )
-            : 0;
-      }
-
-      if (isHorizontalSide(targetSide)) {
-        // Target enters horizontally (left/right)
-        targetOffset = getAttachmentOffset(
-          edge,
-          attachmentTracker.targetAttachments.get(targetKey),
-          targetHalfHeight * 2,
-          edgeScale,
-        );
-      } else {
-        // Target enters vertically (top/bottom)
-        targetOffset = getAttachmentOffset(
-          edge,
-          attachmentTracker.targetAttachments.get(targetKey),
-          targetHalfWidth * 2,
-          edgeScale,
-        );
-      }
-
-      // Re-generate the best route with offsets applied
-      const finalRoute = findBestRoute(
-        source,
-        target,
-        edge.from,
-        edge.to,
-        spatialIndex,
-        sourceOffset,
-        targetOffset,
-      );
-
-      routeWaypoints = finalRoute.waypoints;
-
-      // Set start and collision points from the route
-      if (routeWaypoints.length >= 2) {
-        startPoint = routeWaypoints[0];
-        collisionPoint = routeWaypoints[routeWaypoints.length - 1];
-      }
-    } else if (treatAsStraight && !isAreaDetailEdge) {
-      // For straight edges, apply offsets based on which side the collision points hit
-      const sourceSide = determineNodeSide(startPoint, sourceCenter, source.width, source.height);
-      const targetSide = determineNodeSide(collisionPoint, targetCenter, target.width, target.height);
-
-      const sourceKey = `${edge.from}-${sourceSide}`;
-      const targetKey = `${edge.to}-${targetSide}`;
-
-      // Source offset: only for 'P' edges
-      const sourceOffset =
-        edge.relation === 'P'
-          ? getAttachmentOffset(
-              edge,
-              attachmentTracker.sourceAttachments.get(sourceKey),
-              sourceSide === 'left' || sourceSide === 'right' ? source.height : source.width,
-              edgeScale,
-            )
-          : 0;
-
-      // Target offset: for all edges
-      const targetOffset = getAttachmentOffset(
+      // Assign ports using constraint-based system for ALL edge types
+      // - Respects hard constraints (single edge → center, straight → same port)
+      // - Optimizes unconstrained edges by other endpoint position
+      const sourceSlotValue = assignPort(
+        sourceSide,
         edge,
-        attachmentTracker.targetAttachments.get(targetKey),
-        targetSide === 'left' || targetSide === 'right' ? target.height : target.width,
-        edgeScale,
+        allSourceEdges,
+        portConstraints,
+        positions,
+        true,
+      );
+      const targetSlotValue = assignPort(
+        targetSide,
+        edge,
+        allTargetEdges,
+        portConstraints,
+        positions,
+        false,
       );
 
-      // Apply offsets perpendicular to the side
-      if (sourceSide === 'left' || sourceSide === 'right') {
-        startPoint = { x: startPoint.x, y: startPoint.y + sourceOffset };
-      } else {
-        startPoint = { x: startPoint.x + sourceOffset, y: startPoint.y };
-      }
+      const sourceSlot: AttachmentSlot = { side: sourceSide, slot: sourceSlotValue };
+      const targetSlot: AttachmentSlot = { side: targetSide, slot: targetSlotValue };
 
-      if (targetSide === 'left' || targetSide === 'right') {
-        collisionPoint = { x: collisionPoint.x, y: collisionPoint.y + targetOffset };
+      // Get attachment points using discrete slots
+      startPoint = getAttachmentPoint(source, sourceSlot);
+      collisionPoint = getAttachmentPoint(target, targetSlot);
+    }
+
+    // Store the best route waypoints for multi-segment paths
+    let routeWaypoints: Point2D[] | null = null;
+
+    if (!treatAsStraight && !isAreaDetailEdge) {
+      // Build route waypoints based on the best route shape
+      if (bestRoute.waypoints.length === 2) {
+        // Straight line
+        routeWaypoints = [startPoint, collisionPoint];
+      } else if (bestRoute.waypoints.length === 3) {
+        // L-shape: recalculate corner based on new attachment points
+        const isHorizontalFirst = isHorizontalSide(bestRoute.sourceExit);
+        const corner = isHorizontalFirst
+          ? { x: collisionPoint.x, y: startPoint.y }
+          : { x: startPoint.x, y: collisionPoint.y };
+        routeWaypoints = [startPoint, corner, collisionPoint];
       } else {
-        collisionPoint = { x: collisionPoint.x + targetOffset, y: collisionPoint.y };
+        // More complex routes: use original waypoints but update start/end
+        routeWaypoints = [startPoint, ...bestRoute.waypoints.slice(1, -1), collisionPoint];
       }
     }
 
@@ -1752,46 +2735,75 @@ function computeEdgeSegments(
     const collisionX = collisionPoint.x;
     const collisionY = collisionPoint.y;
 
+    // Calculate total path length (direct distance, used for sizing)
     const toCollisionDx = collisionX - startX;
     const toCollisionDy = collisionY - startY;
     const toCollisionLength = Math.hypot(toCollisionDx, toCollisionDy);
     if (!Number.isFinite(toCollisionLength) || toCollisionLength < 1) {
       return;
     }
-    const dirToCollisionX = toCollisionDx / toCollisionLength;
-    const dirToCollisionY = toCollisionDy / toCollisionLength;
+
+    // For routed edges, calculate the ACTUAL final segment direction
+    // This is crucial for placing arrow heads and bars at the correct angle
+    let finalSegmentDx = toCollisionDx;
+    let finalSegmentDy = toCollisionDy;
+    let finalSegmentLength = toCollisionLength;
+    let firstSegmentDx = toCollisionDx;
+    let firstSegmentDy = toCollisionDy;
+    let firstSegmentLength = toCollisionLength;
+
+    if (routeWaypoints && routeWaypoints.length >= 3) {
+      // Final segment: from second-to-last waypoint to collision point (target)
+      const secondToLast = routeWaypoints[routeWaypoints.length - 2];
+      finalSegmentDx = collisionX - secondToLast.x;
+      finalSegmentDy = collisionY - secondToLast.y;
+      finalSegmentLength = Math.hypot(finalSegmentDx, finalSegmentDy);
+      if (!Number.isFinite(finalSegmentLength) || finalSegmentLength < 1) {
+        finalSegmentDx = toCollisionDx;
+        finalSegmentDy = toCollisionDy;
+        finalSegmentLength = toCollisionLength;
+      }
+
+      // First segment: from start point to second waypoint (first corner)
+      const secondWaypoint = routeWaypoints[1];
+      firstSegmentDx = secondWaypoint.x - startX;
+      firstSegmentDy = secondWaypoint.y - startY;
+      firstSegmentLength = Math.hypot(firstSegmentDx, firstSegmentDy);
+      if (!Number.isFinite(firstSegmentLength) || firstSegmentLength < 1) {
+        firstSegmentDx = toCollisionDx;
+        firstSegmentDy = toCollisionDy;
+        firstSegmentLength = toCollisionLength;
+      }
+    }
+
+    // Normalized direction vectors for the actual segments
+    const dirFinalX = finalSegmentDx / finalSegmentLength;
+    const dirFinalY = finalSegmentDy / finalSegmentLength;
+    const dirFirstX = firstSegmentDx / firstSegmentLength;
+    const dirFirstY = firstSegmentDy / firstSegmentLength;
 
     let endX = collisionX;
     let endY = collisionY;
     let dependentBase: Point2D | null = null;
     let dependentTip: Point2D | null = null;
 
-    // Calculate perpendicular normals to the box edges for proper arrow/bar orientation
-    // Source normal: perpendicular to the source node's exit edge (based on actual exit point)
-    const sourceNormal = calculatePerpendicularBoxNormal(
-      startPoint,
-      sourceCenter,
-      Math.max(source.width, 1),
-      Math.max(source.height, 1),
-    );
-    // Target normal: perpendicular to the target node's entry edge (based on actual entry point)
-    const targetNormal = calculatePerpendicularBoxNormal(
-      collisionPoint,
-      targetCenter,
-      Math.max(target.width, 1),
-      Math.max(target.height, 1),
-    );
+    // Calculate perpendicular normals based on actual segment directions
+    // Source normal: perpendicular to the first segment direction (outward from source)
+    const sourceNormal: Point2D = { x: -dirFirstX, y: -dirFirstY };
+    // Target normal: perpendicular to the final segment direction (inward to target)
+    const targetNormal: Point2D = { x: dirFinalX, y: dirFinalY };
 
     if (edge.relation === 'D') {
+      // Use final segment length for sizing, but position along actual final segment direction
       const rawCap = Math.min(
-        Math.max(12 * edgeScale, toCollisionLength * 0.35),
+        Math.max(12 * edgeScale, finalSegmentLength * 0.35),
         24 * edgeScale,
       );
-      const maxAvailable = Math.max(toCollisionLength - 8 * edgeScale, 0);
+      const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
       const capLength = Math.min(rawCap, maxAvailable);
       if (capLength > 1) {
-        endX = collisionX - dirToCollisionX * capLength;
-        endY = collisionY - dirToCollisionY * capLength;
+        endX = collisionX - dirFinalX * capLength;
+        endY = collisionY - dirFinalY * capLength;
         dependentBase = { x: endX, y: endY };
         dependentTip = { x: collisionX, y: collisionY };
       }
@@ -1800,13 +2812,15 @@ function computeEdgeSegments(
     let arrowPath: string | null = null;
 
     if (edge.relation === 'I') {
-      const maxApproach = Math.max(toCollisionLength - 4 * edgeScale, 0);
+      // Use final segment length to size the arrow appropriately for the actual approach distance
+      const maxApproach = Math.max(finalSegmentLength - 4 * edgeScale, 0);
       const baseArrowLength = Math.min(
-        Math.max(18, toCollisionLength * 0.45),
+        Math.max(18, finalSegmentLength * 0.45),
         maxApproach,
       );
       const arrowLength = Math.min(baseArrowLength * edgeScale, maxApproach);
       if (arrowLength > 8) {
+        // Position arrow along the actual final segment direction
         endX = collisionX - targetNormal.x * arrowLength;
         endY = collisionY - targetNormal.y * arrowLength;
         const arrowWidth = Math.min(
@@ -1842,19 +2856,25 @@ function computeEdgeSegments(
     let curveUnitX = unitX;
     let curveUnitY = unitY;
     let truncatedForParallel = false;
+    let pathSegmentsForCollision: PathSegment[] = [];
 
     if (edge.relation === 'P') {
+      // For routed edges, use actual segment directions for proper bar positioning
       parallelInfo = buildParallelBars({
         startX,
         startY,
         endX,
         endY,
-        unitX,
-        unitY,
-        pathLength: length,
+        unitX: dirFirstX,  // Use first segment direction for source-side bars
+        unitY: dirFirstY,
+        pathLength: firstSegmentLength,
         edgeScale,
         sourceNormal,
         targetNormal,
+        // Pass final segment info for target-side bar positioning
+        targetUnitX: dirFinalX,
+        targetUnitY: dirFinalY,
+        targetPathLength: finalSegmentLength,
       });
       const innerOffset = parallelInfo.innerOffset;
       if (
@@ -1862,10 +2882,11 @@ function computeEdgeSegments(
         innerOffset > 0.2 &&
         innerOffset * 2 < length - 0.2
       ) {
-        const truncatedStartX = startX + unitX * innerOffset;
-        const truncatedStartY = startY + unitY * innerOffset;
-        const truncatedEndX = endX - unitX * innerOffset;
-        const truncatedEndY = endY - unitY * innerOffset;
+        // Use actual segment directions for truncation
+        const truncatedStartX = startX + dirFirstX * innerOffset;
+        const truncatedStartY = startY + dirFirstY * innerOffset;
+        const truncatedEndX = endX - dirFinalX * innerOffset;
+        const truncatedEndY = endY - dirFinalY * innerOffset;
         const truncatedDx = truncatedEndX - truncatedStartX;
         const truncatedDy = truncatedEndY - truncatedStartY;
         const truncatedLength = Math.hypot(truncatedDx, truncatedDy);
@@ -1929,6 +2950,7 @@ function computeEdgeSegments(
         }
       }
       path = buildCurvedPathFromWaypoints(routeWaypoints);
+      pathSegmentsForCollision = buildPathSegmentsFromWaypoints(routeWaypoints);
     } else {
       // Simple 2-point route or straight edge: use original curved path logic
       const pathSegments: string[] = [`M ${sourceCenter.x} ${sourceCenter.y}`];
@@ -1939,7 +2961,7 @@ function computeEdgeSegments(
         pathSegments.push(`M ${curveStartX} ${curveStartY}`);
       }
 
-      const curvePath = buildCurvedPath({
+      const simpleGeometry = describeSimplePathGeometry({
         startX: curveStartX,
         startY: curveStartY,
         endX: curveEndX,
@@ -1949,6 +2971,7 @@ function computeEdgeSegments(
         unitX: curveUnitX,
         unitY: curveUnitY,
       });
+      const curvePath = simpleGeometry.path;
       const curveWithoutMove = curvePath.replace(
         /^M\s*[-+]?[\d.]+(?:e[-+]?\d+)?\s+[-+]?[\d.]+(?:e[-+]?\d+)?\s*/i,
         '',
@@ -1958,6 +2981,20 @@ function computeEdgeSegments(
       }
 
       path = pathSegments.join(' ');
+
+      // Collision geometry mirrors the rendered path (including the optional lead-in line)
+      if (Math.abs(sourceCenter.x - startX) > 1e-2 || Math.abs(sourceCenter.y - startY) > 1e-2) {
+        const leadLen = Math.hypot(startX - sourceCenter.x, startY - sourceCenter.y);
+        if (leadLen > 0.5) {
+          pathSegmentsForCollision.push({
+            type: 'line',
+            from: { x: sourceCenter.x, y: sourceCenter.y },
+            to: { x: startX, y: startY },
+            length: leadLen,
+          });
+        }
+      }
+      pathSegmentsForCollision.push(...simpleGeometry.segments);
     }
 
     const segment: EdgeSegment = {
@@ -1980,9 +3017,9 @@ function computeEdgeSegments(
         baseY: dependentBase.y,
         tipX: dependentTip.x,
         tipY: dependentTip.y,
-        normalX: targetNormal?.x ?? unitX,
-        normalY: targetNormal?.y ?? unitY,
-        effectiveLength: toCollisionLength,
+        normalX: targetNormal?.x ?? dirFinalX,
+        normalY: targetNormal?.y ?? dirFinalY,
+        effectiveLength: finalSegmentLength,
         edgeScale,
       });
       if (cap) {
@@ -1990,6 +3027,293 @@ function computeEdgeSegments(
       }
     } else if (arrowPath) {
       segment.arrowPath = arrowPath;
+    }
+
+    // Post-routing validation: flag edges whose rendered path intersects any node
+    if (pathSegmentsForCollision.length > 0) {
+      const firstSeg = pathSegmentsForCollision[0];
+      const lastSeg = pathSegmentsForCollision[pathSegmentsForCollision.length - 1];
+      segment.renderStart = firstSeg.type === 'line' ? firstSeg.from : firstSeg.from;
+      segment.renderEnd = lastSeg.type === 'line' ? lastSeg.to : lastSeg.to;
+
+      const sampling = samplePathSegments(pathSegmentsForCollision);
+      const nodeCrossing = detectNodeCrossings(
+        sampling.samples,
+        sampling.totalLength,
+        nodeRectsForCollision,
+        edge.from,
+        edge.to,
+      );
+      segment.crossesNode = nodeCrossing.crosses;
+      if (nodeCrossing.points.length > 0) {
+        segment.crossingPoints = nodeCrossing.points;
+      }
+    }
+
+    // POST-PROCESSING: Force straight edges for same-column nodes with clear path
+    // This runs AFTER all routing, overriding bent edges when a straight line is valid
+    if (!isAreaDetailEdge && edge.relation !== 'A') {
+      const sameColumnByPos = Math.abs(sourceCenter.x - targetCenter.x) <= COLUMN_ALIGNMENT_TOLERANCE;
+      const sameRowByPos = Math.abs(sourceCenter.y - targetCenter.y) <= ROW_ALIGNMENT_TOLERANCE;
+
+      if (sameColumnByPos || sameRowByPos) {
+        // Compute straight line attachment points
+        let straightStart: Point2D;
+        let straightEnd: Point2D;
+
+        if (sameColumnByPos) {
+          // Vertical straight line
+          const sourceIsAbove = sourceCenter.y < targetCenter.y;
+          straightStart = {
+            x: sourceCenter.x,
+            y: sourceIsAbove ? sourceCenter.y + source.height / 2 : sourceCenter.y - source.height / 2,
+          };
+          straightEnd = {
+            x: targetCenter.x,
+            y: sourceIsAbove ? targetCenter.y - target.height / 2 : targetCenter.y + target.height / 2,
+          };
+        } else {
+          // Horizontal straight line
+          const sourceIsLeft = sourceCenter.x < targetCenter.x;
+          straightStart = {
+            x: sourceIsLeft ? sourceCenter.x + source.width / 2 : sourceCenter.x - source.width / 2,
+            y: sourceCenter.y,
+          };
+          straightEnd = {
+            x: sourceIsLeft ? targetCenter.x - target.width / 2 : targetCenter.x + target.width / 2,
+            y: targetCenter.y,
+          };
+        }
+
+        // Check if the straight path crosses any nodes
+        let straightPathClear = true;
+        for (const nodeRect of nodeRectsForCollision) {
+          if (nodeRect.id === edge.from || nodeRect.id === edge.to) continue;
+          if (segmentIntersectsRect(straightStart, straightEnd, nodeRect.rect)) {
+            straightPathClear = false;
+            break;
+          }
+        }
+
+        if (straightPathClear) {
+          // Replace path with straight line
+          segment.path = `M ${straightStart.x} ${straightStart.y} L ${straightEnd.x} ${straightEnd.y}`;
+          segment.debugWaypoints = [straightStart, straightEnd];
+          segment.crossesNode = false;
+          segment.crossingPoints = undefined;
+        }
+      }
+    }
+
+    // POST-PROCESSING: Fix edges that cross nodes by trying alternative routes
+    // Only apply to edges where source and target are at DIFFERENT heights (not same row)
+    const notSameRow = Math.abs(sourceCenter.y - targetCenter.y) > ROW_ALIGNMENT_TOLERANCE;
+    if (segment.crossesNode && !isAreaDetailEdge && routeWaypoints && routeWaypoints.length >= 3 && notSameRow) {
+      // First, find which node the ORIGINAL path crosses
+      let originalBlockingNode: { id: string; rect: ObstacleRect } | null = null;
+      for (const nodeRect of nodeRectsForCollision) {
+        if (nodeRect.id === edge.from || nodeRect.id === edge.to) continue;
+        for (let i = 0; i < routeWaypoints.length - 1; i++) {
+          if (segmentIntersectsRect(routeWaypoints[i], routeWaypoints[i + 1], nodeRect.rect)) {
+            originalBlockingNode = nodeRect;
+            break;
+          }
+        }
+        if (originalBlockingNode) break;
+      }
+
+      const currentIsHorizontalFirst = isHorizontalSide(bestRoute.sourceExit);
+
+      // STAGE 1: Try opposite L-shape direction
+      let altStart: Point2D;
+      let altEnd: Point2D;
+      let altCorner: Point2D;
+
+      if (currentIsHorizontalFirst) {
+        // Current: horizontal-first → Try: vertical-first
+        const exitSide: NodeSide = targetCenter.y > sourceCenter.y ? 'bottom' : 'top';
+        const entrySide: NodeSide = targetCenter.x > sourceCenter.x ? 'left' : 'right';
+        altStart = getAttachmentPointOnSide(source, exitSide, 0);
+        altEnd = getAttachmentPointOnSide(target, entrySide, 0);
+        altCorner = { x: altStart.x, y: altEnd.y };
+      } else {
+        // Current: vertical-first → Try: horizontal-first
+        const exitSide: NodeSide = targetCenter.x > sourceCenter.x ? 'right' : 'left';
+        const entrySide: NodeSide = targetCenter.y > sourceCenter.y ? 'top' : 'bottom';
+        altStart = getAttachmentPointOnSide(source, exitSide, 0);
+        altEnd = getAttachmentPointOnSide(target, entrySide, 0);
+        altCorner = { x: altEnd.x, y: altStart.y };
+      }
+
+      const altWaypoints = [altStart, altCorner, altEnd];
+
+      // Check if alternative L-shape is clear
+      let altPathClear = true;
+      for (const nodeRect of nodeRectsForCollision) {
+        if (nodeRect.id === edge.from || nodeRect.id === edge.to) continue;
+        if (segmentIntersectsRect(altStart, altCorner, nodeRect.rect) ||
+            segmentIntersectsRect(altCorner, altEnd, nodeRect.rect)) {
+          altPathClear = false;
+          break;
+        }
+      }
+
+      if (altPathClear) {
+        // Stage 1 success: Use opposite L-shape
+        segment.path = buildCurvedPathFromWaypoints(altWaypoints);
+        segment.debugWaypoints = altWaypoints;
+        segment.crossesNode = false;
+        segment.crossingPoints = undefined;
+      } else if (originalBlockingNode) {
+        // STAGE 2: Create Z-shaped path (vertical → horizontal → vertical)
+        // Try multiple port combinations and prefer unused ports
+        const targetAbove = targetCenter.y < sourceCenter.y;
+
+        // Source exits vertically toward target
+        const sourceExitSide: NodeSide = targetAbove ? 'top' : 'bottom';
+        // Target enters from opposite vertical side
+        const targetEntrySide: NodeSide = targetAbove ? 'bottom' : 'top';
+
+        // Count how many edges already use a given port (node + side)
+        const countZPortUsage = (nodeId: string, side: NodeSide): number => {
+          const key = `${nodeId}-${side}`;
+          return (attachmentTracker.allAttachments.get(key) ?? []).length;
+        };
+
+        // Count crossings for a given waypoint path
+        const countZCrossings = (waypoints: Point2D[]): number => {
+          let crossings = 0;
+          for (const nodeRect of nodeRectsForCollision) {
+            if (nodeRect.id === edge.from || nodeRect.id === edge.to) continue;
+            for (let i = 0; i < waypoints.length - 1; i++) {
+              if (segmentIntersectsRect(waypoints[i], waypoints[i + 1], nodeRect.rect, -10)) {
+                crossings++;
+                break;
+              }
+            }
+          }
+          return crossings;
+        };
+
+        // Generate Z-shape waypoints with specific port slots
+        const makeZShape = (sourceSlot: HorizontalSlot, targetSlot: HorizontalSlot): Point2D[] => {
+          const zStart = getAttachmentPoint(source, { side: sourceExitSide, slot: sourceSlot });
+          const zEnd = getAttachmentPoint(target, { side: targetEntrySide, slot: targetSlot });
+          const midY = (zStart.y + zEnd.y) / 2;
+          const corner1: Point2D = { x: zStart.x, y: midY };
+          const corner2: Point2D = { x: zEnd.x, y: midY };
+          return [zStart, corner1, corner2, zEnd];
+        };
+
+        // Collect candidates: 3 source slots × 3 target slots = 9 candidates
+        const zSlots: HorizontalSlot[] = ['left', 'center', 'right'];
+        const zCandidates: Array<{ waypoints: Point2D[]; crossings: number; sharedPorts: number }> = [];
+
+        for (const sourceSlot of zSlots) {
+          for (const targetSlot of zSlots) {
+            const waypoints = makeZShape(sourceSlot, targetSlot);
+            const crossings = countZCrossings(waypoints);
+            const sourceUsage = countZPortUsage(edge.from, sourceExitSide);
+            const targetUsage = countZPortUsage(edge.to, targetEntrySide);
+            const sharedPorts = (sourceUsage > 0 ? 1 : 0) + (targetUsage > 0 ? 1 : 0);
+            zCandidates.push({ waypoints, crossings, sharedPorts });
+          }
+        }
+
+        // Sort by: 1) fewest crossings, 2) fewest shared ports
+        zCandidates.sort((a, b) => {
+          if (a.crossings !== b.crossings) return a.crossings - b.crossings;
+          return a.sharedPorts - b.sharedPorts;
+        });
+
+        const bestZ = zCandidates[0];
+        if (bestZ) {
+          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints);
+          segment.debugWaypoints = bestZ.waypoints;
+          segment.crossesNode = bestZ.crossings > 0;
+          segment.crossingPoints = undefined;
+        }
+      }
+    }
+
+    // POST-PROCESSING: U-shape for same-row edges that cross nodes
+    const isSameRow = Math.abs(sourceCenter.y - targetCenter.y) <= ROW_ALIGNMENT_TOLERANCE;
+    if (segment.crossesNode && !isAreaDetailEdge && isSameRow) {
+      // Count crossings for a given waypoint path
+      // Use negative shrinkAmount (-10) to EXPAND node rects and detect near-misses
+      const countCrossings = (waypoints: Point2D[]): number => {
+        let crossings = 0;
+        for (const nodeRect of nodeRectsForCollision) {
+          if (nodeRect.id === edge.from || nodeRect.id === edge.to) continue;
+          for (let i = 0; i < waypoints.length - 1; i++) {
+            // Expand rects by 10px to prefer paths with more clearance
+            if (segmentIntersectsRect(waypoints[i], waypoints[i + 1], nodeRect.rect, -10)) {
+              crossings++;
+              break; // Count each node only once
+            }
+          }
+        }
+        return crossings;
+      };
+
+      // Generate U-shape waypoints with specific port slots
+      const makeUShape = (
+        direction: 'up' | 'down',
+        height: number,
+        sourceSlot: HorizontalSlot,
+        targetSlot: HorizontalSlot,
+      ): Point2D[] => {
+        const side: NodeSide = direction === 'up' ? 'top' : 'bottom';
+        const start = getAttachmentPoint(source, { side, slot: sourceSlot });
+        const end = getAttachmentPoint(target, { side, slot: targetSlot });
+        const y = direction === 'up'
+          ? Math.min(start.y, end.y) - height
+          : Math.max(start.y, end.y) + height;
+        return [start, { x: start.x, y }, { x: end.x, y }, end];
+      };
+
+      // Count how many edges already use a given port (node + side)
+      const countPortUsage = (nodeId: string, side: NodeSide): number => {
+        const key = `${nodeId}-${side}`;
+        return (attachmentTracker.allAttachments.get(key) ?? []).length;
+      };
+
+      // Collect ALL candidates: 2 directions × 2 heights × 3 source slots × 3 target slots = 36 candidates
+      const uHeights = [40, 100];
+      const slots: HorizontalSlot[] = ['left', 'center', 'right'];
+      const candidates: Array<{ waypoints: Point2D[]; crossings: number; height: number; sharedPorts: number; direction: 'up' | 'down' }> = [];
+
+      for (const direction of ['up', 'down'] as const) {
+        for (const height of uHeights) {
+          for (const sourceSlot of slots) {
+            for (const targetSlot of slots) {
+              const waypoints = makeUShape(direction, height, sourceSlot, targetSlot);
+              const crossings = countCrossings(waypoints);
+              // Count shared ports: 0 = both unused, 1 = one shared, 2 = both shared
+              const side: NodeSide = direction === 'up' ? 'top' : 'bottom';
+              const sourceUsage = countPortUsage(edge.from, side);
+              const targetUsage = countPortUsage(edge.to, side);
+              const sharedPorts = (sourceUsage > 0 ? 1 : 0) + (targetUsage > 0 ? 1 : 0);
+              candidates.push({ waypoints, crossings, height, sharedPorts, direction });
+            }
+          }
+        }
+      }
+
+      // Sort by: 1) fewest crossings, 2) fewest shared ports, 3) smallest height
+      candidates.sort((a, b) => {
+        if (a.crossings !== b.crossings) return a.crossings - b.crossings;
+        if (a.sharedPorts !== b.sharedPorts) return a.sharedPorts - b.sharedPorts;
+        return a.height - b.height;
+      });
+
+      const best = candidates[0];
+      if (best) {
+        segment.path = buildCurvedPathFromWaypoints(best.waypoints);
+        segment.debugWaypoints = best.waypoints;
+        segment.crossesNode = best.crossings > 0;
+        segment.crossingPoints = undefined;
+      }
     }
 
     segments.push(segment);
@@ -2057,6 +3381,82 @@ function buildCurvedPath({
   const controlY = midpointY + perpY * curveStrength;
 
   return `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`;
+}
+
+function describeSimplePathGeometry({
+  startX,
+  startY,
+  endX,
+  endY,
+  dx,
+  dy,
+  unitX,
+  unitY,
+}: {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  dx: number;
+  dy: number;
+  unitX: number;
+  unitY: number;
+}): { path: string; segments: PathSegment[] } {
+  const length = Math.hypot(dx, dy);
+  const segments: PathSegment[] = [];
+
+  if (!Number.isFinite(length) || length < 1) {
+    const path = `M ${startX} ${startY} L ${endX} ${endY}`;
+    segments.push({ type: 'line', from: { x: startX, y: startY }, to: { x: endX, y: endY }, length: 0 });
+    return { path, segments };
+  }
+
+  if (shouldRenderStraightSegment(dx, dy, length)) {
+    const path = `M ${startX} ${startY} L ${endX} ${endY}`;
+    segments.push({
+      type: 'line',
+      from: { x: startX, y: startY },
+      to: { x: endX, y: endY },
+      length,
+    });
+    return { path, segments };
+  }
+
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+  const midpointX = (startX + endX) / 2;
+  const midpointY = (startY + endY) / 2;
+
+  let bendDirection: number;
+  if (absDx >= absDy) {
+    bendDirection = dy >= 0 ? 1 : -1;
+  } else {
+    bendDirection = dx <= 0 ? 1 : -1;
+  }
+  if (!Number.isFinite(bendDirection) || bendDirection === 0) {
+    bendDirection = 1;
+  }
+
+  const baseCurve = length * 0.5;
+  const maxCurve = Math.max(36, length * 0.65);
+  const curveStrength = Math.min(Math.max(baseCurve, 18), maxCurve, length * 1.2);
+  const perpX = -unitY * bendDirection;
+  const perpY = unitX * bendDirection;
+
+  const controlX = midpointX + perpX * curveStrength;
+  const controlY = midpointY + perpY * curveStrength;
+
+  const path = `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`;
+  const quadLength = Math.hypot(controlX - startX, controlY - startY) + Math.hypot(endX - controlX, endY - controlY);
+  segments.push({
+    type: 'quad',
+    from: { x: startX, y: startY },
+    control: { x: controlX, y: controlY },
+    to: { x: endX, y: endY },
+    length: quadLength,
+  });
+
+  return { path, segments };
 }
 
 function buildNeighbourMap(edges: EdgeDescriptor[]): Map<string, Set<string>> {
@@ -2283,13 +3683,24 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
     });
   });
 
+  // Build a map of levelIndex -> areas at that level (for area crossing detection)
+  const areasByLevel = new Map<number, Array<{ id: string; nodeIds: string[] }>>();
+  layers.forEach((layer, layerIndex) => {
+    const areasAtLevel: Array<{ id: string; nodeIds: string[] }> = [];
+    layer.areas.forEach((area) => {
+      if (area.objectTypes.length > 0) {
+        areasAtLevel.push({ id: area.id, nodeIds: area.objectTypes });
+      }
+    });
+    areasByLevel.set(layerIndex, areasAtLevel);
+  });
+
   const evaluateCrossings = (columns: Record<string, number>) => {
     let total = 0;
     edges.forEach((edge) => {
-      // Existing: count intermediate node obstacles
-      total += countIntermediateObstacles(edge, columns, nodeLevelIndex, nodesByLevelIndex);
+      // Count intermediate node obstacles - high penalty (3.0 per node crossed)
+      total += countIntermediateObstacles(edge, columns, nodeLevelIndex, nodesByLevelIndex) * 0.0;
 
-      // New: add penalty for routing complexity when crossing areas
       const sourceLevel = nodeLevelIndex.get(edge.from);
       const targetLevel = nodeLevelIndex.get(edge.to);
       const sourceCol = columns[edge.from];
@@ -2302,39 +3713,65 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
         targetLevel !== undefined &&
         sourceCol !== undefined &&
         targetCol !== undefined &&
-        sourceArea !== targetArea &&
         sourceLevel !== targetLevel
       ) {
-        // Edge crosses area boundaries - check if horizontal routing is needed
-        const colDiff = Math.abs(sourceCol - targetCol);
-
-        // Check if there are obstacles in intermediate levels at the column range
         const minCol = Math.min(sourceCol, targetCol);
         const maxCol = Math.max(sourceCol, targetCol);
         const minLevel = Math.min(sourceLevel, targetLevel);
         const maxLevel = Math.max(sourceLevel, targetLevel);
 
-        let hasBlockingObstacle = false;
+        // Check for AREA crossings at intermediate levels
+        // This penalizes layouts where edges would have to route around process areas
         for (let level = minLevel + 1; level < maxLevel; level++) {
-          const nodesAtLevel = nodesByLevelIndex.get(level) ?? [];
-          for (const nodeId of nodesAtLevel) {
-            if (nodeId === edge.from || nodeId === edge.to) continue;
-            const nodeCol = columns[nodeId];
-            if (nodeCol !== undefined && nodeCol >= minCol && nodeCol <= maxCol) {
-              hasBlockingObstacle = true;
-              break;
+          const areasAtLevel = areasByLevel.get(level) ?? [];
+          for (const area of areasAtLevel) {
+            // Skip if this is the source or target's area
+            if (area.id === sourceArea || area.id === targetArea) continue;
+
+            // Compute the area's column span based on its nodes' current columns
+            const areaCols = area.nodeIds
+              .map((nodeId) => columns[nodeId])
+              .filter((c): c is number => c !== undefined);
+            if (areaCols.length === 0) continue;
+
+            const areaMinCol = Math.min(...areaCols);
+            const areaMaxCol = Math.max(...areaCols);
+
+            // Check if the edge's column range overlaps with this area's column range
+            // If so, the edge would have to cross through this area
+            if (maxCol >= areaMinCol && minCol <= areaMaxCol) {
+              // Calculate overlap extent - penalty scales with how much of area is crossed
+              const overlapStart = Math.max(minCol, areaMinCol);
+              const overlapEnd = Math.min(maxCol, areaMaxCol);
+              const overlapExtent = overlapEnd - overlapStart + 1;
+
+              // Base penalty of 1.0, plus 0.5 per column of overlap
+              // Crossing more of an area = higher penalty
+              total += 1.0 + overlapExtent * 0.5;
             }
           }
-          if (hasBlockingObstacle) break;
         }
 
-        // If there's a blocking obstacle AND significant horizontal distance,
-        // add a penalty (encourages moving nodes to align better)
-        // Cost of 1 = roughly equivalent to 1 intermediate node crossing
-        if (hasBlockingObstacle && colDiff > 0) {
-          // Penalty increases with horizontal distance
-          // Moving a node 1 column reduces this penalty significantly
-          total += colDiff * 0.4;
+        // Additional penalty for cross-area edges with blocking nodes
+        if (sourceArea !== targetArea) {
+          const colDiff = Math.abs(sourceCol - targetCol);
+          let hasBlockingNode = false;
+          for (let level = minLevel + 1; level < maxLevel; level++) {
+            const nodesAtLevel = nodesByLevelIndex.get(level) ?? [];
+            for (const nodeId of nodesAtLevel) {
+              if (nodeId === edge.from || nodeId === edge.to) continue;
+              const nodeCol = columns[nodeId];
+              if (nodeCol !== undefined && nodeCol >= minCol && nodeCol <= maxCol) {
+                hasBlockingNode = true;
+                break;
+              }
+            }
+            if (hasBlockingNode) break;
+          }
+
+          if (hasBlockingNode && colDiff > 0) {
+            total += colDiff * 0.4;
+          }
         }
       }
     });
@@ -2342,110 +3779,155 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
   };
 
   if (edges.length > 0) {
-    const levelOccupancy = new Map<number, Set<number>>();
-    nodeLevelIndex.forEach((levelIndex, nodeId) => {
-      const column = nodeColumns[nodeId];
-      if (column === undefined) return;
-      if (!levelOccupancy.has(levelIndex)) {
-        levelOccupancy.set(levelIndex, new Set());
-      }
-      levelOccupancy.get(levelIndex)!.add(column);
-    });
+    // Helper function to run optimization from a given starting configuration
+    const runOptimization = (
+      startColumns: Record<string, number>,
+    ): { columns: Record<string, number>; score: number } => {
+      const testColumns = { ...startColumns };
 
-    let globalScore = evaluateCrossings(nodeColumns);
-    const deltas = [0, -1, 1, -2, 2, -3, 3, -4, 4];
-
-    for (let iteration = 0; iteration < 4; iteration += 1) {
-      let improved = false;
-      for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
-        const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-        let occupancy = levelOccupancy.get(levelIndex);
-        if (!occupancy) {
-          occupancy = new Set<number>();
-          levelOccupancy.set(levelIndex, occupancy);
+      const levelOccupancy = new Map<number, Set<number>>();
+      nodeLevelIndex.forEach((levelIndex, nodeId) => {
+        const column = testColumns[nodeId];
+        if (column === undefined) return;
+        if (!levelOccupancy.has(levelIndex)) {
+          levelOccupancy.set(levelIndex, new Set());
         }
-        nodesAtLevel.forEach((nodeId) => {
-          const currentColumn = nodeColumns[nodeId];
-          if (currentColumn === undefined) return;
-          let bestColumn = currentColumn;
-          let bestScore = globalScore;
-          occupancy.delete(currentColumn);
+        levelOccupancy.get(levelIndex)!.add(column);
+      });
 
-          deltas.forEach((delta) => {
-            const candidate = currentColumn + delta;
-            if (candidate < 0) return;
-            if (occupancy.has(candidate)) return;
-            nodeColumns[nodeId] = candidate;
-            occupancy.add(candidate);
-            const candidateScore = evaluateCrossings(nodeColumns);
-            occupancy.delete(candidate);
-            nodeColumns[nodeId] = currentColumn;
-            if (candidateScore + 1e-6 < bestScore) {
-              bestScore = candidateScore;
-              bestColumn = candidate;
+      let globalScore = evaluateCrossings(testColumns);
+      const deltas = [0, -1, 1, -2, 2, -3, 3, -4, 4];
+
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        let improved = false;
+        for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
+          const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
+          let occupancy = levelOccupancy.get(levelIndex);
+          if (!occupancy) {
+            occupancy = new Set<number>();
+            levelOccupancy.set(levelIndex, occupancy);
+          }
+          nodesAtLevel.forEach((nodeId) => {
+            const currentColumn = testColumns[nodeId];
+            if (currentColumn === undefined) return;
+            let bestColumn = currentColumn;
+            let bestScore = globalScore;
+            occupancy.delete(currentColumn);
+
+            deltas.forEach((delta) => {
+              const candidate = currentColumn + delta;
+              if (candidate < 0) return;
+              if (occupancy.has(candidate)) return;
+              testColumns[nodeId] = candidate;
+              occupancy.add(candidate);
+              const candidateScore = evaluateCrossings(testColumns);
+              occupancy.delete(candidate);
+              testColumns[nodeId] = currentColumn;
+              if (candidateScore + 1e-6 < bestScore) {
+                bestScore = candidateScore;
+                bestColumn = candidate;
+              }
+            });
+
+            occupancy.add(currentColumn);
+
+            if (bestColumn !== currentColumn) {
+              occupancy.delete(currentColumn);
+              occupancy.add(bestColumn);
+              testColumns[nodeId] = bestColumn;
+              globalScore = bestScore;
+              improved = true;
+            } else {
+              testColumns[nodeId] = currentColumn;
             }
           });
-
-          occupancy.add(currentColumn);
-
-          if (bestColumn !== currentColumn) {
-            occupancy.delete(currentColumn);
-            occupancy.add(bestColumn);
-            nodeColumns[nodeId] = bestColumn;
-            globalScore = bestScore;
-            improved = true;
-          } else {
-            nodeColumns[nodeId] = currentColumn;
-          }
-        });
+        }
+        if (!improved) break;
       }
-      if (!improved) break;
-    }
 
-    // Additional optimization: try swapping adjacent nodes within the same level
-    // This can find improvements that individual shifts cannot achieve
-    for (let swapIteration = 0; swapIteration < 3; swapIteration += 1) {
-      let swapImproved = false;
-      for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
-        const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-        if (nodesAtLevel.length < 2) continue;
+      // Additional optimization: try swapping adjacent nodes within the same level
+      for (let swapIteration = 0; swapIteration < 3; swapIteration += 1) {
+        let swapImproved = false;
+        for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
+          const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
+          if (nodesAtLevel.length < 2) continue;
 
-        // Sort nodes by their current column position
-        const sortedNodes = [...nodesAtLevel].sort(
-          (a, b) => (nodeColumns[a] ?? 0) - (nodeColumns[b] ?? 0),
-        );
+          const sortedNodes = [...nodesAtLevel].sort(
+            (a, b) => (testColumns[a] ?? 0) - (testColumns[b] ?? 0),
+          );
 
-        // Try swapping adjacent pairs
-        for (let i = 0; i < sortedNodes.length - 1; i += 1) {
-          const nodeA = sortedNodes[i];
-          const nodeB = sortedNodes[i + 1];
-          const colA = nodeColumns[nodeA];
-          const colB = nodeColumns[nodeB];
+          for (let i = 0; i < sortedNodes.length - 1; i += 1) {
+            const nodeA = sortedNodes[i];
+            const nodeB = sortedNodes[i + 1];
+            const colA = testColumns[nodeA];
+            const colB = testColumns[nodeB];
 
-          if (colA === undefined || colB === undefined) continue;
+            if (colA === undefined || colB === undefined) continue;
 
-          // Temporarily swap columns
-          nodeColumns[nodeA] = colB;
-          nodeColumns[nodeB] = colA;
+            testColumns[nodeA] = colB;
+            testColumns[nodeB] = colA;
 
-          const swappedScore = evaluateCrossings(nodeColumns);
+            const swappedScore = evaluateCrossings(testColumns);
 
-          if (swappedScore + 1e-6 < globalScore) {
-            // Swap improved the score, keep it
-            globalScore = swappedScore;
-            swapImproved = true;
-            // Update sorted order for next iteration
-            sortedNodes[i] = nodeB;
-            sortedNodes[i + 1] = nodeA;
-          } else {
-            // Revert the swap
-            nodeColumns[nodeA] = colA;
-            nodeColumns[nodeB] = colB;
+            if (swappedScore + 1e-6 < globalScore) {
+              globalScore = swappedScore;
+              swapImproved = true;
+              sortedNodes[i] = nodeB;
+              sortedNodes[i + 1] = nodeA;
+            } else {
+              testColumns[nodeA] = colA;
+              testColumns[nodeB] = colB;
+            }
           }
         }
+        if (!swapImproved) break;
       }
-      if (!swapImproved) break;
+
+      return { columns: testColumns, score: globalScore };
+    };
+
+    // Multi-start optimization: try different starting configurations
+    const startingConfigs: Record<string, number>[] = [{ ...nodeColumns }];
+
+    // Find max column to determine shift range
+    const allColumns = Object.values(nodeColumns).filter(
+      (v): v is number => v !== undefined,
+    );
+    const maxCol = allColumns.length > 0 ? Math.max(...allColumns) : 0;
+
+    // Generate alternative starting configurations by shifting entire levels horizontally
+    for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
+      const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
+      if (nodesAtLevel.length === 0) continue;
+
+      // Try shifting all nodes at this level by various amounts
+      for (let shift = -maxCol - 2; shift <= maxCol + 4; shift += 1) {
+        if (shift === 0) continue;
+        const config = { ...nodeColumns };
+        let valid = true;
+
+        nodesAtLevel.forEach((nodeId) => {
+          const newCol = (config[nodeId] ?? 0) + shift;
+          if (newCol < 0) valid = false;
+          else config[nodeId] = newCol;
+        });
+
+        if (valid) startingConfigs.push(config);
+      }
     }
+
+    // Run optimization from each starting configuration and keep the best
+    let bestResult = runOptimization(startingConfigs[0]);
+
+    for (let i = 1; i < startingConfigs.length; i += 1) {
+      const result = runOptimization(startingConfigs[i]);
+      if (result.score < bestResult.score) {
+        bestResult = result;
+      }
+    }
+
+    // Apply the best result
+    Object.assign(nodeColumns, bestResult.columns);
 
     nodesByLevelIndex.forEach((nodeIds) => {
       nodeIds.forEach((nodeId) => {
@@ -3547,6 +5029,10 @@ function TotemVisualizer({
     () => edgeSegments.filter((segment) => segment.relation !== 'A'),
     [edgeSegments],
   );
+  const violatingEdgeSegments = useMemo(
+    () => edgeSegments.filter((segment) => segment.crossesNode),
+    [edgeSegments],
+  );
   const legendColumnOffset = useMemo(() => {
     const offsets = Object.values(legendOffsets);
     if (offsets.length === 0) return 0;
@@ -3955,6 +5441,13 @@ function TotemVisualizer({
         // Create set of detail node IDs to exclude from obstacle routing
         const detailNodeIds = new Set(detailNodes.map((d) => d.id));
 
+        const nodeAreaMap: Map<string, string> = new Map();
+        layers.forEach((layer) => {
+          layer.areas.forEach((area) => {
+            area.objectTypes.forEach((obj) => nodeAreaMap.set(obj, area.id));
+          });
+        });
+
         const segments = computeEdgeSegments(
           allEdges,
           mergedPositions,
@@ -3962,6 +5455,8 @@ function TotemVisualizer({
           areaRects,
           detailNodeIds,
           edgeStrokeScale,
+          nodeColumns,
+          nodeAreaMap,
         );
         setEdgeSegments(segments);
         setContentSize({
@@ -4148,7 +5643,7 @@ function TotemVisualizer({
             position: 'absolute',
             inset: 0,
             pointerEvents: 'none',
-            zIndex: 1,
+            zIndex: 50,
           }}
         >
               {[detailEdgeSegments, primaryEdgeSegments].map((group, groupIndex) =>
@@ -4205,6 +5700,109 @@ function TotemVisualizer({
                   );
                 }),
               )}
+              {violatingEdgeSegments.map((edge, vIndex) => {
+                const strokeWidth =
+                  (edge.relation === 'D'
+                    ? 3.2
+                    : edge.relation === 'P'
+                      ? 3
+                      : edge.relation === 'A'
+                        ? 2.2
+                        : 2.6) * edgeStrokeScale;
+                const highlightWidth = strokeWidth + 1.6;
+                const highlightColor = '#ec4899';
+                const markerStroke = '#be185d';
+                const crossSize = 6;
+                const labelPoint =
+                  edge.crossingPoints?.[0] ??
+                  (edge.renderStart && edge.renderEnd
+                    ? {
+                        x: (edge.renderStart.x + edge.renderEnd.x) / 2,
+                        y: (edge.renderStart.y + edge.renderEnd.y) / 2,
+                      }
+                    : edge.renderStart ?? edge.renderEnd);
+                return (
+                  <g key={`violation-${edge.id}`}>
+                    <path
+                      d={edge.path}
+                      stroke={highlightColor}
+                      strokeWidth={highlightWidth}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                    />
+                    {edge.crossingPoints?.map((pt, idx) => (
+                      <circle
+                        key={`violation-${edge.id}-pt-${idx}`}
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={5}
+                        fill={highlightColor}
+                        stroke={markerStroke}
+                        strokeWidth={1.6}
+                      />
+                    ))}
+                    {edge.renderStart && (
+                      <g>
+                        <line
+                          x1={edge.renderStart.x - crossSize}
+                          y1={edge.renderStart.y - crossSize}
+                          x2={edge.renderStart.x + crossSize}
+                          y2={edge.renderStart.y + crossSize}
+                          stroke={markerStroke}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                        />
+                        <line
+                          x1={edge.renderStart.x - crossSize}
+                          y1={edge.renderStart.y + crossSize}
+                          x2={edge.renderStart.x + crossSize}
+                          y2={edge.renderStart.y - crossSize}
+                          stroke={markerStroke}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    )}
+                    {edge.renderEnd && (
+                      <g>
+                        <line
+                          x1={edge.renderEnd.x - crossSize}
+                          y1={edge.renderEnd.y - crossSize}
+                          x2={edge.renderEnd.x + crossSize}
+                          y2={edge.renderEnd.y + crossSize}
+                          stroke={markerStroke}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                        />
+                        <line
+                          x1={edge.renderEnd.x - crossSize}
+                          y1={edge.renderEnd.y + crossSize}
+                          x2={edge.renderEnd.x + crossSize}
+                          y2={edge.renderEnd.y - crossSize}
+                          stroke={markerStroke}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    )}
+                    {labelPoint && (
+                      <text
+                        x={labelPoint.x + 10}
+                        y={labelPoint.y - 6}
+                        fontSize={12}
+                        fontWeight="700"
+                        fill={highlightColor}
+                        stroke="white"
+                        strokeWidth={2}
+                        paintOrder="stroke"
+                      >
+                        {vIndex + 1}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
             </svg>
           )}
 
@@ -4260,7 +5858,7 @@ function TotemVisualizer({
                           rowGap: gridRowGap,
                           flex: 1,
                           minWidth: levelMinimumWidth,
-                          alignItems: 'start',
+                          alignItems: 'center',
                         }}
                       >
                         {layer.areas.map((area) => {
@@ -4327,7 +5925,7 @@ function TotemVisualizer({
                                 columnGap: gridColumnGap,
                                 rowGap: gridRowGap,
                                 justifyItems: 'center',
-                                alignItems: 'start',
+                                alignItems: 'center',
                                 position: 'relative',
                                 minHeight: containerMinHeight,
                               }}
