@@ -104,6 +104,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+!totem_backend.spec
 
 # Unit test / coverage reports
 htmlcov/
@@ -135,6 +136,9 @@ electron/*.zip
 # Visual Studio Code
 .vscode/
 *.code-workspace
+
+# Claude Code CLI
+.claude/
 
 # JetBrains IDEs
 .idea/

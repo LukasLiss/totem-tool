@@ -4,27 +4,31 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard
-from .serializers import EventLogSerializer, DashboardSerializer
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent
+from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
-from totem_lib.ocdfg import OCDFG, CCDFG
+from totem_lib.dfg import OCDFG, CCDFG
 import polars as pl
 from totem_lib.ocel import ObjectCentricEventLog
-from totem_lib.ocvariants import find_variants, calculate_layout
+from totem_lib.variants.ocvariants import find_variants, calculate_layout
 from totem_lib.totem import totemDiscovery, mlpaDiscovery, Totem
+from totem_lib.ocel.importer import (
+    load_events_from_sqlite, load_objects_from_sqlite,
+    load_events_from_json, load_objects_from_json,
+    load_events_from_xml, load_objects_from_xml,
+    import_ocel_from_csv,
+)
+import networkx as nx
+
+from collections import defaultdict
 
 from django.core.cache import cache
 
 import os
-import networkx as nx
 from hashlib import sha1
-
-from totem_lib.ocel import (
-    load_events_from_sqlite, load_objects_from_sqlite,
-    load_events_from_json,   load_objects_from_json,
-    load_events_from_xml,    load_objects_from_xml,
-)
+import json
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 TOTEM_MOCK = {
@@ -194,6 +198,11 @@ def greeting(request):
     
     return Response({"message": "Hello, greetings from the backend!"})
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def health_check(request):
+    return Response({"status": "ok", "message": "Backend is running."})
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
@@ -220,13 +229,35 @@ class EventLogViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        
-        if user_file.file.path.split('.')[-1] == 'sqlite':
-            OCEL = load_events_from_sqlite(user_file.file.path)
-            processed= len(OCEL.unique(subset='_eventId'))
-        else:
-            processed= "Filetype not yet supported"
+
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+            processed = len(ocel.events.unique(subset='_eventId'))
+        except Exception as e:
+            return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return Response(processed, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def object_types(self, request, pk=None):
+        """Returns the list of object types present in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                # We reuse the utility function that handles file format detection
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(ocel.object_types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -249,7 +280,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
     @action(detail=True, methods=["get"])
     def discover_mlpa(self, request, pk=None):
         """API endpoint to perform MLPA discovery on a given event log.
@@ -289,28 +320,160 @@ class DashboardViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         project_id = self.request.data.get("project")
         project = Project.objects.get(id=project_id, users=self.request.user)
+        serializer.save(project=project)
+    
+    @action(detail=True, methods=["PATCH"])
+    def rename(self, request, pk=None):
+        """
+        Rename a dashboard. Only accepts `name` in the body.
+        """
+        dashboard = self.get_object()
+        new_name = request.data.get("name")
+        if not new_name:
+            return Response({"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        dashboard.name = new_name
+        dashboard.save()
+        return Response(self.get_serializer(dashboard).data)
 
         
         serializer.save(project=project)
-
-
-
-def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     
+    @action(detail=True, methods=["GET"])
+    def get_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        base_components = dashboard.components.all()
+        components = []
+        for comp in base_components:
+            if comp.component_name == 'TextBoxComponent':
+                components.append(TextBoxComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'NumberOfEventsComponent':
+                components.append(NumberofEventsComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'ImageComponent':
+                components.append(ImageComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'VariantsComponent':
+                components.append(VariantsComponent.objects.get(id=comp.id))
+            else:
+                components.append(comp)
+        print(f"Dashboard {pk} has {len(components)} components")
+        for comp in components:
+            print(f"Component {comp.id}: type {type(comp).__name__}, component_name {comp.component_name}, text {getattr(comp, 'text', 'N/A')}")
+        serializer = DashboardComponentPolymorphicSerializer(components, many=True)
+        data = serializer.data
+        print("Serialized data:", data)
+        return Response(data)
+    
+    @action(detail=True, methods=["POST"])
+    def save_layout(self, request, pk=None):
+        dashboard = self.get_object()
+        layout = request.data.get("layout")
+
+        if not isinstance(layout, list):
+            return Response({"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Clear existing components
+        dashboard.components.all().delete()
+        
+        for item in layout:
+            component_name = item['component_name']
+            print(f"Saving item: {item}")
+            if component_name == 'TextBoxComponent':
+                comp = TextBoxComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    text=item.get('text', ''),
+                    font_size=item.get('font_size', 14),
+                )
+                print(f"Created TextBoxComponent {comp.id} with text '{comp.text}'")
+
+            elif component_name == 'NumberOfEventsComponent':
+                NumberofEventsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    color=item.get('color', 'blue'),
+                )
+            elif component_name == 'ImageComponent':
+                ImageComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    image=item.get('image', None),
+                )
+            elif component_name == 'VariantsComponent':
+                VariantsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    automatic_loading=item.get('automatic_loading', False),
+                    leading_object_type=item.get('leading_object_type', ''),
+                )
+            # Add more as needed
+
+        return Response({"status": "saved"})
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="upload-image",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_image(self, request, pk=None):
+        dashboard = self.get_object()
+
+        image = request.FILES.get("image")
+        if not image:
+            return Response({"error": "No image provided"}, status=400)
+        if image:
+            if not image.content_type in ['image/jpeg', 'image/png', 'image/gif']:
+                return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
+            if image.size > 5 * 1024 * 1024:  # 5MB limit
+                return Response({'error': 'File too large'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            dashboard.image = image
+            dashboard.save()
+            serializer = ImageComponentSerializer(dashboard)
+
+        return Response({
+            serializer.data
+        })
+
+# TODO: change to equivalent totem_lib.ocel import function 
+def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
+
     ext = os.path.splitext(path)[1].lower()
     if ext in (".sqlite", ".db"):
         events_df  = load_events_from_sqlite(path)
         objects_df = load_objects_from_sqlite(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".json":
         events_df  = load_events_from_json(path)
         objects_df = load_objects_from_json(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
     elif ext == ".xml":
         events_df  = load_events_from_xml(path)
         objects_df = load_objects_from_xml(path)
+        log = ObjectCentricEventLog(events=events_df, objects=objects_df)
+    elif ext == ".csv":
+        # CSV importer returns the complete ObjectCentricEventLog with attributes
+        log = import_ocel_from_csv(path)
     else:
-        raise ValueError(f"Unsupported file type: {ext}")
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .csv")
 
-    return ObjectCentricEventLog(events=events_df, objects=objects_df)
+    return log
 
 
 def _filter_ocel_by_object_types(ocel: ObjectCentricEventLog, object_types: set[str]) -> ObjectCentricEventLog:
@@ -528,12 +691,18 @@ def discover_totem_mock(request, pk: int):
     return Response(payload, status=status.HTTP_200_OK)
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def variants(request):
-    
+
     file_id = request.query_params.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Verify user has access to this file
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
@@ -556,9 +725,23 @@ def variants(request):
         print(f"CACHE HIT for file_id: {file_id}. Using cached OCEL object.")
 
     try:
-        leading_object_type = "Transport Document"  #request.query_params.get("leading_type", "Handling Unit")
+        leading_object_type = request.query_params.get("leading_type")
+
+        # If no leading_type provided or it doesn't exist, use first alphabetically sorted type
+        if not leading_object_type or leading_object_type not in ocel.object_types:
+            if ocel.object_types and len(ocel.object_types) > 0:
+                leading_object_type = sorted(ocel.object_types)[0]
+            else:
+                return Response({
+                    "variants": [],
+                    "object_types": []
+                }, status=status.HTTP_200_OK)
+
         mined = find_variants(ocel, leading_type=leading_object_type)
     except Exception as e:
+        import traceback
+        print(f"ERROR in find_variants: {e}")
+        traceback.print_exc()
         return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     out = []
@@ -593,7 +776,10 @@ def variants(request):
             },
         })
 
-    return Response({"variants": out}, status=status.HTTP_200_OK)
+    return Response({
+        "variants": out,
+        "object_types": ocel.object_types
+    }, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -1691,16 +1877,16 @@ def OCDFGViewSet(request):
     file_id = request.query_params.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     # Optional object-type filter (comma-separated)
     raw_object_types = request.query_params.get("object_types")
     object_type_filter = None
     if raw_object_types:
         object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
-    
+
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
-    
+
     if not ocel:  # i.e. if we have a cache-miss
         try:
             user_file =  EventLog.objects.get(id=file_id)
@@ -1768,3 +1954,23 @@ def OCDFGViewSet(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_user_data(request):
+    confirm = request.data.get("confirm")
+    if confirm != "DELETE":
+        return Response(
+            {"error": "Please confirm by sending {'confirm': 'DELETE'}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user = request.user
+    projects = Project.objects.filter(users=user)
+    deleted_count = projects.count()
+    projects.delete()
+
+    return Response(
+        {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
+        status=status.HTTP_200_OK
+    )

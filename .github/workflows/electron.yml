@@ -1,0 +1,47 @@
+name: electron
+
+on:
+  # push:
+  #   branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        npm install
+        cd frontend
+        npm install
+        cd ../electron
+        npm install
+        cd ..
+        python -m venv backend/.venv
+        ./backend/.venv/Scripts/activate
+        python -m pip install --upgrade pip
+        pip install -r backend/requirements.txt
+        pip install -r backend/requirements-dev.txt
+        pip install -e totem_lib
+
+    - name: Build application
+      run: npm run build-all
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: totem-tool-win
+        path: electron/dist/win-unpacked/

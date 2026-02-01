@@ -12,11 +12,21 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useLocation, useNavigate } from "react-router-dom";
 
+type LocationState = {
+  from?: string;
+};
 // Define the Login function.
 export const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const from =
+    (location.state as LocationState)?.from ?? "/upload";
 
   // Create the submit method.
   const submit = async (e) => {
@@ -28,27 +38,34 @@ export const Login = () => {
     };
 
     try {
-      // Create the POST request
-      const { data } = await axios.post(
-        'http://localhost:8000/token/',
-        user,
-        {
-          headers: { 'Content-Type': 'application/json' },
-        }
-      );
+    const response = await fetch('http://localhost:8000/token/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(user),
+    });
 
-      // Initialize the access & refresh token in localstorage.      
-      localStorage.clear();
-      localStorage.setItem('access_token', data.access);
-      localStorage.setItem('refresh_token', data.refresh);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${data['access']}`;
-
-      // Redirect to home
-      window.history.back();
-    } catch (error) {
-      console.error("Login failed:", error);
-      alert("Invalid credentials or server error.");
+    if (!response.ok) {
+      throw new Error('Login failed');
     }
+
+    const data = await response.json();
+
+    // Initialize the access & refresh token in localStorage
+    localStorage.clear();
+    localStorage.setItem('access_token', data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+
+
+    console.log("Login successful");
+    //window.history.back();
+    navigate(from, { replace: true });
+  } catch (error) {
+    console.error("Login failed:", error);
+    alert("Invalid credentials or server error.");
+  }
+
   };
 
   return (

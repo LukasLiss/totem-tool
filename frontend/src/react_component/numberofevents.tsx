@@ -1,9 +1,8 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { processFile } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 
 export function NumberofEvents() {
-    const [files, setFiles] = useState([]);
     const [processedResult, setProcessedResult] = useState(null);
 
     const { selectedFile } = useContext(SelectedFileContext);
@@ -20,6 +19,10 @@ export function NumberofEvents() {
             const token = localStorage.getItem("access_token");
 
             try {
+            if (!token) {
+                console.error("No token found!");
+                return;
+                }
             const result = await processFile(token, selectedFile.id);
             setProcessedResult(result);
             console.log(result);

@@ -40,19 +40,42 @@ class Dashboard(models.Model):
     
 
 class DashboardComponent(models.Model):
-    x = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
+    dashboard = models.ForeignKey(
+        Dashboard,
+        on_delete=models.CASCADE,
+        related_name="components"
     )
-    y = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
-    )
-    width = models.FloatField()
-    height = models.FloatField()
+
+    # GridStack-native geometry
+    x = models.IntegerField()
+    y = models.IntegerField()
+    w = models.IntegerField()
+    h = models.IntegerField()
+
+    # The actual component name, matching your React componentMap
+    component_name = models.CharField(max_length=100)
+
+    order = models.IntegerField(default=0)  # for z-order or stable sorting
+
+    class Meta:
+        verbose_name = "Dashboard Component"
+        verbose_name_plural = "Dashboard Components"
+
+
+class NumberofEventsComponent(DashboardComponent):
+    color = models.CharField(max_length=20, default="blue")
+
+
+class TextBoxComponent(DashboardComponent):
+    text = models.TextField()
+    font_size = models.IntegerField(default=14)
+
+class ImageComponent(DashboardComponent):
+    image = models.ImageField(upload_to=project_directory_path)
+
+
+class VariantsComponent(DashboardComponent):
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    leading_object_type = models.CharField(max_length=100, null=True, blank=True)
 
 

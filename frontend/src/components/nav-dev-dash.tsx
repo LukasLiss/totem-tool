@@ -1,22 +1,12 @@
-import { ChevronRight, type LucideIcon } from "lucide-react"
-
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
+import { ChevronRight } from "lucide-react"
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
-} from "@/components/ui/sidebar"
+ } from "@/components/ui/sidebar"
 import { DashboardContext,  } from "@/contexts/DashboardContext"
-import React, { useContext, useState } from "react"
+import { useContext } from "react"
 
 
 export function DevDash() {
@@ -26,7 +16,7 @@ export function DevDash() {
     <SidebarGroup>
       <SidebarMenu>
         <SidebarMenuItem>
-            <SidebarMenuButton tooltip={"Development View to see all Components"} onClick={() => {setSelectedDashboard("DevDash"); 
+            <SidebarMenuButton tooltip={"Development View to see all Components"} onClick={() => {setSelectedDashboard(-1); 
               console.log('Context set to DevDash')}}>
                   
                   <span>Dev Dashboard</span>

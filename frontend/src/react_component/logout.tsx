@@ -1,30 +1,34 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
-//import {RefreshToken} from "rest_framework_simplejwt.tokens";
+import { useEffect } from "react";
+import { toast } from "sonner";
 
 export const Logout = () => {
   useEffect(() => {
-    (async () => {
+    const logout = async () => {
       try {
-        const { data } = await axios.post(
-          'http://localhost:8000/logout/',
-          {
-            refresh_token: localStorage.getItem('refresh_token')
+        await fetch('http://localhost:8000/logout/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-          { headers: { 'Content-Type': 'application/json' } },
-          { withCredentials: true }
-        );
+          credentials: 'include', // equivalent to axios withCredentials: true
+          body: JSON.stringify({
+            refresh_token: localStorage.getItem('refresh_token'),
+          }),
+        });
 
+        // Clear tokens regardless of backend response
         localStorage.clear();
-        axios.defaults.headers.common['Authorization'] = null;
-        window.location.href = '/upload';
+
+        // Redirect
+        toast.success('Logged out successfully');
+        window.location.href = '/title';
       } catch (e) {
         console.log('logout not working', e);
       }
-    })();
+    };
+
+    logout();
   }, []);
 
-  return (
-    <div></div>
-  );
+  return null;
 };

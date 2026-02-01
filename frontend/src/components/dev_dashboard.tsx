@@ -16,6 +16,7 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import VariantsExplorer from "@/react_component/VariantsExplorer";
 import TotemVisualizer from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
@@ -23,6 +24,7 @@ export function DevDashboard() {
   const [totemReloadSignal, setTotemReloadSignal] = useState(0);
 
   const { selectedFile } = useContext(SelectedFileContext);
+
   useEffect(() => {
     const handleProcessFile = async () => {
       if (!selectedFile?.id) {
@@ -33,7 +35,7 @@ export function DevDashboard() {
       const token = localStorage.getItem("access_token");
 
       try {
-        const result = await processFile(token, selectedFile.id);
+        const result = await processFile(token ?? "", selectedFile.id);
         setProcessedResult(result);
       } catch (err) {
         console.error("Failed to process file:", err);
@@ -42,13 +44,10 @@ export function DevDashboard() {
 
     handleProcessFile();
   }, [selectedFile]);
+
   return (
     <div>
-      <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-        <div className="flex items-center gap-2 px-4">
-          <SidebarTrigger className="-ml-1" />
-        </div>
-      </header>
+      <SidebarTrigger/>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <Card className="@container/card">
           <CardHeader className="items-center relative z-10 justify-between">
@@ -88,9 +87,7 @@ export function DevDashboard() {
                 {processedResult ?? "—"}
               </CardTitle>
               <CardAction>
-                <Badge variant="outline">
-                  +12.5%
-                </Badge>
+
               </CardAction>
             </CardHeader>
             <CardFooter className="flex-col items-start gap-1.5 text-sm">
@@ -102,12 +99,31 @@ export function DevDashboard() {
               </div>
             </CardFooter>
           </Card>
+          {/*
           <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
             <ReactFlowProvider>
               <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
             </ReactFlowProvider>
           </div>
+          */}
         </div>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              Variants Explorer
+            </CardTitle>
+            <CardDescription>
+              Object-centric variant analysis
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 pb-0">
+            <VariantsExplorer
+              fileId={selectedFile?.id}
+              colWidth={120}
+              embedded={true}
+            />
+          </CardContent>
+        </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />
       </div>
     </div>

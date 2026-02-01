@@ -1,25 +1,32 @@
-from .ocel import ObjectCentricEventLog, load_events_from_sqlite, load_objects_from_sqlite, load_events_from_json, load_objects_from_json, load_events_from_xml, load_objects_from_xml, import_ocel
+from .ocel import (
+    ObjectCentricEventLog,
+    import_ocel,
+    PolarsOCELAdapter,
+    convert_ocel_polars_to_pm4py
+)
 from .totem import totemDiscovery, Totem, mlpaDiscovery
-from .ocdfg import OCDFG, CCDFG
-from .ocvariants import calculate_layout
-from .ocpn import discover_oc_petri_net_polars
-from .utils import ocpns_are_similar
+from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
+from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics
+from .dfg import OCDFG, CCDFG
+from .variants import calculate_layout
 
+# Should be kept alphabetically sorted.
+# Exposes the public API functions. These are imported when doing `from totem_lib import *`
+# All other symbols may be imported directly from their respective submodules.
 __all__ = [
-    "ObjectCentricEventLog",
-    "load_events_from_sqlite",
-    "load_objects_from_sqlite",
-    "load_events_from_json",
-    "load_objects_from_json",
-    "load_events_from_xml",
-    "load_objects_from_xml",
-    "totemDiscovery",
-    "Totem",
-    "mlpaDiscovery",
-    "import_ocel",
     "calculate_layout",
-    "OCDFG",
     "CCDFG",
+    "convert_ocel_polars_to_pm4py",
     "discover_oc_petri_net_polars",
-    "ocpns_are_similar"
+    "import_ocel",
+    "mlpaDiscovery",
+    "ObjectCentricEventLog",
+    "OCCausalNet",
+    "OCCausalNetSemantics",
+    "OCCausalNetState",
+    "OCDFG",
+    "ocpns_are_similar",
+    "PolarsOCELAdapter",
+    "Totem",
+    "totemDiscovery",
 ]

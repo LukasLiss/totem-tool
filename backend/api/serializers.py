@@ -1,6 +1,8 @@
 from rest_framework import serializers
+from rest_polymorphic.serializers import PolymorphicSerializer
 from .models import EventLog
 from .models import Dashboard
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent
 from django.db.models import Max
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -27,3 +29,42 @@ class DashboardSerializer(serializers.ModelSerializer):
             validated_data['order_in_project'] = last_order + 1
 
         return super().create(validated_data)
+
+#Dashboard components
+
+class DashboardComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DashboardComponent
+        fields = "__all__"
+
+class NumberOfEventsComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = NumberofEventsComponent
+        fields = "__all__"
+
+
+class TextBoxComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = TextBoxComponent
+        fields = "__all__"
+
+class ImageComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = ImageComponent
+        fields = "__all__"
+
+
+class VariantsComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = VariantsComponent
+        fields = "__all__"
+#Fill in new Component Serializers here and then edit the mapping below
+
+class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
+    model_serializer_mapping = {
+        DashboardComponent: DashboardComponentSerializer,
+        NumberofEventsComponent: NumberOfEventsComponentSerializer,
+        TextBoxComponent: TextBoxComponentSerializer,
+        ImageComponent: ImageComponentSerializer,
+        VariantsComponent: VariantsComponentSerializer,
+    }
