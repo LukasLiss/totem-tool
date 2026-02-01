@@ -181,6 +181,13 @@ type Point2D = { x: number; y: number };
 
 type NodeSide = 'top' | 'bottom' | 'left' | 'right';
 
+// Softer, sweeping corners for S/Z-shaped postprocessed edges only
+const FLOWING_S_CURVE = {
+  cornerScale: 1.15,
+  maxCornerRadius: 290,
+  minCornerRadius: 18,
+};
+
 // Discrete attachment slots for each side
 type HorizontalSlot = 'left' | 'center' | 'right'; // For top/bottom sides (3 positions)
 type VerticalSlot = 'top' | 'center' | 'bottom'; // For left/right sides (3 positions, center used for single edge)
@@ -1501,7 +1508,10 @@ function findBestRoute(
  * Builds a smooth curved path from waypoints.
  * Converts orthogonal waypoints into smooth Bezier curves.
  */
-function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
+function buildCurvedPathFromWaypoints(
+  waypoints: Point2D[],
+  options?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
+): string {
   if (waypoints.length < 2) {
     return '';
   }
@@ -1509,6 +1519,10 @@ function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
   if (waypoints.length === 2) {
     return `M ${waypoints[0].x} ${waypoints[0].y} L ${waypoints[1].x} ${waypoints[1].y}`;
   }
+
+  const dynamicCornerScale = options?.cornerScale ?? 0.4;
+  const dynamicMaxRadius = options?.maxCornerRadius ?? 40;
+  const dynamicMinRadius = options?.minCornerRadius ?? 0;
 
   // For 3+ points, create smooth curves through the corners
   const parts: string[] = [`M ${waypoints[0].x} ${waypoints[0].y}`];
@@ -1521,7 +1535,10 @@ function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
     // Calculate corner radius based on segment lengths
     const lenBefore = Math.hypot(curr.x - prev.x, curr.y - prev.y);
     const lenAfter = Math.hypot(next.x - curr.x, next.y - curr.y);
-    const cornerRadius = Math.min(lenBefore * 0.4, lenAfter * 0.4, 40);
+    const cornerRadius = Math.max(
+      dynamicMinRadius,
+      Math.min(lenBefore * dynamicCornerScale, lenAfter * dynamicCornerScale, dynamicMaxRadius),
+    );
 
     // Calculate points along segments where curve should start/end
     const beforeDir = {
@@ -2189,6 +2206,200 @@ function buildDependentCap({
   const p4y = tipY + unitTangentY * halfWidth;
 
   return `M ${p1x} ${p1y} L ${p2x} ${p2y} L ${p3x} ${p3y} L ${p4x} ${p4y} Z`;
+}
+
+/**
+ * Recalculates arrow heads, parallel bars, or dependent caps based on the final waypoints.
+ * This should be called after post-processing changes the edge path.
+ */
+function recalculateEdgeDecorations(
+  segment: EdgeSegment,
+  waypoints: Point2D[],
+  relation: string,
+  edgeScale: number,
+  curveOptions?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
+): void {
+  if (waypoints.length < 2) return;
+
+  const startPoint = waypoints[0];
+  const endPoint = waypoints[waypoints.length - 1];
+  let updatedWaypoints = waypoints.slice();
+  let pathNeedsUpdate = false;
+  let renderStart: Point2D = startPoint;
+  let renderEnd: Point2D = endPoint;
+
+  // Calculate first and final segment directions
+  let firstSegmentDx = endPoint.x - startPoint.x;
+  let firstSegmentDy = endPoint.y - startPoint.y;
+  let firstSegmentLength = Math.hypot(firstSegmentDx, firstSegmentDy);
+  let finalSegmentDx = firstSegmentDx;
+  let finalSegmentDy = firstSegmentDy;
+  let finalSegmentLength = firstSegmentLength;
+
+  if (waypoints.length >= 3) {
+    // First segment: start → second waypoint
+    const secondWaypoint = waypoints[1];
+    firstSegmentDx = secondWaypoint.x - startPoint.x;
+    firstSegmentDy = secondWaypoint.y - startPoint.y;
+    firstSegmentLength = Math.hypot(firstSegmentDx, firstSegmentDy);
+    if (!Number.isFinite(firstSegmentLength) || firstSegmentLength < 1) {
+      firstSegmentDx = endPoint.x - startPoint.x;
+      firstSegmentDy = endPoint.y - startPoint.y;
+      firstSegmentLength = Math.hypot(firstSegmentDx, firstSegmentDy);
+    }
+
+    // Final segment: second-to-last → end
+    const secondToLast = waypoints[waypoints.length - 2];
+    finalSegmentDx = endPoint.x - secondToLast.x;
+    finalSegmentDy = endPoint.y - secondToLast.y;
+    finalSegmentLength = Math.hypot(finalSegmentDx, finalSegmentDy);
+    if (!Number.isFinite(finalSegmentLength) || finalSegmentLength < 1) {
+      finalSegmentDx = endPoint.x - startPoint.x;
+      finalSegmentDy = endPoint.y - startPoint.y;
+      finalSegmentLength = Math.hypot(finalSegmentDx, finalSegmentDy);
+    }
+  }
+
+  if (!Number.isFinite(finalSegmentLength) || finalSegmentLength < 1) return;
+
+  const dirFinalX = finalSegmentDx / finalSegmentLength;
+  const dirFinalY = finalSegmentDy / finalSegmentLength;
+  const dirFirstX = firstSegmentDx / firstSegmentLength;
+  const dirFirstY = firstSegmentDy / firstSegmentLength;
+
+  // Target normal points inward along final segment direction
+  const targetNormal: Point2D = { x: dirFinalX, y: dirFinalY };
+  // Source normal points outward (opposite of first segment direction)
+  const sourceNormal: Point2D = { x: -dirFirstX, y: -dirFirstY };
+
+  const collisionX = endPoint.x;
+  const collisionY = endPoint.y;
+
+  if (relation === 'I') {
+    // Recalculate arrow head
+    const maxApproach = Math.max(finalSegmentLength - 4 * edgeScale, 0);
+    const baseArrowLength = Math.min(
+      Math.max(18, finalSegmentLength * 0.45),
+      maxApproach,
+    );
+    const arrowLength = Math.min(baseArrowLength * edgeScale, maxApproach);
+    if (arrowLength > 8) {
+      const endX = collisionX - targetNormal.x * arrowLength;
+      const endY = collisionY - targetNormal.y * arrowLength;
+      const arrowWidth = Math.min(
+        Math.max(12 * edgeScale, arrowLength * 0.62),
+        26 * edgeScale,
+      );
+      const unitTangentX = -targetNormal.y;
+      const unitTangentY = targetNormal.x;
+      const halfWidth = arrowWidth / 2;
+      const leftBaseX = endX + unitTangentX * halfWidth;
+      const leftBaseY = endY + unitTangentY * halfWidth;
+      const rightBaseX = endX - unitTangentX * halfWidth;
+      const rightBaseY = endY - unitTangentY * halfWidth;
+      segment.arrowPath = `M ${leftBaseX} ${leftBaseY} L ${collisionX} ${collisionY} L ${rightBaseX} ${rightBaseY} Z`;
+      renderEnd = { x: endX, y: endY };
+      updatedWaypoints[updatedWaypoints.length - 1] = renderEnd;
+      pathNeedsUpdate = true;
+    } else {
+      segment.arrowPath = undefined;
+    }
+  } else if (relation === 'D') {
+    // Recalculate dependent cap
+    const rawCap = Math.min(
+      Math.max(12 * edgeScale, finalSegmentLength * 0.35),
+      24 * edgeScale,
+    );
+    const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
+    const capLength = Math.min(rawCap, maxAvailable);
+    if (capLength > 1) {
+      const baseX = collisionX - dirFinalX * capLength;
+      const baseY = collisionY - dirFinalY * capLength;
+      const cap = buildDependentCap({
+        baseX,
+        baseY,
+        tipX: collisionX,
+        tipY: collisionY,
+        normalX: targetNormal.x,
+        normalY: targetNormal.y,
+        effectiveLength: finalSegmentLength,
+        edgeScale,
+      });
+      segment.capPath = cap;
+      renderEnd = { x: baseX, y: baseY };
+      updatedWaypoints[updatedWaypoints.length - 1] = renderEnd;
+      pathNeedsUpdate = true;
+    } else {
+      segment.capPath = undefined;
+    }
+  } else if (relation === 'P') {
+    // Recalculate parallel bars
+    const dx = endPoint.x - startPoint.x;
+    const dy = endPoint.y - startPoint.y;
+    const length = Math.hypot(dx, dy);
+    if (Number.isFinite(length) && length >= 1) {
+      const parallelInfo = buildParallelBars({
+        startX: startPoint.x,
+        startY: startPoint.y,
+        endX: endPoint.x,
+        endY: endPoint.y,
+        unitX: dirFirstX,
+        unitY: dirFirstY,
+        pathLength: firstSegmentLength,
+        edgeScale,
+        sourceNormal,
+        targetNormal,
+        targetUnitX: dirFinalX,
+        targetUnitY: dirFinalY,
+        targetPathLength: finalSegmentLength,
+      });
+      segment.bars = parallelInfo.bars.length > 0 ? parallelInfo.bars : [];
+
+      const innerOffset = parallelInfo.innerOffset;
+      const canTrim =
+        innerOffset !== null &&
+        innerOffset > 0.2 &&
+        innerOffset * 2 < length - 0.2;
+
+      if (canTrim) {
+        const trimmedStart =
+          firstSegmentLength > innerOffset * 2
+            ? {
+                x: startPoint.x + dirFirstX * innerOffset,
+                y: startPoint.y + dirFirstY * innerOffset,
+              }
+            : null;
+        const trimmedEnd =
+          finalSegmentLength > innerOffset * 2
+            ? {
+                x: endPoint.x - dirFinalX * innerOffset,
+                y: endPoint.y - dirFinalY * innerOffset,
+              }
+            : null;
+
+        if (trimmedStart || trimmedEnd) {
+          if (trimmedStart) {
+            updatedWaypoints[0] = trimmedStart;
+            renderStart = trimmedStart;
+          }
+          if (trimmedEnd) {
+            updatedWaypoints[updatedWaypoints.length - 1] = trimmedEnd;
+            renderEnd = trimmedEnd;
+          }
+          pathNeedsUpdate = true;
+        }
+      }
+    }
+  }
+
+  // Keep render markers aligned with the (possibly) updated endpoints
+  segment.renderStart = renderStart;
+  segment.renderEnd = renderEnd;
+
+  if (pathNeedsUpdate) {
+    segment.path = buildCurvedPathFromWaypoints(updatedWaypoints, curveOptions);
+    segment.debugWaypoints = updatedWaypoints;
+  }
 }
 
 function computeEdgeSegments(
@@ -3101,6 +3312,8 @@ function computeEdgeSegments(
           segment.debugWaypoints = [straightStart, straightEnd];
           segment.crossesNode = false;
           segment.crossingPoints = undefined;
+          // Recalculate decorations for the new path
+          recalculateEdgeDecorations(segment, [straightStart, straightEnd], edge.relation, edgeScale);
         }
       }
     }
@@ -3164,6 +3377,8 @@ function computeEdgeSegments(
         segment.debugWaypoints = altWaypoints;
         segment.crossesNode = false;
         segment.crossingPoints = undefined;
+        // Recalculate decorations for the new path
+        recalculateEdgeDecorations(segment, altWaypoints, edge.relation, edgeScale);
       } else if (originalBlockingNode) {
         // STAGE 2: Create Z-shaped path (vertical → horizontal → vertical)
         // Try multiple port combinations and prefer unused ports
@@ -3228,10 +3443,12 @@ function computeEdgeSegments(
 
         const bestZ = zCandidates[0];
         if (bestZ) {
-          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints);
+          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints, FLOWING_S_CURVE);
           segment.debugWaypoints = bestZ.waypoints;
           segment.crossesNode = bestZ.crossings > 0;
           segment.crossingPoints = undefined;
+          // Recalculate decorations for the new path (preserve flowing radius)
+          recalculateEdgeDecorations(segment, bestZ.waypoints, edge.relation, edgeScale, FLOWING_S_CURVE);
         }
       }
     }
@@ -3313,6 +3530,8 @@ function computeEdgeSegments(
         segment.debugWaypoints = best.waypoints;
         segment.crossesNode = best.crossings > 0;
         segment.crossingPoints = undefined;
+        // Recalculate decorations for the new path
+        recalculateEdgeDecorations(segment, best.waypoints, edge.relation, edgeScale);
       }
     }
 
@@ -5643,7 +5862,7 @@ function TotemVisualizer({
             position: 'absolute',
             inset: 0,
             pointerEvents: 'none',
-            zIndex: 50,
+            zIndex: 1,
           }}
         >
               {[detailEdgeSegments, primaryEdgeSegments].map((group, groupIndex) =>
@@ -5684,18 +5903,6 @@ function TotemVisualizer({
                       {edge.arrowPath && (
                         <path d={edge.arrowPath} fill={strokeColor} stroke="none" />
                       )}
-                      {/* Debug waypoints - yellow dots */}
-                      {edge.debugWaypoints?.map((wp, wpIndex) => (
-                        <circle
-                          key={`${edge.id}-wp-${wpIndex}`}
-                          cx={wp.x}
-                          cy={wp.y}
-                          r={6}
-                          fill="#FBBF24"
-                          stroke="#F59E0B"
-                          strokeWidth={2}
-                        />
-                      ))}
                     </g>
                   );
                 }),
