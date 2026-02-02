@@ -14,15 +14,6 @@ const SidePanel: React.FC = () => {
     if (!grid) return;
 
     GridStack.setupDragIn(
-      ".sidepanel .number-events",
-      {
-        helper: "clone",
-        appendTo: "body",
-      },
-      [{ h: 2, w: 2, content: "Number of Events", component_name: "NumberOfEventsComponent", font_size: 14, text: "", order: 0 }]  // Added custom properties
-    );
-
-    GridStack.setupDragIn(
       ".sidepanel .text-box",
       {
         helper: "clone",
@@ -107,18 +98,13 @@ const SidePanel: React.FC = () => {
         <div>Drop here to remove!</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item number-events flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/numbers.jpg" width="100" height="70"/>
-        <div>Number of Events</div>
-      </div>
-
       <div className="grid-stack-item sidepanel-item text-box flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/textbox-icon.svg" width="100" height="50"/>
         <div>Text Box</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item image-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/adgu8l.jpg" width="100" height="50"/>
+        <img src="src/images/image-icon.svg" width="100" height="50"/>
         <div>Image Component</div>
       </div>
 

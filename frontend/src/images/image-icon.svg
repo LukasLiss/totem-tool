@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Frame -->
+  <rect x="10" y="5" width="80" height="40" rx="3" ry="3" fill="#f9fafb"/>
+  <!-- Mountain -->
+  <polygon points="20,38 40,18 60,38" fill="#9ca3af" stroke="none"/>
+  <polygon points="50,38 65,25 80,38" fill="#d1d5db" stroke="none"/>
+  <!-- Sun -->
+  <circle cx="70" cy="15" r="6" fill="#fbbf24" stroke="none"/>
+</svg>
