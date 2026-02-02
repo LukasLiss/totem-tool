@@ -3,7 +3,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { ScanIcon, FlaskConicalIcon, BrainIcon } from 'lucide-react';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardAction,
+} from '@/components/ui/card';
+import { ScanIcon, FlaskConicalIcon, BrainIcon, RefreshCcw } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
@@ -136,6 +143,20 @@ type ProcessLayer = {
   areas: ProcessAreaDefinition[];
 };
 
+export type TotemVisualizerControls = {
+  processAreaScale: number;
+  onProcessAreaScaleChange: (value: number) => void;
+  autoZoomEnabled: boolean;
+  onAutoZoomToggle: () => void;
+  useMockData: boolean;
+  onUseMockDataToggle: () => void;
+  useBackendMlpa: boolean;
+  onUseBackendMlpaToggle: () => void;
+  minScale: number;
+  maxScale: number;
+  scaleStep: number;
+};
+
 type TotemVisualizerProps = {
   eventLogId?: number | string | null;
   height?: string | number;
@@ -143,6 +164,9 @@ type TotemVisualizerProps = {
   reloadSignal?: number;
   title?: string;
   topInset?: number;
+  /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
+  embedded?: boolean;
+  onControlsReady?: (controls: TotemVisualizerControls) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4963,10 +4987,14 @@ function TotemVisualizer({
   reloadSignal,
   title,
   topInset = 0,
+  embedded = false,
+  onControlsReady,
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
+  const [internalReloadSignal, setInternalReloadSignal] = useState(0);
+  const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -5042,8 +5070,8 @@ function TotemVisualizer({
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
-  const [useMockData, setUseMockData] = useState(true);
-  const [useBackendMlpa, setUseBackendMlpa] = useState(false);
+  const [useMockData, setUseMockData] = useState(false);
+  const [useBackendMlpa, setUseBackendMlpa] = useState(true);
   const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -5056,6 +5084,9 @@ function TotemVisualizer({
   const verticalBoundsRef = useRef<typeof verticalBounds>(null);
   const lastCenteredTriggerRef = useRef(0);
   const [pendingCenter, setPendingCenter] = useState(0);
+  // Canvas panning state (only active when auto-zoom is disabled)
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const smoothedProcessAreaScaleRef = useRef(DEFAULT_PROCESS_AREA_SCALE);
   const zoomAnimationFrameRef = useRef<number | null>(null);
   const zoomAnimationStateRef = useRef<{
@@ -5070,6 +5101,66 @@ function TotemVisualizer({
     const clamped = Math.min(MAX_PROCESS_AREA_SCALE, Math.max(MIN_PROCESS_AREA_SCALE, nextValue));
     setProcessAreaScale(clamped);
   }, []);
+
+  // Canvas panning handlers (only active when auto-zoom is disabled)
+  const handlePanStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (autoZoomEnabled) return;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      setIsPanning(true);
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        scrollLeft: container.scrollLeft,
+        scrollTop: container.scrollTop,
+      };
+      e.preventDefault();
+    },
+    [autoZoomEnabled],
+  );
+
+  const handlePanMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isPanning || !panStartRef.current) return;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      container.scrollLeft = panStartRef.current.scrollLeft - dx;
+      container.scrollTop = panStartRef.current.scrollTop - dy;
+    },
+    [isPanning],
+  );
+
+  const handlePanEnd = useCallback(() => {
+    setIsPanning(false);
+    panStartRef.current = null;
+  }, []);
+
+  // Expose controls to parent component via callback
+  useEffect(() => {
+    if (!onControlsReady) return;
+    onControlsReady({
+      processAreaScale,
+      onProcessAreaScaleChange: handleProcessAreaScaleChange,
+      autoZoomEnabled,
+      onAutoZoomToggle: () => {
+        const next = !autoZoomEnabled;
+        setAutoZoomEnabled(next);
+        if (next) {
+          setAutoZoomTrigger((value) => value + 1);
+        }
+      },
+      useMockData,
+      onUseMockDataToggle: () => setUseMockData((prev) => !prev),
+      useBackendMlpa,
+      onUseBackendMlpaToggle: () => setUseBackendMlpa((prev) => !prev),
+      minScale: MIN_PROCESS_AREA_SCALE,
+      maxScale: MAX_PROCESS_AREA_SCALE,
+      scaleStep: PROCESS_AREA_SCALE_STEP,
+    });
+  }, [onControlsReady, processAreaScale, handleProcessAreaScaleChange, autoZoomEnabled, useMockData, useBackendMlpa]);
 
   useEffect(() => {
     smoothedProcessAreaScaleRef.current = smoothedProcessAreaScale;
@@ -5437,13 +5528,13 @@ function TotemVisualizer({
 
   useEffect(() => {
     fetchTotem();
-  }, [fetchTotem, reloadSignal, useMockData, useBackendMlpa]);
+  }, [fetchTotem, effectiveReloadSignal, useMockData, useBackendMlpa]);
 
   useEffect(() => {
     setPendingCenter((value) => value + 1);
     setProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
     setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
-  }, [reloadSignal]);
+  }, [effectiveReloadSignal]);
 
   useEffect(() => {
     setExpandedAreas({});
@@ -5678,16 +5769,6 @@ function TotemVisualizer({
           nodeAreaMap,
         );
         setEdgeSegments(segments);
-        setContentSize({
-          width: Math.max(
-            1,
-            Math.ceil(contentRef.current.scrollWidth || contentRect.width),
-          ),
-          height: Math.max(
-            1,
-            Math.ceil(contentRef.current.scrollHeight || contentRect.height),
-          ),
-        });
 
         const baseBounds = computeHorizontalBounds(mergedPositions, areaRects);
         const bounds = baseBounds;
@@ -5709,6 +5790,23 @@ function TotemVisualizer({
           setVerticalBounds(vBounds);
           setAutoZoomTrigger((value) => value + 1);
         }
+
+        const extraCanvasMargin = 240;
+        const boundsWidth = Math.max(0, bounds?.width ?? 0);
+        const boundsHeight = Math.max(0, vBounds?.height ?? 0);
+        const desiredWidth = Math.max(
+          contentRect.width,
+          boundsWidth + contentPaddingLeft + horizontalPadding + extraCanvasMargin,
+        );
+        const desiredHeight = Math.max(
+          contentRect.height,
+          boundsHeight + contentPaddingTop + 72 + extraCanvasMargin,
+        );
+
+        setContentSize({
+          width: Math.max(1, Math.ceil(desiredWidth)),
+          height: Math.max(1, Math.ceil(desiredHeight)),
+        });
 
         const containerWidth = scrollContainerRef.current?.clientWidth ?? 0;
         const widthChanged = Math.abs((viewportWidthRef.current ?? 0) - containerWidth) > 0.5;
@@ -5758,70 +5856,8 @@ function TotemVisualizer({
     rawTotem,
   ]);
 
-  return (
+  const visualizerContent = (
     <div className="relative flex-1" style={{ height: computedHeight, width: '100%' }}>
-      <div
-        style={{
-          position: 'absolute',
-          top: 16,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 12px',
-          borderRadius: 9999,
-          border: '1px solid #E2E8F0',
-          background: '#FFFFFF',
-          boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
-        }}
-      >
-        <Slider
-          min={MIN_PROCESS_AREA_SCALE}
-          max={MAX_PROCESS_AREA_SCALE}
-          step={PROCESS_AREA_SCALE_STEP}
-          value={[processAreaScale]}
-          onValueChange={(values) => handleProcessAreaScaleChange(values?.[0] ?? DEFAULT_PROCESS_AREA_SCALE)}
-          style={{ width: 120 }}
-        />
-        <Button
-          type="button"
-          variant={autoZoomEnabled ? 'secondary' : 'outline'}
-          size="icon"
-          onClick={() => {
-            const next = !autoZoomEnabled;
-            setAutoZoomEnabled(next);
-            if (next) {
-              setAutoZoomTrigger((value) => value + 1);
-            }
-          }}
-          className="rounded-full h-9 w-9"
-          title={autoZoomEnabled ? 'Disable auto-zoom' : 'Enable auto-zoom'}
-        >
-          <ScanIcon className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant={useMockData ? 'secondary' : 'outline'}
-          size="icon"
-          onClick={() => setUseMockData((prev) => !prev)}
-          className="rounded-full h-9 w-9"
-          title={useMockData ? 'Use backend data' : 'Use mock data'}
-        >
-          <FlaskConicalIcon className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant={useBackendMlpa ? 'secondary' : 'outline'}
-          size="icon"
-          onClick={() => setUseBackendMlpa((prev) => !prev)}
-          className="rounded-full h-9 w-9"
-          title={useBackendMlpa ? 'Using backend MLPA (ILP)' : 'Using frontend MLPA (greedy)'}
-        >
-          <BrainIcon className="h-4 w-4" />
-        </Button>
-      </div>
       {!eventLogId && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-5 shadow-md">
@@ -5833,12 +5869,17 @@ function TotemVisualizer({
 
       <div
         ref={scrollContainerRef}
+        onMouseDown={handlePanStart}
+        onMouseMove={handlePanMove}
+        onMouseUp={handlePanEnd}
+        onMouseLeave={handlePanEnd}
         style={{
           position: 'relative',
           height: '100%',
           width: '100%',
           overflow: 'auto',
           background: '#FFFFFF',
+          cursor: !autoZoomEnabled ? (isPanning ? 'grabbing' : 'grab') : 'default',
         }}
       >
         <div
@@ -5846,6 +5887,8 @@ function TotemVisualizer({
           style={{
             position: 'relative',
             minHeight: '100%',
+            width: `${Math.max(contentSize.width, 1)}px`,
+            height: `${Math.max(contentSize.height, 1)}px`,
             paddingTop: contentPaddingTop,
             paddingRight: horizontalPadding,
             paddingBottom: 72,
@@ -6434,6 +6477,81 @@ function TotemVisualizer({
         </div>
       )}
     </div>
+  );
+
+  if (embedded) {
+    return visualizerContent;
+  }
+
+  return (
+    <Card className="@container/card">
+      <CardHeader className="items-center relative z-10 justify-between">
+        <CardTitle>{title ?? 'Totem Visualizer'}</CardTitle>
+        <CardAction className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <ScanIcon className="h-4 w-4 text-muted-foreground" />
+            <Slider
+              min={MIN_PROCESS_AREA_SCALE}
+              max={MAX_PROCESS_AREA_SCALE}
+              step={PROCESS_AREA_SCALE_STEP}
+              value={[processAreaScale]}
+              onValueChange={(values) =>
+                handleProcessAreaScaleChange(values?.[0] ?? DEFAULT_PROCESS_AREA_SCALE)
+              }
+              className="w-[120px]"
+            />
+          </div>
+          <Button
+            type="button"
+            variant={autoZoomEnabled ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => {
+              const next = !autoZoomEnabled;
+              setAutoZoomEnabled(next);
+              if (next) {
+                setAutoZoomTrigger((value) => value + 1);
+              }
+            }}
+            className="rounded-full h-8 w-8"
+            title={autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
+          >
+            <ScanIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={useMockData ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setUseMockData((prev) => !prev)}
+            className="rounded-full h-8 w-8"
+            title={useMockData ? 'Use backend data' : 'Use mock data'}
+          >
+            <FlaskConicalIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={useBackendMlpa ? 'secondary' : 'outline'}
+            size="icon"
+            onClick={() => setUseBackendMlpa((prev) => !prev)}
+            className="rounded-full h-8 w-8"
+            title={useBackendMlpa ? 'Using backend MLPA (ILP)' : 'Using frontend MLPA (greedy)'}
+          >
+            <BrainIcon className="h-4 w-4" />
+          </Button>
+          <div className="w-px h-6 bg-border" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setInternalReloadSignal((value) => value + 1)}
+            className="flex items-center gap-2"
+            disabled={!eventLogId}
+          >
+            <RefreshCcw className="h-4 w-4" />
+            Reload
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="h-[600px] p-0">{visualizerContent}</CardContent>
+    </Card>
   );
 }
 

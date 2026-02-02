@@ -1,5 +1,5 @@
-import React, { useContext, useEffect, useState } from "react";
-import { RefreshCcw } from "lucide-react";
+import React, { useCallback, useContext, useEffect, useState } from "react";
+import { RefreshCcw, ScanIcon, FlaskConicalIcon, BrainIcon, ZoomOut, ZoomIn } from "lucide-react";
 import {
   Card,
   CardAction,
@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { Slider } from "./ui/slider";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -17,13 +18,18 @@ import { processFile } from "@/api/fileApi";
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
-import TotemVisualizer from "@/react_component/TotemVisualizer";
+import TotemVisualizer, { type TotemVisualizerControls } from "@/react_component/TotemVisualizer";
 
 export function DevDashboard() {
   const [processedResult, setProcessedResult] = useState(null);
   const [totemReloadSignal, setTotemReloadSignal] = useState(0);
+  const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
 
   const { selectedFile } = useContext(SelectedFileContext);
+
+  const handleTotemControlsReady = useCallback((controls: TotemVisualizerControls) => {
+    setTotemControls(controls);
+  }, []);
 
   useEffect(() => {
     const handleProcessFile = async () => {
@@ -54,7 +60,54 @@ export function DevDashboard() {
             <CardTitle>
               Totem Visualizer
             </CardTitle>
-            <CardAction>
+            <CardAction className="flex items-center gap-2">
+              {totemControls && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <ZoomOut className="h-4 w-4 text-muted-foreground" />
+                    <Slider
+                      min={totemControls.minScale}
+                      max={totemControls.maxScale}
+                      step={totemControls.scaleStep}
+                      value={[totemControls.processAreaScale]}
+                      onValueChange={(values) => totemControls.onProcessAreaScaleChange(values?.[0] ?? totemControls.minScale)}
+                      className="w-[120px]"
+                    />
+                    <ZoomIn className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <Button
+                    type="button"
+                    variant={totemControls.autoZoomEnabled ? 'secondary' : 'outline'}
+                    size="icon"
+                    onClick={totemControls.onAutoZoomToggle}
+                    className="rounded-full h-8 w-8"
+                    title={totemControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
+                  >
+                    <ScanIcon className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={totemControls.useMockData ? 'secondary' : 'outline'}
+                    size="icon"
+                    onClick={totemControls.onUseMockDataToggle}
+                    className="rounded-full h-8 w-8"
+                    title={totemControls.useMockData ? 'Use backend data' : 'Use mock data'}
+                  >
+                    <FlaskConicalIcon className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={totemControls.useBackendMlpa ? 'secondary' : 'outline'}
+                    size="icon"
+                    onClick={totemControls.onUseBackendMlpaToggle}
+                    className="rounded-full h-8 w-8"
+                    title={totemControls.useBackendMlpa ? 'Using backend MLPA (ILP)' : 'Using frontend MLPA (greedy)'}
+                  >
+                    <BrainIcon className="h-4 w-4" />
+                  </Button>
+                  <div className="w-px h-6 bg-border" />
+                </>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -75,6 +128,8 @@ export function DevDashboard() {
                 backendBaseUrl="http://localhost:8000"
                 reloadSignal={totemReloadSignal}
                 title="Totem Visualizer"
+                embedded={true}
+                onControlsReady={handleTotemControlsReady}
               />
             </ReactFlowProvider>
           </CardContent>
