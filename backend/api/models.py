@@ -91,3 +91,8 @@ class LogStatisticsComponent(DashboardComponent):
     show_earliest_timestamp = models.BooleanField(default=False)
     show_newest_timestamp = models.BooleanField(default=False)
     show_duration = models.BooleanField(default=False)
+
+
+class OCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)

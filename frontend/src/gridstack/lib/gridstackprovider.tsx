@@ -204,6 +204,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_newest_timestamp: (node as any).show_newest_timestamp ?? false,
           show_duration: (node as any).show_duration ?? false,
         };
+      } else if (component_name === "OCDFGComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -278,6 +283,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Process Area";
         } else if (item.component_name === "LogStatisticsComponent") {
           content = "Log Statistics";
+        } else if (item.component_name === "OCDFGComponent") {
+          content = "OCDFG";
         } else {
           content = "Unknown";
         }
@@ -304,6 +311,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             show_earliest_timestamp: item.show_earliest_timestamp,
             show_newest_timestamp: item.show_newest_timestamp,
             show_duration: item.show_duration,
+            // OCDFGComponent properties
+            show_controls: item.show_controls,
+            initial_interaction_locked: item.initial_interaction_locked,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -324,6 +334,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
               (node as any).show_newest_timestamp = item.show_newest_timestamp;
               (node as any).show_duration = item.show_duration;
+              // OCDFGComponent properties
+              (node as any).show_controls = item.show_controls;
+              (node as any).initial_interaction_locked = item.initial_interaction_locked;
             }
           }
           // Set data attribute for persistence

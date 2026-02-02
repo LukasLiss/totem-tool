@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -394,6 +394,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
             elif comp.component_name == 'LogStatisticsComponent':
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCDFGComponent':
+                components.append(OCDFGComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -486,6 +488,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_earliest_timestamp=item.get('show_earliest_timestamp', False),
                     show_newest_timestamp=item.get('show_newest_timestamp', False),
                     show_duration=item.get('show_duration', False),
+                )
+            elif component_name == 'OCDFGComponent':
+                OCDFGComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
             # Add more as needed
 

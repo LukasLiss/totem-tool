@@ -88,6 +88,8 @@ interface OCDFGVisualizerProps {
   instanceId?: string;
   typeColorOverrides?: Record<string, string>;
   onSizeChange?: (size: { width: number; height: number }) => void;
+  showControls?: boolean;
+  initialInteractionLocked?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -274,6 +276,8 @@ function OCDFGVisualizer({
   instanceId,
   typeColorOverrides,
   onSizeChange,
+  showControls = true,
+  initialInteractionLocked = true,
 }: OCDFGVisualizerProps) {
   console.log('[OCDFGVisualizer] Longest Trace Mode - Component mounted!');
 
@@ -293,7 +297,7 @@ function OCDFGVisualizer({
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
-  const [interactionLocked, setInteractionLocked] = useState(true);
+  const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
   const [showDebugOverlays, setShowDebugOverlays] = useState(false);
   const [animateEdges, setAnimateEdges] = useState(false);
@@ -313,7 +317,7 @@ function OCDFGVisualizer({
   const nodePadding = variantPreset.nodePadding;
   const fontSize = variantPreset.fontSize;
   const terminalSize = variantPreset.terminalSize;
-  const hideChrome = resolvedVariant !== 'full';
+  const hideChrome = resolvedVariant !== 'full' || showControls === false;
   const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow({ id: reactFlowId } as any);

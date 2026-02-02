@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
 import VariantsExplorer from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
+import { ReactFlowProvider } from "@xyflow/react";
+import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
@@ -46,6 +48,9 @@ interface ComponentProps {
     show_earliest_timestamp?: boolean;
     show_newest_timestamp?: boolean;
     show_duration?: boolean;
+    // OCDFGComponent properties
+    show_controls?: boolean;
+    initial_interaction_locked?: boolean;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -482,6 +487,79 @@ const LogStatisticsComponent: React.FC<ComponentProps> = ({
 };
 
 
+// OCDFGComponent: Dashboard wrapper for Object-Centric Directly Follows Graph
+const OCDFGComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+
+  useEffect(() => {
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+  }, [node.show_controls, node.initial_interaction_locked]);
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>OCDFG Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Object-Centric Directly Follows Graph (OCDFG) visualization.
+          </p>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-controls">Show Controls Panel</Label>
+            <Switch
+              id="show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render OCDFGVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <OCDFGVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -490,4 +568,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   VariantsComponent,
   ProcessAreaComponent,
   LogStatisticsComponent,
+  OCDFGComponent,
 };

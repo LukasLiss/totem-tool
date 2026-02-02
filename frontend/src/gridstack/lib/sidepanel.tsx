@@ -80,13 +80,30 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .ocdfg-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "OCDFG",
+        component_name: "OCDFGComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
   return (
-    <div className="sidepanel col-md-2 d-none d-md-block p-2 ">
+    <div className="sidepanel col-md-2 d-none d-md-block p-2 max-h-screen overflow-y-auto">
       <div id="trash" className="sidepanel-item flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/trash.png" width="50" height="50"/>
+        <img src="src/images/trash-icon.svg" width="50" height="50"/>
         <div>Drop here to remove!</div>
       </div>
 
@@ -96,7 +113,7 @@ const SidePanel: React.FC = () => {
       </div>
 
       <div className="grid-stack-item sidepanel-item text-box flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/text.jpg" width="100" height="50"/>
+        <img src="src/images/textbox-icon.svg" width="100" height="50"/>
         <div>Text Box</div>
       </div>
 
@@ -106,18 +123,23 @@ const SidePanel: React.FC = () => {
       </div>
 
       <div className="grid-stack-item sidepanel-item variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/variants.svg" width="100" height="50"/>
+        <img src="src/images/variants-preview.png" width="100" height="50"/>
         <div>Variants Explorer</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item process-area-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/variants.svg" width="100" height="50"/>
+        <img src="src/images/process-area-preview.png" width="100" height="50"/>
         <div>Process Area</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/numbers.jpg" width="100" height="70"/>
+        <img src="src/images/log-statistics-preview.png" width="100" height="70"/>
         <div>Log Statistics</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>OCDFG</div>
       </div>
     </div>
   );
