@@ -13,7 +13,7 @@ import { componentMap } from "../../components/componentMap";
 interface GridContextValue {
   grid: GridStack | null;
   gridRef: React.RefObject<HTMLDivElement>;
-  addWidget: (content?: string) => void;
+  addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
   getLayout: () => any[];
   loadLayout: (layout: any[]) => void;
   resetGrid: () => void;
@@ -27,7 +27,8 @@ const GridModeContext = createContext<{
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
-  selectedFile: any;
+  selectedFile?: any;  // Made optional
+  dashboardId: number;  // Added
 }
 
 export const useGridMode = () => useContext(GridModeContext);
@@ -49,11 +50,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
   selectedFile,
+  dashboardId,
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
-
+  const componentIdCounter = useRef(1);  // Counter for generating unique component IDs
 
   // Define grid options here so resetGrid can access them
   const gridOptions: GridStackOptions = {
@@ -62,6 +64,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     removable: "#trash",
     float: true,
     ...(options || {}),
+  };
+
+  // Function to generate a unique component ID
+  const generateComponentId = () => {
+    return componentIdCounter.current++;
   };
 
   useEffect(() => {
@@ -87,8 +94,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         root.render(
           <Component
             node={w}
-            isEditMode={isEditMode} // Use current isEditMode
+            isEditMode={isEditMode}
             selectedFile={selectedFile}
+            dashboardId={dashboardId}  // Pass dashboardId
             onUpdate={(updates) => {
               Object.assign(w, updates);
               gridRef.current?.update(el, updates);
@@ -122,6 +130,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node={node}
               isEditMode={isEditMode}
               selectedFile={selectedFile}
+              dashboardId={dashboardId}
               onUpdate={(updates) => {
                 Object.assign(node, updates);
                 gridRef.current?.update(item as HTMLElement, updates);
@@ -135,8 +144,30 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     } else {
       console.log('No grid instance to update');
     }
-  }, [isEditMode, grid, selectedFile]);
+  }, [isEditMode, grid, selectedFile, dashboardId]);
 
+  // Implement addWidget to add new widgets with generated component_id
+  const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
+    if (!grid) return;
+    const newId = generateComponentId();
+    const widgetEl = grid.addWidget({
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 2,
+      content,
+      component_name: componentName,
+      component_id: newId,
+    });
+    if (widgetEl) {
+      const node = grid.getGridItems().find(item => item.el === widgetEl)?.gridstackNode;
+      if (node) {
+        (node as any).component_name = componentName;
+        (node as any).component_id = newId;
+      }
+      widgetEl.dataset.componentName = componentName;
+    }
+  };
 
   const resetGrid = () => {
     console.log("Resetting grid completely");
@@ -176,6 +207,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     if (!gridRef.current) return [];
     const nodes = gridRef.current.save(false) as GridStackNode[];
     return nodes.map((node, index) => {
+      // Ensure component_id is set (generate if missing)
+      let component_id = (node as any).component_id || generateComponentId();
+      (node as any).component_id = component_id;  // Update node for consistency
       // Use component_name from the node, fallback to data attribute or content-based logic
       let component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
       let props: any = {};
@@ -188,12 +222,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: (node as any).text || "Enter text here", font_size: 14 };  // Read from node.text
+        props = { text: (node as any).text || "Enter text here", font_size: 14 };  
+      } else if (component_name === "ImageComponent") {
+        props = { image: (node as any).image};
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
       
       return {
+        id: component_id,  // Now always set
         component_name,
         x: node.x,
         y: node.y,
@@ -251,7 +288,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       layout.forEach((item, index) => {
         console.log(`Adding widget ${index}:`, item);
         let content = "";
-        if (item.component_name === "NumberOfEventsComponent") {
+        if (item.component_name === "NumberofEventsComponent") {
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
@@ -260,6 +297,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         } else {
           content = "Unknown";
         }
+        
+        // Ensure component_id is set (generate if missing from layout)
+        const component_id = item.id || item.component_id || generateComponentId();
         
         try {
           const widgetEl = gridRef.current?.addWidget({
@@ -270,12 +310,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             content,  // Keep for GridStack compatibility
             text: item.text,  // Add text for component data
             component_name: item.component_name,
+            component_id,  // Now always set
+            image: item.image, // For ImageComponent
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
             const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
             if (node) {
               (node as any).component_name = item.component_name;
+              (node as any).component_id = component_id;  // Ensure it's set
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
@@ -301,7 +344,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
   return (
     <GridModeContext.Provider value={{ isEditMode, setIsEditMode }}>
-      <GridContext.Provider value={{ grid, gridRef, getLayout, loadLayout, resetGrid }}>
+      <GridContext.Provider value={{ grid, gridRef, addWidget, getLayout, loadLayout, resetGrid }}>
         {children}
       </GridContext.Provider>
     </GridModeContext.Provider>

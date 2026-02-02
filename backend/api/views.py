@@ -169,7 +169,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         for comp in base_components:
             if comp.component_name == 'TextBoxComponent':
                 components.append(TextBoxComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'NumberOfEventsComponent':
+            elif comp.component_name == 'NumberofEventsComponent':
                 components.append(NumberofEventsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'ImageComponent':
                 components.append(ImageComponent.objects.get(id=comp.id))
@@ -221,6 +221,11 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color=item.get('color', 'blue'),
                 )
             elif component_name == 'ImageComponent':
+                # Extract image path, stripping /files/ prefix if present
+                image_path = item.get('image', None)
+                if image_path and isinstance(image_path, str) and image_path.startswith('/files/'):
+                    image_path = image_path[7:]  # Remove '/files/' prefix
+                
                 ImageComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],
@@ -228,37 +233,66 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item['w'],
                     h=item['h'],
                     component_name=component_name,
-                    image=item.get('image', None),
+                    image=image_path,
                 )
             # Add more as needed
 
         return Response({"status": "saved"})
 
     @action(
-        detail=True,
-        methods=["post"],
-        url_path="upload-image",
-        parser_classes=[MultiPartParser, FormParser],
+    detail=True,
+    methods=["post"],
+    url_path="upload_image",
+    parser_classes=[MultiPartParser, FormParser],
     )
     def upload_image(self, request, pk=None):
         dashboard = self.get_object()
 
-        image = request.FILES.get("image")
-        if not image:
-            return Response({"error": "No image provided"}, status=400)
-        if image:
-            if not image.content_type in ['image/jpeg', 'image/png', 'image/gif']:
-                return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
-            if image.size > 5 * 1024 * 1024:  # 5MB limit
-                return Response({'error': 'File too large'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            dashboard.image = image
-            dashboard.save()
-            serializer = ImageComponentSerializer(dashboard)
+        component_id = request.data.get("component_id")
+        if not component_id:
+            return Response(
+                {"error": "component_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        return Response({
-            serializer.data
-        })
+        # ensure integer id
+        try:
+            component_id = int(component_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "component_id must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        image_file = request.FILES.get("image")
+        if not image_file:
+            return Response(
+                {"error": "No image file provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            image_component = ImageComponent.objects.get(
+                dashboardcomponent_ptr_id=component_id,
+                dashboard=dashboard,
+            )
+        except ImageComponent.DoesNotExist:
+            return Response(
+                {"error": "ImageComponent not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        image_component.image = image_file
+        image_component.save()
+        print("image_file name:", image_file.name)
+        print("image_component.image.url:", image_component.image.url)
+        full_url = request.build_absolute_uri(image_component.image.url)
+        print("full_url returned to frontend:", full_url)
+        return Response(
+            {"image": image_component.image.url},  # This returns relative path like /files/project/image.png
+            status=status.HTTP_200_OK,
+        )
+
 
 # TODO: change to equivalent totem_lib.ocel import function 
 def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:

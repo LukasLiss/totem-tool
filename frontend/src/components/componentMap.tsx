@@ -19,6 +19,7 @@ import { uploadImageToComponent } from "@/api/componentsApi";
 // Define props interface for components (extend as needed)
 interface ComponentProps {
   node: GridStackNode & {
+    component_id: number;
     component_name?: string;
     text?: string;
     font_size?: number;
@@ -27,6 +28,8 @@ interface ComponentProps {
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
+  dashboardId: number;  // Added for API calls
+  selectedFile?: any;  // Optional, for components that need it
 }
 
 
@@ -132,41 +135,46 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
   }, [selectedFile]); // Only re-run when selectedFile changes
 
   return (
-    <div style={{ padding: '10px', color: node.color || 'blue', textAlign: 'center' }}>
-      <h3>Number of Events</h3>
-      {isEditMode ? (
-        // Edit mode: Editable (example: input for value)
-        
-          <Button onClick={() => alert('Refresh data!')} className="mt-2" variant="primary">
-            Refresh Data
-          </Button>
-        
-      ) : (
-        // Normal mode: Read-only
-        <>
-          <p style={{ fontSize: '24px', fontWeight: 'bold' }}>{processedResult || 'Loading...'}</p>
-          <Button onClick={() => alert('Refresh data!')} variant="primary">
-            Refresh
-          </Button>
-        </>
-      )}
+    <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardDescription>
+            Number of Events
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
+        </CardContent>
+      </Card>
     </div>
   );
 };
 
 
-const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
+const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false, dashboardId }) => {
   const [imageUrl, setImageUrl] = useState<string | null>(node.image || null);
   const [uploading, setUploading] = useState(false);
+  useEffect(() => {
+    if (node.image) {
+    setImageUrl(node.image);
+    console.log("Resolved imageUrl:", node.image);
+  }
+  }, [node?.image]);
+
+  console.log('imageUrl in ImageComponent:', node.image);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    console.log('Selected file for upload [componentMap.tsx]:', file);
+    console.log('node component_id:', node.component_id);
     if (!file) return;
 
     setUploading(true);
     const token = localStorage.getItem('access_token');
     try {
-      const data = await uploadImageToComponent(node.id, file, token);
+      console.log('node:', node);
+      console.log('Uploading file to component ID:', node.component_id, 'for dashboard:', dashboardId);
+      const data = await uploadImageToComponent(dashboardId, node.component_id, file, token);  // Updated call
       setImageUrl(data.image);
       onUpdate?.({ image: data.image });
     } catch (error) {
@@ -188,7 +196,8 @@ const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode =
           </>
         ) : (
           imageUrl ? (
-            <img src={imageUrl} alt="Uploaded" className="w-full h-full object-cover" />
+            console.log("http://localhost:8000" + imageUrl),
+            <img src={"http://localhost:8000" + imageUrl} alt="Uploaded" className="w-full h-full object-cover" />
           ) : (
             <p>No image uploaded</p>
           )

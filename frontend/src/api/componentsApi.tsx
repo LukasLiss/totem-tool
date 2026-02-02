@@ -40,16 +40,17 @@ export async function getLayout(dashboardId: number, token: string) {
 }
 
 export async function uploadImageToComponent(
+  dashboardId: number,
   componentId: number,
   file: File,
   token: string
 ) {
-
   const formData = new FormData();
   formData.append("image", file);
+  formData.append("component_id", componentId.toString());  // Pass component_id in the body
 
   const response = await fetch(
-    `/api/dashboard-components/${componentId}/upload_image/`,
+    `/api/dashboard/${dashboardId}/upload_image/`,  // Updated URL to match backend
     {
       method: "POST",
       headers: {
@@ -63,17 +64,7 @@ export async function uploadImageToComponent(
     const text = await response.text();
     console.error("Upload failed:", response.status, text);
     throw new Error(`Image upload failed (${response.status})`);
-
-    try {
-      const errorData = await response.json();
-      errorMessage = errorData?.error ?? errorMessage;
-    } catch {
-      // response was not JSON, keep default message
-    }
-
-    throw new Error(errorMessage);
   }
-
   const data = await response.json();
   return data;
 }

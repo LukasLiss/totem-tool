@@ -49,6 +49,14 @@ class TextBoxComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 class ImageComponentSerializer(DashboardComponentSerializer):
+    image = serializers.SerializerMethodField()
+    
+    def get_image(self, obj):
+        """Return the image URL if it exists, otherwise None"""
+        if obj.image:
+            return obj.image.url
+        return None
+    
     class Meta:
         model = ImageComponent
         fields = "__all__"

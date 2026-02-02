@@ -20,7 +20,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
-
+import { DashboardContext } from "@/contexts/DashboardContext.tsx";
 // extend type to allow optional logo component
 
 
@@ -31,6 +31,7 @@ export function Switcher() {
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
   const navigate = useNavigate();
+  const { setSelectedDashboard } = useContext(DashboardContext)
   
   // find active project by id, fallback to first
 const displayName = selectedFile?.file
@@ -100,6 +101,7 @@ const displayName = selectedFile?.file
                 key={project.id}
                 onClick={() => {
                   setSelectedFile(project); // put entire file into context
+                  setSelectedDashboard(-1); // reset dashboard view
                   console.log("Saved to context:", project);
                 }}
                 className="gap-2 p-2"

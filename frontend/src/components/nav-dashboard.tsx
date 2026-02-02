@@ -39,6 +39,10 @@ import { toast } from "sonner"
 import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
+import { useNavigate } from "react-router-dom";
+
+
+
 
 export function NavDashboard({
   dashboards,
@@ -54,6 +58,7 @@ export function NavDashboard({
   const [ openDelete, setOpenDelete ] = useState(false);
   const [dashboardToRename, setDashboardToRename] = useState<null | { id: number; name: string }>(null);
   const [dashboardToDelete, setDashboardToDelete] = useState<null | { id: number; name: string }>(null);
+  const navigate = useNavigate()
 
 
 
@@ -67,11 +72,18 @@ export function NavDashboard({
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (err) {
-      console.error("Upload failed:", err);
+    } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Upload failed:", error);
       toast.error("Dashboard could not be created");
     }
   };
+};
 
   const handleChangeName = async () => {
   if (!dashboardToRename) return; // nothing selected
@@ -83,12 +95,18 @@ export function NavDashboard({
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (err) {
-    console.error("Rename failed:", err);
-    toast.error("Dashboard could not be renamed");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Rename failed:", error);
+      toast.error("Dashboard could not be renamed");
+    }
+  };
 };
-
 
   const handleDeleteDashboard = async () => {
 
@@ -98,10 +116,17 @@ export function NavDashboard({
     await refreshDashboards();
     setOpenDelete(false);
     setDashboardToDelete(null); // reset
-  } catch (err) {
-    console.error("Delete failed:", err);
-    toast.error("Dashboard could not be deleted");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Delete failed:", error);
+      toast.error("Dashboard could not be deleted");
+    }
+  };
 };
 
 
@@ -132,7 +157,10 @@ export function NavDashboard({
                         console.log("Dashboard clicked:", dashboard);
                         setSelectedDashboard(dashboard.id);
                       }}>
-                        <span>{dashboard.name}</span>
+                        <span className="flex-1 truncate"
+                        title={dashboard.name}
+
+                        >{dashboard.name}</span>
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -248,6 +276,7 @@ export function NavDashboard({
                   value={dashboardname}
                   onChange={(e) => setDashboardname(e.target.value)}
                   placeholder={dashboardToRename?.name || "Dashboard Name"}
+                  maxLength={100}
                 />
               </div>
             </div>

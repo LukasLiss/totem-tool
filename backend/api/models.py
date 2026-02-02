@@ -12,8 +12,7 @@ def user_directory_path(instance, filename):
     return os.path.join("legacy", filename)
 
 def project_directory_path(instance, filename):
-    return os.path.join(instance.project.name, filename)
-
+    return os.path.join(instance.dashboard.project.name, filename)
 
 class Project(models.Model):
     users = models.ManyToManyField(User)

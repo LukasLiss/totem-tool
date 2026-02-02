@@ -15,7 +15,7 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
 import {
-  Settings, Save
+  Settings, Save, Minus, Plus
 } from "lucide-react"
 
 // Type-safe layout items
@@ -119,17 +119,26 @@ const GridContent: React.FC = () => {
             <Save />
             <span className="sr-only">Toggle Sidebar</span>
           </Button>
+          
           : null}
+        {isEditMode ?<Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+            console.log('Edit mode button clicked, current isEditMode:', isEditMode);
+            setIsEditMode(!isEditMode);}}>
+            <Minus />
+            <span className="sr-only">Toggle Sidebar</span>
+          </Button> :
         <Button
             variant="ghost"
             size="icon"
             onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
             setIsEditMode(!isEditMode);}}>
-            <Settings />
+            <Plus />
             <span className="sr-only">Toggle Sidebar</span>
-          </Button>
-        
+          </Button> }
         
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
@@ -140,7 +149,6 @@ const GridContent: React.FC = () => {
           </GridContainer>
         </div>
         {isEditMode ? <SidePanel /> : null}
-
       </div>
     </div>
   );
@@ -148,11 +156,11 @@ const GridContent: React.FC = () => {
 
 const Grid: React.FC = () => {
   const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
-
+  const { selectedDashboard: dashboardId } = useContext(DashboardContext);
   console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
-    <GridProvider selectedFile={selectedFile}>
+    <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
       <GridContent />
     </GridProvider>
   </SidebarInset>
