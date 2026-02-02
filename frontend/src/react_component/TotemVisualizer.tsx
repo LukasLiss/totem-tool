@@ -6427,8 +6427,9 @@ function TotemVisualizer({
 
       {loading && (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
-          <div className="rounded-md border border-slate-200 bg-white px-5 py-3 text-sm font-medium text-slate-600 shadow-lg">
-            Discovering Totem model…
+          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <span className="text-sm font-medium text-slate-700">Discovering Totem model…</span>
           </div>
         </div>
       )}
