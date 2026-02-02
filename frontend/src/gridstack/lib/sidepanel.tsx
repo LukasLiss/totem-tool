@@ -58,6 +58,28 @@ const SidePanel: React.FC = () => {
       [{ h: 6, w: 8, content: "Process Area", component_name: "ProcessAreaComponent", order: 0 }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .log-statistics-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 2,
+        w: 4,
+        content: "Log Statistics",
+        component_name: "LogStatisticsComponent",
+        show_num_events: true,
+        show_num_activities: true,
+        show_num_objects: true,
+        show_num_object_types: true,
+        show_earliest_timestamp: false,
+        show_newest_timestamp: false,
+        show_duration: false,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -91,6 +113,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item process-area-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/variants.svg" width="100" height="50"/>
         <div>Process Area</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/numbers.jpg" width="100" height="70"/>
+        <div>Log Statistics</div>
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ import { uploadImageToComponent } from "@/api/componentsApi";
 import VariantsExplorer from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
 import { Switch } from '@/components/ui/switch';
+import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -37,6 +38,14 @@ interface ComponentProps {
     image?: string;
     automatic_loading?: boolean;
     leading_object_type?: string;
+    // LogStatisticsComponent properties
+    show_num_events?: boolean;
+    show_num_activities?: boolean;
+    show_num_objects?: boolean;
+    show_num_object_types?: boolean;
+    show_earliest_timestamp?: boolean;
+    show_newest_timestamp?: boolean;
+    show_duration?: boolean;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -357,6 +366,122 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 };
 
 
+// LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
+const LogStatisticsComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  // Local state for toggle values (synced with node for edit mode)
+  const [showNumEvents, setShowNumEvents] = useState(node.show_num_events ?? true);
+  const [showNumActivities, setShowNumActivities] = useState(node.show_num_activities ?? true);
+  const [showNumObjects, setShowNumObjects] = useState(node.show_num_objects ?? true);
+  const [showNumObjectTypes, setShowNumObjectTypes] = useState(node.show_num_object_types ?? true);
+  const [showEarliestTimestamp, setShowEarliestTimestamp] = useState(node.show_earliest_timestamp ?? false);
+  const [showNewestTimestamp, setShowNewestTimestamp] = useState(node.show_newest_timestamp ?? false);
+  const [showDuration, setShowDuration] = useState(node.show_duration ?? false);
+
+  // Sync with node when it changes
+  useEffect(() => {
+    setShowNumEvents(node.show_num_events ?? true);
+    setShowNumActivities(node.show_num_activities ?? true);
+    setShowNumObjects(node.show_num_objects ?? true);
+    setShowNumObjectTypes(node.show_num_object_types ?? true);
+    setShowEarliestTimestamp(node.show_earliest_timestamp ?? false);
+    setShowNewestTimestamp(node.show_newest_timestamp ?? false);
+    setShowDuration(node.show_duration ?? false);
+  }, [node.show_num_events, node.show_num_activities, node.show_num_objects, node.show_num_object_types, node.show_earliest_timestamp, node.show_newest_timestamp, node.show_duration]);
+
+  // Handlers for toggle changes
+  const handleShowNumEventsChange = (checked: boolean) => {
+    setShowNumEvents(checked);
+    onUpdate?.({ show_num_events: checked } as any);
+  };
+  const handleShowNumActivitiesChange = (checked: boolean) => {
+    setShowNumActivities(checked);
+    onUpdate?.({ show_num_activities: checked } as any);
+  };
+  const handleShowNumObjectsChange = (checked: boolean) => {
+    setShowNumObjects(checked);
+    onUpdate?.({ show_num_objects: checked } as any);
+  };
+  const handleShowNumObjectTypesChange = (checked: boolean) => {
+    setShowNumObjectTypes(checked);
+    onUpdate?.({ show_num_object_types: checked } as any);
+  };
+  const handleShowEarliestTimestampChange = (checked: boolean) => {
+    setShowEarliestTimestamp(checked);
+    onUpdate?.({ show_earliest_timestamp: checked } as any);
+  };
+  const handleShowNewestTimestampChange = (checked: boolean) => {
+    setShowNewestTimestamp(checked);
+    onUpdate?.({ show_newest_timestamp: checked } as any);
+  };
+  const handleShowDurationChange = (checked: boolean) => {
+    setShowDuration(checked);
+    onUpdate?.({ show_duration: checked } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Configuration form with toggles
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>Log Statistics Settings</CardTitle>
+          <CardDescription>Select which statistics to display</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-events">Number of Events</Label>
+            <Switch id="show-events" checked={showNumEvents} onCheckedChange={handleShowNumEventsChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-activities">Number of Activities</Label>
+            <Switch id="show-activities" checked={showNumActivities} onCheckedChange={handleShowNumActivitiesChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-objects">Number of Objects</Label>
+            <Switch id="show-objects" checked={showNumObjects} onCheckedChange={handleShowNumObjectsChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-object-types">Number of Object Types</Label>
+            <Switch id="show-object-types" checked={showNumObjectTypes} onCheckedChange={handleShowNumObjectTypesChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-earliest">Earliest Timestamp</Label>
+            <Switch id="show-earliest" checked={showEarliestTimestamp} onCheckedChange={handleShowEarliestTimestampChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-newest">Newest Timestamp</Label>
+            <Switch id="show-newest" checked={showNewestTimestamp} onCheckedChange={handleShowNewestTimestampChange} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-duration">Duration</Label>
+            <Switch id="show-duration" checked={showDuration} onCheckedChange={handleShowDurationChange} />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Delegate to reusable LogStatistics component
+  return (
+    <LogStatistics
+      fileId={selectedFile?.id}
+      showNumEvents={showNumEvents}
+      showNumActivities={showNumActivities}
+      showNumObjects={showNumObjects}
+      showNumObjectTypes={showNumObjectTypes}
+      showEarliestTimestamp={showEarliestTimestamp}
+      showNewestTimestamp={showNewestTimestamp}
+      showDuration={showDuration}
+      className="w-full h-full"
+    />
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -364,4 +489,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ImageComponent,
   VariantsComponent,
   ProcessAreaComponent,
+  LogStatisticsComponent,
 };

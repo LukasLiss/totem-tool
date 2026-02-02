@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -306,6 +306,43 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=["get"])
+    def statistics(self, request, pk=None):
+        """Returns basic statistics of the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            num_events = len(ocel.events.unique(subset='_eventId'))
+            num_unique_activities = ocel.events.select('_activity').unique().height
+            num_objects = ocel.objects.unique(subset='_objId').height
+            num_object_types = len(ocel.object_types)
+            earliest_timestamp = ocel.events.select('_timestampUnix').min().item()
+            newest_timestamp = ocel.events.select('_timestampUnix').max().item()
+
+            return Response({
+                "num_events": num_events,
+                "num_unique_activities": num_unique_activities,
+                "num_objects": num_objects,
+                "num_object_types": num_object_types,
+                "earliest_timestamp": earliest_timestamp,
+                "newest_timestamp": newest_timestamp,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -355,6 +392,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(VariantsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'ProcessAreaComponent':
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'LogStatisticsComponent':
+                components.append(LogStatisticsComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -431,6 +470,22 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item['w'],
                     h=item['h'],
                     component_name=component_name,
+                )
+            elif component_name == 'LogStatisticsComponent':
+                LogStatisticsComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_num_events=item.get('show_num_events', True),
+                    show_num_activities=item.get('show_num_activities', True),
+                    show_num_objects=item.get('show_num_objects', True),
+                    show_num_object_types=item.get('show_num_object_types', True),
+                    show_earliest_timestamp=item.get('show_earliest_timestamp', False),
+                    show_newest_timestamp=item.get('show_newest_timestamp', False),
+                    show_duration=item.get('show_duration', False),
                 )
             # Add more as needed
 

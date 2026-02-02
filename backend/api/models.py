@@ -81,3 +81,13 @@ class VariantsComponent(DashboardComponent):
 
 class ProcessAreaComponent(DashboardComponent):
     pass
+
+
+class LogStatisticsComponent(DashboardComponent):
+    show_num_events = models.BooleanField(default=True)
+    show_num_activities = models.BooleanField(default=True)
+    show_num_objects = models.BooleanField(default=True)
+    show_num_object_types = models.BooleanField(default=True)
+    show_earliest_timestamp = models.BooleanField(default=False)
+    show_newest_timestamp = models.BooleanField(default=False)
+    show_duration = models.BooleanField(default=False)

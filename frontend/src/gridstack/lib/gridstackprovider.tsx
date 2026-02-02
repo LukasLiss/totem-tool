@@ -194,6 +194,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           automatic_loading: (node as any).automatic_loading ?? false,
           leading_object_type: (node as any).leading_object_type ?? '',
         };
+      } else if (component_name === "LogStatisticsComponent") {
+        props = {
+          show_num_events: (node as any).show_num_events ?? true,
+          show_num_activities: (node as any).show_num_activities ?? true,
+          show_num_objects: (node as any).show_num_objects ?? true,
+          show_num_object_types: (node as any).show_num_object_types ?? true,
+          show_earliest_timestamp: (node as any).show_earliest_timestamp ?? false,
+          show_newest_timestamp: (node as any).show_newest_timestamp ?? false,
+          show_duration: (node as any).show_duration ?? false,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -266,6 +276,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Variants Explorer";
         } else if (item.component_name === "ProcessAreaComponent") {
           content = "Process Area";
+        } else if (item.component_name === "LogStatisticsComponent") {
+          content = "Log Statistics";
         } else {
           content = "Unknown";
         }
@@ -284,6 +296,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             image: item.image,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
+            // LogStatisticsComponent properties
+            show_num_events: item.show_num_events,
+            show_num_activities: item.show_num_activities,
+            show_num_objects: item.show_num_objects,
+            show_num_object_types: item.show_num_object_types,
+            show_earliest_timestamp: item.show_earliest_timestamp,
+            show_newest_timestamp: item.show_newest_timestamp,
+            show_duration: item.show_duration,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -296,6 +316,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).image = item.image; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+              // LogStatisticsComponent properties
+              (node as any).show_num_events = item.show_num_events;
+              (node as any).show_num_activities = item.show_num_activities;
+              (node as any).show_num_objects = item.show_num_objects;
+              (node as any).show_num_object_types = item.show_num_object_types;
+              (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
+              (node as any).show_newest_timestamp = item.show_newest_timestamp;
+              (node as any).show_duration = item.show_duration;
             }
           }
           // Set data attribute for persistence
