@@ -10,19 +10,10 @@ import {
   CardTitle,
   CardAction,
 } from '@/components/ui/card';
-import { ScanIcon, FlaskConicalIcon, BrainIcon, RefreshCcw } from 'lucide-react';
+import { ScanIcon, RefreshCcw } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
-import {
-  orderItemOcdfgMock,
-  hrWorkerOcdfgMock,
-  companyLifecycleOcdfgMock,
-  factoryOcdfgMock,
-  warehouseOcdfgMock,
-  ocdfgDetailMiniMock,
-  type OcdfgMockData,
-} from '@/mocks/ocdfgDetailMock';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -45,92 +36,6 @@ type TotemApiResponse = {
   object_type_to_event_types?: Record<string, string[]>;
 };
 
-const TOTEM_MOCK: TotemApiResponse = {
-  layers: [
-    {
-      level: 0,
-      areas: [
-        { objectTypes: ['Company'], eventTypes: ['Establish Company', 'Close Company'] },
-      ],
-    },
-    {
-      level: 1,
-      areas: [
-        { objectTypes: ['Factory', 'Warehouse'], eventTypes: ['Start Production', 'Maintain Equipment', 'Store Inventory', 'Dispatch Inventory'] },
-        { objectTypes: ['HR'], eventTypes: ['Hire Worker', 'Process Contract'] },
-      ],
-    },
-    {
-      level: 2,
-      areas: [
-        { objectTypes: ['Worker'], eventTypes: ['Staff Shift', 'Relocate Worker'] },
-      ],
-    },
-    {
-      level: 3,
-      areas: [
-        { objectTypes: ['Order', 'Item'], eventTypes: ['Create Order', 'Complete Order', 'Package Item', 'Ship Item'] },
-      ],
-    },
-  ],
-  tempgraph: {
-    nodes: ['Company', 'Factory', 'Warehouse', 'HR', 'Worker', 'Order', 'Item'],
-    D: [
-      ['Order', 'Worker'],
-      ['Item', 'Worker'],
-      ['Worker', 'Factory'],
-      ['Item', 'Warehouse'],
-      ['HR', 'Company'],
-      ['Factory', 'Company'],
-      ['Warehouse', 'Company'],
-    ],
-    P: [
-      ['Factory', 'Warehouse'],
-      ['Warehouse', 'Factory'],
-      ['HR', 'Worker'],
-      ['Worker', 'HR'],
-    ],
-    I: [['Order', 'Item']],
-  },
-  type_relations: [
-    ['Company', 'Factory'],
-    ['Company', 'Warehouse'],
-    ['Company', 'Worker'],
-    ['Factory', 'Warehouse'],
-    ['Factory', 'Worker'],
-    ['HR', 'Order'],
-    ['HR', 'Worker'],
-    ['Item', 'Worker'],
-    ['Order', 'Item'],
-    ['Order', 'Worker'],
-  ],
-  all_event_types: [
-    'Close Company',
-    'Complete Order',
-    'Create Order',
-    'Dispatch Inventory',
-    'Establish Company',
-    'Hire Worker',
-    'Maintain Equipment',
-    'Package Item',
-    'Process Contract',
-    'Relocate Worker',
-    'Ship Item',
-    'Staff Shift',
-    'Start Production',
-    'Store Inventory',
-  ],
-  object_type_to_event_types: {
-    Company: ['Establish Company', 'Close Company'],
-    Factory: ['Start Production', 'Maintain Equipment'],
-    Warehouse: ['Store Inventory', 'Dispatch Inventory'],
-    HR: ['Hire Worker', 'Process Contract'],
-    Worker: ['Staff Shift', 'Relocate Worker'],
-    Order: ['Create Order', 'Complete Order'],
-    Item: ['Package Item', 'Ship Item'],
-  },
-};
-
 type ProcessAreaDefinition = {
   id: string;
   level: number;
@@ -148,10 +53,6 @@ export type TotemVisualizerControls = {
   onProcessAreaScaleChange: (value: number) => void;
   autoZoomEnabled: boolean;
   onAutoZoomToggle: () => void;
-  useMockData: boolean;
-  onUseMockDataToggle: () => void;
-  useBackendMlpa: boolean;
-  onUseBackendMlpaToggle: () => void;
   minScale: number;
   maxScale: number;
   scaleStep: number;
@@ -4966,20 +4867,6 @@ function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLa
   return buildLayersFromFrontend(data);
 }
 
-function selectDetailMock(area: ProcessAreaDefinition): OcdfgMockData {
-  const label = (area.label || '').toLowerCase();
-  const types = area.objectTypes.map((t) => t.toLowerCase());
-  const has = (keyword: string) => label.includes(keyword) || types.some((t) => t.includes(keyword));
-
-  if (has('order') || has('item')) return orderItemOcdfgMock;
-  if (has('hr') || has('human')) return hrWorkerOcdfgMock;
-  if (has('worker')) return hrWorkerOcdfgMock;
-  if (has('company')) return companyLifecycleOcdfgMock;
-  if (has('factory')) return factoryOcdfgMock;
-  if (has('warehouse')) return warehouseOcdfgMock;
-  return ocdfgDetailMiniMock;
-}
-
 function TotemVisualizer({
   eventLogId,
   height = '100%',
@@ -5070,8 +4957,6 @@ function TotemVisualizer({
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
-  const [useMockData, setUseMockData] = useState(false);
-  const [useBackendMlpa, setUseBackendMlpa] = useState(true);
   const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
@@ -5152,15 +5037,11 @@ function TotemVisualizer({
           setAutoZoomTrigger((value) => value + 1);
         }
       },
-      useMockData,
-      onUseMockDataToggle: () => setUseMockData((prev) => !prev),
-      useBackendMlpa,
-      onUseBackendMlpaToggle: () => setUseBackendMlpa((prev) => !prev),
       minScale: MIN_PROCESS_AREA_SCALE,
       maxScale: MAX_PROCESS_AREA_SCALE,
       scaleStep: PROCESS_AREA_SCALE_STEP,
     });
-  }, [onControlsReady, processAreaScale, handleProcessAreaScaleChange, autoZoomEnabled, useMockData, useBackendMlpa]);
+  }, [onControlsReady, processAreaScale, handleProcessAreaScaleChange, autoZoomEnabled]);
 
   useEffect(() => {
     smoothedProcessAreaScaleRef.current = smoothedProcessAreaScale;
@@ -5248,7 +5129,7 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, useBackendMlpa) : []), [rawTotem, useBackendMlpa]);
+  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, true) : []), [rawTotem]);
   const levelCount = layers.length;
   const extraTopPadding = useMemo(() => {
     const deficit = Math.max(0, 4 - levelCount);
@@ -5361,24 +5242,13 @@ function TotemVisualizer({
       return;
     }
 
-    // Use mock data if toggle is enabled
-    if (useMockData) {
-      setRawTotem(TOTEM_MOCK);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
     setError(null);
-    // Clear stale mock data so the legend/process areas reflect the new backend result as soon as it arrives
+    // Clear stale data so the legend/process areas reflect the new backend result as soon as it arrives
     setRawTotem(null);
     try {
       const token = localStorage.getItem('access_token');
-      // Choose endpoint based on MLPA toggle
-      const endpoint = useBackendMlpa
-        ? `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
-        : `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`;
+      const endpoint = `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
       const response = await fetch(
         endpoint,
         {
@@ -5402,7 +5272,7 @@ function TotemVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, useMockData, useBackendMlpa]);
+  }, [backendBaseUrl, eventLogId]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -5412,15 +5282,6 @@ function TotemVisualizer({
         setDetailError((prev) => ({
           ...prev,
           [areaId]: 'No event log selected',
-        }));
-        return;
-      }
-
-      // Mock mode stays on existing behaviour
-      if (useMockData) {
-        setDetailCache((prev) => ({
-          ...prev,
-          [areaId]: selectDetailMock(area),
         }));
         return;
       }
@@ -5505,7 +5366,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId, useMockData],
+    [backendBaseUrl, eventLogId],
   );
 
   const toggleAreaDetail = useCallback(
@@ -5528,7 +5389,7 @@ function TotemVisualizer({
 
   useEffect(() => {
     fetchTotem();
-  }, [fetchTotem, effectiveReloadSignal, useMockData, useBackendMlpa]);
+  }, [fetchTotem, effectiveReloadSignal]);
 
   useEffect(() => {
     setPendingCenter((value) => value + 1);
@@ -5555,16 +5416,7 @@ function TotemVisualizer({
     setDetailLoading({});
     setDetailError({});
     setAllOcdfgNodes(null);
-  }, [eventLogId, useMockData, useBackendMlpa]);
-
-  // Also reset layout/legend when switching between mock data and backend variants
-  useEffect(() => {
-    setExpandedAreas({});
-    setDetailSizes({});
-    setDetailLayout({});
-    setLegendOffsets({});
-    setPendingCenter((value) => value + 1);
-  }, [useMockData, useBackendMlpa]);
+  }, [eventLogId]);
 
   useEffect(() => {
     if (pendingCenter === 0) return;
@@ -6141,7 +5993,7 @@ function TotemVisualizer({
                           const cachedDetail = detailCache[area.id];
                           const loadingDetail = Boolean(detailLoading[area.id]);
                           const errorDetail = detailError[area.id];
-                          const detailData = useMockData ? selectDetailMock(area) : cachedDetail;
+                          const detailData = cachedDetail;
                           const detailSide = detailSideByLevel[area.level] ?? 'right';
                           const detailCenter = detailLayout[area.id];
                           const areaRect = areaRectsRef.current[area.id];
@@ -6304,33 +6156,7 @@ function TotemVisualizer({
                                       pointerEvents: 'auto',
                                     }}
                                   >
-                                    {useMockData ? (
-                                      <OCDFGDetailVisualizer
-                                        height={ocdfgHeight}
-                                        data={detailData}
-                                        instanceId={`detail-${area.id}`}
-                                        typeColorOverrides={typeColorMap}
-                                        onSizeChange={(size) => {
-                                          setDetailSizes((prev) => {
-                                            const existing = prev[area.id];
-                                            if (
-                                              existing &&
-                                              existing.width === size.width &&
-                                              existing.height === size.height
-                                            ) {
-                                              return prev;
-                                            }
-                                            return {
-                                              ...prev,
-                                              [area.id]: {
-                                                width: size.width,
-                                                height: size.height,
-                                              },
-                                            };
-                                          });
-                                        }}
-                                      />
-                                    ) : loadingDetail ? (
+                                    {loadingDetail ? (
                                       <div
                                         style={{
                                           fontSize: 12,
@@ -6516,26 +6342,6 @@ function TotemVisualizer({
             title={autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
           >
             <ScanIcon className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant={useMockData ? 'secondary' : 'outline'}
-            size="icon"
-            onClick={() => setUseMockData((prev) => !prev)}
-            className="rounded-full h-8 w-8"
-            title={useMockData ? 'Use backend data' : 'Use mock data'}
-          >
-            <FlaskConicalIcon className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant={useBackendMlpa ? 'secondary' : 'outline'}
-            size="icon"
-            onClick={() => setUseBackendMlpa((prev) => !prev)}
-            className="rounded-full h-8 w-8"
-            title={useBackendMlpa ? 'Using backend MLPA (ILP)' : 'Using frontend MLPA (greedy)'}
-          >
-            <BrainIcon className="h-4 w-4" />
           </Button>
           <div className="w-px h-6 bg-border" />
           <Button

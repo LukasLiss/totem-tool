@@ -260,8 +260,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
-        }  else if (item.component_name === "ImageComponent") {
+        } else if (item.component_name === "ImageComponent") {
           content = "Image Component";
+        } else if (item.component_name === "VariantsComponent") {
+          content = "Variants Explorer";
+        } else if (item.component_name === "ProcessAreaComponent") {
+          content = "Process Area";
         } else {
           content = "Unknown";
         }

@@ -16,6 +16,7 @@ import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
 import VariantsExplorer from '@/react_component/VariantsExplorer';
+import ProcessArea from '@/react_component/ProcessArea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
@@ -319,11 +320,48 @@ const VariantsComponent: React.FC<ComponentProps> = ({
 };
 
 
+// ProcessAreaComponent: Wrapper for ProcessArea (Totem Visualizer)
+const ProcessAreaComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  if (isEditMode) {
+    // EDIT MODE: Show configuration placeholder
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>Process Area Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The Process Area visualizes the totem/MLPA structure of your event log.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Select an event log file to see the visualization.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render ProcessArea with controls visible
+  return (
+    <ProcessArea
+      fileId={selectedFile?.id}
+      embedded={false}
+      height="100%"
+    />
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
   NumberOfEventsComponent,
   ImageComponent,
   VariantsComponent,
-  // Add more as needed, e.g., ChartComponent: ChartComponent,
+  ProcessAreaComponent,
 };

@@ -79,3 +79,5 @@ class VariantsComponent(DashboardComponent):
     leading_object_type = models.CharField(max_length=100, null=True, blank=True)
 
 
+class ProcessAreaComponent(DashboardComponent):
+    pass
