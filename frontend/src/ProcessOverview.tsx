@@ -3,34 +3,33 @@ import { useContext } from "react";
 import {
   SidebarInset,
   SidebarProvider,
-  
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
-
+import { AnalysisView } from "./components/AnalysisView";
 import Grid from './components/grid';
-import DevGrid from "./components/grid_dev";
-
-const development = false;
 
 export function ProcessOverview() {
-      const { selectedDashboard } = useContext(DashboardContext);
+  const { viewMode } = useContext(DashboardContext);
+
+  const renderContent = () => {
+    switch (viewMode.type) {
+      case 'overview':
+        return <DevDashboard />;
+      case 'analysis':
+        return <AnalysisView />;
+      case 'dashboard':
+        return <Grid />;
+      default:
+        return <DevDashboard />;
+    }
+  };
 
   return (
     <SidebarProvider>
       <AppSidebar />
-     
       <SidebarInset>
-        <div>
-          {selectedDashboard === -1 ? (
-            <>
-              {console.log("DevDash activated")}
-              <DevDashboard />
-            </>) : (development ? <DevGrid /> : <Grid />)
-          }
-        </div>
-
-
+        {renderContent()}
       </SidebarInset>
     </SidebarProvider>
   )

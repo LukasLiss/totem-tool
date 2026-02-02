@@ -47,7 +47,7 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
-  const { setSelectedDashboard } = useContext(DashboardContext);
+  const { setViewMode } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
@@ -130,7 +130,7 @@ export function NavDashboard({
                       <SidebarMenuSubButton className="flex w-full items-center justify-between"
                       onClick={() => {
                         console.log("Dashboard clicked:", dashboard);
-                        setSelectedDashboard(dashboard.id);
+                        setViewMode({ type: 'dashboard', id: dashboard.id });
                       }}>
                         <span>{dashboard.name}</span>
 

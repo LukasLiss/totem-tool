@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
-import { DevDash } from "./nav-dev-dash";
+import { NavOverview } from "./nav-overview";
+import { NavAnalysis } from "./nav-analysis";
 import { getDashboards } from "@/api/dashboardApi";
 import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -110,7 +111,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         
       </SidebarHeader>
       <SidebarContent>
-        <DevDash />
+        <NavOverview />
+        <NavAnalysis />
         <NavDashboard 
           dashboards={dashboards} 
           refreshDashboards={async () => {
