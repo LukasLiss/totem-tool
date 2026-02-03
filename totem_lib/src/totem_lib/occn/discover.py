@@ -8,7 +8,7 @@ import scipy.special
 from collections import Counter
 from tqdm.auto import tqdm
 from . import OCCausalNet
-from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, PolarsOCELAdapter
+from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, PolarsOCELAdapter, filter_dead_objects
 
 
 def discover_occn(
@@ -150,8 +150,11 @@ def _prepare_ocel_for_discovery(ocel):
     1. event_log: A log of unique events.
     2. event_log_for_miner: A flattened log of event-to-object relationships.
     """
-    # Adapter to PM4Py event log
-    ocel_pm4py = PolarsOCELAdapter(ocel)
+    # Pre-process OCEL
+    ocel = filter_dead_objects(ocel)
+    
+    # Convert to PM4Py event log
+    ocel_pm4py = convert_ocel_polars_to_pm4py(ocel)
     
     # Create the unique event log
     event_log = ocel_pm4py.events.rename(

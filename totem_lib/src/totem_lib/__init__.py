@@ -2,6 +2,7 @@ from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
     convert_ocel_polars_to_pm4py,
+    filter_dead_objects
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
@@ -18,6 +19,7 @@ __all__ = [
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
     "discover_oc_petri_net_polars",
+    "filter_dead_objects",
     "import_ocel",
     "ObjectCentricEventLog",
     "OCCausalNet",
