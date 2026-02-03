@@ -74,3 +74,25 @@ class ImageComponent(DashboardComponent):
     image = models.ImageField(upload_to=project_directory_path)
 
 
+class VariantsComponent(DashboardComponent):
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    leading_object_type = models.CharField(max_length=100, null=True, blank=True)
+
+
+class ProcessAreaComponent(DashboardComponent):
+    pass
+
+
+class LogStatisticsComponent(DashboardComponent):
+    show_num_events = models.BooleanField(default=True)
+    show_num_activities = models.BooleanField(default=True)
+    show_num_objects = models.BooleanField(default=True)
+    show_num_object_types = models.BooleanField(default=True)
+    show_earliest_timestamp = models.BooleanField(default=False)
+    show_newest_timestamp = models.BooleanField(default=False)
+    show_duration = models.BooleanField(default=False)
+
+
+class OCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)

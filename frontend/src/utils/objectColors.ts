@@ -7,7 +7,9 @@ const DARK_TEXT = '#0F172A';
 const LIGHT_TEXT = '#FFFFFF';
 
 export function mapTypesToColors(types: string[], overrides?: Record<string, string>) {
-  const uniqueTypes = Array.from(new Set(types));
+  const uniqueTypes = Array.from(
+    new Set(types.filter((t): t is string => typeof t === 'string' && t.length > 0)),
+  ).sort((a, b) => a.localeCompare(b));
   const colorMap: Record<string, string> = {};
   uniqueTypes.forEach((type, index) => {
     colorMap[type] = overrides?.[type] ?? TYPE_PALETTE[index % TYPE_PALETTE.length];

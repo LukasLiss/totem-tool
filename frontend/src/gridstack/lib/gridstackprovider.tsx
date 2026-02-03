@@ -189,6 +189,26 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
         props = { text: (node as any).text || "Enter text here", font_size: 14 };  // Read from node.text
+      } else if (component_name === "VariantsComponent") {
+        props = {
+          automatic_loading: (node as any).automatic_loading ?? false,
+          leading_object_type: (node as any).leading_object_type ?? '',
+        };
+      } else if (component_name === "LogStatisticsComponent") {
+        props = {
+          show_num_events: (node as any).show_num_events ?? true,
+          show_num_activities: (node as any).show_num_activities ?? true,
+          show_num_objects: (node as any).show_num_objects ?? true,
+          show_num_object_types: (node as any).show_num_object_types ?? true,
+          show_earliest_timestamp: (node as any).show_earliest_timestamp ?? false,
+          show_newest_timestamp: (node as any).show_newest_timestamp ?? false,
+          show_duration: (node as any).show_duration ?? false,
+        };
+      } else if (component_name === "OCDFGComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -255,8 +275,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
-        }  else if (item.component_name === "ImageComponent") {
+        } else if (item.component_name === "ImageComponent") {
           content = "Image Component";
+        } else if (item.component_name === "VariantsComponent") {
+          content = "Variants Explorer";
+        } else if (item.component_name === "ProcessAreaComponent") {
+          content = "Process Area";
+        } else if (item.component_name === "LogStatisticsComponent") {
+          content = "Log Statistics";
+        } else if (item.component_name === "OCDFGComponent") {
+          content = "OCDFG";
         } else {
           content = "Unknown";
         }
@@ -268,8 +296,24 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w: item.w,
             h: item.h,
             content,  // Keep for GridStack compatibility
-            text: item.text,  // Add text for component data
+            text: item.text,
             component_name: item.component_name,
+            color: item.color,
+            font_size: item.font_size,
+            image: item.image,
+            automatic_loading: item.automatic_loading,
+            leading_object_type: item.leading_object_type,
+            // LogStatisticsComponent properties
+            show_num_events: item.show_num_events,
+            show_num_activities: item.show_num_activities,
+            show_num_objects: item.show_num_objects,
+            show_num_object_types: item.show_num_object_types,
+            show_earliest_timestamp: item.show_earliest_timestamp,
+            show_newest_timestamp: item.show_newest_timestamp,
+            show_duration: item.show_duration,
+            // OCDFGComponent properties
+            show_controls: item.show_controls,
+            initial_interaction_locked: item.initial_interaction_locked,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -280,6 +324,19 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
               (node as any).image = item.image; // For ImageComponent
+              (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
+              (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+              // LogStatisticsComponent properties
+              (node as any).show_num_events = item.show_num_events;
+              (node as any).show_num_activities = item.show_num_activities;
+              (node as any).show_num_objects = item.show_num_objects;
+              (node as any).show_num_object_types = item.show_num_object_types;
+              (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
+              (node as any).show_newest_timestamp = item.show_newest_timestamp;
+              (node as any).show_duration = item.show_duration;
+              // OCDFGComponent properties
+              (node as any).show_controls = item.show_controls;
+              (node as any).initial_interaction_locked = item.initial_interaction_locked;
             }
           }
           // Set data attribute for persistence

@@ -1,20 +1,27 @@
 import React, { createContext, useState } from "react";
 
+export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants';
+
+export type ViewMode =
+  | { type: 'overview' }
+  | { type: 'analysis'; component: AnalysisComponent }
+  | { type: 'dashboard'; id: number };
+
 type DashboardContextType = {
-  selectedDashboard: number | null;
-  setSelectedDashboard: (id: number | null) => void;
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
 };
 
 export const DashboardContext = createContext<DashboardContextType>({
-  selectedDashboard: null,
-  setSelectedDashboard: () => {},
+  viewMode: { type: 'overview' },
+  setViewMode: () => {},
 });
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [selectedDashboard, setSelectedDashboard] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>({ type: 'overview' });
 
   return (
-    <DashboardContext.Provider value={{ selectedDashboard, setSelectedDashboard }}>
+    <DashboardContext.Provider value={{ viewMode, setViewMode }}>
       {children}
     </DashboardContext.Provider>
   );

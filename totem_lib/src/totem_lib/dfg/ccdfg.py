@@ -101,5 +101,5 @@ class CCDFG(nx.DiGraph):
                         weight=row["weight"],
                         role="end",
                     )
-            
+
         return graph
