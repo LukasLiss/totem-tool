@@ -11,6 +11,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
+import Totem from "@/react_component/Totem";
 import LogStatistics from '@/components/LogStatistics';
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
 
@@ -29,6 +30,7 @@ export function DevDashboard() {
           showNumObjectTypes={true}
         />
         <ProcessArea fileId={selectedFile?.id} />
+        <Totem fileId={selectedFile?.id} />
         <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
           <ReactFlowProvider>
             <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />

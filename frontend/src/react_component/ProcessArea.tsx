@@ -15,9 +15,9 @@ import {
   ZoomOut,
   ZoomIn,
 } from 'lucide-react';
-import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
+import ProcessAreaVisualizer, { type ProcessAreaVisualizerControls } from './ProcessAreaVisualizer';
 
-export type { TotemVisualizerControls } from './TotemVisualizer';
+export type { ProcessAreaVisualizerControls } from './ProcessAreaVisualizer';
 
 export type ProcessAreaProps = {
   fileId?: number | string | null;
@@ -32,11 +32,11 @@ export default function ProcessArea({
   backendBaseUrl = 'http://localhost:8000',
   height = 600,
 }: ProcessAreaProps) {
-  const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
+  const [visualizerControls, setVisualizerControls] = useState<ProcessAreaVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
 
-  const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
-    setTotemControls(controls);
+  const handleControlsReady = useCallback((controls: ProcessAreaVisualizerControls) => {
+    setVisualizerControls(controls);
   }, []);
 
   const handleReload = useCallback(() => {
@@ -48,12 +48,12 @@ export default function ProcessArea({
 
   const visualizerContent = (
     <ReactFlowProvider>
-      <TotemVisualizer
+      <ProcessAreaVisualizer
         eventLogId={fileId}
         height="100%"
         backendBaseUrl={backendBaseUrl}
         reloadSignal={reloadSignal}
-        title="Totem Visualizer"
+        title="Process Area Visualizer"
         embedded={true}
         onControlsReady={handleControlsReady}
       />
@@ -75,17 +75,17 @@ export default function ProcessArea({
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
         <CardTitle>Process Area Visualizer</CardTitle>
         <CardAction className="flex items-center gap-2">
-          {totemControls && (
+          {visualizerControls && (
             <>
               <div className="flex items-center gap-2">
                 <ZoomOut className="h-4 w-4 text-muted-foreground" />
                 <Slider
-                  min={totemControls.minScale}
-                  max={totemControls.maxScale}
-                  step={totemControls.scaleStep}
-                  value={[totemControls.processAreaScale]}
+                  min={visualizerControls.minScale}
+                  max={visualizerControls.maxScale}
+                  step={visualizerControls.scaleStep}
+                  value={[visualizerControls.processAreaScale]}
                   onValueChange={(values) =>
-                    totemControls.onProcessAreaScaleChange(values?.[0] ?? totemControls.minScale)
+                    visualizerControls.onProcessAreaScaleChange(values?.[0] ?? visualizerControls.minScale)
                   }
                   className="w-[120px]"
                 />
@@ -93,11 +93,11 @@ export default function ProcessArea({
               </div>
               <Button
                 type="button"
-                variant={totemControls.autoZoomEnabled ? 'secondary' : 'outline'}
+                variant={visualizerControls.autoZoomEnabled ? 'secondary' : 'outline'}
                 size="icon"
-                onClick={totemControls.onAutoZoomToggle}
+                onClick={visualizerControls.onAutoZoomToggle}
                 className="rounded-full h-8 w-8"
-                title={totemControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
+                title={visualizerControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
               >
                 <ScanIcon className="h-4 w-4" />
               </Button>

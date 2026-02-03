@@ -88,6 +88,22 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .totem-model-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 4,
+        w: 4,
+        content: "TOTeM Model",
+        component_name: "TotemModelComponent",
+        initial_tau: 0.9,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -126,6 +142,10 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>OCDFG</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item totem-model-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <div>TOTeM Model</div>
       </div>
     </div>
   );

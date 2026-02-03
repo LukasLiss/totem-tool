@@ -96,3 +96,7 @@ class LogStatisticsComponent(DashboardComponent):
 class OCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
+
+
+class TotemModelComponent(DashboardComponent):
+    initial_tau = models.FloatField(default=0.9, null=True, blank=True)

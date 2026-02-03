@@ -48,7 +48,7 @@ type ProcessLayer = {
   areas: ProcessAreaDefinition[];
 };
 
-export type TotemVisualizerControls = {
+export type ProcessAreaVisualizerControls = {
   processAreaScale: number;
   onProcessAreaScaleChange: (value: number) => void;
   autoZoomEnabled: boolean;
@@ -58,7 +58,7 @@ export type TotemVisualizerControls = {
   scaleStep: number;
 };
 
-type TotemVisualizerProps = {
+type ProcessAreaVisualizerProps = {
   eventLogId?: number | string | null;
   height?: string | number;
   backendBaseUrl?: string;
@@ -67,7 +67,7 @@ type TotemVisualizerProps = {
   topInset?: number;
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
-  onControlsReady?: (controls: TotemVisualizerControls) => void;
+  onControlsReady?: (controls: ProcessAreaVisualizerControls) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4867,7 +4867,7 @@ function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLa
   return buildLayersFromFrontend(data);
 }
 
-function TotemVisualizer({
+function ProcessAreaVisualizer({
   eventLogId,
   height = '100%',
   backendBaseUrl = DEFAULT_BACKEND,
@@ -4876,7 +4876,7 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
-}: TotemVisualizerProps) {
+}: ProcessAreaVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -5266,7 +5266,7 @@ function TotemVisualizer({
       const payload: TotemApiResponse = await response.json();
       setRawTotem(payload);
     } catch (err) {
-      console.error('[TotemVisualizer] Failed to load Totem data', err);
+      console.error('[ProcessAreaVisualizer] Failed to load Totem data', err);
       setError(err instanceof Error ? err.message : 'Failed to load Totem data');
       setRawTotem(null);
     } finally {
@@ -5354,7 +5354,7 @@ function TotemVisualizer({
           setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
         }
       } catch (err) {
-        console.error('[TotemVisualizer] Failed to load detail OCDFG', err);
+        console.error('[ProcessAreaVisualizer] Failed to load detail OCDFG', err);
         setDetailError((prev) => ({
           ...prev,
           [areaId]: err instanceof Error ? err.message : 'Failed to load OCDFG',
@@ -6361,4 +6361,4 @@ function TotemVisualizer({
   );
 }
 
-export default TotemVisualizer;
+export default ProcessAreaVisualizer;

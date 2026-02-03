@@ -209,6 +209,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "TotemModelComponent") {
+        props = {
+          initial_tau: (node as any).initial_tau ?? 0.9,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -285,6 +289,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "TotemModelComponent") {
+          content = "TOTeM Model";
         } else {
           content = "Unknown";
         }
@@ -314,6 +320,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // TotemModelComponent properties
+            initial_tau: item.initial_tau,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -337,6 +345,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // TotemModelComponent properties
+              (node as any).initial_tau = item.initial_tau;
             }
           }
           // Set data attribute for persistence

@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, TotemModelComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -261,19 +261,28 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
+        # Extract tau from query parameters
+        tau_str = request.query_params.get('tau', '0.9')
+        try:
+            tau = float(tau_str)
+            tau = max(0.0, min(1.0, tau))  # Clamp to valid range
+        except (ValueError, TypeError):
+            tau = 0.9
+
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"totem_discovery_{user_file.pk}"
+            # Include tau in cache key
+            cache_key = f"totem_discovery_{user_file.pk}_{tau}"
             cached_result = cache.get(cache_key)
             if cached_result:
                 return Response(cached_result, status=status.HTTP_200_OK)
 
             ocel = _build_ocel_from_path(user_file.file.path)
-            totem = totemDiscovery(ocel)
+            totem = totemDiscovery(ocel, tau=tau)
             serialized = _serialize_totem(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
@@ -396,6 +405,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'TotemModelComponent':
+                components.append(TotemModelComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -499,6 +510,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                )
+            elif component_name == 'TotemModelComponent':
+                TotemModelComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    initial_tau=item.get('initial_tau', 0.9),
                 )
             # Add more as needed
 

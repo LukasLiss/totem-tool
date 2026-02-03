@@ -22,6 +22,8 @@ import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
+import Totem from '@/react_component/Totem';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,6 +53,8 @@ interface ComponentProps {
     // OCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
+    // TotemModelComponent properties
+    initial_tau?: number;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -560,6 +564,63 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
 };
 
 
+// TotemModelComponent: Dashboard wrapper for TOTeM Model visualization
+const TotemModelComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [initialTau, setInitialTau] = useState(node.initial_tau ?? 0.9);
+
+  useEffect(() => {
+    setInitialTau(node.initial_tau ?? 0.9);
+  }, [node.initial_tau]);
+
+  const handleTauChange = (value: number) => {
+    setInitialTau(value);
+    onUpdate?.({ initial_tau: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>TOTeM Model Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-4">
+            <Label className="whitespace-nowrap">Initial τ: {initialTau.toFixed(2)}</Label>
+            <Slider
+              value={[initialTau]}
+              min={0}
+              max={1}
+              step={0.05}
+              onValueChange={(v) => handleTauChange(v[0])}
+              className="flex-1"
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render Totem with configured initial tau
+  return (
+    <div className="w-full h-full overflow-hidden bg-white">
+      <Totem
+        fileId={selectedFile?.id}
+        height="100%"
+        embedded={true}
+        automaticLoading={true}
+        initialTau={initialTau}
+      />
+    </div>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -569,4 +630,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ProcessAreaComponent,
   LogStatisticsComponent,
   OCDFGComponent,
+  TotemModelComponent,
 };
