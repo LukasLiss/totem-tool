@@ -174,7 +174,7 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
         ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
-    print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
+    print(f"[Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
 
     if not leading_object_ids:
         print(f"WARNING: No objects found for leading type '{leading_type}'.")
@@ -197,7 +197,7 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
             if instance_graph.number_of_edges() > 0:
                 process_instances.append(instance_graph)
     print(
-        f"✅ [Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds"
+        f"[Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds"
     )
 
     t2 = time.time()
@@ -233,7 +233,7 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
             }
             variant_counter += 1
     print(
-        f"✅ [Step 3/4] Grouped into {len(variants_dict)} unique variants in: {time.time() - t2:.2f} seconds"
+        f"[Step 3/4] Grouped into {len(variants_dict)} unique variants in: {time.time() - t2:.2f} seconds"
     )
 
     t3 = time.time()
@@ -248,7 +248,7 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
         variant_list.append(variant)
 
     variant_list.sort(key=lambda v: v.support, reverse=True)
-    print(f"✅ [Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
+    print(f"[Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
     print(f"--- Naive Variant Discovery Complete ---")
     print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
 
@@ -283,7 +283,7 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
         ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
-    print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
+    print(f"[Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
 
     if not leading_object_ids:
         print(f"WARNING: No objects found for leading type '{leading_type}'.")
@@ -307,7 +307,7 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
             if instance_graph.number_of_edges() > 0:
                 process_instances.append(instance_graph)
     print(
-        f"✅ [Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds"
+        f"[Step 2/4] Found {len(process_instances)} process instances in: {time.time() - t1:.2f} seconds"
     )
 
     # STEP 3: Group Variants Using Normalized Signatures
@@ -358,7 +358,7 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
                 list(instance_graph.nodes())
             )
     print(
-        f"✅ [Step 3/4] Grouped into {len(variants_by_signature)} unique variants in: {time.time() - t2:.2f} seconds"
+        f"[Step 3/4] Grouped into {len(variants_by_signature)} unique variants in: {time.time() - t2:.2f} seconds"
     )
 
     # STEP 4: Final Formatting and Sorting
@@ -375,7 +375,7 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
         )
 
     variant_list.sort(key=lambda v: v.support, reverse=True)
-    print(f"✅ [Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
+    print(f"[Step 4/4] Final formatting in: {time.time() - t3:.2f} seconds")
     print(f"--- Variant Discovery Complete ---")
     print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
 
