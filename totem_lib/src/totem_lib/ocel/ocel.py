@@ -126,6 +126,24 @@ class ObjectCentricEventLog:
         return objects_ungrouped_df.rows()
 
     @cached_property
+    def o2o_graph_edges_with_qualifiers(self) -> List[Tuple[str, str, str]]:
+        """
+        Returns the object-to-object graph edges with their qualifiers.
+        Each edge is a tuple (source_object_id, target_object_id, qualifier).
+        The qualifier indicates the type of relationship (e.g., "has", "belongs-to").
+        """
+        objects_ungrouped_df = (
+            self.objects.explode(["_targetObjects", "_qualifiers"])
+            .select(
+                pl.col("_objId").alias("source"),
+                pl.col("_targetObjects").alias("target"),
+                pl.col("_qualifiers").alias("qualifier"),
+            )
+            .drop_nulls()
+        )
+        return objects_ungrouped_df.rows()
+
+    @cached_property
     def event_cache(self) -> Dict[str, dict]:
         """
         Returns a cache of events attributes.
