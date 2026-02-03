@@ -1,6 +1,7 @@
 // Add a dashboard for the logged-in user
+import { API_BASE_URL } from "./config";
 export async function addDashboard(dashboardName: string, projectId: number, token: string) {
-  const response = await fetch("http://localhost:8000/api/dashboard/", {
+  const response = await fetch(`${API_BASE_URL}/api/dashboard/`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -24,7 +25,7 @@ export async function addDashboard(dashboardName: string, projectId: number, tok
 }
 
 export async function renameDashboard(dashboardId: number, newName: string, token: string) {
-  const response = await fetch(`http://localhost:8000/api/dashboard/${dashboardId}/rename/`, {
+  const response = await fetch(`${API_BASE_URL}/api/dashboard/${dashboardId}/rename/`, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -47,11 +48,11 @@ export async function renameDashboard(dashboardId: number, newName: string, toke
 
 export async function getDashboards(token: string, projectId?: number) {
   const url = projectId
-    ? `http://localhost:8000/api/dashboard/?project=${projectId}`
-    : "http://localhost:8000/api/dashboard/";
+    ? `${API_BASE_URL}/api/dashboard/?project=${projectId}`
+    : `${API_BASE_URL}/api/dashboard/`;
 
   console.log("Requesting dashboards from:", url);
-  
+
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -73,7 +74,7 @@ export async function getDashboards(token: string, projectId?: number) {
 
 
 export async function deleteDashboard(dashboardId: number, token: string) {
-  const response = await fetch(`http://localhost:8000/api/dashboard/${dashboardId}/`, {
+  const response = await fetch(`${API_BASE_URL}/api/dashboard/${dashboardId}/`, {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${token}`,

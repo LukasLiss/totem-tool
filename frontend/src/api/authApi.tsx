@@ -1,25 +1,26 @@
 let refreshPromise: Promise<string> | null = null;
+import { API_BASE_URL } from "./config";
 
 async function refreshAccessToken(): Promise<string> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       const refresh = localStorage.getItem("refresh_token");
       if (!refresh) throw new Error("NO_REFRESH");
-      
-      const res = await fetch("http://localhost:8000/token/refresh/", {
+
+      const res = await fetch(`${API_BASE_URL}/token/refresh/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh }),
       });
-      
+
       if (!res.ok) {
         localStorage.clear();
         throw new Error("REFRESH_FAILED");
       }
-      
+
       const data = await res.json();
       localStorage.setItem("access_token", data.access);
-      
+
       return data.access;
     })().finally(() => {
       refreshPromise = null;
@@ -34,7 +35,7 @@ export async function authFetch(
   retry = true
 ): Promise<Response> {
   const access = localStorage.getItem("access_token");
-  
+
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -50,7 +51,7 @@ export async function authFetch(
   // Try to refresh the token
   try {
     const newAccess = await refreshAccessToken();
-    
+
     return authFetch(
       url,
       {
@@ -65,10 +66,10 @@ export async function authFetch(
   } catch (error) {
     // Refresh failed - signal that auth has expired
     localStorage.clear();
-    
+
     // Dispatch event for AuthContext to pick up
     window.dispatchEvent(new CustomEvent("auth-expired"));
-    
+
     throw new Error("SESSION_EXPIRED");
   }
 }
