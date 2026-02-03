@@ -18,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { API_BASE_URL } from "../api/config";
 
 /* =========================
    Types shared with callers
@@ -33,10 +34,10 @@ export type VariantEventNode = {
   id: string;
   activity: string;
   objectIds: string[];
-  types: string[];      
-  x: number;            
-  y_lane: number;       
-  y_lanes: number[];    
+  types: string[];
+  x: number;
+  y_lane: number;
+  y_lanes: number[];
 };
 
 export type VariantGraph = {
@@ -180,7 +181,7 @@ export default function VariantsExplorer({
           throw new Error("Not authenticated");
         }
 
-        const url = `/api/files/${currentFileId}/object_types/`;
+        const url = `${API_BASE_URL}/api/files/${currentFileId}/object_types/`;
         const res = await fetch(url, {
           credentials: "include",
           headers: {
@@ -270,7 +271,7 @@ export default function VariantsExplorer({
           throw new Error("Not authenticated");
         }
 
-        const url = `/api/variants/${qs}`;
+        const url = `${API_BASE_URL}/api/variants/${qs}`;
         const res = await fetch(url, {
           credentials: "include",
           headers: {
@@ -301,7 +302,7 @@ export default function VariantsExplorer({
 
         if (!cancelled) {
           setVariants(arr ?? []);
-          {console.log(arr)}
+          { console.log(arr) }
           setStatus(arr && arr.length ? "ready" : "empty");
           onVariantsLoad?.(arr ?? []);
         }
@@ -536,12 +537,12 @@ function VariantRow({
         objectIds: node.objectIds,
         xStart: node.x,
         // Set end to start for a consistent 1-column width. This could be enhanced later.
-        xEnd: node.x, 
+        xEnd: node.x,
       };
     }
     return positionedEvents;
   }, [v.graph.nodes]);
-  
+
   const objects = v.graph.objects;
 
   const objectTypes = useMemo(
@@ -762,11 +763,11 @@ function VariantRow({
             {/* canvas */}
             <div
               style={{
-                  position: "relative",
-                  border: `1px solid ${UI.border}`,
-                  borderRadius: 8,
-                  overflow: "auto",
-                  width: "100%",
+                position: "relative",
+                border: `1px solid ${UI.border}`,
+                borderRadius: 8,
+                overflow: "auto",
+                width: "100%",
               }}
               aria-label={`Variant ${v.id} visualization`}
             >
