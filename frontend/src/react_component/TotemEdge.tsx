@@ -12,11 +12,29 @@ export type TotemEdgeData = {
   sourceHeight: number;
   targetWidth: number;
   targetHeight: number;
+  // Conformance fitness data
+  fitness?: {
+    temporal: number | null;
+    logCardinality: number | null;
+    eventCardinality: number | null;
+  };
+  // Click handlers for histogram panels
+  onEllipseClick?: (source: string, target: string, position: { x: number; y: number }) => void;
+  onArcClick?: (source: string, target: string, position: { x: number; y: number }) => void;
+  onLogCardClick?: (source: string, target: string, side: 'source' | 'target', position: { x: number; y: number }) => void;
 };
 
 const EDGE_COLOR = '#000000';
-const EDGE_WIDTH = 1.5;
+const EDGE_WIDTH = 2.0;
 const BOUNDARY_MARGIN = 8; // Pixels of margin around nodes
+
+// Fitness color helpers
+function getFitnessColor(fitness: number | null | undefined): string | undefined {
+  if (fitness === null || fitness === undefined) return undefined;
+  if (fitness < 0.75) return '#EF4444'; // Red
+  if (fitness < 0.9) return '#F97316'; // Orange
+  return undefined; // No highlight (good)
+}
 
 type Point = { x: number; y: number };
 
@@ -54,6 +72,8 @@ function calculateBoundaryPoint(
 
 function TotemEdgeComponent({
   id,
+  source,
+  target,
   sourceX,
   sourceY,
   targetX,
@@ -124,17 +144,17 @@ function TotemEdgeComponent({
         // Square at target end
         return (
           <rect
-            x={targetPoint.x - 5}
-            y={targetPoint.y - 5}
-            width={10}
-            height={10}
-            fill={EDGE_COLOR}
+            x={targetPoint.x - 6}
+            y={targetPoint.y - 6}
+            width={12}
+            height={12}
+            fill={strokeColor}
           />
         );
       case 'I':
         // Arrow pointing toward target
         // Calculate arrow direction
-        const arrowSize = 10;
+        const arrowSize = 12;
         const dirX = edgeDx / edgeLen;
         const dirY = edgeDy / edgeLen;
         const perpX = -dirY;
@@ -146,21 +166,21 @@ function TotemEdgeComponent({
         // Arrow base points
         const baseX = tipX - dirX * arrowSize;
         const baseY = tipY - dirY * arrowSize;
-        const leftX = baseX + perpX * 6;
-        const leftY = baseY + perpY * 6;
-        const rightX = baseX - perpX * 6;
-        const rightY = baseY - perpY * 6;
+        const leftX = baseX + perpX * 7;
+        const leftY = baseY + perpY * 7;
+        const rightX = baseX - perpX * 7;
+        const rightY = baseY - perpY * 7;
 
         return (
           <polygon
             points={`${tipX},${tipY} ${leftX},${leftY} ${rightX},${rightY}`}
-            fill={EDGE_COLOR}
+            fill={strokeColor}
           />
         );
       case 'P':
         // Parallel bars at both ends
-        const barLength = 8;
-        const barSpacing = 3;
+        const barLength = 10;
+        const barSpacing = 4;
         // Perpendicular direction
         const pDirX = edgeDx / edgeLen;
         const pDirY = edgeDy / edgeLen;
@@ -175,16 +195,16 @@ function TotemEdgeComponent({
               y1={nearSourceY + pPerpY - barSpacing * pDirY}
               x2={nearSourceX - pPerpX - barSpacing * pDirX}
               y2={nearSourceY - pPerpY - barSpacing * pDirY}
-              stroke={EDGE_COLOR}
-              strokeWidth={EDGE_WIDTH}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
             />
             <line
               x1={nearSourceX + pPerpX + barSpacing * pDirX}
               y1={nearSourceY + pPerpY + barSpacing * pDirY}
               x2={nearSourceX - pPerpX + barSpacing * pDirX}
               y2={nearSourceY - pPerpY + barSpacing * pDirY}
-              stroke={EDGE_COLOR}
-              strokeWidth={EDGE_WIDTH}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
             />
             {/* Bars near target */}
             <line
@@ -192,16 +212,16 @@ function TotemEdgeComponent({
               y1={nearTargetY + pPerpY - barSpacing * pDirY}
               x2={nearTargetX - pPerpX - barSpacing * pDirX}
               y2={nearTargetY - pPerpY - barSpacing * pDirY}
-              stroke={EDGE_COLOR}
-              strokeWidth={EDGE_WIDTH}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
             />
             <line
               x1={nearTargetX + pPerpX + barSpacing * pDirX}
               y1={nearTargetY + pPerpY + barSpacing * pDirY}
               x2={nearTargetX - pPerpX + barSpacing * pDirX}
               y2={nearTargetY - pPerpY + barSpacing * pDirY}
-              stroke={EDGE_COLOR}
-              strokeWidth={EDGE_WIDTH}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
             />
           </>
         );
@@ -214,38 +234,73 @@ function TotemEdgeComponent({
   const hasEventCards = edgeData?.eventCardForward || edgeData?.eventCardReverse;
 
   // Calculate offset direction for labels (perpendicular to edge)
-  const labelOffsetX = (-edgeDy / edgeLen) * 15;
-  const labelOffsetY = (edgeDx / edgeLen) * 15;
+  const labelOffsetX = (-edgeDy / edgeLen) * 18;
+  const labelOffsetY = (edgeDx / edgeLen) * 18;
 
   // Dynamic event cardinality direction based on visual position (left-to-right)
   const sourceIsLeft = sourcePoint.x <= targetPoint.x;
   const leftEventCard = sourceIsLeft ? edgeData?.eventCardReverse : edgeData?.eventCardForward;
   const rightEventCard = sourceIsLeft ? edgeData?.eventCardForward : edgeData?.eventCardReverse;
 
-  const strokeColor = selected ? '#2563eb' : EDGE_COLOR;
-  const strokeWidth = selected ? EDGE_WIDTH + 1 : EDGE_WIDTH;
+  // Get fitness-based colors
+  const arcFitnessColor = getFitnessColor(edgeData?.fitness?.temporal);
+  const ellipseFitnessColor = getFitnessColor(edgeData?.fitness?.eventCardinality);
+  const logCardFitnessColor = getFitnessColor(edgeData?.fitness?.logCardinality);
+
+  const strokeColor = selected ? '#2563eb' : (arcFitnessColor ?? EDGE_COLOR);
+  const strokeWidth = selected ? EDGE_WIDTH + 1 : (arcFitnessColor ? EDGE_WIDTH + 0.5 : EDGE_WIDTH);
 
   return (
     <>
       {/* Main edge path - for P relation, line is between the parallel bars */}
       {relation === 'P' ? (
-        <path
-          id={id}
-          d={middleSegmentPath}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-        />
+        <g
+          style={{ cursor: 'pointer' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            edgeData?.onArcClick?.(source, target, { x: e.clientX, y: e.clientY });
+          }}
+        >
+          {/* Invisible wider path for easier clicking */}
+          <path
+            d={middleSegmentPath}
+            fill="none"
+            stroke="transparent"
+            strokeWidth={12}
+          />
+          <path
+            id={id}
+            d={middleSegmentPath}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+          />
+        </g>
       ) : (
-        <path
-          id={id}
-          d={fullEdgePath}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-        />
+        <g
+          style={{ cursor: 'pointer' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            edgeData?.onArcClick?.(source, target, { x: e.clientX, y: e.clientY });
+          }}
+        >
+          {/* Invisible wider path for easier clicking */}
+          <path
+            d={fullEdgePath}
+            fill="none"
+            stroke="transparent"
+            strokeWidth={12}
+          />
+          <path
+            id={id}
+            d={fullEdgePath}
+            fill="none"
+            stroke={strokeColor}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+          />
+        </g>
       )}
 
       {/* Relation-specific markers */}
@@ -253,11 +308,18 @@ function TotemEdgeComponent({
 
       {/* Log cardinality near source (reverse direction) */}
       {edgeData?.logCardReverse && (
-        <g transform={`translate(${nearSourceX + labelOffsetX}, ${nearSourceY + labelOffsetY})`}>
+        <g
+          transform={`translate(${nearSourceX + labelOffsetX}, ${nearSourceY + labelOffsetY})`}
+          style={{ cursor: 'pointer' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            edgeData?.onLogCardClick?.(source, target, 'source', { x: e.clientX, y: e.clientY });
+          }}
+        >
           <text
-            fontSize={10}
-            fontWeight={500}
-            fill="#374151"
+            fontSize={12}
+            fontWeight={logCardFitnessColor ? 600 : 500}
+            fill={logCardFitnessColor ?? '#374151'}
             fontFamily="system-ui, sans-serif"
             textAnchor="middle"
             dominantBaseline="middle"
@@ -269,11 +331,18 @@ function TotemEdgeComponent({
 
       {/* Log cardinality near target (forward direction) */}
       {edgeData?.logCardForward && (
-        <g transform={`translate(${nearTargetX + labelOffsetX}, ${nearTargetY + labelOffsetY})`}>
+        <g
+          transform={`translate(${nearTargetX + labelOffsetX}, ${nearTargetY + labelOffsetY})`}
+          style={{ cursor: 'pointer' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            edgeData?.onLogCardClick?.(source, target, 'target', { x: e.clientX, y: e.clientY });
+          }}
+        >
           <text
-            fontSize={10}
-            fontWeight={500}
-            fill="#374151"
+            fontSize={12}
+            fontWeight={logCardFitnessColor ? 600 : 500}
+            fill={logCardFitnessColor ?? '#374151'}
             fontFamily="system-ui, sans-serif"
             textAnchor="middle"
             dominantBaseline="middle"
@@ -285,24 +354,31 @@ function TotemEdgeComponent({
 
       {/* Event cardinality ellipse in middle - direction based on visual position */}
       {hasEventCards && (
-        <g transform={`translate(${labelX}, ${labelY})`}>
+        <g
+          transform={`translate(${labelX}, ${labelY})`}
+          style={{ cursor: 'pointer' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            edgeData?.onEllipseClick?.(source, target, { x: e.clientX, y: e.clientY });
+          }}
+        >
           {/* Ellipse background */}
           <ellipse
             cx={0}
             cy={0}
-            rx={28}
-            ry={12}
+            rx={34}
+            ry={14}
             fill="white"
-            stroke="#d1d5db"
-            strokeWidth={1}
+            stroke={ellipseFitnessColor ?? '#d1d5db'}
+            strokeWidth={ellipseFitnessColor ? 2 : 1}
           />
           {/* Event cardinality text - shows (left | right) based on visual position */}
           <text
             x={0}
             y={4}
-            fontSize={9}
-            fontWeight={500}
-            fill="#374151"
+            fontSize={11}
+            fontWeight={ellipseFitnessColor ? 600 : 500}
+            fill={ellipseFitnessColor ?? '#374151'}
             fontFamily="system-ui, sans-serif"
             textAnchor="middle"
           >

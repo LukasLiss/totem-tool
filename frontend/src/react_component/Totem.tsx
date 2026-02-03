@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   type Node,
@@ -23,6 +23,10 @@ import { RefreshCcw } from 'lucide-react';
 import { mapTypesToColors } from '../utils/objectColors';
 import { TotemNode, type TotemNodeData } from './TotemNode';
 import { TotemEdge, type TotemEdgeData } from './TotemEdge';
+import {
+  ActivityHistogramPanel,
+  RelationTypeHistogramPanel,
+} from './HistogramFloatingPanel';
 
 // API Response types matching backend _serialize_totem
 type TotemCardinality = {
@@ -44,6 +48,48 @@ type TotemApiResponse = {
   all_event_types: string[];
   object_type_to_event_types: Record<string, string[]>;
 };
+
+// Conformance types matching backend _serialize_conformance
+type ConformanceMetrics = {
+  fitness: number | null;
+  precision: number | null;
+};
+
+type TypePairMetrics = {
+  temporal: ConformanceMetrics & { model_relation: string | null };
+  log_cardinality: ConformanceMetrics & { model_relation: string | null };
+  event_cardinality: ConformanceMetrics & { model_relation: string | null };
+};
+
+type ConformanceData = {
+  overall_metrics: {
+    temporal: ConformanceMetrics;
+    log_cardinality: ConformanceMetrics;
+    event_cardinality: ConformanceMetrics;
+  };
+  object_type_metrics: Record<string, {
+    temporal: { avg_fitness: number | null; avg_precision: number | null };
+    log_cardinality: { avg_fitness: number | null; avg_precision: number | null };
+    event_cardinality: { avg_fitness: number | null; avg_precision: number | null };
+  }>;
+  type_pair_metrics: Record<string, TypePairMetrics>; // "Type1|Type2" → metrics
+  histograms: {
+    temporal: Record<string, Record<string, number>>;
+    log_cardinality: Record<string, Record<string, number>>;
+    event_cardinality: Record<string, Record<string, number>>;
+    event_cardinality_by_activity: Record<string, Record<string, number>>;
+    temporal_by_relation_type: Record<string, Record<string, number>>;
+    log_cardinality_by_relation_type: Record<string, Record<string, number>>;
+  };
+};
+
+// Selected element for floating panels
+type SelectedElement = {
+  type: 'ellipse' | 'arc' | 'logCard';
+  sourceType: string;
+  targetType: string;
+  position: { x: number; y: number };
+} | null;
 
 // Internal types
 type RelationType = 'D' | 'I' | 'P';
@@ -69,6 +115,21 @@ const NODE_HEIGHT = 36;
 const ROW_GAP = 120;
 const COLUMN_GAP = 80;
 const PADDING = 60;
+
+// Fitness color helpers
+function getFitnessColor(fitness: number | null | undefined): string | undefined {
+  if (fitness === null || fitness === undefined) return undefined;
+  if (fitness < 0.75) return '#EF4444'; // Red
+  if (fitness < 0.9) return '#F97316'; // Orange
+  return undefined; // No highlight (good)
+}
+
+function getFitnessColorClass(fitness: number | null | undefined): string {
+  if (fitness === null || fitness === undefined) return 'text-gray-500';
+  if (fitness < 0.75) return 'text-red-500 font-bold';
+  if (fitness < 0.9) return 'text-orange-500 font-bold';
+  return 'text-green-600';
+}
 
 // Custom node and edge types for React Flow
 const nodeTypes = { totemNode: TotemNode };
@@ -216,13 +277,21 @@ function createNodes(
   });
 }
 
+type EdgeClickHandlers = {
+  onEllipseClick?: (source: string, target: string, position: { x: number; y: number }) => void;
+  onArcClick?: (source: string, target: string, position: { x: number; y: number }) => void;
+  onLogCardClick?: (source: string, target: string, side: 'source' | 'target', position: { x: number; y: number }) => void;
+};
+
 /**
  * Create edges with cardinalities from both directions
  */
 function createEdges(
   data: TotemApiResponse,
   logCardMap: Map<string, string>,
-  eventCardMap: Map<string, string>
+  eventCardMap: Map<string, string>,
+  conformanceData: ConformanceData | null,
+  clickHandlers?: EdgeClickHandlers
 ): Edge<TotemEdgeData>[] {
   const edges: Edge<TotemEdgeData>[] = [];
   const processedPairs = new Set<string>();
@@ -244,6 +313,22 @@ function createEdges(
     }
     processedPairs.add(pairKey);
 
+    // Get fitness data from conformance if available
+    let fitness: TotemEdgeData['fitness'] = undefined;
+    if (conformanceData) {
+      const pairMetricsKey = `${from}|${to}`;
+      const reversePairKey = `${to}|${from}`;
+      const pairMetrics = conformanceData.type_pair_metrics[pairMetricsKey]
+        || conformanceData.type_pair_metrics[reversePairKey];
+      if (pairMetrics) {
+        fitness = {
+          temporal: pairMetrics.temporal.fitness,
+          logCardinality: pairMetrics.log_cardinality.fitness,
+          eventCardinality: pairMetrics.event_cardinality.fitness,
+        };
+      }
+    }
+
     edges.push({
       id: `${relation}-${from}-${to}`,
       source: from,
@@ -260,6 +345,12 @@ function createEdges(
         sourceHeight: NODE_HEIGHT,
         targetWidth: NODE_WIDTH,
         targetHeight: NODE_HEIGHT,
+        // Conformance fitness data
+        fitness,
+        // Click handlers for histogram panels
+        onEllipseClick: clickHandlers?.onEllipseClick,
+        onArcClick: clickHandlers?.onArcClick,
+        onLogCardClick: clickHandlers?.onLogCardClick,
       },
     });
   };
@@ -292,6 +383,11 @@ function TotemInner({
   const [nodes, setNodes, onNodesChange] = useNodesState<TotemNodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<TotemEdgeData>([]);
 
+  // Conformance state
+  const [conformanceData, setConformanceData] = useState<ConformanceData | null>(null);
+  const [conformanceStatus, setConformanceStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [selectedElement, setSelectedElement] = useState<SelectedElement>(null);
+
   // Stale closure prevention
   const fileIdRef = useRef<number | string | null | undefined>(fileId);
   const tauRef = useRef<number>(initialTau);
@@ -309,6 +405,9 @@ function TotemInner({
     setHasStartedLoading(false);
     setNodes([]);
     setEdges([]);
+    setConformanceData(null);
+    setConformanceStatus('idle');
+    setSelectedElement(null);
   }, [fileId, setNodes, setEdges]);
 
   // Fetch data
@@ -368,6 +467,66 @@ function TotemInner({
     fetchTotem();
   }, [fetchTotem]);
 
+  // Fetch conformance data
+  const fetchConformance = useCallback(async () => {
+    if (!fileId) return;
+
+    setConformanceStatus('loading');
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      setConformanceStatus('error');
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${backendBaseUrl}/api/files/${fileId}/compute_conformance/?tau=${tauRef.current}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data: ConformanceData = await response.json();
+      setConformanceData(data);
+      setConformanceStatus('ready');
+    } catch (err) {
+      setConformanceStatus('error');
+    }
+  }, [fileId, backendBaseUrl]);
+
+  // Click handlers for edge elements
+  const handleEllipseClick = useCallback(
+    (source: string, target: string, position: { x: number; y: number }) => {
+      if (!conformanceData) return;
+      setSelectedElement({ type: 'ellipse', sourceType: source, targetType: target, position });
+    },
+    [conformanceData]
+  );
+
+  const handleArcClick = useCallback(
+    (source: string, target: string, position: { x: number; y: number }) => {
+      if (!conformanceData) return;
+      setSelectedElement({ type: 'arc', sourceType: source, targetType: target, position });
+    },
+    [conformanceData]
+  );
+
+  const handleLogCardClick = useCallback(
+    (source: string, target: string, _side: 'source' | 'target', position: { x: number; y: number }) => {
+      if (!conformanceData) return;
+      setSelectedElement({ type: 'logCard', sourceType: source, targetType: target, position });
+    },
+    [conformanceData]
+  );
+
   // Build nodes and edges when data changes
   useEffect(() => {
     if (!totemData) return;
@@ -377,12 +536,18 @@ function TotemInner({
     const colorMap = mapTypesToColors(totemData.tempgraph.nodes);
     const { logCardMap, eventCardMap } = buildCardinalityMaps(totemData.cardinalities);
 
+    const clickHandlers: EdgeClickHandlers = {
+      onEllipseClick: handleEllipseClick,
+      onArcClick: handleArcClick,
+      onLogCardClick: handleLogCardClick,
+    };
+
     const newNodes = createNodes(totemData.tempgraph.nodes, layout, colorMap);
-    const newEdges = createEdges(totemData, logCardMap, eventCardMap);
+    const newEdges = createEdges(totemData, logCardMap, eventCardMap, conformanceData, clickHandlers);
 
     setNodes(newNodes);
     setEdges(newEdges);
-  }, [totemData, setNodes, setEdges]);
+  }, [totemData, conformanceData, setNodes, setEdges, handleEllipseClick, handleArcClick, handleLogCardClick]);
 
   const handleReload = useCallback(() => {
     setHasStartedLoading(true);
@@ -390,12 +555,66 @@ function TotemInner({
     setStatus('idle');
     setNodes([]);
     setEdges([]);
+    setConformanceData(null);
+    setConformanceStatus('idle');
+    setSelectedElement(null);
     setTimeout(() => {
       fetchTotem();
     }, 0);
   }, [fetchTotem, setNodes, setEdges]);
 
   const heightStyle = typeof height === 'number' ? `${height}px` : height;
+
+  // Close floating panel handler
+  const closeFloatingPanel = useCallback(() => {
+    setSelectedElement(null);
+  }, []);
+
+  // Render floating panels based on selected element
+  const renderFloatingPanels = () => {
+    if (!selectedElement || !conformanceData) return null;
+
+    const { type, sourceType, targetType, position } = selectedElement;
+
+    switch (type) {
+      case 'ellipse':
+        return (
+          <ActivityHistogramPanel
+            sourceType={sourceType}
+            targetType={targetType}
+            histogramByActivity={conformanceData.histograms.event_cardinality_by_activity}
+            position={position}
+            onClose={closeFloatingPanel}
+          />
+        );
+      case 'arc':
+        return (
+          <RelationTypeHistogramPanel
+            title="Temporal Relations by Relation Type"
+            sourceType={sourceType}
+            targetType={targetType}
+            histogramByRelationType={conformanceData.histograms.temporal_by_relation_type}
+            position={position}
+            onClose={closeFloatingPanel}
+            type="temporal"
+          />
+        );
+      case 'logCard':
+        return (
+          <RelationTypeHistogramPanel
+            title="Log Cardinality by Relation Type"
+            sourceType={sourceType}
+            targetType={targetType}
+            histogramByRelationType={conformanceData.histograms.log_cardinality_by_relation_type}
+            position={position}
+            onClose={closeFloatingPanel}
+            type="logCardinality"
+          />
+        );
+      default:
+        return null;
+    }
+  };
 
   const renderContent = () => {
     if (status === 'idle' && !fileId) {
@@ -465,14 +684,33 @@ function TotemInner({
   };
 
   if (embedded) {
-    return <div style={{ height: heightStyle }}>{renderContent()}</div>;
+    return (
+      <div style={{ height: heightStyle }}>
+        {renderContent()}
+        {renderFloatingPanels()}
+      </div>
+    );
   }
 
   return (
     <Card className="@container/card w-full">
+      {renderFloatingPanels()}
       <CardHeader className="items-center relative z-10 justify-between">
         <CardTitle>TOTeM Model</CardTitle>
         <CardAction className="flex items-center gap-4">
+          {/* Conformance metrics display */}
+          {conformanceData && (
+            <div className="flex items-center gap-3 text-sm border-r pr-4">
+              <span className="text-muted-foreground">Fitness:</span>
+              <span className={getFitnessColorClass(conformanceData.overall_metrics.temporal.fitness)}>
+                {(conformanceData.overall_metrics.temporal.fitness ?? 0).toFixed(2)}
+              </span>
+              <span className="text-muted-foreground">Precision:</span>
+              <span className="text-gray-700">
+                {(conformanceData.overall_metrics.temporal.precision ?? 0).toFixed(2)}
+              </span>
+            </div>
+          )}
           {/* Tau slider */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground whitespace-nowrap">
@@ -489,6 +727,14 @@ function TotemInner({
               disabled={!fileId}
             />
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchConformance}
+            disabled={!fileId || conformanceStatus === 'loading' || status !== 'ready'}
+          >
+            {conformanceStatus === 'loading' ? 'Computing...' : 'Check Conformance'}
+          </Button>
           <Button
             variant="outline"
             size="sm"

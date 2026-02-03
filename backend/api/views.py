@@ -12,7 +12,7 @@ from totem_lib.dfg import OCDFG, CCDFG
 import polars as pl
 from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.variants.ocvariants import find_variants, calculate_layout
-from totem_lib.totem import totemDiscovery, mlpaDiscovery, Totem
+from totem_lib.totem import totemDiscovery, mlpaDiscovery, Totem, conformance_of_totem
 from totem_lib.ocel.importer import (
     load_events_from_sqlite, load_objects_from_sqlite,
     load_events_from_json, load_objects_from_json,
@@ -314,6 +314,39 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["get"])
+    def compute_conformance(self, request, pk=None):
+        """API endpoint to compute conformance metrics for a TOTEM model against the OCEL."""
+        tau_str = request.query_params.get('tau', '0.9')
+        try:
+            tau = float(tau_str)
+            tau = max(0.0, min(1.0, tau))
+        except (ValueError, TypeError):
+            tau = 0.9
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            cache_key = f"conformance_{user_file.pk}_{tau}"
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
+            ocel = _build_ocel_from_path(user_file.file.path)
+            totem = totemDiscovery(ocel, tau=tau)
+            conformance = conformance_of_totem(totem, ocel)
+
+            # Serialize for JSON (convert tuple keys to strings)
+            serialized = _serialize_conformance(conformance)
+
+            cache.set(cache_key, serialized, timeout=3600)
+            return Response(serialized, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Failed to compute conformance: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
@@ -737,6 +770,41 @@ def _serialize_totem(totem: Totem) -> dict:
         "all_event_types": all_event_types,
         "object_type_to_event_types": object_type_to_event_types,
     }
+
+
+def _serialize_conformance(conformance: dict) -> dict:
+    """
+    Convert conformance dict for JSON serialization (tuple keys → string keys).
+    """
+    result = {
+        "overall_metrics": conformance["overall_metrics"],
+        "object_type_metrics": conformance["object_type_metrics"],
+        "type_pair_metrics": {},
+        "histograms": {}
+    }
+
+    # Convert tuple keys to "type1|type2" strings
+    for key, metrics in conformance["type_pair_metrics"].items():
+        if isinstance(key, tuple):
+            str_key = f"{key[0]}|{key[1]}"
+        else:
+            str_key = str(key)
+        result["type_pair_metrics"][str_key] = metrics
+
+    # Serialize histograms
+    for hist_name, hist_data in conformance["histograms"].items():
+        result["histograms"][hist_name] = {}
+        for key, counts in hist_data.items():
+            if isinstance(key, tuple):
+                if len(key) == 2:
+                    str_key = f"{key[0]}|{key[1]}"
+                else:  # len == 3 (fine-grained)
+                    str_key = f"{key[0]}|{key[1]}|{key[2]}"
+            else:
+                str_key = str(key)
+            result["histograms"][hist_name][str_key] = counts
+
+    return result
 
 
 def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
