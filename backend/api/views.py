@@ -242,27 +242,11 @@ class DashboardViewSet(viewsets.ModelViewSet):
     @action(
     detail=True,
     methods=["post"],
-    url_path="upload_image",
+    url_path="components/(?P<component_id>[^/.]+)/image",
     parser_classes=[MultiPartParser, FormParser],
     )
-    def upload_image(self, request, pk=None):
+    def upload_image(self, request, pk=None, component_id=None):
         dashboard = self.get_object()
-
-        component_id = request.data.get("component_id")
-        if not component_id:
-            return Response(
-                {"error": "component_id is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # ensure integer id
-        try:
-            component_id = int(component_id)
-        except (TypeError, ValueError):
-            return Response(
-                {"error": "component_id must be an integer"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         image_file = request.FILES.get("image")
         if not image_file:
@@ -284,14 +268,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         image_component.image = image_file
         image_component.save()
-        print("image_file name:", image_file.name)
-        print("image_component.image.url:", image_component.image.url)
-        full_url = request.build_absolute_uri(image_component.image.url)
-        print("full_url returned to frontend:", full_url)
+        
         return Response(
-            {"image": image_component.image.url},  # This returns relative path like /files/project/image.png
-            status=status.HTTP_200_OK,
-        )
+        {
+            "id": image_component.id,
+            "component_name": image_component.component_name,
+            "image": image_component.image.url,
+        },
+        status=status.HTTP_200_OK,
+    )
+
 
 
 # TODO: change to equivalent totem_lib.ocel import function 

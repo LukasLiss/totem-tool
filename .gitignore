@@ -63,10 +63,9 @@ __pycache__/
 backend/venv/
 backend/env/
 backend/user_files/*
-!backend/user_files/guest/
-!backend/user_files/guest/ContainerLogistics.json
-!backend/user_files/guest/ContainerLogistics.sqlite
-!backend/user_files/guest/ContainerLogistics.xml
+!backend/user_files/ContainerLogistics.json
+!backend/user_files/ContainerLogistics.sqlite
+!backend/user_files/ContainerLogistics.xml
 .venv/
 .env/
 

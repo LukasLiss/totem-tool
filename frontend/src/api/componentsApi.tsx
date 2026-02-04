@@ -47,10 +47,9 @@ export async function uploadImageToComponent(
 ) {
   const formData = new FormData();
   formData.append("image", file);
-  formData.append("component_id", componentId.toString());  // Pass component_id in the body
 
   const response = await fetch(
-    `/api/dashboard/${dashboardId}/upload_image/`,  // Updated URL to match backend
+    `/api/dashboard/${dashboardId}/components/${componentId}/image/`,  // Updated URL to match backend
     {
       method: "POST",
       headers: {

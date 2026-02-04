@@ -151,61 +151,69 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
 };
 
 
-const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false, dashboardId }) => {
-  const [imageUrl, setImageUrl] = useState<string | null>(node.image || null);
+const ImageComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  dashboardId,
+}) => {
   const [uploading, setUploading] = useState(false);
-  useEffect(() => {
-    if (node.image) {
-    setImageUrl(node.image);
-    console.log("Resolved imageUrl:", node.image);
-  }
-  }, [node?.image]);
-
-  console.log('imageUrl in ImageComponent:', node.image);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    console.log('Selected file for upload [componentMap.tsx]:', file);
-    console.log('node component_id:', node.component_id);
     if (!file) return;
 
     setUploading(true);
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem("access_token");
+
     try {
-      console.log('node:', node);
-      console.log('Uploading file to component ID:', node.component_id, 'for dashboard:', dashboardId);
-      const data = await uploadImageToComponent(dashboardId, node.component_id, file, token);  // Updated call
-      setImageUrl(data.image);
+      const data = await uploadImageToComponent(
+        dashboardId,
+        node.component_id,
+        file,
+        token
+      );
+
+      // Single source of truth
       onUpdate?.({ image: data.image });
     } catch (error) {
-      console.error('Upload error:', error);
+      console.error("Upload error:", error);
     } finally {
       setUploading(false);
     }
   };
+
   return (
     <Card className="w-full h-full rounded-none">
       <CardHeader>
         <CardTitle>Image Component</CardTitle>
       </CardHeader>
+
       <CardContent>
         {isEditMode ? (
           <>
-            <Input type="file" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
+            <Input
+              type="file"
+              accept="image/*"
+              onChange={handleFileUpload}
+              disabled={uploading}
+            />
             {uploading && <p>Uploading...</p>}
           </>
+        ) : node.image ? (
+          <img
+            src={`http://localhost:8000${node.image}`}
+            alt="Uploaded"
+            className="w-full h-full object-cover"
+          />
         ) : (
-          imageUrl ? (
-            console.log("http://localhost:8000" + imageUrl),
-            <img src={"http://localhost:8000" + imageUrl} alt="Uploaded" className="w-full h-full object-cover" />
-          ) : (
-            <p>No image uploaded</p>
-          )
+          <p>No image uploaded</p>
         )}
       </CardContent>
     </Card>
   );
 };
+
 
 
 // Component map for easy lookup

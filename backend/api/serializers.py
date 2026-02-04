@@ -49,17 +49,12 @@ class TextBoxComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 class ImageComponentSerializer(DashboardComponentSerializer):
-    image = serializers.SerializerMethodField()
-    
-    def get_image(self, obj):
-        """Return the image URL if it exists, otherwise None"""
-        if obj.image:
-            return obj.image.url
-        return None
-    
+    image = serializers.ImageField(read_only=True)
+
     class Meta:
         model = ImageComponent
         fields = "__all__"
+
 #Fill in new Component Serializers here and then edit the mapping below
 
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
