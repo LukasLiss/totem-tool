@@ -128,7 +128,7 @@ def convert_ocel_polars_to_pm4py(polars_ocel: ObjectCentricEventLog) -> OCEL:
     pm4py_events_pl = polars_ocel.events.select(
         pl.col("_eventId").alias(PM4PY_EVENT_ID),
         pl.col("_activity").alias(PM4PY_ACTIVITY),
-        pl.from_epoch(pl.col("_timestampUnix"), time_unit="ms").alias(PM4PY_TIMESTAMP),
+        pl.from_epoch(pl.col("_timestampUnix"), time_unit="s").alias(PM4PY_TIMESTAMP),
     )
     pm4py_events = pm4py_events_pl.to_pandas()
 
@@ -150,7 +150,7 @@ def convert_ocel_polars_to_pm4py(polars_ocel: ObjectCentricEventLog) -> OCEL:
             pl.col("_qualifiers").alias(PM4PY_QUALIFIER),
         )
         .explode([PM4PY_OBJECT_ID, PM4PY_QUALIFIER])
-        .drop_nulls()
+        .drop_nulls(subset=[PM4PY_OBJECT_ID])
     )
 
     # Join with the object table to inject the object type
@@ -181,7 +181,7 @@ def convert_ocel_polars_to_pm4py(polars_ocel: ObjectCentricEventLog) -> OCEL:
             pl.col("_qualifiers").alias(PM4PY_QUALIFIER),
         )
         .explode([PM4PY_OBJECT_ID + "_2", PM4PY_QUALIFIER])
-        .drop_nulls()
+        .drop_nulls(subset=[PM4PY_OBJECT_ID + "_2"])
     )
 
     pm4py_o2o = pm4py_o2o_pl.to_pandas()
@@ -200,3 +200,100 @@ def convert_ocel_polars_to_pm4py(polars_ocel: ObjectCentricEventLog) -> OCEL:
     )
 
     return pm4py_ocel
+
+
+def convert_pm4py_to_ocel_polars(pm4py_ocel: OCEL) -> ObjectCentricEventLog:
+    """
+    Converts a PM4Py OCEL object to a custom Polars-based ObjectCentricEventLog object.
+
+    Args:
+        pm4py_ocel: The pm4py.objects.ocel.obj.OCEL object.
+
+    Returns:
+        ObjectCentricEventLog: A custom ObjectCentricEventLog instance using Polars.
+    """
+
+    # 1. Reconstruct Events DataFrame
+    # Join events with relations to get objects per event
+    
+    # Ensure we work with pandas DataFrames
+    events_df = pm4py_ocel.events.copy()
+    relations_df = pm4py_ocel.relations.copy()
+    
+    # Merge events with relations. We use a left merge to keep all events.
+    # Relationships might be multiple per event, so this explodes the events table initially.
+    # merging on event ID
+    merged_events = events_df.merge(
+        relations_df, 
+        on=pm4py_ocel.event_id_column, 
+        how="left", 
+        suffixes=("", "_rel")
+    )
+
+    # We need to aggregate multiple objects and qualifiers into lists for each event.
+    # Group by all event attributes
+    event_group_cols = [pm4py_ocel.event_id_column, pm4py_ocel.event_activity, pm4py_ocel.event_timestamp]
+    
+    # Handling potential extra columns in events if necessary? For now stick to standard 3.
+    
+    # Prepare aggregation dictionary
+    agg_dict = {
+        pm4py_ocel.object_id_column: lambda x: list(x.dropna()),
+        pm4py_ocel.qualifier: lambda x: list(x.dropna())
+    }
+
+    events_aggregated = merged_events.groupby(event_group_cols).agg(agg_dict).reset_index()
+
+    # Convert to Polars
+    events_pl = pl.from_pandas(events_aggregated)
+    
+    # Rename and format columns
+    events_pl = events_pl.select(
+        pl.col(pm4py_ocel.event_id_column).alias("_eventId"),
+        pl.col(pm4py_ocel.event_activity).alias("_activity"),
+        pl.col(pm4py_ocel.event_timestamp).cast(pl.Datetime).dt.epoch(time_unit="s").alias("_timestampUnix"),
+        pl.col(pm4py_ocel.object_id_column).alias("_objects"),
+        pl.col(pm4py_ocel.qualifier).alias("_qualifiers")
+    )
+
+
+    # 2. Reconstruct Objects DataFrame
+    objects_df = pm4py_ocel.objects.copy()
+    o2o_df = pm4py_ocel.o2o.copy()
+
+    # Merge objects with o2o to get target objects and qualifiers
+    # o2o table has: object_id, object_id_2, qualifier
+    merged_objects = objects_df.merge(
+        o2o_df,
+        left_on=pm4py_ocel.object_id_column,
+        right_on=pm4py_ocel.object_id_column,
+        how="left",
+        suffixes=("", "_rel")
+    )
+    
+    # Group columns
+    obj_group_cols = [pm4py_ocel.object_id_column, pm4py_ocel.object_type_column]
+    
+    # Prepare aggregation dictionary for objects
+    # Target object column in o2o is typically object_id + "_2"
+    target_obj_col = pm4py_ocel.object_id_column + "_2"
+    
+    agg_dict_obj = {
+        target_obj_col: lambda x: list(x.dropna()),
+        pm4py_ocel.qualifier: lambda x: list(x.dropna())
+    }
+    
+    objects_aggregated = merged_objects.groupby(obj_group_cols).agg(agg_dict_obj).reset_index()
+
+    # Convert to Polars
+    objects_pl = pl.from_pandas(objects_aggregated)
+
+    # Rename and format columns
+    objects_pl = objects_pl.select(
+        pl.col(pm4py_ocel.object_id_column).alias("_objId"),
+        pl.col(pm4py_ocel.object_type_column).alias("_objType"),
+        pl.col(target_obj_col).alias("_targetObjects"),
+        pl.col(pm4py_ocel.qualifier).alias("_qualifiers")
+    )
+
+    return ObjectCentricEventLog(events=events_pl, objects=objects_pl)

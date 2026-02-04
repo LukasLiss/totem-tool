@@ -1,12 +1,13 @@
 // Upload a file for the logged-in user
+import { API_BASE_URL } from "./config";
 export async function uploadFile(file: File, token: string) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch("http://localhost:8000/api/files/", {
+  const response = await fetch(`${API_BASE_URL}/api/files/`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`, 
+      Authorization: `Bearer ${token}`,
     },
     body: formData,
   });
@@ -22,13 +23,13 @@ export async function uploadFile(file: File, token: string) {
 
 // Fetch the list of files for the logged-in user
 export async function getUserFiles(token: string) {
-  const response = await fetch("http://localhost:8000/api/files/", {
+  const response = await fetch(`${API_BASE_URL}/api/files/`, {
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
   });
-   if (response.status === 401) {
+  if (response.status === 401) {
     throw new Error("UNAUTHORIZED");
   }
 
@@ -41,7 +42,7 @@ export async function getUserFiles(token: string) {
 
 
 export async function processFile(token: string, fileId: string) {
-  const response = await fetch(`http://localhost:8000/api/files/${fileId}/NoE/`, {
+  const response = await fetch(`${API_BASE_URL}/api/files/${fileId}/NoE/`, {
     method: "GET", // since our Django @action uses GET
     headers: {
       Authorization: `Bearer ${token}`,

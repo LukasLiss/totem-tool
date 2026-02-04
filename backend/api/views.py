@@ -13,6 +13,7 @@ import polars as pl
 from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.variants.ocvariants import find_variants, calculate_layout
 from totem_lib.totem import totemDiscovery, mlpaDiscovery, Totem
+import traceback
 from totem_lib.ocel.importer import (
     load_events_from_sqlite, load_objects_from_sqlite,
     load_events_from_json, load_objects_from_json,
@@ -304,6 +305,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
+            traceback.print_exc()
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=["get"])
@@ -341,6 +343,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "newest_timestamp": newest_timestamp,
             }, status=status.HTTP_200_OK)
         except Exception as e:
+            traceback.print_exc()
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class DashboardViewSet(viewsets.ModelViewSet):
