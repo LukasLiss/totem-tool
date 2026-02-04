@@ -30,6 +30,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+import { API_BASE_URL } from "../api/config";
+
+
 // Define props interface for components (extend as needed)
 interface ComponentProps {
   node: GridStackNode & {
@@ -54,7 +57,7 @@ interface ComponentProps {
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
-  selectedFile?: { id: number; [key: string]: any }; // Selected event log file
+  selectedFile?: { id: number;[key: string]: any }; // Selected event log file
 }
 
 
@@ -75,21 +78,21 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
   };
 
   return (
-    <div style={{ height: '100%', width: '100%',fontSize: node.font_size || 14 }}>
+    <div style={{ height: '100%', width: '100%', fontSize: node.font_size || 14 }}>
       {isEditMode ? (
         // Edit mode: Editable
         <Card className="w-full h-full min-h-80 rounded-none">
-          
+
           <CardContent>
             <Textarea
-            value={text}
-            onChange={(e) => handleTextChange(e.target.value)}
-            placeholder="Type here..."
-            className="w-full h-full resize-none"
-          />
+              value={text}
+              onChange={(e) => handleTextChange(e.target.value)}
+              placeholder="Type here..."
+              className="w-full h-full resize-none"
+            />
           </CardContent>
         </Card>
-        
+
       ) : (
         // Normal mode: Read-only
         <Card className="w-full h-full min-h-80 rounded-none">
@@ -109,33 +112,33 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
-  
-  
+
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  
+
   console.log("selectedFile start:", selectedFile);
 
   useEffect(() => {
     const handleProcessFile = async () => {
-      
-      
+
+
       if (!selectedFile?.id) {
         console.log("No file selected, skipping processing");
         setProcessedResult(null);
         return;
       }
-      
+
       setIsLoading(true);
       setError(null);
-      
+
       const token = localStorage.getItem("access_token");
       if (!token) {
         setError("No access token found");
         setIsLoading(false);
         return;
       }
-      
+
       try {
         const result = await processFile(token, selectedFile.id);
         setProcessedResult(result);
@@ -147,7 +150,7 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
         setIsLoading(false);
       }
     };
-    
+
     handleProcessFile();
   }, [selectedFile]); // Only re-run when selectedFile changes
 
@@ -156,11 +159,11 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
       <h3>Number of Events</h3>
       {isEditMode ? (
         // Edit mode: Editable (example: input for value)
-        
-          <Button onClick={() => alert('Refresh data!')} className="mt-2" variant="primary">
-            Refresh Data
-          </Button>
-        
+
+        <Button onClick={() => alert('Refresh data!')} className="mt-2" variant="primary">
+          Refresh Data
+        </Button>
+
       ) : (
         // Normal mode: Read-only
         <>
@@ -246,7 +249,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
       setLoadingTypes(true);
       const token = localStorage.getItem('access_token');
       try {
-        const res = await fetch(`/api/files/${selectedFile.id}/object_types/`, {
+        const res = await fetch(`${API_BASE_URL}/api/files/${selectedFile.id}/object_types/`, {
           headers: { Authorization: `Bearer ${token}` },
           credentials: 'include',
         });

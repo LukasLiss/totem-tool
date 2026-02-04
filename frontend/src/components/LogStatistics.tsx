@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from "../api/config";
 
 // Helper function to format duration from seconds
 export const formatDuration = (seconds: number): string => {
@@ -68,7 +69,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       setError(null);
       const token = localStorage.getItem('access_token');
       try {
-        const res = await fetch(`/api/files/${fileId}/statistics/`, {
+        const res = await fetch(`${API_BASE_URL}/api/files/${fileId}/statistics/`, {
           headers: { Authorization: `Bearer ${token}` },
           credentials: 'include',
         });
