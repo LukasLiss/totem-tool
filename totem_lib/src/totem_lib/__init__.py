@@ -19,6 +19,7 @@ __all__ = [
     "convert_ocel_polars_to_pm4py",
     "discover_oc_petri_net_polars",
     "import_ocel",
+    "mlpaDiscovery",
     "ObjectCentricEventLog",
     "OCCausalNet",
     "OCCausalNetSemantics",
@@ -26,7 +27,6 @@ __all__ = [
     "OCDFG",
     "ocpns_are_similar",
     "PolarsOCELAdapter",
-    "mlpaDiscovery",
     "Totem",
     "totemDiscovery",
 ]

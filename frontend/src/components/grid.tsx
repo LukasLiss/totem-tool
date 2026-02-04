@@ -23,21 +23,21 @@ import { toast } from "sonner"
 
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
-  const { selectedDashboard } = useContext(DashboardContext);
-  
+  const { viewMode } = useContext(DashboardContext);
+
+  // Extract dashboard ID when in dashboard mode
+  const selectedDashboard = viewMode.type === 'dashboard' ? viewMode.id : null;
 
   useEffect(() => {
     console.log("Dashboard changed to:", selectedDashboard);
-    //console.log("Current grid containers:", document.querySelectorAll('.grid-stack').length);
-    //console.log("Current grid-stack-item elements:", document.querySelectorAll('.grid-stack-item').length);
-    
+
     const loadSelectedDashboard = async () => {
       console.log("Starting to load dashboard layout");
-      
+
       // Completely reset the grid instance
       console.log("Resetting grid instance");
       resetGrid();
-      
+
       if (!selectedDashboard) {
         console.log("No dashboard selected, staying blank");
         return;
