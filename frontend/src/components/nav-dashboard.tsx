@@ -195,10 +195,10 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton asChild>
+                    <SidebarMenuSubButton asChild className="group/collapsible">
                       <Dialog open={open} onOpenChange={setOpen}>
                         <DialogTrigger>
-                          Add Dashboard +
+                          <span>Add Dashboard +</span>
                         </DialogTrigger>
                         <DialogContent className="sm:max-w-[425px]">
                           <form

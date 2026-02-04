@@ -15,7 +15,6 @@ import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
-
 // Define props interface for components (extend as needed)
 interface ComponentProps {
   node: GridStackNode & {

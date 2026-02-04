@@ -17,7 +17,7 @@ import { useGridMode } from '../gridstack/lib/gridstackprovider';
 import {
   Settings, Save, Minus, Plus
 } from "lucide-react"
-
+import { toast } from "sonner"
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -71,7 +71,7 @@ const GridContent: React.FC = () => {
 
   const handleSave = async () => {
     if (!selectedDashboard) {
-      alert("No dashboard selected!");
+      toast.error("No dashboard selected!");
       return;
     }
     const layout = getGridLayout();
@@ -81,16 +81,16 @@ const GridContent: React.FC = () => {
     try {
       const response = await saveLayout(selectedDashboard, layout, token);
       console.log('Save response:', response); // Debug: Check API response
-      alert("Layout saved!");
+      toast.success("Layout saved!");
     } catch (error) {
       console.error('Save failed:', error); // Debug: Check for errors
-      alert("Save failed!");
+      toast.error("Save failed!");
     }
   };
 
   const handleLoad = async () => {
     if (!selectedDashboard) {
-      alert("No dashboard selected!");
+      toast.error("No dashboard selected!");
       return;
     }
     const token = localStorage.getItem("access_token");
