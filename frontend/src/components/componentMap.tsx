@@ -184,31 +184,37 @@ const ImageComponent: React.FC<ComponentProps> = ({
 
   return (
     <Card className="w-full h-full rounded-none">
-      <CardHeader>
-        <CardTitle>Image Component</CardTitle>
-      </CardHeader>
+      
 
-      <CardContent>
+      
         {isEditMode ? (
-          <>
+          <><CardHeader>
+              <CardTitle>Image Component</CardTitle>
+            </CardHeader>
+            <CardContent>
             <Input
               type="file"
               accept="image/*"
               onChange={handleFileUpload}
               disabled={uploading}
             />
+            </CardContent>
+
             {uploading && <p>Uploading...</p>}
           </>
         ) : node.image ? (
+          <CardContent>
+          
           <img
             src={`http://localhost:8000${node.image}`}
             alt="Uploaded"
             className="w-full h-full object-cover"
           />
-        ) : (
+          </CardContent>) : (<CardContent>
           <p>No image uploaded</p>
-        )}
-      </CardContent>
+        </CardContent>)
+          
+        }
     </Card>
   );
 };

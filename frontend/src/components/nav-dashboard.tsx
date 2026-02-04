@@ -1,4 +1,4 @@
-import { ChevronRight, FileStack, Settings2 } from "lucide-react"
+import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
 import { useContext,  useState } from 'react'
 import {
   Collapsible,
@@ -195,10 +195,11 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton asChild className="group/collapsible">
+                    <SidebarMenuSubButton className="flex w-full items-center justify-between">
                       <Dialog open={open} onOpenChange={setOpen}>
-                        <DialogTrigger>
-                          <span>Add Dashboard +</span>
+                        <DialogTrigger className="pr-9 hover:bg-accent rounded flex w-full items-center justify-between">
+                          <Plus className="w-4 h-4"/>
+                          <span >Add Dashboard</span>
                         </DialogTrigger>
                         <DialogContent className="sm:max-w-[425px]">
                           <form
