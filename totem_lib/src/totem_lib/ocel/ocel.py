@@ -551,12 +551,13 @@ class ObjectCentricEventLog:
 
     def filter_by_process_area(self, mlpa: dict, level: int, objects: list[str]) -> "ObjectCentricEventLog":
         """
-        Filters the event log to include only specific object types and its related events.
+        Filters the event log to include only object types from a given process area. Additionally, adds higher
+        level objects as a resource attribute to each event.
 
         This method performs two main steps:
         1. Filters the objects DataFrame to keep only those matching the specified object_types.
         2. Filters the events DataFrame to keep only the events that are associated with
-        at least one of the objects from the filtered set.
+        at least one of the objects from the filtered set and adds higher level objects a resource attribute.
 
         Args:
             mlpa (dict): Dictionary defining the process areas.
