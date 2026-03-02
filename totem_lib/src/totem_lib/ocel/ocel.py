@@ -549,7 +549,7 @@ class ObjectCentricEventLog:
         # 4. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
-    def filter_by_multiple_object_types(self, object_types: list[str]) -> "ObjectCentricEventLog":
+    def filter_by_process_area(self, mlpa: dict, level: int, objects: list[str]) -> "ObjectCentricEventLog":
         """
         Filters the event log to include only specific object types and its related events.
 
@@ -559,27 +559,78 @@ class ObjectCentricEventLog:
         at least one of the objects from the filtered set.
 
         Args:
-            object_types ([str]): List of object types to keep in the log (e.g., ["container", "forklift"]).
+            mlpa (dict): Dictionary defining the process areas.
+            level (int): The level threshold for process areas.
+            objects (list[str]): List of object types to keep in the log.
 
         Returns:
             ObjectCentricEventLog: A new, filtered instance of the ObjectCentricEventLog.
         """
         # 1. Filter the objects DataFrame to get only the relevant objects
-        filtered_objects = self.objects.filter(pl.col("_objType").is_in(pl.lit(list(object_types))))
+        filtered_objects = self.objects.filter(pl.col("_objType").is_in(objects))
 
-        # 2. Get the set of IDs for these relevant objects
-        relevant_object_ids = filtered_objects.get_column("_objId")
+        # 2. Get object IDs of relevant objects
+        relevant_object_ids = filtered_objects.get_column("_objId").to_list()
 
-        # 3. Filter the events DataFrame
-        # Keep an event if its list of objects has a non-empty intersection
-        # with our set of relevant object IDs.
-        filtered_events = self.events.filter(
-            pl.col("_objects")
-            .list.eval(pl.element().is_in(relevant_object_ids))
-            .list.any()
+        # 3. Extract the activity types that are used as resources
+        resource_object_types = []
+        for key, item in mlpa.items():
+            if key > level:
+                for object_list, activities in item:
+                    resource_object_types.extend(object_list)
+
+        # 4. Get IDs of resources
+        resource_object_ids = (
+            self.objects
+            .filter(pl.col("_objType").is_in(resource_object_types))
+            .get_column("_objId")
+            .to_list()
         )
 
-        # 4. Return a new event log instance with the filtered DataFrames
+        # 5. Ensure that _attributes column exists
+        events_df = self.events
+        if "_attributes" not in events_df.columns:
+            events_df = events_df.with_columns(pl.lit("{}").alias("_attributes"))
+
+        # 6. Filter the events DataFrame
+        filtered_events = (
+            events_df
+            .with_columns([
+                # Objects to stay in the Dataframe
+                pl.col("_objects")
+                .list.eval(pl.element().filter(pl.element().is_in(relevant_object_ids)))
+                .alias("_kept_objects"),
+
+                # Objects that are now used as resources
+                pl.col("_objects")
+                .list.eval(pl.element().filter(pl.element().is_in(resource_object_ids)))
+                .alias("_resources_in_event"),
+            ])
+            # Keep only events with more than one object
+            .filter(pl.col("_kept_objects").list.len() > 0)
+            .with_columns([
+                # Add objects column back to Dataframe
+                pl.col("_kept_objects").alias("_objects"),
+
+                # Merge resource attribute back into the Attribute JSON
+                pl.struct(["_attributes", "_resources_in_event"])
+                .map_elements(
+                    lambda row: json.dumps(
+                        {
+                            # Fallback for empty attributes
+                            **(json.loads(row["_attributes"]) if row["_attributes"] else {}),
+                            "process_area_resources": list(row["_resources_in_event"]) if row[
+                                "_resources_in_event"] else []
+                        },
+                        ensure_ascii=False
+                    ),
+                    return_dtype=pl.Utf8
+                ).alias("_attributes"),
+            ])
+            .drop(["_kept_objects", "_resources_in_event"])
+        )
+
+        # 7. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
     def get_object_ids_by_type(self, object_type: str) -> List[str]:
