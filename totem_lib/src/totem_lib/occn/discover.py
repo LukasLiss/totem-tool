@@ -8,7 +8,7 @@ import scipy.special
 from collections import Counter
 from tqdm.auto import tqdm
 from . import OCCausalNet
-from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, PolarsOCELAdapter, filter_dead_objects
+from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, filter_dead_objects
 
 
 def discover_occn(
@@ -27,8 +27,6 @@ def discover_occn(
     -----------
     ocel
         The object-centric event log.
-    objectTypes
-        A list of object types to be considered in the mining process.
     relativeOccuranceThreshold
         The threshold for relative occurrence of markers (between 0 and 1).
         Markers with occurrence below this threshold will be filtered out.
@@ -46,6 +44,21 @@ def discover_occn(
         - `inconsumableObjects`: List of object types considered inconsumable
           (default: None).
         - `inconsumableThreshold`: Threshold for inconsumable objects (default: 1).
+    
+    When using multiple values for relativeOccuranceThreshold, it is recommended
+    to conduct the expensive discovery only once without filtering and then 
+    filter the resulting OCCN for different thresholds:
+    
+    ```python
+    
+    # Discover with no filtering
+    base_occn = discover_occn(ocel, relativeOccuranceThreshold=0)
+    
+    # Filter for different thresholds
+    occn_1 = base_occn.apply_relative_occurrence_threshold(0.1)
+    occn_2 = base_occn.apply_relative_occurrence_threshold(0.2)
+    ```
+    
     Returns
     --------
     OCCausalNet
