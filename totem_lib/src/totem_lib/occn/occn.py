@@ -12,6 +12,8 @@ class OCCausalNet(object):
     Object-Centric Causal Net capturing dependency graph and marker groups.
     Start activities are named "START_{object_type}" and end activities "END_{object_type}".
 
+    See `examples/OCCN.md` for an introduction and example usage.
+
     Reference:
     Liss et al. (2025). Object-Centric Causal Nets.
     CAiSE 2025. https://doi.org/10.1007/978-3-031-94571-7_6
