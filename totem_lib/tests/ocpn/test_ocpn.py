@@ -25,9 +25,6 @@ def id_fn(filepath):
 def loaded_ocel(request):
     """Import OCEL once for all tests in this file."""
     ocel = import_ocel(request.param)
-    # Apply filtering
-    ocel = schema_base_filtering(ocel)
-    ocel = propagate_filtering(ocel)
     return ocel
 
 

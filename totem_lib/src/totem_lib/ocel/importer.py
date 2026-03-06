@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 import os
 import re
 from collections import defaultdict
-from . import ObjectCentricEventLog
+from . import ObjectCentricEventLog, schema_base_filtering, propagate_filtering
 
 
 def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
@@ -45,7 +45,13 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
     events_df = events_loader(file_path)
     objects_df = objects_loader(file_path)
 
-    return ObjectCentricEventLog(events=events_df, objects=objects_df)
+    ocel = ObjectCentricEventLog(events=events_df, objects=objects_df)
+    
+    # Apply filtering for consistent structure
+    ocel = schema_base_filtering(ocel)
+    ocel = propagate_filtering(ocel)
+    
+    return ocel
 
 
 def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
@@ -276,11 +282,17 @@ def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
             "_jsonObjAttributes": pl.Utf8,
         })
 
-    return ObjectCentricEventLog(
+    ocel =  ObjectCentricEventLog(
         events=events_df,
         objects=objects_df,
         object_attributes=object_attributes_df
     )
+    
+    # Apply filtering for consistent structure
+    ocel = schema_base_filtering(ocel)
+    ocel = propagate_filtering(ocel)
+    
+    return ocel
 
 
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
