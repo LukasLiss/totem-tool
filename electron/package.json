@@ -43,6 +43,7 @@
     "electron-packager": "^17.1.2"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "tree-kill": "^1.2.2"
   }
 }

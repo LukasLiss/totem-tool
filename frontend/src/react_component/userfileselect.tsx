@@ -2,12 +2,9 @@ import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import './component_styles/userfileselect.css';
 import { Button } from "@/components/ui/button";
 import {
   Card,
-  CardAction,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -42,14 +39,22 @@ function UserFileSelect() {
             try {
             if (!token) {
                     console.error("No token found!");
-                    return;
                   }
             const response = await getUserFiles(token);
+            console.log("Fetched files:", response);
             setFiles(response);
-            console.log(files)
-            } catch (err) {
-            console.error(err);
+            console.log("files",files)
+            } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+                console.error(error);
+              }
             }
+          
         };
 
         fetchFiles(); 
@@ -92,9 +97,9 @@ function UserFileSelect() {
           </PopoverTrigger>
           <PopoverContent className="w-[300px] p-0">
             <Command>
-              <CommandInput placeholder="Search framework..." />
+              <CommandInput placeholder="Search files..." />
               <CommandList>
-                <CommandEmpty>No framework found.</CommandEmpty>
+                <CommandEmpty>No file found.</CommandEmpty>
                 <CommandGroup>
                   {files.map((file) => (
                     <CommandItem

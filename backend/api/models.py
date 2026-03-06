@@ -12,8 +12,7 @@ def user_directory_path(instance, filename):
     return os.path.join("legacy", filename)
 
 def project_directory_path(instance, filename):
-    return os.path.join(instance.project.name, filename)
-
+    return os.path.join(instance.dashboard.project.name, filename)
 
 class Project(models.Model):
     users = models.ManyToManyField(User)
@@ -45,20 +44,17 @@ class DashboardComponent(models.Model):
         on_delete=models.CASCADE,
         related_name="components"
     )
-    x = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
-    )
-    y = models.FloatField(
-        validators=[
-            MinValueValidator(0.0),
-            MaxValueValidator(100.0)
-        ]
-    )
-    width = models.FloatField()
-    height = models.FloatField()
+
+    # GridStack-native geometry
+    x = models.IntegerField()
+    y = models.IntegerField()
+    w = models.IntegerField()
+    h = models.IntegerField()
+
+    # The actual component name, matching your React componentMap
+    component_name = models.CharField(max_length=100)
+
+    order = models.IntegerField(default=0)  # for z-order or stable sorting
 
     class Meta:
         verbose_name = "Dashboard Component"
@@ -73,3 +69,29 @@ class TextBoxComponent(DashboardComponent):
     text = models.TextField()
     font_size = models.IntegerField(default=14)
 
+class ImageComponent(DashboardComponent):
+    image = models.ImageField(upload_to=project_directory_path)
+
+
+class VariantsComponent(DashboardComponent):
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    leading_object_type = models.CharField(max_length=100, null=True, blank=True)
+
+
+class ProcessAreaComponent(DashboardComponent):
+    pass
+
+
+class LogStatisticsComponent(DashboardComponent):
+    show_num_events = models.BooleanField(default=True)
+    show_num_activities = models.BooleanField(default=True)
+    show_num_objects = models.BooleanField(default=True)
+    show_num_object_types = models.BooleanField(default=True)
+    show_earliest_timestamp = models.BooleanField(default=False)
+    show_newest_timestamp = models.BooleanField(default=False)
+    show_duration = models.BooleanField(default=False)
+
+
+class OCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)

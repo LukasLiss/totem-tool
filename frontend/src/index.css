@@ -130,3 +130,19 @@ html, body, #root {
 .ocdfg-controls .react-flow__controls-button:active {
   background-color: #e2e8f0;
 }
+
+/* Keep arrow heads static even when edges are animated */
+.react-flow__edge.animated .ocdfg-arrow-head {
+  stroke-dasharray: none;
+  animation: none;
+}
+
+/* Smooth transitions for parametric edge curves */
+.react-flow__edge path {
+  transition: d 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Disable transitions during node dragging to prevent jitter */
+.react-flow__edge.dragging path {
+  transition: none;
+}

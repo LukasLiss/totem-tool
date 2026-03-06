@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useContext } from "react";
 import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
-
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,8 +20,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
-
-
+import { DashboardContext } from "@/contexts/DashboardContext.tsx";
 // extend type to allow optional logo component
 
 
@@ -33,6 +31,7 @@ export function Switcher() {
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
   const navigate = useNavigate();
+  const { setSelectedDashboard } = useContext(DashboardContext)
   
   // find active project by id, fallback to first
 const displayName = selectedFile?.file
@@ -45,14 +44,21 @@ const displayName = selectedFile?.file
         try {
           if (!token) {
             console.error("No token found!");
-            return;
+            
           }
           const response = await getUserFiles(token);
           setFiles(response);
           console.log('Loading files successfull')
-        } catch (err) {
-          console.error(err);
-        }
+        } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                  navigate("/login", {
+                    replace: true,
+                    state: { from: location.pathname },
+                  });
+                } else {
+                  console.error(error);
+                  }
+                };
       };
       fetchFiles();
     }, []);
@@ -95,6 +101,7 @@ const displayName = selectedFile?.file
                 key={project.id}
                 onClick={() => {
                   setSelectedFile(project); // put entire file into context
+                  setSelectedDashboard(-1); // reset dashboard view
                   console.log("Saved to context:", project);
                 }}
                 className="gap-2 p-2"

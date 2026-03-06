@@ -1,8 +1,23 @@
-import React, { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
-  AlignLeft, Download, Filter, MinusCircle, PlusCircle
+  MinusCircle, PlusCircle
 } from "lucide-react";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* =========================
    Types shared with callers
@@ -37,75 +52,6 @@ export type Variant = {
   signature_hash: string;
   graph: VariantGraph;
 };
-
-/* ========== minimalist UI wrappers (no shadcn) ========== */
-type BasicChildrenProps = { className?: string; children?: React.ReactNode };
-
-const Card: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className="rounded-md border" style={{ borderColor: "#E2E8F0" }}>
-    <div className={className}>{children}</div>
-  </div>
-);
-const CardHeader: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className={className} style={{ padding: "12px 16px" }}>{children}</div>
-);
-const CardContent: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
-  <div className={className} style={{ padding: "12px 16px" }}>{children}</div>
-);
-const CardTitle: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: 18, fontWeight: 600, color: "#0F172A" }}>{children}</div>
-);
-
-type ButtonProps = {
-  children?: React.ReactNode;
-  onClick?: React.MouseEventHandler<HTMLButtonElement>;
-  title?: string;
-  size?: "md" | "icon" | "sm";
-  variant?: "solid" | "ghost";
-  className?: string;
-};
-const Button: React.FC<ButtonProps> = ({
-  children, onClick, title, size = "md", variant = "solid", className = ""
-}) => {
-  const pad = size === "icon" ? "6px" : "6px 10px";
-  const bg = variant === "ghost" ? "transparent" : "#2563EB";
-  const col = variant === "ghost" ? "#0F172A" : "#fff";
-  const brd = variant === "ghost" ? "#E2E8F0" : "transparent";
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className={className}
-      style={{
-        padding: pad, background: bg, color: col,
-        border: "1px solid " + brd, borderRadius: 8, lineHeight: 1
-      }}
-    >
-      {children}
-    </button>
-  );
-};
-
-/* slider wrapper (expects onValueChange([number])) */
-type SliderProps = {
-  value: [number];
-  min: number;
-  max: number;
-  step: number;
-  onValueChange: (vals: [number]) => void;
-  className?: string;
-};
-const Slider: React.FC<SliderProps> = ({ value, min, max, step, onValueChange, className = "" }) => (
-  <input
-    type="range"
-    className={className}
-    min={min}
-    max={max}
-    step={step}
-    value={value[0]}
-    onChange={(e) => onValueChange([Number(e.target.value)])}
-  />
-);
 
 /* ========== colors/tokens ========== */
 const ACTOR_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#8B5CF6", "#F43F5E"];
@@ -156,113 +102,400 @@ const chevronClip = (tipPx: number = 16): string =>
            0 100%,
            ${tipPx}px 50%)`;
 
-/*
-  REMOVED: The computePositions function is no longer needed
-  as the layout is now calculated by the backend.
-*/
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
-  variants: Variant[];
-  typeColors?: Record<string, string>;
-  laneHeight?: number;
-  colWidth?: number;
+  fileId?: number;                                // Event log file ID
+  automaticLoading?: boolean;                     // Auto-load variants (default: false)
+  onVariantsLoad?: (variants: Variant[]) => void; // Optional callback when variants load
+  typeColors?: Record<string, string>;            // UI customization
+  colWidth?: number;                              // Column width (default: 120)
+  embedded?: boolean;                             // When true, removes outer Card wrapper
+  defaultLeadingType?: string;                    // Pre-select this type if provided and valid
 };
 
 export default function VariantsExplorer({
-  variants,
+  fileId,
+  automaticLoading = false,
+  onVariantsLoad,
   typeColors,
-  laneHeight = 40,
   colWidth = 120,
+  embedded = false,
+  defaultLeadingType,
 }: VariantsExplorerProps) {
+  // Component state
+  const [variants, setVariants] = useState<Variant[]>([]);
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [leadingType, setLeadingType] = useState<string>("");
+  const [hasStartedLoading, setHasStartedLoading] = useState<boolean>(false);
+
+  // UI state
   const [zoom, setZoom] = useState<number>(1);
   const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
   const [query, setQuery] = useState<string>("");
-  const [minSupport, setMinSupport] = useState<number>(0);
+
+  // Track current fileId to detect stale closures
+  const fileIdRef = useRef<number | undefined>(fileId);
+
+  // Update ref whenever fileId changes
+  useEffect(() => {
+    fileIdRef.current = fileId;
+  }, [fileId]);
 
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
+
+  // Fetch object types when fileId changes
+  useEffect(() => {
+    if (!fileId) {
+      setAvailableTypes([]);
+      setLeadingType("");
+      setHasStartedLoading(false);
+      setStatus("idle");
+      setVariants([]);
+      setErrorMsg("");
+      return;
+    }
+
+    // SYNCHRONOUS state reset BEFORE async work
+    setHasStartedLoading(false);  // Reset loading flag immediately
+    setStatus("idle");            // Reset status immediately
+    setLeadingType("");           // Clear old leading type immediately
+    setVariants([]);              // Clear old variants immediately
+    setErrorMsg("");              // Clear old errors immediately
+
+    const currentFileId = fileId;  // Capture fileId in closure
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // Check if we're still on the same file before proceeding
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, abort this stale closure
+        }
+
+        const token = localStorage.getItem("access_token");
+        if (!token) {
+          throw new Error("Not authenticated");
+        }
+
+        const url = `/api/files/${currentFileId}/object_types/`;
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (res.status === 401) {
+          throw new Error("UNAUTHORIZED");
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+        const objectTypes: string[] = await res.json();
+
+        // Check again after async operation
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed during fetch, abort
+        }
+
+        if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
+          setAvailableTypes(objectTypes);
+
+          // Use defaultLeadingType if provided and valid, otherwise auto-select first type alphabetically
+          if (defaultLeadingType && objectTypes.includes(defaultLeadingType)) {
+            setLeadingType(defaultLeadingType);
+          } else {
+            const sortedTypes = [...objectTypes].sort();
+            setLeadingType(sortedTypes[0]);
+          }
+        }
+      } catch (e: any) {
+        // Check again before setting error
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, don't show error from old file
+        }
+
+        if (!cancelled) {
+          console.error("Failed to load object types:", e);
+          setErrorMsg(e?.message || "Failed to load object types");
+          setStatus("error");
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fileId]);
+
+  // Fetch variants when fileId or leadingType changes
+  useEffect(() => {
+    if (!fileId) {
+      setVariants([]);
+      setStatus("idle");
+      setErrorMsg("");
+      return;
+    }
+
+    // Wait for object types to be loaded and leadingType to be selected
+    if (!leadingType) {
+      return;
+    }
+
+    // Only fetch if automaticLoading is true OR user has manually started loading
+    if (!automaticLoading && !hasStartedLoading) {
+      return;
+    }
+
+    const currentFileId = fileId;  // Capture fileId in closure
+    const currentLeadingType = leadingType;  // Capture leadingType in closure
+    let cancelled = false;
+
+    (async () => {
+      // CRITICAL: Check if we're still on the same file before setting status="loading"
+      if (fileIdRef.current !== currentFileId) {
+        return;  // File changed, abort this stale closure
+      }
+
+      const qs = `?file_id=${currentFileId}&leading_type=${encodeURIComponent(currentLeadingType)}`;
+
+      setStatus("loading");
+      setErrorMsg("");
+
+      try {
+        const token = localStorage.getItem("access_token");
+        if (!token) {
+          throw new Error("Not authenticated");
+        }
+
+        const url = `/api/variants/${qs}`;
+        const res = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (res.status === 401) {
+          throw new Error("UNAUTHORIZED");
+        }
+
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          const text = await res.text();
+          throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
+        }
+
+        const data = await res.json();
+        const arr: Variant[] = Array.isArray(data) ? data : data.variants;
+
+        // Check again after async operation
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed during fetch, abort
+        }
+
+        if (!cancelled) {
+          setVariants(arr ?? []);
+          {console.log(arr)}
+          setStatus(arr && arr.length ? "ready" : "empty");
+          onVariantsLoad?.(arr ?? []);
+        }
+      } catch (e: any) {
+        // Check again before setting error
+        if (fileIdRef.current !== currentFileId) {
+          return;  // File changed, don't show error from old file
+        }
+
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMsg(e?.message || "Unknown error while loading variants.");
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [leadingType, automaticLoading, hasStartedLoading, onVariantsLoad]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return variants
-      .filter((v) => v.support >= minSupport)
       .filter((v) => q ? (String(v.id).toLowerCase().includes(q) || v.signature.toLowerCase().includes(q)) : true)
       .sort((a, b) => b.support - a.support);
-  }, [variants, minSupport, query]);
+  }, [variants, query]);
+
+  //console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
+
+  const Wrapper = embedded ? 'div' : Card;
 
   return (
-    <Card className="w-full">
+    <Wrapper className="w-full">
       <CardHeader className="pb-2">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <CardTitle>Object-Centric Variants</CardTitle>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-semibold">Perspective:</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="min-w-[150px] justify-between">
+                  {leadingType || "Select type"}
+                  <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[200px]">
+                <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={leadingType} onValueChange={setLeadingType}>
+                  {availableTypes.length > 0 ? (
+                    availableTypes.map((type) => (
+                      <DropdownMenuRadioItem key={type} value={type}>
+                        {type}
+                      </DropdownMenuRadioItem>
+                    ))
+                  ) : (
+                    <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
+                  )}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             {/* Zoom */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <ZoomOut size={16} color={UI.textSecondary} />
+              <ZoomOut size={16} className="text-muted-foreground" />
               <Slider
-                value={[zoom]} min={0.5} max={2} step={0.1}
+                value={[zoom]}
+                min={0.5}
+                max={2}
+                step={0.1}
                 onValueChange={(v) => setZoom(v[0])}
                 className="w-40"
               />
-              <ZoomIn size={16} color={UI.textSecondary} />
+              <ZoomIn size={16} className="text-muted-foreground" />
             </div>
 
-            {/* Label mode toggle */}
-            <div style={{ display: "flex", gap: 6, background: UI.mutedBG, border: `1px solid ${UI.border}`, borderRadius: 8, padding: 2 }}>
-              <Button variant="ghost" onClick={() => setLabelMode("compact")} title="Compact labels">
-                <AlignLeft size={14} /> <span style={{ marginLeft: 4 }}>Compact</span>
-              </Button>
-              <Button variant="ghost" onClick={() => setLabelMode("full")} title="Full labels">Full</Button>
-            </div>
-
-            {/* Search */}
-            <div style={{ position: "relative" }}>
-              <Search size={14} color={UI.textSecondary} style={{ position: "absolute", left: 8, top: 10 }} />
-              <input
-                placeholder="Filter by id or signature…"
-                style={{ padding: "8px 8px 8px 28px", width: 260, border: `1px solid ${UI.border}`, borderRadius: 8 }}
-                value={query} onChange={(e) => setQuery(e.target.value)}
-                aria-label="Filter variants"
+            {/* Label mode toggle - Switch */}
+            <div className="flex items-center gap-2">
+              <Label htmlFor="label-mode" className="text-sm font-medium">
+                Compact Labels
+              </Label>
+              <Switch
+                id="label-mode"
+                checked={labelMode === "compact"}
+                onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
               />
             </div>
 
-            {/* Min support */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Filter size={16} color={UI.textSecondary} />
-              <input
-                type="number" min={0}
-                style={{ width: 100, padding: "6px 8px", border: `1px solid ${UI.border}`, borderRadius: 8 }}
-                value={String(minSupport)}
-                onChange={(e) => setMinSupport(Math.max(0, Number(e.target.value || 0)))}
-                placeholder="Min support"
-                aria-label="Minimum support"
+            {/* Search */}
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Filter by id or signature…"
+                className="pl-9 w-[260px]"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Filter variants"
               />
             </div>
           </div>
         </div>
       </CardHeader>
 
-      <CardContent className="pt-2">
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {filtered.map((v) => (
-            <VariantRow
-              key={v.signature_hash}
-              v={v}
-              totalSupport={totalSupport}
-              zoom={zoom}
-              labelMode={labelMode}
-              laneHeight={laneHeight}
-              colWidth={colWidth}
-              typeColorsOverride={typeColors}
-            />
-          ))}
-          {filtered.length === 0 && (
-            <div style={{ fontSize: 12, color: UI.textSecondary }}>No variants match your filters.</div>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+      {/* Idle state - no file selected */}
+      {status === "idle" && !fileId && (
+        <CardContent className="pt-2">
+          <div className="text-sm text-muted-foreground">
+            Select a file to view variants
+          </div>
+        </CardContent>
+      )}
+
+      {/* Manual loading state - waiting for user to start */}
+      {!automaticLoading && !hasStartedLoading && fileId && leadingType && status === "idle" && (
+        <CardContent className="pt-2">
+          <div className="flex flex-col gap-3 items-center py-4">
+            <div className="text-sm text-muted-foreground text-center">
+              Variant computation can take some time for large event logs.
+              <br />
+              Click below when ready to start the analysis.
+            </div>
+            <Button
+              onClick={() => setHasStartedLoading(true)}
+              className="min-w-[200px]"
+            >
+              Start Variant Computation
+            </Button>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Loading state */}
+      {status === "loading" && (
+        <CardContent className="pt-2">
+          <div className="flex items-center gap-2">
+            <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+            <span className="text-sm">Loading variants...</span>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Error state */}
+      {status === "error" && (
+        <CardContent className="pt-2">
+          <div className="flex flex-col gap-2">
+            <div className="text-sm text-red-600 font-semibold">
+              Failed to load variants
+            </div>
+            {errorMsg && (
+              <div className="text-xs text-red-500">{errorMsg}</div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLeadingType("")}
+              className="w-fit"
+            >
+              Retry
+            </Button>
+          </div>
+        </CardContent>
+      )}
+
+      {/* Empty state */}
+      {status === "empty" && (
+        <CardContent className="pt-2">
+          <div className="text-sm text-muted-foreground">
+            No variants found for this file
+          </div>
+        </CardContent>
+      )}
+
+      {/* Ready state - show variants */}
+      {status === "ready" && (
+        <CardContent className="pt-2">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {filtered.map((v) => (
+              <VariantRow
+                key={v.signature_hash}
+                v={v}
+                totalSupport={totalSupport}
+                zoom={zoom}
+                labelMode={labelMode}
+                colWidth={colWidth}
+                typeColorsOverride={typeColors}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <div style={{ fontSize: 12, color: UI.textSecondary }}>No variants match your filters.</div>
+            )}
+          </div>
+        </CardContent>
+      )}
+    </Wrapper>
   );
 }
 
@@ -281,13 +514,12 @@ type VariantRowProps = {
   totalSupport: number;
   zoom: number;
   labelMode: "compact" | "full";
-  laneHeight: number;
   colWidth: number;
   typeColorsOverride?: Record<string, string>;
 };
 
 function VariantRow({
-  v, totalSupport, zoom, labelMode, laneHeight, colWidth, typeColorsOverride
+  v, totalSupport, zoom, labelMode, colWidth, typeColorsOverride
 }: VariantRowProps) {
   const [expanded, setExpanded] = useState<boolean>(false);
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
@@ -321,15 +553,35 @@ function VariantRow({
     [objectTypes, typeColorsOverride]
   );
 
-  const lanesByType = useMemo(() => {
-    const map = new Map<string, VariantObject[]>();
-    for (const o of objects) {
-      if (!map.has(o.type)) map.set(o.type, []);
-      map.get(o.type)!.push(o);
-    }
-    for (const [, arr] of map) arr.sort((a, b) => a.id.localeCompare(b.id));
-    return Array.from(map.entries()); // [type, objects[]][]
+  // Create ordered list of lanes (one per object, preserving backend's lane order)
+  const lanes = useMemo(() => {
+    return objects.map((obj, idx) => ({
+      index: idx,
+      object: obj,
+      type: obj.type,
+    }));
   }, [objects]);
+
+  // Group lanes by type for legend display (preserves order, tracks lane count per type)
+  const typeGroups = useMemo(() => {
+    const groups: { type: string; laneCount: number; startIndex: number }[] = [];
+    let currentType = '';
+    let count = 0;
+    let startIndex = 0;
+    for (let i = 0; i < lanes.length; i++) {
+      const lane = lanes[i];
+      if (lane.type !== currentType) {
+        if (currentType) groups.push({ type: currentType, laneCount: count, startIndex });
+        currentType = lane.type;
+        count = 1;
+        startIndex = i;
+      } else {
+        count++;
+      }
+    }
+    if (currentType) groups.push({ type: currentType, laneCount: count, startIndex });
+    return groups;
+  }, [lanes]);
 
   const maxCol = useMemo(
     () => Math.max(0, ...Object.values(pos).map((p) => Math.max(p.xStart, p.xEnd))),
@@ -338,42 +590,73 @@ function VariantRow({
   const cols = maxCol + 1;
   const gridTemplateCols = `repeat(${cols}, ${Math.round(colWidth * zoom)}px)`;
 
+  // Map lane index -> events in that lane (using y_lanes from node data)
   const laneEvents = useMemo(() => {
-    const map = new Map<string, PositionedEvent[]>();
-    for (const p of Object.values(pos)) for (const oid of p.objectIds) {
-      if (!map.has(oid)) map.set(oid, []);
-      map.get(oid)!.push({ ...p });
-    }
-    for (const [, arr] of map) {
-      arr.sort((a, b) => a.xStart - b.xStart);
-      for (let i = 0; i < arr.length; i++) {
-        const cur = arr[i], prev = arr[i - 1], next = arr[i + 1];
-        const prevShared = prev ? prev.objectIds.length > 1 : false;
-        const nextShared = next ? next.objectIds.length > 1 : false;
-        if (cur.objectIds.length === 1 && prevShared && nextShared && next) {
-          const naturalEnd = next.xStart - 1;
-          if (naturalEnd >= cur.xStart) cur.xEnd = Math.min(cur.xEnd, naturalEnd);
-        }
+    const map = new Map<number, PositionedEvent[]>();
+    for (const node of v.graph.nodes) {
+      for (const laneIdx of node.y_lanes) {
+        if (!map.has(laneIdx)) map.set(laneIdx, []);
+        map.get(laneIdx)!.push({
+          id: node.id,
+          activity: node.activity,
+          objectIds: node.objectIds,
+          xStart: node.x,
+          xEnd: node.x,
+        });
       }
     }
+    // Sort events in each lane by x position
+    for (const [, arr] of map) {
+      arr.sort((a, b) => a.xStart - b.xStart);
+    }
     return map;
-  }, [pos]);
+  }, [v.graph.nodes]);
 
   const supportPct = totalSupport ? (v.support / totalSupport) : 0;
   const toggleType = (t: string) => setCollapsedTypes(prev => {
     const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
   });
 
-  const colsCount = cols;
-  const visibleRowCount = lanesByType.reduce((acc, [t, objs]) =>
-    acc + (collapsedTypes.has(t) ? 1 : objs.length) + 1, 0);
+  // Fixed height for each type lane to match legend boxes
+  const typeLaneHeight = 48;
+
+  // Calculate legend height based on actual type groups (including collapsed ones)
+  const legendHeight = useMemo(() => {
+    let height = 32; // padding (16 top + 16 bottom)
+    typeGroups.forEach(({ type, laneCount }, idx) => {
+      const collapsed = collapsedTypes.has(type);
+      height += collapsed ? typeLaneHeight : laneCount * typeLaneHeight + (laneCount - 1) * 12;
+      if (idx < typeGroups.length - 1) height += 12; // gap between groups
+    });
+    return height;
+  }, [typeGroups, collapsedTypes, typeLaneHeight]);
+
+  // Calculate the grid row for a lane, accounting for collapsed type groups
+  const getRowForLane = (laneIdx: number): number => {
+    const lane = lanes[laneIdx];
+    let row = 1;
+
+    for (const group of typeGroups) {
+      if (group.type === lane.type) {
+        // Found our type group - add position within group
+        const posInGroup = laneIdx - group.startIndex;
+        return row + posInGroup;
+      }
+      // Add rows for this type group
+      const collapsed = collapsedTypes.has(group.type);
+      row += collapsed ? 1 : group.laneCount;
+    }
+    return row;
+  };
+
 
   return (
     <div style={{ border: `1px solid ${UI.border}`, borderRadius: 8 }}>
       <CardHeader className="py-2">
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <Button
-            variant="ghost" size="icon"
+            variant="ghost"
+            size="icon"
             onClick={() => setExpanded(e => !e)}
             title={expanded ? "Collapse variant" : "Expand variant"}
           >
@@ -394,8 +677,8 @@ function VariantRow({
             {v.support}
           </div>
 
-          <div style={{ color: UI.textPrimary }}>
-            Variant <span style={{ fontFamily: "ui-monospace, monospace" }}>{String(v.id)}</span>
+          <div style={{ color: UI.textPrimary, fontFamily: "ui-monospace, monospace", marginLeft: 42 }}>
+            {String(v.id)}
           </div>
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
@@ -408,58 +691,71 @@ function VariantRow({
             >
               signature: {v.signature}
             </div>
-            <Button variant="ghost" size="icon" title="Export (stub)">
-              <Download size={16} />
-            </Button>
           </div>
         </div>
       </CardHeader>
 
       {expanded && (
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 pb-6">
           <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
             {/* legend */}
             <div style={{ width: 256, flexShrink: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: UI.textSecondary }}>Object types</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {lanesByType.map(([type, objs]) => {
-                  const collapsed = collapsedTypes.has(type);
-                  const tColor = typeColor[type];
-                  return (
-                    <div key={type} style={{ border: `1px solid ${UI.border}`, borderRadius: 8, padding: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ height: 12, width: 12, borderRadius: 3, background: tColor }} />
-                          <div style={{ fontSize: 14, fontWeight: 600, color: UI.textPrimary }}>{type}</div>
-                        </div>
-                        <Button
-                          size="sm" variant="ghost" onClick={() => toggleType(type)}
-                          title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
-                        >
-                          {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
-                        </Button>
-                      </div>
-                      {!collapsed && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingLeft: 20 }}>
-                          {objs.map((o, i) => (
-                            <div key={o.id} style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                              <div style={{ height: 8, width: 16, borderRadius: 3, background: shade(tColor, 0.15 * (i % 5)) }} />
-                              <span
-                                title={o.label || o.id}
-                                style={{
-                                  color: UI.textSecondary, maxWidth: 160,
-                                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                                }}
-                              >
-                                {o.label || o.id}
-                              </span>
+              <div
+                style={{
+                  border: `1px solid ${UI.border}`,
+                  borderRadius: 8,
+                  height: legendHeight,
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 16, paddingBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
+                  {typeGroups.map(({ type, laneCount }) => {
+                    const collapsed = collapsedTypes.has(type);
+                    const tColor = typeColor[type];
+                    // Height matches the lanes in the grid: laneCount * laneHeight + (laneCount - 1) * gap
+                    const groupHeight = collapsed
+                      ? typeLaneHeight
+                      : laneCount * typeLaneHeight + (laneCount - 1) * 12;
+                    return (
+                      <div
+                        key={type}
+                        style={{
+                          border: `1px solid ${UI.border}`,
+                          borderRadius: 8,
+                          padding: 8,
+                          height: `${groupHeight}px`,
+                          display: "flex",
+                          alignItems: collapsed ? "center" : "flex-start"
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{
+                              height: 12,
+                              width: 12,
+                              borderRadius: 3,
+                              background: collapsed ? UI.textSecondary : tColor,
+                              opacity: collapsed ? 0.5 : 1
+                            }} />
+                            <div style={{
+                              fontSize: 14,
+                              fontWeight: 600,
+                              color: collapsed ? UI.textSecondary : UI.textPrimary,
+                              opacity: collapsed ? 0.5 : 1
+                            }}>
+                              {type} {laneCount > 1 && `(${laneCount})`}
                             </div>
-                          ))}
+                          </div>
+                          <Button
+                            size="sm" variant="ghost" onClick={() => toggleType(type)}
+                            title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
+                          >
+                            {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
+                          </Button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -471,147 +767,112 @@ function VariantRow({
                   borderRadius: 8,
                   overflow: "auto",
                   width: "100%",
-                  marginTop: 25   
               }}
               aria-label={`Variant ${v.id} visualization`}
             >
-              <div style={{ minWidth: "100%", height: visibleRowCount * laneHeight + GUTTER }}>
+              <div style={{ minWidth: "100%", height: legendHeight, paddingTop: 16, paddingBottom: 16 }}>
                 <div
                   style={{
                     position: "absolute",
-                    top: GUTTER,
+                    top: 16,
                     left: GUTTER,
                     right: 0,
-                    bottom: 0,
+                    bottom: 16,
                     display: "grid",
                     gridTemplateColumns: gridTemplateCols,
-                    gridAutoRows: `${laneHeight}px`,
+                    gridAutoRows: `${typeLaneHeight}px`,
                     columnGap: "12px",
+                    rowGap: "12px",
                   }}
                 >
-                  {/* lane lines */}
-                  {(() => {
-                    const acc: { row: number; els: React.ReactNode[] } = { row: 0, els: [] };
-                    for (const [type, objs] of lanesByType) {
-                      const collapsed = collapsedTypes.has(type);
-                      if (!collapsed) {
-                        for (const o of objs) {
-                          acc.row += 1;
-                          acc.els.push(
+                  {/* events - one lane per object instance */}
+                  {lanes.map((lane, laneIdx) => {
+                    if (collapsedTypes.has(lane.type)) return null;
+
+                    // Get events for this specific lane
+                    const events = laneEvents.get(lane.index) || [];
+
+                    // Calculate grid row accounting for collapsed type groups
+                    const gridRow = getRowForLane(laneIdx);
+
+                    return events.map((ev, i) => {
+                      const colStart = ev.xStart + 1;
+                      const span = Math.max(1, ev.xEnd - ev.xStart + 1);
+                      const isShared = ev.objectIds.length > 1;
+                      const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
+                      const background = gradientFor(objects, typeColor, ev.objectIds);
+                      const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nLane: ${lane.index} (${lane.type})\nPos: [${ev.xStart}..${ev.xEnd}]`;
+                      const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
+
+                      return (
+                        <div
+                          key={`lane-${lane.index}-${ev.id}-${i}`}
+                          title={title}
+                          style={{
+                            gridColumn: `${colStart} / span ${span}`,
+                            gridRow: `${gridRow}`,
+                            background,
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            position: "relative",
+                            userSelect: "none",
+                            fontSize: 12,
+                            clipPath: chevronClip(tipPx),
+                            WebkitClipPath: chevronClip(tipPx),
+                            overflow: "hidden",
+                            paddingLeft: tipPx,
+                            paddingRight: tipPx,
+                          }}
+                          aria-label={`${label} (${lane.type})${isShared ? " (shared)" : ""}`}
+                        >
+                          {isShared && (
                             <div
-                              key={`lane-${o.id}`}
+                              aria-hidden
                               style={{
-                                gridColumn: `1 / span ${colsCount}`,
-                                gridRow: `${acc.row}`,
-                                borderBottom: `1px dashed ${UI.border}`
-                              }}
-                            />
-                          );
-                        }
-                        acc.row += 1;
-                        acc.els.push(<div key={`gap-${type}`} style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}` }} />);
-                      } else {
-                        acc.row += 1;
-                        acc.els.push(
-                          <div
-                            key={`sep-${type}`}
-                            style={{ gridColumn: `1 / span ${colsCount}`, gridRow: `${acc.row}`, borderBottom: `1px solid ${UI.border}` }}
-                          />
-                        );
-                      }
-                    }
-                    return acc.els;
-                  })()}
-
-                  {/* events */}
-                  {(() => {
-                    const acc: { row: number; els: React.ReactNode[] } = { row: 0, els: [] };
-                    for (const [type, objs] of lanesByType) {
-                      if (collapsedTypes.has(type)) { acc.row += 1; continue; }
-                      for (const o of objs) {
-                        acc.row += 1;
-                        const events = (laneEvents.get(o.id) || []).slice().sort((a, b) => a.xStart - b.xStart);
-                        for (let i = 0; i < events.length; i++) {
-                          const ev = events[i];
-                          const colStart = ev.xStart + 1;
-                          const span = Math.max(1, ev.xEnd - ev.xStart + 1);
-                          const isShared = ev.objectIds.length > 1;
-                          const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
-                          const background = gradientFor(objects, typeColor, ev.objectIds);
-                          const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nPos: [${ev.xStart}..${ev.xEnd}]`;
-
-                          // compute once per event — OUTSIDE JSX
-                          const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
-
-                          acc.els.push(
-                            <div
-                              key={`${o.id}-${ev.id}-${i}`}
-                              title={title}
-                              style={{
-                                gridColumn: `${colStart} / span ${span}`,
-                                gridRow: `${acc.row}`,
-                                background,
-                                color: "#fff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                position: "relative",
-                                userSelect: "none",
-                                fontSize: 12,
+                                position: "absolute",
+                                inset: 0,
+                                opacity: 0.25,
+                                backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
                                 clipPath: chevronClip(tipPx),
                                 WebkitClipPath: chevronClip(tipPx),
-                                overflow: "hidden",
-                                paddingRight: tipPx,
+                                zIndex: 0,
                               }}
-                              aria-label={`${label} on ${o.id}${isShared ? " (shared)" : ""}`}
+                            />
+                          )}
+
+                          <span
+                            style={{
+                              padding: "2px 8px",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              position: "relative",
+                              zIndex: 1,
+                            }}
+                          >
+                            {label}
+                          </span>
+
+                          {isShared && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                right: Math.max(4, Math.round(tipPx * 0.8)),
+                                top: 4,
+                                fontSize: 10,
+                                opacity: 0.8,
+                              }}
+                              aria-hidden
                             >
-                              {isShared && (
-                                <div
-                                  aria-hidden
-                                  style={{
-                                    position: "absolute",
-                                    inset: 0,
-                                    opacity: 0.25,
-                                    backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
-                                    clipPath: chevronClip(tipPx),
-                                    WebkitClipPath: chevronClip(tipPx),
-                                  }}
-                                />
-                              )}
-
-                              <span
-                                style={{
-                                  padding: "2px 8px",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {label}
-                              </span>
-
-                              {isShared && (
-                                <div
-                                  style={{
-                                    position: "absolute",
-                                    right: Math.max(4, Math.round(tipPx * 0.8)), // nudge away from the chevron tip
-                                    top: 4,
-                                    fontSize: 10,
-                                    opacity: 0.8,
-                                  }}
-                                  aria-hidden
-                                >
-                                  ⇄
-                                </div>
-                              )}
+                              ⇄
                             </div>
-                          );
-                        }
-                      }
-                      acc.row += 1;
-                    }
-                    return acc.els;
-                  })()}
+                          )}
+                        </div>
+                      );
+                    });
+                  })}
                 </div>
               </div>
             </div>
@@ -628,10 +889,13 @@ function gradientFor(
   objectIds: string[]
 ): string {
   const colors = objectIds.map((oid) => {
-    const obj = objects.find((o) => o.id === oid);
+    // Extract type from objectId (format: "type::item" -> "item")
+    const typeFromId = oid.startsWith("type::") ? oid.slice(6) : oid;
+    // Find object by type instead of ID (IDs may have different formats)
+    const obj = objects.find((o) => o.type === typeFromId);
     const base = obj ? typeColor[obj.type] : UI.textSecondary;
-    const siblings = objects.filter((o) => o.type === (obj ? obj.type : ""));
-    const idx = obj ? siblings.findIndex((o) => o.id === oid) : 0;
+    const siblings = objects.filter((o) => o.type === typeFromId);
+    const idx = siblings.length > 0 ? 0 : 0; // Use first sibling's shade
     return shade(base, 0.15 * (idx % 5));
   });
   if (colors.length <= 1) return colors[0] || UI.textSecondary;

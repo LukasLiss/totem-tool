@@ -1,5 +1,5 @@
-import { ChevronRight, Plus, FileStack, Settings2 } from "lucide-react"
-import React, { useContext, useEffect, useState } from 'react'
+import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
+import { useContext,  useState } from 'react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,17 +29,20 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { addDashboard, deleteDashboard, getDashboards, renameDashboard } from "@/api/dashboardApi"
+import { toast } from "sonner"
+import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
+import { useNavigate } from "react-router-dom";
+
+
+
 
 export function NavDashboard({
   dashboards,
@@ -48,13 +51,14 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
-  const { setSelectedDashboard } = useContext(DashboardContext);
+  const { setViewMode } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
   const [ openDelete, setOpenDelete ] = useState(false);
   const [dashboardToRename, setDashboardToRename] = useState<null | { id: number; name: string }>(null);
   const [dashboardToDelete, setDashboardToDelete] = useState<null | { id: number; name: string }>(null);
+  const navigate = useNavigate()
 
 
 
@@ -68,11 +72,18 @@ export function NavDashboard({
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (err) {
-      console.error("Upload failed:", err);
-      alert("Upload failed");
+    } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Upload failed:", error);
+      toast.error("Dashboard could not be created");
     }
   };
+};
 
   const handleChangeName = async () => {
   if (!dashboardToRename) return; // nothing selected
@@ -84,18 +95,18 @@ export function NavDashboard({
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (err) {
-    console.error("Rename failed:", err);
-    alert("Rename failed");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Rename failed:", error);
+      toast.error("Dashboard could not be renamed");
+    }
+  };
 };
-
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    await handleAddDashboard();
-    await fetchDashboards();
- };
 
   const handleDeleteDashboard = async () => {
 
@@ -105,10 +116,17 @@ export function NavDashboard({
     await refreshDashboards();
     setOpenDelete(false);
     setDashboardToDelete(null); // reset
-  } catch (err) {
-    console.error("Delete failed:", err);
-    alert("Delete failed");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Delete failed:", error);
+      toast.error("Dashboard could not be deleted");
+    }
+  };
 };
 
 
@@ -137,9 +155,12 @@ export function NavDashboard({
                       <SidebarMenuSubButton className="flex w-full items-center justify-between"
                       onClick={() => {
                         console.log("Dashboard clicked:", dashboard);
-                        setSelectedDashboard(dashboard);
+                        setViewMode({ type: 'dashboard', id: dashboard.id });
                       }}>
-                        <span>{dashboard.name}</span>
+                        <span className="flex-1 truncate"
+                        title={dashboard.name}
+
+                        >{dashboard.name}</span>
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -174,10 +195,11 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton asChild>
+                    <SidebarMenuSubButton className="flex w-full items-center justify-between">
                       <Dialog open={open} onOpenChange={setOpen}>
-                        <DialogTrigger>
-                          Add Dashboard +
+                        <DialogTrigger className="pr-9 hover:bg-accent rounded flex w-full items-center justify-between">
+                          <Plus className="w-4 h-4"/>
+                          <span >Add Dashboard</span>
                         </DialogTrigger>
                         <DialogContent className="sm:max-w-[425px]">
                           <form
@@ -255,6 +277,7 @@ export function NavDashboard({
                   value={dashboardname}
                   onChange={(e) => setDashboardname(e.target.value)}
                   placeholder={dashboardToRename?.name || "Dashboard Name"}
+                  maxLength={100}
                 />
               </div>
             </div>

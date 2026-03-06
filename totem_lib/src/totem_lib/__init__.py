@@ -21,6 +21,7 @@ __all__ = [
     "discover_oc_petri_net_polars",
     "filter_dead_objects",
     "import_ocel",
+    "mlpaDiscovery",
     "ObjectCentricEventLog",
     "OCCausalNet",
     "OCCausalNetSemantics",

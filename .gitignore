@@ -5,6 +5,9 @@ tests
 totem_lib/src/totem_lib/old_ocvariants.py
 totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
+.gitignore
+*.md
+*.txt
 
 # Reinclude totem_lib tests
 !totem_lib/tests/
@@ -63,10 +66,9 @@ __pycache__/
 backend/venv/
 backend/env/
 backend/user_files/*
-!backend/user_files/guest/
-!backend/user_files/guest/ContainerLogistics.json
-!backend/user_files/guest/ContainerLogistics.sqlite
-!backend/user_files/guest/ContainerLogistics.xml
+!backend/user_files/ContainerLogistics.json
+!backend/user_files/ContainerLogistics.sqlite
+!backend/user_files/ContainerLogistics.xml
 .venv/
 .env/
 
@@ -101,6 +103,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+!totem_backend.spec
 
 # Unit test / coverage reports
 htmlcov/
@@ -132,6 +135,9 @@ electron/*.zip
 # Visual Studio Code
 .vscode/
 *.code-workspace
+
+# Claude Code CLI
+.claude/
 
 # JetBrains IDEs
 .idea/
@@ -241,3 +247,4 @@ test-*.md
 # Batch files (uncomment if you don't want to track them)
 # *.bat
 
+highwayimplementation.md

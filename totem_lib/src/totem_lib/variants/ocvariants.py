@@ -98,7 +98,7 @@ def calculate_layout(variant, ocel):
     for obj in obj_details:
         y_mappings[obj["id"]] = y_counter
         lane_info[y_counter] = {
-            "id": f"type::{obj['type']}",
+            "id": f"lane::{y_counter}::{obj['type']}",  # Unique ID per lane
             "type": obj["type"],
             "label": obj["type"],
         }
@@ -109,13 +109,8 @@ def calculate_layout(variant, ocel):
 
     # Final Serialization: Build the lists for the JSON response.
     nodes = []
-    unique_lanes = []
-    seen_lane_ids = set()
-    for lane in lane_info.values():
-        if lane["id"] not in seen_lane_ids:
-            unique_lanes.append(lane)
-            seen_lane_ids.add(lane["id"])
-    objects_for_lanes = unique_lanes
+    # Each lane is unique (one per object instance), so include all of them
+    objects_for_lanes = [lane_info[i] for i in range(len(lane_info))]
 
     for node_id, data in G.nodes(data=True):
         object_ids_for_node = set()
@@ -170,8 +165,8 @@ def find_variants_naive(ocel: ObjectCentricEventLog, leading_type: str) -> Varia
             for obj_id in row["_objects"]:
                 object_to_events[obj_id].append(row["_eventId"])
 
-    leading_object_ids = ocel.object_df.filter(
-        ocel.object_df["_objType"] == leading_type
+    leading_object_ids = ocel.objects.filter(
+        ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
     print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
@@ -279,8 +274,8 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
             for obj_id in row["_objects"]:
                 object_to_events[obj_id].append(row["_eventId"])
 
-    leading_object_ids = ocel.object_df.filter(
-        ocel.object_df["_objType"] == leading_type
+    leading_object_ids = ocel.objects.filter(
+        ocel.objects["_objType"] == leading_type
     )["_objId"].to_list()
 
     print(f"✅ [Step 1/4] Graph & Lookups Built in: {time.time() - t0:.2f} seconds")
