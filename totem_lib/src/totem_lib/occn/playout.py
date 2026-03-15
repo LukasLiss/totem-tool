@@ -2,9 +2,11 @@ import random
 from typing import Counter, Dict, Iterator, Tuple, Union
 
 import pandas as pd
-from totem_lib import ObjectCentricEventLog
+from totem_lib import ObjectCentricEventLog, convert_pm4py_to_ocel_polars
 from . import OCCausalNet, OCCausalNetState, OCCausalNetSemantics
 from .semantics import Sequence, Binding
+from pm4py import OCEL
+from pm4py.objects.ocel.obj import Parameters as OCEL_Parameters
 
 
 # Marks the final state in a state space exploration
@@ -131,7 +133,7 @@ def occn_playout(
 
     # == Phase 3: Return data in the desired format ==
     if return_ocel:
-        _valid_sequences_to_ocel(valid_sequences_iter, id_to_activity, id_to_object_type, make_objects_unique_per_sequence) 
+        return _valid_sequences_to_ocel(valid_sequences_iter, make_objects_unique_per_sequence) 
     else:
         return valid_sequences_iter
     
@@ -490,7 +492,7 @@ def _reconstruct_sequences(state_key: tuple, memo: dict, idx_to_act: dict, idx_t
             yield (convert_ids_to_names(binding),) + sub_sequence
             
             
-def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, objects_unique_per_sequence):
+def _valid_sequences_to_ocel(valid_sequences_iter, objects_unique_per_sequence):
     """
     Converts the valid sequences of bindings into an OCEL object.
 
@@ -498,10 +500,6 @@ def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, object
     ----------
     valid_sequences_iter : iter
         An iterator over valid sequences of bindings, where each sequence is a tuple of Binding objects
-    idx_to_act : dict
-        Mapping from indices to activity names
-    idx_to_ot : dict
-        Mapping from indices to object types
     objects_unique_per_sequence : bool
         If True, objects in the resulting OCEL are made unique per sequence. 
         This means that if an object 'o1' of type 'order' is used in multiple sequences, 
@@ -513,8 +511,12 @@ def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, object
     ObjectCentricEventLog
         The resulting OCEL object.
     """
-    raise NotImplementedError("Verify ObjectCentricEventLog implementation; then adapt this function to use it instead of PM4Py OCEL.")
-    # Convert all found traces to OCEL format
+    # Convert all found traces to PM4Py OCEL format, then convert to Polars OCEL
+    event_id_column = "ocel:eid"
+    event_activity = "ocel:activity"
+    event_timestamp = "ocel:timestamp"
+    object_id_column = "ocel:oid"
+    object_type_column = "ocel:otype"
 
     # Create the OCEL object
     events_list = []
@@ -532,11 +534,9 @@ def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, object
     for sequence in valid_sequences_iter:
         # For each sequence, create events and objects
         for binding in sequence:
-            activity_id = binding[0]
+            act = binding[0]
             consumed = binding[1]
             produced = binding[2]
-
-            act = idx_to_act[activity_id]
 
             # do not add START / END activities
             if act.startswith("START_") or act.startswith("END_"):
@@ -558,8 +558,7 @@ def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, object
             # Create objects and relations
             # consumed and produced contain the same objects; we only need to create them once
             for _, ot_to_obj in consumed:
-                for ot_id, objects in ot_to_obj:
-                    obj_type = idx_to_ot[ot_id]
+                for obj_type, objects in ot_to_obj:
                     for obj_id in objects:
                         if objects_unique_per_sequence:
                             obj_id = f"{obj_id}_{object_id_counter}"
@@ -592,10 +591,16 @@ def _valid_sequences_to_ocel(valid_sequences_iter, idx_to_act, idx_to_ot, object
     relations_df = pd.DataFrame(relations_list)
 
     # Create the OCEL object
-    ocel = OCEL(
+    ocel_pm4py = OCEL(
         events=events_df,
         objects=objects_df,
         relations=relations_df,
+        parameters={
+            OCEL_Parameters.OBJECT_TYPE: "ocel:otype"
+        }
     )
+    
+    # convert to polars
+    ocel = convert_pm4py_to_ocel_polars(ocel_pm4py)
 
     return ocel

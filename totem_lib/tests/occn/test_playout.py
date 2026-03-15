@@ -26,6 +26,9 @@ def test_playout_occn_extensive(orders, expected_count):
     valid_sequences_iter = occn_playout(occn, objects, max_bindings_per_activity=3)
     valid_sequences = list(valid_sequences_iter)
     assert len(valid_sequences) == expected_count
+    
+    ocel = occn_playout(occn, objects, max_bindings_per_activity=3, return_ocel=True, make_objects_unique_per_sequence=True)
+    assert ocel.events.height == expected_count * 3 * len(orders) # activity a, b, c for every object
 
 def test_playout_occn_extensive_bf_limited():
         occn = occn_ABC()
