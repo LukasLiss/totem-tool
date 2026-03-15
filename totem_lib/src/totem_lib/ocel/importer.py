@@ -142,7 +142,7 @@ def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
         timestamp_unix = None
         if timestamp_str:
             try:
-                timestamp_unix = int(pl.Series([timestamp_str]).str.to_datetime().dt.epoch(time_unit="s")[0])
+                timestamp_unix = int(pl.Series([timestamp_str]).str.to_datetime(time_zone="UTC").dt.epoch(time_unit="s")[0])
             except Exception:
                 timestamp_unix = 0
 
@@ -365,7 +365,7 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+        pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime")
     )
     df = df.with_columns(
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
@@ -479,7 +479,7 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+        pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime")
     )
     df = df.with_columns(
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
@@ -576,9 +576,9 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
     # convert timestamp to epoch seconds
     df = df.with_columns(
         [
-            pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime"),
+            pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime"),
             pl.col("_timestamp_str")
-            .str.to_datetime()
+            .str.to_datetime(time_zone="UTC")
             .dt.epoch(time_unit="s")
             .alias("_timestampUnix"),
         ]
