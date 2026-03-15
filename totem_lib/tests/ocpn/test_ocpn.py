@@ -2,13 +2,7 @@ import pytest
 from totem_lib import (
     import_ocel,
     discover_ocpn,
-    ocpns_are_similar,
-    convert_ocel_polars_to_pm4py,
-    filter_dead_objects,
 )
-from totem_lib.ocel import schema_base_filtering, propagate_filtering
-import pm4py
-import os
 
 OCEL_FILES = [
     "example_data/ContainerLogistics.json",
