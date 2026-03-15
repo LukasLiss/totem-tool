@@ -15,7 +15,7 @@ from .occn import (
 )
 from .dfg import OCDFG, CCDFG
 from .variants import calculate_layout
-from .transformations import occn_to_ocpn
+from .transformations import occn_to_ocpn, ocpn_to_occn
 
 # Should be kept alphabetically sorted.
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
@@ -37,6 +37,7 @@ __all__ = [
     "occn_to_ocpn",
     "OCDFG",
     "OCPetriNet",
+    "ocpn_to_occn",
     "OCMarking",
     "ocpns_are_similar",
     "mlpaDiscovery",
