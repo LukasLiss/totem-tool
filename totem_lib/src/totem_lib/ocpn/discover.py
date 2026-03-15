@@ -1,6 +1,6 @@
 from pm4py import discover_oc_petri_net
 from totem_lib import convert_ocel_polars_to_pm4py, ObjectCentricEventLog
-from .factory import create_from_dict
+from .pm4py_adapter import from_pm4py_dict
 
 
 def discover_ocpn(ocel: ObjectCentricEventLog):
@@ -20,5 +20,5 @@ def discover_ocpn(ocel: ObjectCentricEventLog):
     """
     pm4py_ocel = convert_ocel_polars_to_pm4py(ocel)
     oc_petri_net_dict = discover_oc_petri_net(pm4py_ocel)
-    ocpn = create_from_dict(oc_petri_net_dict)
+    ocpn = from_pm4py_dict(oc_petri_net_dict)
     return ocpn

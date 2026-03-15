@@ -496,7 +496,7 @@ class OCPetriNet():
             src.out_arcs.add(a_copy)
             tgt.in_arcs.add(a_copy)
             new_net.arcs.add(a_copy)
-            memodict[id(a)] = a_copy1
+            memodict[id(a)] = a_copy
 
         def copy_marking(marking):
             if marking is None:
