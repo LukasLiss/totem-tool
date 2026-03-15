@@ -2,7 +2,7 @@ import pytest
 import totem_lib
 import pandas as pd
 import polars as pl
-from pandas.api.types import is_datetime64_any_dtype
+from pandas.api.types import is_datetime64_any_dtype, is_string_dtype, is_object_dtype
 
 OCEL_FILES = [
     "example_data/ContainerLogistics.json",
@@ -42,6 +42,11 @@ def test_columns(loaded_ocel):
                     errors.append(
                         f"Column '{col_name}' is {df[col_name].dtype}, expected datetime"
                     )
+                    
+            # String cols are object in Pandas<3.0.0 but string in Pandas>=3.0.0. We allow both here
+            elif expected_type is object:
+                if not (is_object_dtype(df[col_name]) or is_string_dtype(df[col_name])):
+                    errors.append(f"Column '{col_name}' is {df[col_name].dtype}, expected object or string")
 
             # Check for other types
             else:
