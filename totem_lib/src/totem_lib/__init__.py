@@ -5,7 +5,7 @@ from .ocel import (
     filter_dead_objects,
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
-from .ocpn import ocpns_are_similar, discover_ocpn
+from .ocpn import ocpns_are_similar, discover_ocpn, OCPetriNet, OCMarking
 from .occn import (
     OCCausalNet,
     OCCausalNetState,
@@ -34,6 +34,8 @@ __all__ = [
     "OCCausalNetState",
     "occn_playout",
     "OCDFG",
+    "OCPetriNet",
+    "OCMarking",
     "ocpns_are_similar",
     "mlpaDiscovery",
     "Totem",
