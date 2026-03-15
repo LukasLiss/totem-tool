@@ -2,7 +2,7 @@ from totem_lib import (
     import_ocel,
     totemDiscovery,
     mlpaDiscovery,
-    discover_oc_petri_net_polars,
+    discover_ocpn,
 )
 import cProfile
 
@@ -40,5 +40,5 @@ print("\n\n\n-------------------- MLPA Discovery --------------------")
 view = mlpaDiscovery(totem)
 # cProfile.run('mlpaDiscovery(ocel)')
 
-ocpn = discover_oc_petri_net_polars(ocel)
+ocpn = discover_ocpn(ocel)
 print("done")

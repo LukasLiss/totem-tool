@@ -2,11 +2,17 @@ from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
     convert_ocel_polars_to_pm4py,
-    filter_dead_objects
+    filter_dead_objects,
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
-from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
-from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics, discover_occn, occn_playout
+from .ocpn import ocpns_are_similar, discover_ocpn
+from .occn import (
+    OCCausalNet,
+    OCCausalNetState,
+    OCCausalNetSemantics,
+    discover_occn,
+    occn_playout,
+)
 from .dfg import OCDFG, CCDFG
 from .variants import calculate_layout
 
@@ -18,7 +24,7 @@ __all__ = [
     "CCDFG",
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
-    "discover_oc_petri_net_polars",
+    "discover_ocpn",
     "filter_dead_objects",
     "import_ocel",
     "mlpaDiscovery",

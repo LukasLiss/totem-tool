@@ -2,7 +2,7 @@ import pm4py
 import os
 from totem_lib import (
     import_ocel,
-    discover_oc_petri_net_polars,
+    discover_ocpn,
     ocpns_are_similar,
     convert_ocel_polars_to_pm4py,
 )

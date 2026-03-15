@@ -1,2 +1,2 @@
-from .ocpn import discover_oc_petri_net_polars
+from .discover import discover_ocpn
 from .utils import ocpns_are_similar, compare_ocpns
