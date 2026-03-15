@@ -2,6 +2,7 @@ from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
     convert_ocel_polars_to_pm4py,
+    convert_pm4py_to_ocel_polars,
     filter_dead_objects,
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
@@ -30,6 +31,7 @@ __all__ = [
     "calculate_layout",
     "CCDFG",
     "convert_ocel_polars_to_pm4py",
+    "convert_pm4py_to_ocel_polars",
     "discover_occn",
     "discover_ocpn",
     "filter_dead_objects",
