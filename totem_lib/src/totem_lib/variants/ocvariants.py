@@ -376,6 +376,109 @@ def find_variants(ocel: ObjectCentricEventLog, leading_type: str) -> Variants:
 
     return Variants(variant_list)
 
+def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Variants:
+    """
+    Computes Object Centric Variants based on Connected Components.
+
+    Steps:
+    1. Build object graph + object→events lookup.
+    2. Extract EOG graph per component
+    3. Group to variants by normalized signature 
+    4. Sort by support and return.
+    """
+    total_start_time = time.time()
+    print("--- Starting OC Variant Discovery (Connected Components) ---")
+
+    # STEP 1: build object co-occurrence graph & object→events lookup
+    t0 = time.time()
+    eog = ocel.eog
+    object_graph = nx.Graph()
+    object_to_events: Dict[str, List[str]] = defaultdict(list)
+
+    for row in ocel.events.iter_rows(named=True):
+        objs = row["_objects"]
+        eid = row["_eventId"]
+
+        for o in objs:
+            if not object_graph.has_node(o):
+                object_graph.add_node(o, type=ocel.obj_type_map.get(o))
+            object_to_events[o].append(eid)
+
+        if len(objs) > 1:
+            for u, v in itertools.combinations(objs, 2):
+                object_graph.add_edge(u, v)
+
+    print(f"✅ [Step 1/4] Object graph built with {object_graph.number_of_nodes()} nodes in {time.time() - t0:.2f}s")
+
+    # STEP 2: extract EOG subgraph per connected component
+    t1 = time.time()
+    connected_components = list(nx.connected_components(object_graph))
+
+    process_executions: List[nx.DiGraph] = []
+    for comp in connected_components:
+        event_ids: Set[str] = set()
+        for obj_id in comp:
+            event_ids.update(object_to_events[obj_id])
+
+        if event_ids:
+            process_execution_graph = eog.subgraph(event_ids).copy()
+            if process_execution_graph.number_of_nodes() > 0:
+                process_executions.append(process_execution_graph)
+
+    print(f"✅ [Step 2/4] Found {len(process_executions)} process executions in {time.time() - t1:.2f}s")
+
+ 
+    # STEP 3: group instances by normalized EOG signature
+    t2 = time.time()
+    normalize_label = lambda label: label.split("_")[0]
+    variants_by_signature: Dict[str, Dict] = {}
+
+    for process_exec_graph in process_executions:
+        print(process_exec_graph.nodes(data=True))
+        node_labels = sorted(
+            [normalize_label(d["label"]) for _, d in process_exec_graph.nodes(data=True)]
+        )
+        edge_tuples = sorted([
+            (
+                normalize_label(process_exec_graph.nodes[u]["label"]),
+                normalize_label(process_exec_graph.nodes[v]["label"]),
+                d["type"],
+            )
+            for u, v, d in process_exec_graph.edges(data=True)
+        ])
+        signature = f"nodes:{'|'.join(node_labels)};edges:{'|'.join(map(str, edge_tuples))}"
+
+        if signature not in variants_by_signature:
+            variants_by_signature[signature] = {
+                "graph": process_exec_graph,
+                "support": 1,
+                "executions": [list(process_exec_graph.nodes())],
+            }
+        else:
+            variants_by_signature[signature]["support"] += 1
+            variants_by_signature[signature]["executions"].append(list(process_exec_graph.nodes()))
+
+    print(f"✅ [Step 3/4] Grouped into {len(variants_by_signature)} variants in {time.time() - t2:.2f}s")
+
+    # STEP 4: final formatting and sorting
+    t3 = time.time()
+    variant_list: List[Variant] = []
+    for i, data in enumerate(variants_by_signature.values()):
+        variant_list.append(
+            Variant(
+                vid=f"variant_{i}",
+                support=data["support"],
+                executions=data["executions"],
+                graph=data["graph"],
+            )
+        )
+
+    variant_list.sort(key=lambda v: v.support, reverse=True)
+    print(f"✅ [Step 4/4] Final formatting in {time.time() - t3:.2f}s")
+    print("--- OC Variant Discovery Complete ---")
+    print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
+
+    return Variants(variant_list)
 
 if __name__ == "__main__":
     import polars as pl
