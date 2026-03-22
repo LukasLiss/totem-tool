@@ -460,9 +460,16 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
         raise e
 
     # Post-processing in Polars
-    df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
-    )
+    ts_dtype = df.schema["_timestamp_str"]
+    if ts_dtype == pl.Utf8 or ts_dtype == pl.String:
+        df = df.with_columns(
+            pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+        )
+    else:
+        df = df.with_columns(
+            pl.col("_timestamp_str").alias("_timestamp_datetime")
+        )
+        
     df = df.with_columns(
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
     ).drop(["_timestamp_str", "_timestamp_datetime"])
