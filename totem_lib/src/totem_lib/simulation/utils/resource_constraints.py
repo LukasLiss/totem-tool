@@ -44,14 +44,16 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
                 for act, event_ids in activity_to_events.items()
             }
 
-            for (act1, act2) in itertools.permutations(activity_to_resource_counts.keys(), 2):
+            activities = list(activity_to_resource_counts.keys())
+            pairs = list(itertools.permutations(activities, 2)) + [(act, act) for act in activities]
+            for (act1, act2) in pairs:
                 key = (act1, act2)
                 for rs1, count1 in activity_to_resource_counts[act1].items():
                     for rs2, count2 in activity_to_resource_counts[act2].items():
                         # Compare resource sets and update vector counts based on their relationship
                         pairs = count1 * count2
 
-                        # Vector indices: [same_resource, 1subsetof2, different_resource, Not_defined]
+                        # Vector indices: [same_resource, 1subsetof2, disjoint, Not_defined]
                         # same_resource: A\B = {} and B\A = {} (sets are equal)
                         if not (rs1 - rs2) and not (rs2 - rs1):
                             process_exec_analysis_dict[key][0] += pairs
@@ -60,8 +62,8 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
                         elif rs1.issubset(rs2):
                             process_exec_analysis_dict[key][1] += pairs
 
-                        # different_resource: A\B != {} or B\A != {} (sets are not equal)
-                        elif (rs1 - rs2) or (rs2 - rs1):
+                        # disjoint: A ∩ B = {} (no shared resources)
+                        elif rs1.isdisjoint(rs2):
                             process_exec_analysis_dict[key][2] += pairs
 
                         # no specific relationship, but still count for correct support calculation
@@ -117,8 +119,8 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
 
             elif (vector[2] / total >= support_threshold_percentage
                     and inverse_vector[2] / inverse_total >= support_threshold_percentage):
-                constraints_for_variant[(act1, act2)] = "different_resource"
-                constraints_for_variant[(act2, act1)] = "different_resource"
+                constraints_for_variant[(act1, act2)] = "disjoint"
+                constraints_for_variant[(act2, act1)] = "disjoint"
                 processed_pairs.add((act2, act1))  # Mark inverse as processed, as it is symmetric
 
         constraints[variant] = constraints_for_variant
