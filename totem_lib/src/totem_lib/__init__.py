@@ -7,7 +7,6 @@ from .ocel import (
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import (
-    ocpns_are_similar,
     discover_ocpn,
     OCPetriNet,
     OCMarking,
@@ -48,7 +47,6 @@ __all__ = [
     "OCPetriNetSemantics",
     "ocpn_to_occn",
     "OCMarking",
-    "ocpns_are_similar",
     "mlpaDiscovery",
     "Totem",
     "totemDiscovery",
