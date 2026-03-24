@@ -1,29 +1,5 @@
-import polars as pl
-
-from totem_lib.ocel.ocel import ObjectCentricEventLog
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
-
-
-def make_ocel(events, objects):
-    return ObjectCentricEventLog(
-        events=pl.DataFrame(events),
-        objects=pl.DataFrame(objects),
-    )
-
-
-def _event(eid, activity, t, objects):
-    return {
-        "_eventId": eid,
-        "_activity": activity,
-        "_timestampUnix": t,
-        "_objects": objects,
-        "_qualifiers": [],
-        "_attributes": "",
-    }
-
-
-def _object(oid, otype):
-    return {"_objId": oid, "_objType": otype, "_targetObjects": [], "_qualifiers": []}
+from tests.assets.ocel_helpers import make_ocel, event as _event, obj as _object
 
 
 def test_two_identical_components_one_variant():
