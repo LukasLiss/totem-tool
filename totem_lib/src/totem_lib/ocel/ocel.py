@@ -607,7 +607,7 @@ class ObjectCentricEventLog:
                 .list.eval(pl.element().filter(pl.element().is_in(resource_object_ids)))
                 .alias("_resources_in_event"),
             ])
-            # Keep only events with more than one object
+            # Keep only events with at least one object
             .filter(pl.col("_kept_objects").list.len() > 0)
             .with_columns([
                 # Add objects column back to Dataframe
