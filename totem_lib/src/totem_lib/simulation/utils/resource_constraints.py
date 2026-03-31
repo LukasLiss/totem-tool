@@ -14,8 +14,8 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
         min_occurrences_across_executions (int): Minimum total vector sum across all executions.
 
     Returns:
-        dict: Keys are Variant objects, values are dicts mapping (act1, act2) to constraint type.
-              Vector indices: [same_resource, 1subsetof2, different_resource, 2subsetof1]
+        dict: Keys are Variant objects, values are dicts mapping activity -> {other_activity: constraint_type}.
+              Constraint types: "same_resource", "subset" (act1 ⊆ act2), "disjoint".
     """
 
     constraints = {}
@@ -70,6 +70,13 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
                         else:
                             process_exec_analysis_dict[key][3] += pairs
 
+            # For self-pairs (act, act): subtract the diagonal — each event paired with itself
+            # is not meaningful for constraint detection (trivially same_resource).
+            for act in activities:
+                key = (act, act)
+                for _rs, count in activity_to_resource_counts[act].items():
+                    process_exec_analysis_dict[key][0] -= count
+
             # Filter: remove entries that not appear at least min_occurrences_within_execution times within process execution
             filtered_exec_dict = {
                 key: vector
@@ -91,7 +98,9 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
         }
 
         # Construct constraints for this variant
-        constraints_for_variant = {}
+        # Format: {activity: {other_activity: constraint_type}}
+        # allows O(1) lookup of all constraints for a given activity during simulation replay
+        constraints_for_variant = defaultdict(dict)
         processed_pairs = set()
         for key, vector in filtered_constraints.items():
             act1, act2 = key
@@ -107,22 +116,23 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
 
             if (vector[0] / total >= support_threshold_percentage
                     and inverse_vector[0] / inverse_total >= support_threshold_percentage):
-                # Same resource
-                constraints_for_variant[(act1, act2)] = "same_resource"
-                constraints_for_variant[(act2, act1)] = "same_resource"
-                processed_pairs.add((act2, act1))  # Mark inverse as processed, as it is symmetric
+                # Same resource (symmetric)
+                constraints_for_variant[act1][act2] = "same_resource"
+                constraints_for_variant[act2][act1] = "same_resource"
+                processed_pairs.add((act2, act1))
 
             elif (vector[1]  + vector[0] / total >= support_threshold_percentage # Subset or Equal
                     and inverse_vector[3] / inverse_total >= support_threshold_percentage):
-                # Subset relation
-                constraints_for_variant[(act1, act2)] = "subset"
+                # Subset relation (act1 resources ⊆ act2 resources)
+                constraints_for_variant[act1][act2] = "subset"
 
             elif (vector[2] / total >= support_threshold_percentage
                     and inverse_vector[2] / inverse_total >= support_threshold_percentage):
-                constraints_for_variant[(act1, act2)] = "disjoint"
-                constraints_for_variant[(act2, act1)] = "disjoint"
-                processed_pairs.add((act2, act1))  # Mark inverse as processed, as it is symmetric
+                # Disjoint (symmetric)
+                constraints_for_variant[act1][act2] = "disjoint"
+                constraints_for_variant[act2][act1] = "disjoint"
+                processed_pairs.add((act2, act1))
 
-        constraints[variant] = constraints_for_variant
+        constraints[variant] = dict(constraints_for_variant)
 
     return constraints

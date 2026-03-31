@@ -33,8 +33,8 @@ def test_same_resource_detected_and_symmetric():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("Load", "Unload")] == "same_resource"
-    assert constraints[("Unload", "Load")] == "same_resource"
+    assert constraints["Load"]["Unload"] == "same_resource"
+    assert constraints["Unload"]["Load"] == "same_resource"
 
 
 def test_disjoint_detected_and_symmetric():
@@ -57,8 +57,8 @@ def test_disjoint_detected_and_symmetric():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("Scan",  "Check")] == "disjoint"
-    assert constraints[("Check", "Scan")]  == "disjoint"
+    assert constraints["Scan"]["Check"] == "disjoint"
+    assert constraints["Check"]["Scan"] == "disjoint"
 
 
 def test_no_constraint_below_support_threshold():
@@ -138,7 +138,7 @@ def test_aggregation_across_executions():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("Load", "Unload")] == "same_resource"
+    assert constraints["Load"]["Unload"] == "same_resource"
 
 
 def test_subset_detected():
@@ -161,7 +161,7 @@ def test_subset_detected():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("A", "B")] == "subset"
+    assert constraints["A"]["B"] == "subset"
 
 
 def test_empty_resources_treated_as_empty_set():
@@ -183,7 +183,7 @@ def test_empty_resources_treated_as_empty_set():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("A", "B")] == "same_resource"
+    assert constraints["A"]["B"] == "same_resource"
 
 
 def test_same_activity_same_resource_within_execution():
@@ -206,7 +206,7 @@ def test_same_activity_same_resource_within_execution():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("Load", "Load")] == "same_resource"
+    assert constraints["Load"]["Load"] == "same_resource"
 
 
 def test_same_activity_different_resource_within_execution():
@@ -229,4 +229,4 @@ def test_same_activity_different_resource_within_execution():
                                            min_occurrences_across_executions=1)
 
     constraints = result[variant]
-    assert constraints[("Load", "Load")] == "disjoint"
+    assert constraints["Load"]["Load"] == "disjoint"
