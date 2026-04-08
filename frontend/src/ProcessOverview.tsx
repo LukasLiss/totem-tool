@@ -1,11 +1,11 @@
-import { AppSidebar } from "@/components/app-sidebar"
+import { AppSidebar } from "@/components/AppSidebar"
 import { useContext } from "react";
 import {
   SidebarInset,
   SidebarProvider,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "./contexts/DashboardContext"
-import { DevDashboard } from "./components/dev_dashboard";
+import { DevDashboard } from "./components/DevDashboard";
 import { AnalysisView } from "./components/AnalysisView";
 import Grid from './components/grid';
 

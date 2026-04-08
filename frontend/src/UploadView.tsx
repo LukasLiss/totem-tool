@@ -1,5 +1,5 @@
-import {FileUploadValidator} from './react_component/fileuploadvalidator';
-import UserFileSelect from './react_component/userfileselect';
+import {FileUploadValidator} from './react_component/FileUploadValidator';
+import UserFileSelect from './react_component/UserfileSelect';
 
 
 export function UploadView(){

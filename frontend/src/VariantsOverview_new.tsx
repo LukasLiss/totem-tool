@@ -1,4 +1,4 @@
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppSidebar } from "@/components/AppSidebar";
 import React, { useState, useContext, useEffect } from "react";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import VariantsExplorer, { type Variant } from "./react_component/VariantsExplorer";
