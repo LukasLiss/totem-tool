@@ -36,6 +36,10 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
 
     activities_set = set(activities)
 
+    if ocel.events.is_empty():
+        print("Error: Cannot compute resource cooldown distribution on an empty event log.")
+        return {}
+
     sorted_events = ocel.events.sort("_timestampUnix")
 
     for row in sorted_events.iter_rows(named=True):
