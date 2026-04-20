@@ -2,7 +2,7 @@ import networkx as nx
 
 from totem_lib.variants.ocvariants import Variant, Variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
-from tests.assets.ocel_helpers import make_ocel as _make_ocel, event as _event, obj as _object
+from tests.assets.ocel_helpers import make_ocel as _make_ocel, event as _event
 
 
 def _variant(executions):
@@ -20,10 +20,10 @@ def test_same_resource_detected_and_symmetric():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   1, ["r1", "r2"]),
-            _event("e2", "Unload", 2, ["r1", "r2"]),
+            _event("e1", "Load",   1, [], ["r1", "r2"]),
+            _event("e2", "Unload", 2, [], ["r1", "r2"]),
         ],
-        [_object("r1", "resources"), _object("r2", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 
@@ -44,10 +44,10 @@ def test_disjoint_detected_and_symmetric():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Scan",  1, ["r1"]),
-            _event("e2", "Check", 2, ["r2"]),
+            _event("e1", "Scan",  1, [], ["r1"]),
+            _event("e2", "Check", 2, [], ["r2"]),
         ],
-        [_object("r1", "resources"), _object("r2", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 
@@ -69,16 +69,16 @@ def test_no_constraint_below_support_threshold():
     ocel = _make_ocel(
         [
             # execution 0: same
-            _event("e1", "A", 1, ["r1"]),
-            _event("e2", "B", 2, ["r1"]),
+            _event("e1", "A", 1, [], ["r1"]),
+            _event("e2", "B", 2, [], ["r1"]),
             # execution 1: different
-            _event("e3", "A", 3, ["r1"]),
-            _event("e4", "B", 4, ["r2"]),
+            _event("e3", "A", 3, [], ["r1"]),
+            _event("e4", "B", 4, [], ["r2"]),
             # execution 2: different
-            _event("e5", "A", 5, ["r1"]),
-            _event("e6", "B", 6, ["r2"]),
+            _event("e5", "A", 5, [], ["r1"]),
+            _event("e6", "B", 6, [], ["r2"]),
         ],
-        [_object("r1", "resources"), _object("r2", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"], ["e3", "e4"], ["e5", "e6"]])
 
@@ -98,10 +98,10 @@ def test_filtered_by_min_occurrences_within_execution():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "A", 1, ["r1"]),
-            _event("e2", "B", 2, ["r1"]),
+            _event("e1", "A", 1, [], ["r1"]),
+            _event("e2", "B", 2, [], ["r1"]),
         ],
-        [_object("r1", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 
@@ -121,14 +121,14 @@ def test_aggregation_across_executions():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   1, ["r1"]),
-            _event("e2", "Unload", 2, ["r1"]),
-            _event("e3", "Load",   3, ["r1"]),
-            _event("e4", "Unload", 4, ["r1"]),
-            _event("e5", "Load",   5, ["r1"]),
-            _event("e6", "Unload", 6, ["r1"]),
+            _event("e1", "Load",   1, [], ["r1"]),
+            _event("e2", "Unload", 2, [], ["r1"]),
+            _event("e3", "Load",   3, [], ["r1"]),
+            _event("e4", "Unload", 4, [], ["r1"]),
+            _event("e5", "Load",   5, [], ["r1"]),
+            _event("e6", "Unload", 6, [], ["r1"]),
         ],
-        [_object("r1", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"], ["e3", "e4"], ["e5", "e6"]])
 
@@ -148,10 +148,10 @@ def test_subset_detected():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "A", 1, ["r1"]),
-            _event("e2", "B", 2, ["r1", "r2"]),
+            _event("e1", "A", 1, [], ["r1"]),
+            _event("e2", "B", 2, [], ["r1", "r2"]),
         ],
-        [_object("r1", "resources"), _object("r2", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 
@@ -193,10 +193,10 @@ def test_same_activity_same_resource_within_execution():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load", 1, ["r1"]),
-            _event("e2", "Load", 2, ["r1"]),
+            _event("e1", "Load", 1, [], ["r1"]),
+            _event("e2", "Load", 2, [], ["r1"]),
         ],
-        [_object("r1", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 
@@ -216,10 +216,10 @@ def test_same_activity_different_resource_within_execution():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load", 1, ["r1"]),
-            _event("e2", "Load", 2, ["r2"]),
+            _event("e1", "Load", 1, [], ["r1"]),
+            _event("e2", "Load", 2, [], ["r2"]),
         ],
-        [_object("r1", "resources"), _object("r2", "resources")],
+        [],
     )
     variant = _variant([["e1", "e2"]])
 

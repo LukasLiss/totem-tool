@@ -1,3 +1,4 @@
+import json
 import polars as pl
 
 from totem_lib.ocel.ocel import ObjectCentricEventLog
@@ -10,14 +11,14 @@ def make_ocel(events, objects):
     )
 
 
-def event(eid, activity, t, objects):
+def event(eid, activity, t, objects, resources=None):
     return {
         "_eventId": eid,
         "_activity": activity,
         "_timestampUnix": t,
         "_objects": objects,
         "_qualifiers": [],
-        "_attributes": "",
+        "_attributes": json.dumps({"process_area_resources": resources}) if resources is not None else "",
     }
 
 

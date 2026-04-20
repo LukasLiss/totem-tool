@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict, Counter
 import itertools
 
@@ -17,6 +18,13 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
         dict: Keys are Variant objects, values are dicts mapping activity -> {other_activity: constraint_type}.
               Constraint types: "same_resource", "subset" (act1 ⊆ act2), "disjoint".
     """
+
+    # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
+    resource_lookup: dict[str, list] = {
+        row["_eventId"]: (json.loads(row["_attributes"]).get("process_area_resources", [])
+                          if row["_attributes"] else [])
+        for row in ocel.events.select(["_eventId", "_attributes"]).iter_rows(named=True)
+    }
 
     constraints = {}
 
@@ -38,7 +46,7 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
             # Group events per activity by their resource frozenset and count occurrences. Avoid pairwise comparisons on acitvity level
             activity_to_resource_counts: dict[str, Counter] = {
                 act: Counter(
-                    frozenset(ocel.get_value(event_id, "resources") or [])
+                    frozenset(resource_lookup.get(event_id) or [])
                     for event_id in event_ids
                 )
                 for act, event_ids in activity_to_events.items()
