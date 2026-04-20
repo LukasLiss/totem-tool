@@ -1,6 +1,9 @@
+import json
 import statistics
+import itertools
 from collections import defaultdict
 
+ALLOCATION_STRATEGIES = ["random", "FIFO", "LIFO"] # TODO: consider adding more complex strategies(round-robin,...)
 
 def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activities: list[str]) -> dict:
     """
@@ -70,5 +73,92 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
             "max_duration_s": max(durations),
             "sample_count": len(durations),
         }
+
+    return result
+
+
+def calculate_resource_allocation_strategy(ocel, resource_cooldowns: dict = None, resource_type_map: dict = None) -> dict:
+    """
+    Analyzes the event log to determine the most likely resource allocation strategy per resource type.
+
+    The algorithm replays the event log chronologically and maintains an idle queue per resource type,
+    ordered by the time each resource last became free. For each event, it
+    checks at which position in the idle queue the actually assigned resource sits:
+    position 0 → FIFO, last position → LIFO, anywhere else → random.
+
+    Args:
+        ocel: ObjectCentricEventLog — typically the filtered OCEL (contains process_area_resources in _attributes).
+        resource_cooldowns: The resource cooldown distribution, structured as
+                            {activity: {resource_type: {"mean_duration_s": float, ...}}}.
+                            Used to schedule when a resource becomes idle again after an event.
+                            If None or missing an entry, cooldown defaults to 0.
+        resource_type_map: Optional. A dict mapping resource_id -> resource_type, used to resolve
+                           the type of resources in process_area_resources. Needed, as algorithm also runs on filtered OCELs
+                           where the resource types are no longer directly visible
+    Returns:
+        dict: {resource_type: strategy} where strategy is one of ALLOCATION_STRATEGIES
+    """
+    if resource_cooldowns is None:
+        resource_cooldowns = {}
+    if resource_type_map is None:
+        resource_type_map = ocel.obj_type_map
+
+    # scores[resource_type][strategy] = hit count
+    scores: dict[str, dict[str, int]] = defaultdict(lambda: {"FIFO": 0, "LIFO": 0, "random": 0})
+    
+    # idle_queue[resource_type] = list of (available_at_ts, resource_id), sorted ascending by ts (FIFO order)
+    idle_queue: dict[str, list[tuple[int, str]]] = defaultdict(list)
+
+    # Iterate over events 
+    for row in ocel.events.sort("_timestampUnix").iter_rows(named=True):
+        timestamp: int = row["_timestampUnix"]
+        activity: str = row["_activity"]
+
+        if not row["_attributes"]:
+            continue
+        try:
+            attrs = json.loads(row["_attributes"])
+        except json.JSONDecodeError:
+            continue
+
+        resources: list[str] = attrs.get("process_area_resources") or []
+        if not resources:
+            continue
+
+        # Group resources by type
+        resources_by_type: dict[str, str] = {}
+        for rid in resources:
+            rt = resource_type_map.get(rid)
+            if rt and rt not in resources_by_type:
+                resources_by_type[rt] = rid
+
+        for rt, actual_rid in resources_by_type.items():
+            # Candidate queue: resources that are in idle at this timestamp, sorted FIFO-first (earliest free first)
+            candidates = sorted(
+                [(ts, rid) for ts, rid in idle_queue[rt] if ts <= timestamp],
+                key=lambda x: x[0],
+            )
+            candidate_ids = [rid for _, rid in candidates]
+
+            if actual_rid in candidate_ids:
+                pos = candidate_ids.index(actual_rid)
+                n = len(candidate_ids)
+                if n == 1 or pos == 0:
+                    scores[rt]["FIFO"] += 1
+                elif pos == n - 1:
+                    scores[rt]["LIFO"] += 1
+                else:
+                    scores[rt]["random"] += 1
+
+            # Reschedule resource: remove old entry, add with updated availability
+            idle_queue[rt] = [(ts, rid) for ts, rid in idle_queue[rt] if rid != actual_rid]
+            mean_cooldown = resource_cooldowns.get(activity, {}).get(rt, {}).get("mean_duration_s", 0)
+            idle_queue[rt].append((int(timestamp + mean_cooldown), actual_rid))
+
+    # Pick the strategy with the highest score per resource type
+    result: dict[str, str] = {}
+    for rt, s in scores.items():
+        total = sum(s.values())
+        result[rt] = max(s, key=lambda k: s[k]) if total > 0 else "random"
 
     return result
