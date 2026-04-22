@@ -434,7 +434,6 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
     variants_by_signature: Dict[str, Dict] = {}
 
     for process_exec_graph in process_executions:
-        print(process_exec_graph.nodes(data=True))
         node_labels = sorted(
             [normalize_label(d["label"]) for _, d in process_exec_graph.nodes(data=True)]
         )
