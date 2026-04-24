@@ -248,3 +248,7 @@ test-*.md
 # *.bat
 
 highwayimplementation.md
+
+# Large OCEL test/evaluation files — place manually, never commit to git
+totem_lib/test_data/large/*
+!totem_lib/test_data/large/.gitkeep
