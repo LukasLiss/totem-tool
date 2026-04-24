@@ -1,14 +1,8 @@
 import pytest
 from totem_lib import (
     import_ocel,
-    discover_oc_petri_net_polars,
-    ocpns_are_similar,
-    convert_ocel_polars_to_pm4py,
-    filter_dead_objects
+    discover_ocpn,
 )
-from totem_lib.ocel import schema_base_filtering, propagate_filtering
-import pm4py
-import os
 
 OCEL_FILES = [
     "example_data/ContainerLogistics.json",
@@ -29,4 +23,4 @@ def loaded_ocel(request):
 
 
 def test_ocpn_discovery_no_error(loaded_ocel):
-    discover_oc_petri_net_polars(loaded_ocel)
+    discover_ocpn(loaded_ocel)

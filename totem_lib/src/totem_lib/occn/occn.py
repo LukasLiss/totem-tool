@@ -278,21 +278,17 @@ class OCCausalNet(object):
             for binds in self.__input_marker_groups.values()
             for bs in binds
             for o in bs.markers
-        }
+        }.union(
+            {s.removeprefix("START_") for s in self.__activities if s.startswith("START_")}
+        ).union(
+            {s.removeprefix("END_") for s in self.__activities if s.startswith("END_")}
+        )
         # Make sure a start and end activity exists for each object type
         for ot in self.__object_types:
             start_act = f"START_{ot}"
             end_act = f"END_{ot}"
             assert start_act in self.__activities, f"Missing start activity {start_act} for object type {ot}"
             assert end_act in self.__activities, f"Missing end activity {end_act} for object type {ot}"
-        # Assert no other START and END activities are present
-        for act in self.__activities:
-            if act.startswith("START_"):
-                ot = act[len("START_") :]
-                assert ot in self.__object_types, f"Unexpected start activity {act} for unknown object type {ot}"
-            if act.startswith("END_"):
-                ot = act[len("END_") :]
-                assert ot in self.__object_types, f"Unexpected end activity {act} for unknown object type {ot}"
         self.__activity_count = activity_count
 
     def __repr__(self):
