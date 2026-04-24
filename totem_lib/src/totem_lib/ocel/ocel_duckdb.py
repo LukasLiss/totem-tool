@@ -1,4 +1,5 @@
 import json
+import os
 import duckdb
 import polars as pl
 from typing import List, Tuple
@@ -339,6 +340,91 @@ class OcelDuckDB:
     def query(self, sql: str) -> pl.DataFrame:
         """Execute an arbitrary SQL query and return a Polars DataFrame."""
         return self.conn.execute(sql).pl()
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, db_path: str) -> None:
+        """
+        Save this database to a native DuckDB file for fast reloading.
+
+        Use this when the database was created in-memory (the default). If you
+        already passed db_path= to import_ocel_db(), the file is already on disk
+        and no explicit save is needed.
+
+        Reload later with OcelDuckDB.load(db_path) — opening an existing DuckDB
+        file is essentially instantaneous compared to re-parsing the original OCEL
+        source.
+
+        Args:
+            db_path: Destination file path, e.g. 'my_log.duckdb'.
+
+        Raises:
+            FileExistsError: If db_path already exists. Delete the file first or
+                             choose a different path.
+        """
+        if os.path.exists(db_path):
+            raise FileExistsError(
+                f"'{db_path}' already exists. Delete it first or choose a different path."
+            )
+        self.conn.execute(f"ATTACH '{db_path}' AS _save_dest")
+        for table in (
+            "events",
+            "objects",
+            "event_object",
+            "object_relations",
+            "object_attribute_history",
+        ):
+            self.conn.execute(
+                f"CREATE TABLE _save_dest.{table} AS SELECT * FROM {table}"
+            )
+        self.conn.execute("DETACH _save_dest")
+
+    @classmethod
+    def load(cls, db_path: str) -> "OcelDuckDB":
+        """
+        Load a previously saved OcelDuckDB from a native DuckDB file.
+
+        This is orders of magnitude faster than re-parsing the original OCEL
+        source because the data is already structured and indexed — opening the
+        file is essentially just a file handle and memory-map operation.
+
+        Typical workflow::
+
+            # First run — slow (full parse + save)
+            db = import_ocel_db("big_log.sqlite")
+            db.save("big_log.duckdb")
+            db.close()
+
+            # Every subsequent run — fast
+            db = OcelDuckDB.load("big_log.duckdb")
+
+        Args:
+            db_path: Path to a .duckdb file previously created by save() or by
+                     passing db_path= to import_ocel_db().
+
+        Returns:
+            OcelDuckDB instance backed by the on-disk database.
+        """
+        conn = duckdb.connect(db_path)
+        fixed_event = {"event_id", "activity", "timestamp_unix"}
+        fixed_obj   = {"obj_id", "obj_type"}
+        event_cols = [
+            r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'events' ORDER BY ordinal_position"
+            ).fetchall()
+        ]
+        obj_cols = [
+            r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'objects' ORDER BY ordinal_position"
+            ).fetchall()
+        ]
+        event_attr_cols = sorted(c for c in event_cols if c not in fixed_event)
+        obj_attr_cols   = sorted(c for c in obj_cols   if c not in fixed_obj)
+        return cls._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
     # ------------------------------------------------------------------
     # Context manager support
