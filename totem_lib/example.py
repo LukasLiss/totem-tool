@@ -4,6 +4,7 @@ from totem_lib import (
     mlpaDiscovery,
     discover_oc_petri_net_polars,
 )
+from totem_lib.ocel.importer_db import import_ocel_db
 import cProfile
 
 
@@ -31,7 +32,8 @@ print(
 # print(ocel.o2o_graph_edges)  # new interface for ocel.o2o_graph.graph.edges
 
 print("\n\n\n-------------------- Totem Discovery --------------------")
-totem = totemDiscovery(ocel)
+db = import_ocel_db("example_data/ContainerLogistics.sqlite")
+totem = totemDiscovery(db)
 print(totem.tempgraph)
 totem.visualize(
     output_dir="figures", output_file="totem_example.pdf", ot_to_hex_color={}
@@ -42,3 +44,4 @@ view = mlpaDiscovery(totem)
 
 ocpn = discover_oc_petri_net_polars(ocel)
 print("done")
+

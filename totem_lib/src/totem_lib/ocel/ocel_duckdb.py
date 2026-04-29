@@ -337,6 +337,224 @@ class OcelDuckDB:
             ORDER BY e.timestamp_unix
         """).pl()
 
+    # ------------------------------------------------------------------
+    # TOTeM discovery query methods
+    # ------------------------------------------------------------------
+
+    def get_type_event_mapping(self) -> pl.DataFrame:
+        """
+        Returns the mapping from object types to event activities.
+
+        Each row is a unique (obj_type, activity) pair, meaning that at least
+        one object of that type participated in at least one event with that
+        activity.
+
+        Replaces the obj_typ_to_ev_type + all_event_types construction in
+        totem.py.
+        """
+        return self.conn.execute("""
+            SELECT DISTINCT o.obj_type, e.activity
+            FROM event_object eo
+            JOIN objects o ON eo.obj_id  = o.obj_id
+            JOIN events e  ON eo.event_id = e.event_id
+        """).pl()
+
+    def get_type_relations(self) -> pl.DataFrame:
+        """
+        Returns all pairs of object types that co-occur in at least one event.
+
+        Each row is an unordered pair (t1, t2) with t1 < t2.
+        Replaces the type_relations set construction in totem.py.
+        """
+        return self.conn.execute("""
+            SELECT DISTINCT o1.obj_type AS t1, o2.obj_type AS t2
+            FROM event_object eo1
+            JOIN event_object eo2 ON eo1.event_id = eo2.event_id
+            JOIN objects o1       ON eo1.obj_id   = o1.obj_id
+            JOIN objects o2       ON eo2.obj_id   = o2.obj_id
+            WHERE o1.obj_type < o2.obj_type
+        """).pl()
+
+    def get_event_cardinality_counts(self) -> pl.DataFrame:
+        """
+        Returns aggregated event cardinality counts per (type_source, type_target).
+
+        For each event where type_source is involved, counts how many objects
+        of type_target are present in that event, then buckets:
+          - zero:  count of events with 0 objects of type_target
+          - one:   count of events with exactly 1
+          - gt_one: count of events with > 1
+
+        Replaces the h_event_cardinalities computation in totem.py.
+        """
+        return self.conn.execute("""
+            WITH event_type_counts AS (
+                SELECT eo.event_id, o.obj_type,
+                       COUNT(DISTINCT eo.obj_id) AS cnt
+                FROM event_object eo
+                JOIN objects o ON eo.obj_id = o.obj_id
+                GROUP BY eo.event_id, o.obj_type
+            ),
+            involved AS (
+                SELECT DISTINCT event_id, obj_type AS type_source
+                FROM event_type_counts
+            )
+            SELECT
+                i.type_source,
+                t.obj_type    AS type_target,
+                COUNT(*)                                                      AS total,
+                SUM(CASE WHEN COALESCE(etc.cnt, 0) = 0 THEN 1 ELSE 0 END)    AS zero,
+                SUM(CASE WHEN COALESCE(etc.cnt, 0) = 1 THEN 1 ELSE 0 END)    AS one,
+                SUM(CASE WHEN COALESCE(etc.cnt, 0) > 1  THEN 1 ELSE 0 END)   AS gt_one
+            FROM involved i
+            CROSS JOIN (SELECT DISTINCT obj_type FROM objects) t
+            LEFT JOIN event_type_counts etc
+                ON  etc.event_id = i.event_id
+                AND etc.obj_type = t.obj_type
+            GROUP BY i.type_source, t.obj_type
+        """).pl()
+
+    def get_log_cardinality_counts(self) -> pl.DataFrame:
+        """
+        Returns aggregated log cardinality counts per (type_source, type_target).
+
+        For each object of type_source (that appears in at least one event),
+        counts how many distinct objects of type_target it is connected to via
+        event co-occurrence (e2o) OR explicit object relations (o2o), then
+        buckets into zero / one / gt_one.
+
+        Replaces the o2o dict + h_log_cardinalities computation in totem.py.
+        """
+        return self.conn.execute("""
+            WITH active_objects AS (
+                SELECT DISTINCT eo.obj_id, o.obj_type
+                FROM event_object eo
+                JOIN objects o ON eo.obj_id = o.obj_id
+            ),
+            e2o_pairs AS (
+                SELECT DISTINCT eo1.obj_id AS src, eo2.obj_id AS tgt
+                FROM event_object eo1
+                JOIN event_object eo2 ON eo1.event_id = eo2.event_id
+                WHERE eo1.obj_id <> eo2.obj_id
+            ),
+            o2o_pairs AS (
+                SELECT source_obj_id AS src, target_obj_id AS tgt
+                FROM object_relations
+            ),
+            all_pairs AS (
+                SELECT DISTINCT src, tgt FROM e2o_pairs
+                UNION
+                SELECT DISTINCT src, tgt FROM o2o_pairs
+            ),
+            connection_counts AS (
+                SELECT
+                    ao.obj_id,
+                    ao.obj_type                AS type_source,
+                    tt.obj_type                AS type_target,
+                    COUNT(DISTINCT ap.tgt)     AS card
+                FROM active_objects ao
+                CROSS JOIN (SELECT DISTINCT obj_type FROM objects) tt
+                LEFT JOIN (
+                    SELECT ap.src, o.obj_type AS tgt_type, ap.tgt
+                    FROM all_pairs ap
+                    JOIN objects o ON ap.tgt = o.obj_id
+                ) ap ON ao.obj_id = ap.src AND tt.obj_type = ap.tgt_type
+                GROUP BY ao.obj_id, ao.obj_type, tt.obj_type
+            )
+            SELECT
+                type_source,
+                type_target,
+                COUNT(*)                                                    AS total,
+                SUM(CASE WHEN card = 0 THEN 1 ELSE 0 END)                  AS zero,
+                SUM(CASE WHEN card = 1 THEN 1 ELSE 0 END)                  AS one,
+                SUM(CASE WHEN card > 1 THEN 1 ELSE 0 END)                  AS gt_one
+            FROM connection_counts
+            GROUP BY type_source, type_target
+        """).pl()
+
+    def get_temporal_relation_counts(self) -> pl.DataFrame:
+        """
+        Returns aggregated temporal relation counts per (type_source, type_target).
+
+        For each pair of connected objects (via e2o or o2o), classifies the
+        temporal relation based on their lifetimes (min/max event timestamps)
+        and counts occurrences of each relation type per type pair.
+
+        Temporal relation categories (not mutually exclusive):
+          - D  (Dependent):         target lifespan contains source lifespan
+          - Di (Dependent Inverse): source lifespan contains target lifespan
+          - I  (Initiating):        source precedes or overlaps-then-precedes target
+          - Ii (Initiating Inverse): target precedes or overlaps-then-precedes source
+          - P  (Parallel):          always true for every pair
+
+        Replaces the h_temporal_relations computation in totem.py.
+        """
+        return self.conn.execute("""
+            WITH lifetimes AS (
+                SELECT o.obj_id, o.obj_type,
+                       MIN(e.timestamp_unix) AS min_t,
+                       MAX(e.timestamp_unix) AS max_t
+                FROM objects o
+                JOIN event_object eo ON o.obj_id    = eo.obj_id
+                JOIN events e        ON eo.event_id  = e.event_id
+                GROUP BY o.obj_id, o.obj_type
+            ),
+            e2o_pairs AS (
+                SELECT DISTINCT eo1.obj_id AS src, eo2.obj_id AS tgt
+                FROM event_object eo1
+                JOIN event_object eo2 ON eo1.event_id = eo2.event_id
+                WHERE eo1.obj_id <> eo2.obj_id
+            ),
+            o2o_pairs AS (
+                SELECT source_obj_id AS src, target_obj_id AS tgt
+                FROM object_relations
+            ),
+            all_pairs AS (
+                SELECT DISTINCT src, tgt FROM e2o_pairs
+                UNION
+                SELECT DISTINCT src, tgt FROM o2o_pairs
+            ),
+            pair_lifetimes AS (
+                SELECT
+                    ls.obj_type AS type_source,
+                    lt.obj_type AS type_target,
+                    ls.min_t    AS src_min,
+                    ls.max_t    AS src_max,
+                    lt.min_t    AS tgt_min,
+                    lt.max_t    AS tgt_max
+                FROM all_pairs ap
+                JOIN lifetimes ls ON ap.src = ls.obj_id
+                JOIN lifetimes lt ON ap.tgt = lt.obj_id
+            )
+            SELECT
+                type_source,
+                type_target,
+                COUNT(*) AS total,
+                SUM(CASE WHEN tgt_min <= src_min
+                          AND src_max <= tgt_max
+                         THEN 1 ELSE 0 END) AS "D",
+                SUM(CASE WHEN src_min <= tgt_min
+                          AND tgt_max <= src_max
+                         THEN 1 ELSE 0 END) AS "Di",
+                SUM(CASE WHEN (src_max <= tgt_min)
+                           OR (src_min < tgt_min
+                               AND tgt_min <= src_max
+                               AND src_max < tgt_max)
+                         THEN 1 ELSE 0 END) AS "I",
+                SUM(CASE WHEN (tgt_max <= src_min)
+                           OR (tgt_min < src_min
+                               AND src_min <= tgt_max
+                               AND tgt_max < src_max)
+                         THEN 1 ELSE 0 END) AS "Ii",
+                COUNT(*) AS "P"
+            FROM pair_lifetimes
+            GROUP BY type_source, type_target
+        """).pl()
+
+    # ------------------------------------------------------------------
+    # General query interface
+    # ------------------------------------------------------------------
+
     def query(self, sql: str) -> pl.DataFrame:
         """Execute an arbitrary SQL query and return a Polars DataFrame."""
         return self.conn.execute(sql).pl()

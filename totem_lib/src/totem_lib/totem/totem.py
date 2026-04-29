@@ -1,6 +1,5 @@
 from typing import Dict, Set, List
 import networkx as nx
-from datetime import datetime
 from pulp import *
 import graphviz
 import os
@@ -178,13 +177,6 @@ class Totem:
 # Help functions for OCEL2.0
 
 
-def get_all_event_objects(ocel, event_id):
-    # obj_ids = []
-    # for obj_type in ocel.object_types:
-    #     obj_ids += ocel.get_value(event_id, obj_type)
-    # return obj_ids
-    return ocel.get_value(event_id, "event_objects")
-
 
 def get_most_precise_lc(directed_type_tuple, tau, log_cardinalities):
     total = 0
@@ -324,318 +316,115 @@ def connected_components_undirected(used_nodes, edges):
     return connected_components
 
 
-def totemDiscovery(ocel, tau=0.9):
+def totemDiscovery(db, tau=0.9):
     """
-    Given an Object Centric Event Log, compute the temporal graph and related information.
-    :param ocel: The Object Centric Event Log to analyze.
-    :param tau: The threshold for determining strong relations (default is 0.9).
-    :return: A Totem object containing the temporal graph and related information.
+    Given an OcelDuckDB database, compute the temporal graph and related
+    information using the TOTeM algorithm.
+
+    All heavy computation (object lifetimes, co-occurrence pairs, cardinality
+    counting, temporal relation classification) is performed inside DuckDB via
+    SQL queries exposed by the OcelDuckDB convenience methods. Python code here
+    only converts the compact, type-pair-level aggregates into the data
+    structures expected by the downstream ``get_most_precise_*`` helpers and
+    ``mlpaDiscovery``.
+
+    Args:
+        db: An OcelDuckDB instance (from ``import_ocel_db`` or
+            ``OcelDuckDB(ocel)``).
+        tau: Threshold for determining strong relations (default 0.9).
+
+    Returns:
+        A Totem object containing the temporal graph and related information.
     """
-    # object type to event type dict
-    obj_typ_to_ev_type: dict[str, set[str]] = dict()
-    all_event_types = set()
+    from datetime import datetime
 
-    # temporal relations results
-    h_temporal_relations: dict[tuple[str, str], dict[str, int]] = (
-        dict()
-    )  # stores all the temporal relations found
-    # event cardinality results
-    h_event_cardinalities: dict[tuple[str, str], dict[str, int]] = (
-        dict()
-    )  # stores all the temporal cardinalities found
-    # event cardinality results
-    h_log_cardinalities: dict[tuple[str, str], dict[str, int]] = (
-        dict()
-    )  # stores all the temporal cardinalities found
+    # ------------------------------------------------------------------
+    # 1. Object type → event type mapping  &  all event types
+    # ------------------------------------------------------------------
+    print(f"computing type-event mapping, start time: {datetime.now()}")
+    type_event_df = db.get_type_event_mapping()
 
-    # object min times (omint_L(o))
-    o_min_times: dict[str, datetime] = (
-        dict()
-    )  # str identifier of the object maps to the earliest time recorded for that object in the event log
-    # object max times (omaxt_L(o))
-    o_max_times: dict[str, datetime] = (
-        dict()
-    )  # str identifier of the object maps to the last time recorded for that object in the event log
+    obj_typ_to_ev_type: dict[str, set[str]] = {}
+    all_event_types: set[str] = set()
+    for row in type_event_df.iter_rows(named=True):
+        obj_typ_to_ev_type.setdefault(row["obj_type"], set()).add(row["activity"])
+        all_event_types.add(row["activity"])
 
-    # get a list of all object types (or variable that is filled while passing through the process executions)
-    type_relations: set[set[str, str]] = set()  # stores all connected types
+    # ------------------------------------------------------------------
+    # 2. Type relations (co-occurring type pairs)
+    # ------------------------------------------------------------------
+    print(f"computing type relations, start time: {datetime.now()}")
+    type_relations_df = db.get_type_relations()
 
-    o2o_o2o: dict[str, dict[str, set[str]]] = (
-        dict()
-    )  # dict that describes which objects are connected to which types and for each type which object
-    # o2o[obj1][type3] = [obj5, obj6]
-    o2o_e2o: dict[str, dict[str, set[str]]] = dict()
-    o2o: dict[str, dict[str, set[str]]] = dict()
+    type_relations: set[frozenset[str]] = set()
+    for row in type_relations_df.iter_rows(named=True):
+        type_relations.add(frozenset({row["t1"], row["t2"]}))
 
-    # a mapping from type to its objects
-    type_to_object = dict()
+    # ------------------------------------------------------------------
+    # 3. Event cardinalities
+    # ------------------------------------------------------------------
+    print(f"computing event cardinalities, start time: {datetime.now()}")
+    ec_df = db.get_event_cardinality_counts()
 
-    print(f"looping through events, start time: {datetime.now()}")
-    for px in (
-        ocel.process_executions
-    ):  # TODO: for ev in all events instead of process_executions
-        for ev in px:
-            # print(f"Processing event {ev}")
-            # event infos: objects and timestamps
-            # ev_timestamp = datetime.strptime(str(ocel.get_value(ev, 'event_timestamp')), DATEFORMAT)  #TODO: just use unix timestamp?
-            # ev_timestamp = ocel.get_value(ev, 'event_timestamp')  # use unix timestamp directly
-            ev_timestamp = ocel.get_event_timestamp(ev)  # use unix timestamp directly
+    h_event_cardinalities: dict[tuple[str, str], dict[str, int]] = {}
+    for row in ec_df.iter_rows(named=True):
+        key = (row["type_source"], row["type_target"])
+        total = int(row["total"])
+        zero  = int(row["zero"])
+        one   = int(row["one"])
+        gt_one = int(row["gt_one"])
+        h_event_cardinalities[key] = {
+            EC_TOTAL:     total,
+            EC_ZERO:      zero,
+            EC_ONE:       one,
+            EC_ZERO_ONE:  zero + one,
+            EC_MANY:      one + gt_one,
+            EC_ZERO_MANY: total,
+        }
 
-            objects_of_event = get_all_event_objects(ocel, ev)
-            for obj in objects_of_event:
-                # o2o updating
-                o2o.setdefault(obj, dict())
-                for type in ocel.object_types:
-                    o2o[obj].setdefault(type, set())
-                    o2o[obj][type].update(
-                        # ocel.get_value(ev, type))  # add all objects connected via e2o to each object involved
-                        ocel.get_event_objects_by_type(ev, type)
-                    )  # add all objects connected via e2o to each object involved
-                # update lifespan information
-                o_min_times.setdefault(obj, ev_timestamp)
-                if (
-                    ev_timestamp < o_min_times[obj]
-                ):  # todo check if comparison of datetimes works correctly here
-                    o_min_times[obj] = ev_timestamp
-                o_max_times.setdefault(obj, ev_timestamp)
-                if (
-                    ev_timestamp > o_max_times[obj]
-                ):  # todo check if comparison of datetimes works correctly here
-                    o_max_times[obj] = ev_timestamp
-
-            # maintain object type to event type dictionary
-            # eventtype = ocel.get_value(ev, 'event_activity')
-            eventtype = ocel.get_event_activity(ev)
-            all_event_types.add(eventtype)
-            for type in ocel.object_types:
-                # if len(ocel.get_value(ev, type)) > 0:
-                if len(ocel.get_event_objects_by_type(ev, type)) > 0:
-                    obj_typ_to_ev_type.setdefault(type, set())
-                    obj_typ_to_ev_type[type].add(eventtype)
-
-            # compute event cardinality
-            involved_types = []
-            obj_count_per_type = dict()
-            for type in ocel.object_types:
-                # obj_list = ocel.get_value(ev, type)
-                obj_list = ocel.get_event_objects_by_type(ev, type)
-                if not obj_list:
-                    continue
-                else:
-                    type_to_object.setdefault(type, set())
-                    type_to_object[type].update(obj_list)
-                    involved_types.append(type)
-                    obj_count_per_type[type] = len(obj_list)
-            # created related types
-            for t1 in involved_types:
-                for t2 in involved_types:
-                    if t1 != t2:
-                        type_relations.add(frozenset({t1, t2}))
-            # for all type pairs determine
-            for type_source in involved_types:
-                for type_target in ocel.object_types:
-                    # add one to total
-                    h_event_cardinalities.setdefault((type_source, type_target), dict())
-                    h_event_cardinalities[(type_source, type_target)].setdefault(
-                        EC_TOTAL, 0
-                    )
-                    h_event_cardinalities[(type_source, type_target)][EC_TOTAL] += 1
-                    # determine cardinality
-                    cardinality = 0
-                    if type_target in obj_count_per_type.keys():
-                        cardinality = obj_count_per_type[type_target]
-                    # add one to matching cardinalities
-                    if cardinality == 0:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][EC_ZERO] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO_ONE, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][
-                            EC_ZERO_ONE
-                        ] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO_MANY, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][
-                            EC_ZERO_MANY
-                        ] += 1
-                    elif cardinality == 1:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ONE, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][EC_ONE] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO_ONE, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][
-                            EC_ZERO_ONE
-                        ] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_MANY, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][EC_MANY] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO_MANY, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][
-                            EC_ZERO_MANY
-                        ] += 1
-                    elif cardinality > 1:
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_MANY, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][EC_MANY] += 1
-                        h_event_cardinalities[(type_source, type_target)].setdefault(
-                            EC_ZERO_MANY, 0
-                        )
-                        h_event_cardinalities[(type_source, type_target)][
-                            EC_ZERO_MANY
-                        ] += 1
-
-    # merge o2o and e2o connected objects
-    print(f"mergeing o2o and e2o, start time: {datetime.now()}")
-    # for (source_o, target_o) in ocel.o2o_graph.graph.edges:
-    for source_o, target_o in ocel.o2o_graph_edges:  # Toan: use different interface
-        # print(f"{source_o} - {target_o}")
-        type_of_target_o = None
-        for type in ocel.object_types:
-            if target_o in type_to_object[type]:
-                type_of_target_o = type
-                break
-        if type_of_target_o == None:
-            continue
-        o2o.setdefault(source_o, dict())
-        o2o[source_o].setdefault(type_of_target_o, set())
-        o2o[source_o][type_of_target_o].update([source_o])
-
-    # compute log cardinality
+    # ------------------------------------------------------------------
+    # 4. Log cardinalities
+    # ------------------------------------------------------------------
     print(f"computing log cardinalities, start time: {datetime.now()}")
-    for type_source in ocel.object_types:
-        for type_target in ocel.object_types:
-            h_temporal_relations.setdefault((type_source, type_target), dict())
-            for obj in type_to_object[type_source]:
-                h_log_cardinalities.setdefault((type_source, type_target), dict())
-                h_log_cardinalities[(type_source, type_target)].setdefault(LC_TOTAL, 0)
-                h_log_cardinalities[(type_source, type_target)][LC_TOTAL] += 1
+    lc_df = db.get_log_cardinality_counts()
 
-                cardinality = len(o2o[obj][type_target])
-                # if type_source == 'products':
-                #    print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
+    h_log_cardinalities: dict[tuple[str, str], dict[str, int]] = {}
+    for row in lc_df.iter_rows(named=True):
+        key = (row["type_source"], row["type_target"])
+        total  = int(row["total"])
+        zero   = int(row["zero"])
+        one    = int(row["one"])
+        gt_one = int(row["gt_one"])
+        h_log_cardinalities[key] = {
+            LC_TOTAL:     total,
+            LC_ZERO:      zero,
+            LC_ONE:       one,
+            LC_ZERO_ONE:  zero + one,
+            LC_MANY:      one + gt_one,
+            LC_ZERO_MANY: total,
+        }
 
-                if cardinality == 0:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO_ONE, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO_MANY, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
-                elif cardinality == 1:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ONE, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO_ONE, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO_ONE] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_MANY, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_MANY] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO_MANY, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
-                elif cardinality > 1:
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_MANY, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_MANY] += 1
-                    h_log_cardinalities[(type_source, type_target)].setdefault(
-                        LC_ZERO_MANY, 0
-                    )
-                    h_log_cardinalities[(type_source, type_target)][LC_ZERO_MANY] += 1
+    # ------------------------------------------------------------------
+    # 5. Temporal relations
+    # ------------------------------------------------------------------
+    print(f"computing temporal relations, start time: {datetime.now()}")
+    tr_df = db.get_temporal_relation_counts()
 
-                # compute temporal relations
-                for obj_target in o2o[obj][type_target]:
-                    h_temporal_relations[(type_source, type_target)].setdefault(
-                        TR_TOTAL, 0
-                    )
-                    h_temporal_relations[(type_source, type_target)][TR_TOTAL] += 1
-                    if (
-                        o_min_times[obj_target]
-                        <= o_min_times[obj]
-                        <= o_max_times[obj]
-                        <= o_max_times[obj_target]
-                    ):
-                        h_temporal_relations[(type_source, type_target)].setdefault(
-                            TR_DEPENDENT, 0
-                        )
-                        h_temporal_relations[(type_source, type_target)][
-                            TR_DEPENDENT
-                        ] += 1
-                    if (
-                        o_min_times[obj]
-                        <= o_min_times[obj_target]
-                        <= o_max_times[obj_target]
-                        <= o_max_times[obj]
-                    ):
-                        h_temporal_relations[(type_source, type_target)].setdefault(
-                            TR_DEPENDENT_INVERSE, 0
-                        )
-                        h_temporal_relations[(type_source, type_target)][
-                            TR_DEPENDENT_INVERSE
-                        ] += 1
-                    if (
-                        o_min_times[obj]
-                        <= o_max_times[obj]
-                        <= o_min_times[obj_target]
-                        <= o_max_times[obj_target]
-                    ) or (
-                        o_min_times[obj]
-                        < o_min_times[obj_target]
-                        <= o_max_times[obj]
-                        < o_max_times[obj_target]
-                    ):
-                        h_temporal_relations[(type_source, type_target)].setdefault(
-                            TR_INITIATING, 0
-                        )
-                        h_temporal_relations[(type_source, type_target)][
-                            TR_INITIATING
-                        ] += 1
-                    if (
-                        o_min_times[obj_target]
-                        <= o_max_times[obj_target]
-                        <= o_min_times[obj]
-                        <= o_max_times[obj]
-                    ) or (
-                        o_min_times[obj_target]
-                        < o_min_times[obj]
-                        <= o_max_times[obj_target]
-                        < o_max_times[obj]
-                    ):
-                        h_temporal_relations[(type_source, type_target)].setdefault(
-                            TR_INITIATING_REVERSE, 0
-                        )
-                        h_temporal_relations[(type_source, type_target)][
-                            TR_INITIATING_REVERSE
-                        ] += 1
-                    # allways parallel
-                    h_temporal_relations[(type_source, type_target)].setdefault(
-                        TR_PARALLEL, 0
-                    )
-                    h_temporal_relations[(type_source, type_target)][TR_PARALLEL] += 1
+    h_temporal_relations: dict[tuple[str, str], dict[str, int]] = {}
+    for row in tr_df.iter_rows(named=True):
+        key = (row["type_source"], row["type_target"])
+        h_temporal_relations[key] = {
+            TR_TOTAL:              int(row["total"]),
+            TR_DEPENDENT:          int(row["D"]),
+            TR_DEPENDENT_INVERSE:  int(row["Di"]),
+            TR_INITIATING:         int(row["I"]),
+            TR_INITIATING_REVERSE: int(row["Ii"]),
+            TR_PARALLEL:           int(row["P"]),
+        }
 
-    # setup temporal graph
+    # ------------------------------------------------------------------
+    # 6. Build the temporal graph
+    # ------------------------------------------------------------------
     print(f"building the temporal graph, start time: {datetime.now()}")
     tempgraph = {
         "nodes": set(),
@@ -646,7 +435,6 @@ def totemDiscovery(ocel, tau=0.9):
 
     cardinalities = {}
 
-    # for each connection give the 6 relations
     for connected_types in type_relations:
         t1, t2 = connected_types
         tempgraph["nodes"].add(t1)
@@ -670,7 +458,6 @@ def totemDiscovery(ocel, tau=0.9):
             tempgraph[tr_i].add((t2, t1))
         else:
             tempgraph[tr].add((t1, t2))
-        # print(f"TRi: {tr_i}")
         print("")
 
         cardinalities[(t1, t2)] = {"LC": lc, "EC": ec}

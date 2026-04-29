@@ -19,6 +19,7 @@ from totem_lib.ocel.importer import (
     load_events_from_xml, load_objects_from_xml,
     import_ocel_from_csv,
 )
+from totem_lib.ocel.importer_db import import_ocel_db
 import networkx as nx
 
 from collections import defaultdict
@@ -272,8 +273,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             if cached_result:
                 return Response(cached_result, status=status.HTTP_200_OK)
 
-            ocel = _build_ocel_from_path(user_file.file.path)
-            totem = totemDiscovery(ocel)
+            db = import_ocel_db(user_file.file.path)
+            totem = totemDiscovery(db)
             serialized = _serialize_totem(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
@@ -296,8 +297,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             if cached_result:
                 return Response(cached_result, status=status.HTTP_200_OK)
 
-            ocel = _build_ocel_from_path(user_file.file.path)
-            totem = totemDiscovery(ocel)
+            db = import_ocel_db(user_file.file.path)
+            totem = totemDiscovery(db)
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
