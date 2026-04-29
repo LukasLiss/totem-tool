@@ -1,9 +1,6 @@
 class ProcessArea:
     """
-    Represents a single process area discovered by MLPA.
-
-    A process area groups a set of object types and their associated activities
-    that belong together at a specific level in the multi-level process hierarchy.
+    Represents a single process area consisting of a set of activities and object types and a level.
     """
 
     def __init__(self, object_types: list[str], activities: list[str], level: float = None):
