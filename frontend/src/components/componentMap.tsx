@@ -21,6 +21,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
+
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -29,6 +30,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import SQLQueryComponent from './SQLQueryComponent';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -52,6 +54,8 @@ interface ComponentProps {
     // OCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
+    // OCELQueryComponent properties
+    query?: string;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -392,6 +396,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 };
 
 
+
 // LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
 const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
@@ -590,4 +595,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ProcessAreaComponent,
   LogStatisticsComponent,
   OCDFGComponent,
+  SQLQueryComponent,
 };
