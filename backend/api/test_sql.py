@@ -20,4 +20,3 @@ duckdb.register('objects', data.objects.to_pandas())
 print(duckdb.sql('SELECT * FROM objects'))
 
 print(duckdb.sql("""SELECT e._activity, e._objects, e._qualifiers FROM events e WHERE CAST(e._objects AS VARCHAR) LIKE '%Benedikt Knopp%'"""))
-

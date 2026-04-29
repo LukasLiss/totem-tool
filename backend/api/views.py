@@ -30,6 +30,7 @@ from hashlib import sha1
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
 import duckdb
+import duckdb
 
 
 TOTEM_MOCK = {

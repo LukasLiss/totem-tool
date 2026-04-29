@@ -28,6 +28,7 @@ import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 
+
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -551,6 +552,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
     />
   );
 };
+
 
 
 
