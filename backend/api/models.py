@@ -100,3 +100,7 @@ class LogStatisticsComponent(DashboardComponent):
 class OCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
+
+class SQLQueryComponent(DashboardComponent):
+    query = models.TextField(default="SELECT * FROM data LIMIT 10")
+

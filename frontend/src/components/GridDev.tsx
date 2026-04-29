@@ -1,35 +1,33 @@
 import React, { useContext, useEffect } from "react";
-import GridProvider from "../gridstack/lib/gridStackProvider"
-import DashboardGrid from "../gridstack/lib/dashboard_grid";
-import SidePanel from "../gridstack/lib/Sidepanel";
+import GridProvider from "../gridstack/lib/gridstackprovider"
+import DashboardGrid from "../gridstack/lib/dashboardGrid";
+import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
   SidebarInset,
-  SidebarTrigger
 } from "@/components/ui/sidebar"
-import { Button } from "@/components/ui/button";
-import GridContainer from "../gridstack/lib/grid_container";
-import { useGrid } from "../gridstack/lib/gridStackProvider";
+import GridContainer from "../gridstack/lib/gridContainer";
+import { useGrid } from "../gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import { useGridMode } from '../gridstack/lib/gridStackProvider';
-import {
-  Settings, Save, Minus, Plus
-} from "lucide-react"
-import { toast } from "sonner"
+import { useGridMode } from '../gridstack/lib/gridstackprovider';
+
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
   const { viewMode } = useContext(DashboardContext);
+  const { selectedFile } = useContext(SelectedFileContext);
 
   // Extract dashboard ID when in dashboard mode
   const selectedDashboard = viewMode.type === 'dashboard' ? viewMode.id : null;
 
   useEffect(() => {
     console.log("Dashboard changed to:", selectedDashboard);
+    console.log("Current grid containers:", document.querySelectorAll('.grid-stack').length);
+    console.log("Current grid-stack-item elements:", document.querySelectorAll('.grid-stack-item').length);
 
     const loadSelectedDashboard = async () => {
       console.log("Starting to load dashboard layout");
@@ -43,9 +41,15 @@ const GridContent: React.FC = () => {
         return;
       }
       
+      const token = localStorage.getItem("access_token");
+      if (!token) {
+        console.log("No token found");
+        return;
+      }
+      
       try {
         console.log("Fetching layout for dashboard:", selectedDashboard);
-        const response = await getLayout(selectedDashboard);
+        const response = await getLayout(selectedDashboard, token);
         console.log("Layout response:", response);
         
         if (Array.isArray(response) && response.length > 0) {
@@ -65,27 +69,31 @@ const GridContent: React.FC = () => {
 
   const handleSave = async () => {
     if (!selectedDashboard) {
-      toast.error("No dashboard selected!");
+      alert("No dashboard selected!");
       return;
     }
     const layout = getGridLayout();
-    console.log('Layout to save:', layout);
+    console.log('Layout to save:', layout); // Debug: Check what's being saved
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
     try {
-      const response = await saveLayout(selectedDashboard, layout);
+      const response = await saveLayout(selectedDashboard, layout, token);
       console.log('Save response:', response); // Debug: Check API response
-      toast.success("Layout saved!");
+      alert("Layout saved!");
     } catch (error) {
       console.error('Save failed:', error); // Debug: Check for errors
-      toast.error("Save failed!");
+      alert("Save failed!");
     }
   };
 
   const handleLoad = async () => {
     if (!selectedDashboard) {
-      toast.error("No dashboard selected!");
+      alert("No dashboard selected!");
       return;
     }
-    const response = await getLayout(selectedDashboard);
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+    const response = await getLayout(selectedDashboard, token);
     // Small delay to ensure any pending operations complete
     setTimeout(() => loadLayout(response), 50);
   };
@@ -98,38 +106,27 @@ const GridContent: React.FC = () => {
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
       <div className="flex justify-end p-2 space-x-2">
-        <SidebarTrigger className="mr-auto"/>
-        
-        {isEditMode ?
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleSave}
-          >
-            <Save />
-            <span className="sr-only">Toggle Sidebar</span>
-          </Button>
-          
-          : null}
-        {isEditMode ?<Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
+        <button
+          onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
-            setIsEditMode(!isEditMode);}}>
-            <Minus />
-            <span className="sr-only">Toggle Sidebar</span>
-          </Button> :
-        <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-            console.log('Edit mode button clicked, current isEditMode:', isEditMode);
-            setIsEditMode(!isEditMode);}}>
-            <Plus />
-            <span className="sr-only">Toggle Sidebar</span>
-          </Button> }
-        
+            setIsEditMode(!isEditMode);
+          }}
+          className={`px-4 py-2 rounded ${isEditMode ? 'bg-green-500 text-white' : 'bg-gray-500 text-white'}`}
+        >
+          {isEditMode ? 'Disable Edit Mode' : 'Enable Edit Mode'}
+        </button>
+        <button onClick={() => resetGrid()} className="bg-red-500 text-white px-4 py-2 rounded">
+          Reset Grid
+        </button>
+        <button onClick={handleLoad} className="bg-green-500 text-white px-4 py-2 rounded">
+          Load Layout
+        </button>
+        <button onClick={handleSave} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Save Layout
+        </button>
+        <button onClick={handleLog} className="bg-blue-500 text-white px-4 py-2 rounded">
+          Log Layout
+        </button>
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
         
@@ -139,22 +136,20 @@ const GridContent: React.FC = () => {
           </GridContainer>
         </div>
         {isEditMode ? <SidePanel /> : null}
+
       </div>
     </div>
   );
 };
 
-const Grid: React.FC = () => {
-  const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
-  const { selectedDashboard: dashboardId } = useContext(DashboardContext);
-  console.log("selectedFile passed to GridProvider:", selectedFile);
+const DevGrid: React.FC = () => {
   return (
   <SidebarInset>
-    <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
+    <GridProvider>
       <GridContent />
     </GridProvider>
   </SidebarInset>
   );
 };
 
-export default Grid;
+export default DevGrid;

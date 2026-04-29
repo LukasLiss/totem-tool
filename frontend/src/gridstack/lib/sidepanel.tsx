@@ -88,6 +88,21 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .sqlquery-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 6,
+        content: "SQL Query",
+        component_name: "SQLQueryComponent",
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -126,6 +141,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>OCDFG</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/variants-preview.png" width="100" height="50"/>
+        <div>SQL Query</div>
       </div>
     </div>
   );

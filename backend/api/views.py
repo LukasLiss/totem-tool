@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, SQLQueryComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -29,6 +29,7 @@ import os
 from hashlib import sha1
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
+import duckdb
 
 
 TOTEM_MOCK = {
@@ -340,6 +341,105 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=["post"])
+    def execute_query(self, request, pk=None):
+        """Execute a SQL query on the OCEL data using DuckDB."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        query = request.data.get('query')
+        if not query:
+            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: only allow SELECT queries (read-only)
+        query_upper = query.strip().upper()
+        if not query_upper.startswith('SELECT'):
+            return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            # Register the DataFrames as DuckDB tables
+            duckdb.register('events', ocel.events.to_pandas())
+            duckdb.register('objects', ocel.objects.to_pandas())
+            if ocel.object_attributes is not None and not ocel.object_attributes.is_empty():
+                duckdb.register('object_attributes', ocel.object_attributes.to_pandas())
+
+            # Execute the query
+            result = duckdb.sql(query)
+            # Convert to list of dicts for JSON response
+            data = result.to_df().to_dict('records')
+
+            return Response({"data": data, "columns": list(result.columns)}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+'''
+    @action(detail=True, methods=["post"])
+    def export_query_to_csv(self, request, pk=None):
+        """Execute a SQL query and return results as CSV."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        query = request.data.get('query')
+        if not query:
+            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: only allow SELECT queries (read-only)
+        query_upper = query.strip().upper()
+        if not query_upper.startswith('SELECT'):
+            return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+
+        if not ocel:
+            try:
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            import duckdb
+            import io
+            import csv
+
+            # Register the DataFrames as DuckDB tables
+            duckdb.register('events', ocel.events.to_pandas())
+            duckdb.register('objects', ocel.objects.to_pandas())
+            if ocel.object_attributes is not None and not ocel.object_attributes.is_empty():
+                duckdb.register('object_attributes', ocel.object_attributes.to_pandas())
+
+            # Execute the query
+            result = duckdb.sql(query)
+            df = result.to_df()
+
+            # Convert to CSV
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            csv_data = output.getvalue()
+            output.close()
+
+            # Return as downloadable CSV
+            response = Response(csv_data, content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="query_results_{pk}.csv"'
+            return response
+
+        except Exception as e:
+            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+'''
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -393,6 +493,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'SQLQueryComponent':
+                components.append(SQLQueryComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -505,7 +607,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
-            # Add more as needed
+            elif component_name == 'SQLQueryComponent':
+                SQLQueryComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    query=item.get('query', 'SELECT * FROM data LIMIT 10'),
+                )            # Add more as needed
 
         return Response({"status": "saved"})
 
