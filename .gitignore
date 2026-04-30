@@ -136,8 +136,6 @@ electron/*.zip
 .vscode/
 *.code-workspace
 
-# Claude Code CLI
-.claude/
 
 # JetBrains IDEs
 .idea/
