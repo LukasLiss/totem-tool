@@ -51,7 +51,8 @@ def _alarm(_sig, _frame):
 signal.signal(signal.SIGALRM, _alarm)
 
 
-def _measure(extraction, leading_type, iso, db, timeout_s):
+def _measure(extraction, leading_type, iso, db, timeout_s,
+             business_obj_types=None, resource_types=None):
     tracemalloc.start()
     t0 = time.perf_counter()
     try:
@@ -61,6 +62,8 @@ def _measure(extraction, leading_type, iso, db, timeout_s):
             extraction=extraction,
             leading_type=leading_type,
             iso=iso,
+            business_obj_types=business_obj_types,
+            resource_types=resource_types,
             verbose=False,
         )
         signal.alarm(0)
@@ -135,7 +138,10 @@ def append_row(row: dict) -> None:
 # Per-dataset run
 # ---------------------------------------------------------------------------
 
-def evaluate(duckdb_path: Path, timeout_s: int, extractions, isos) -> None:
+def evaluate(
+    duckdb_path: Path, timeout_s: int, extractions, isos,
+    business_obj_types=None, resource_types=None,
+) -> None:
     print(f"\n=== {duckdb_path.name} ===", flush=True)
     db = OcelDuckDB.load(str(duckdb_path))
     types = sorted(
@@ -144,10 +150,19 @@ def evaluate(duckdb_path: Path, timeout_s: int, extractions, isos) -> None:
         ).fetchall()
     )
 
+    # Skip leading-type cells that would be invalid under the chosen split.
+    resource_set = set(resource_types or [])
+    business_set = set(business_obj_types or [])
+
     last_status = "ok"
     for ext in extractions:
         type_iter = types if ext.startswith("leading") else [None]
         for lt in type_iter:
+            if lt is not None:
+                if lt in resource_set:
+                    continue  # invalid: leading_type cannot be a resource
+                if business_set and lt not in business_set:
+                    continue  # invalid: leading_type must be in business set
             for iso in isos:
                 # DuckDB connections get poisoned when SIGALRM fires mid-query.
                 # After any non-ok cell, force a fresh connection.
@@ -158,7 +173,11 @@ def evaluate(duckdb_path: Path, timeout_s: int, extractions, isos) -> None:
                         pass
                     db = OcelDuckDB.load(str(duckdb_path))
 
-                m = _measure(ext, lt, iso, db, timeout_s)
+                m = _measure(
+                    ext, lt, iso, db, timeout_s,
+                    business_obj_types=business_obj_types,
+                    resource_types=resource_types,
+                )
                 last_status = m["status"]
                 row = {
                     "dataset":    duckdb_path.stem,
@@ -198,6 +217,14 @@ def main() -> None:
                              "db_signature,trace,signature,wl,wl+vf2,exact")
     parser.add_argument("--data-dir", type=Path, default=TEST_DATA,
                         help="directory containing .duckdb files")
+    parser.add_argument("--business-types", type=_csv, default=None,
+                        help="comma-separated obj_types to treat as business "
+                             "(others become resources unless --resource-types "
+                             "is also given)")
+    parser.add_argument("--resource-types", type=_csv, default=None,
+                        help="comma-separated obj_types to treat as resources "
+                             "(others become business unless --business-types "
+                             "is also given)")
     args = parser.parse_args()
 
     duckdb_paths = sorted(args.data_dir.glob("*.duckdb"))
@@ -211,7 +238,11 @@ def main() -> None:
 
     for p in duckdb_paths:
         try:
-            evaluate(p, args.timeout, args.extractions, args.isos)
+            evaluate(
+                p, args.timeout, args.extractions, args.isos,
+                business_obj_types=args.business_types,
+                resource_types=args.resource_types,
+            )
         except Exception as e:
             import traceback
             traceback.print_exc()

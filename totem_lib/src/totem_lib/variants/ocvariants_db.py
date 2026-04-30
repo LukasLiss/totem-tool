@@ -47,6 +47,17 @@ JOIN event_object eo ON co.obj_id = eo.obj_id
 # case_edges: global EOG (consecutive events for one object) restricted to
 # pairs whose both endpoints fall inside the same case
 # (= eog.subgraph(case_event_ids)). One row per inducing object.
+#
+# Two variants:
+#   _CREATE_CASE_EDGES_SQL          — every object induces edges (legacy)
+#   _CREATE_CASE_EDGES_SQL_BUSINESS — only objects in TEMP TABLE
+#                                     `business_objects` induce edges. Required
+#                                     when the user split obj_types into
+#                                     business / resource — otherwise resources
+#                                     (e.g. a forklift used across thousands of
+#                                     events) would synthesise huge spurious
+#                                     EOG chains.
+
 _CREATE_CASE_EDGES_SQL = """
 CREATE OR REPLACE TEMP TABLE case_edges AS
 WITH obj_rn AS (
@@ -70,6 +81,77 @@ FROM global_eog g
 JOIN case_events ce1 ON g.src = ce1.event_id
 JOIN case_events ce2 ON g.tgt = ce2.event_id
                     AND ce1.case_id = ce2.case_id
+"""
+
+_CREATE_CASE_EDGES_SQL_BUSINESS = """
+CREATE OR REPLACE TEMP TABLE case_edges AS
+WITH obj_rn AS (
+    SELECT
+        eo.obj_id,
+        eo.event_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY eo.obj_id
+            ORDER BY e.timestamp_unix, eo.event_id
+        ) AS rn
+    FROM event_object eo
+    JOIN events e ON eo.event_id = e.event_id
+    JOIN business_objects bo ON eo.obj_id = bo.obj_id
+),
+global_eog AS (
+    SELECT a.obj_id, a.event_id AS src, b.event_id AS tgt
+    FROM obj_rn a
+    JOIN obj_rn b ON a.obj_id = b.obj_id AND b.rn = a.rn + 1
+)
+SELECT DISTINCT ce1.case_id, g.obj_id, g.src, g.tgt
+FROM global_eog g
+JOIN case_events ce1 ON g.src = ce1.event_id
+JOIN case_events ce2 ON g.tgt = ce2.event_id
+                    AND ce1.case_id = ce2.case_id
+"""
+
+# Resource-induced edges between events that already belong to a
+# representative case. We use **case-local** EOG ranking here (rank a
+# resource's events within each rep case by timestamp) instead of the
+# global EOG rank used for business objects. Rationale: a high-traffic
+# resource (e.g. a forklift used by hundreds of orders) almost never has
+# two *globally* consecutive events in the same case, so global ranking
+# would silently hide every such resource. Case-local ranking faithfully
+# shows "the order in which this resource was touched within this rep
+# case", which is what the user-visible variant graph needs.
+#
+# Reads from TEMP TABLE `rep_events(rep_case_id, event_id)` materialised
+# by `_enrich_with_resources` and returns one row per
+# (rep_case_id, src, tgt, obj_id, obj_type) consecutive pair.
+_RESOURCE_EDGES_SQL = """
+WITH res_events_in_rep AS (
+    SELECT re.rep_case_id,
+           re.event_id,
+           eo.obj_id,
+           e.timestamp_unix
+    FROM rep_events     re
+    JOIN event_object   eo ON re.event_id = eo.event_id
+    JOIN events         e  ON re.event_id = e.event_id
+    JOIN resource_objects ro ON eo.obj_id = ro.obj_id
+),
+ranked AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY rep_case_id, obj_id
+               ORDER BY timestamp_unix, event_id
+           ) AS rn
+    FROM res_events_in_rep
+)
+SELECT a.rep_case_id,
+       a.obj_id,
+       o.obj_type,
+       a.event_id AS src,
+       b.event_id AS tgt
+FROM ranked a
+JOIN ranked b
+  ON a.rep_case_id = b.rep_case_id
+ AND a.obj_id      = b.obj_id
+ AND b.rn          = a.rn + 1
+JOIN objects o ON a.obj_id = o.obj_id
 """
 
 _NODES_SQL = """
@@ -97,6 +179,8 @@ def find_variants(
     extraction: Extraction = "leading_1hop",
     leading_type: Optional[str] = None,
     iso: IsoStrategy = "wl+vf2",
+    business_obj_types: Optional[List[str]] = None,
+    resource_types: Optional[List[str]] = None,
     verbose: bool = True,
 ) -> Variants:
     """
@@ -117,6 +201,22 @@ def find_variants(
         - "wl":           Weisfeiler-Lehman hash only.
         - "wl+vf2":       WL bucketing + VF2 refinement (recommended default).
         - "exact":        full pairwise VF2.
+    :param business_obj_types: Optional list of obj_types treated as
+        "business" objects. Only these participate in the object graph,
+        case extraction, case-edge construction, and the iso comparison.
+    :param resource_types: Optional list of obj_types treated as
+        "resources" (e.g. forklifts, drivers). They are excluded from the
+        case extraction and the iso projection but are *re-added* to the
+        representative graph as additional edges between events that are
+        already part of that case (using the same edge schema as business
+        objects, so downstream consumers keep working).
+        Resolution rules (see also docs):
+          - both None         → all types are business, no resources.
+          - only resources    → all other types become business.
+          - only business     → all other types become resources.
+          - both given        → types not in either set are ignored entirely.
+        Validation: business ∩ resources must be empty; for leading
+        extractions, leading_type must be in the business set.
     :param verbose: Show per-step progress bars in the terminal.
     :return: Variants sorted by support descending.
     """
@@ -132,6 +232,19 @@ def find_variants(
     total_t0 = time.time()
     conn = ocel_db.conn
 
+    # ---- Step 0: resolve business / resource type split ----
+    business_set, resource_set = _resolve_object_types(
+        conn, business_obj_types, resource_types, leading_type
+    )
+    use_split = bool(resource_set) or business_obj_types is not None
+    if use_split:
+        _materialise_type_partition(conn, business_set, resource_set)
+        if verbose:
+            _msg(
+                f"  business types: {sorted(business_set)}"
+                f"\n  resource types: {sorted(resource_set) or '∅'}"
+            )
+
     # ---- Step 1: object graph ----
     with _tqdm(
         total=1,
@@ -140,7 +253,9 @@ def find_variants(
         bar_format="{desc} {bar} {elapsed}",
         **_bar_kw,
     ) as pb:
-        object_graph, obj_type = _ext.build_object_graph(conn)
+        object_graph, obj_type = _ext.build_object_graph(
+            conn, business_only=use_split
+        )
         n_obj = object_graph.number_of_nodes()
         n_comp = nx.number_connected_components(object_graph)
         pb.set_postfix_str(f"{n_obj:,} objects · {n_comp:,} component(s)")
@@ -195,7 +310,9 @@ def find_variants(
         pb.set_postfix_str("case_events ✓")
         pb.update(1)
 
-        conn.execute(_CREATE_CASE_EDGES_SQL)
+        conn.execute(
+            _CREATE_CASE_EDGES_SQL_BUSINESS if use_split else _CREATE_CASE_EDGES_SQL
+        )
         pb.set_postfix_str("case_edges ✓")
         pb.update(1)
 
@@ -222,7 +339,9 @@ def find_variants(
             if iso == "db_signature":
                 groups = _group_db_signature(conn, cases_with_edges)
             else:
-                groups = _group_trace(conn, cases_with_edges)
+                groups = _group_trace(
+                    conn, cases_with_edges, business_only=use_split
+                )
             pb.set_postfix_str(f"→ {len(groups):,} variants")
             pb.update(1)
     else:
@@ -254,6 +373,19 @@ def find_variants(
             else:
                 raise ValueError(f"unknown iso strategy: {iso!r}")
             pb.set_postfix_str(f"→ {len(groups):,} variants")
+
+    # ---- Step 3b: re-introduce resource objects on the rep graphs ----
+    if resource_set:
+        with _tqdm(
+            total=1,
+            desc="[3/4] enriching with resources",
+            unit="query",
+            bar_format="{desc} {bar} [{elapsed}]",
+            **_bar_kw,
+        ) as pb:
+            n_added = _enrich_with_resources(conn, groups)
+            pb.set_postfix_str(f"+{n_added:,} resource edges")
+            pb.update(1)
 
     # ---- Step 4: format Variant objects ----
     with _tqdm(
@@ -288,6 +420,162 @@ def find_variants_naive_db(ocel_db: OcelDuckDB, leading_type: str) -> Variants:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_object_types(
+    conn,
+    business_obj_types: Optional[List[str]],
+    resource_types: Optional[List[str]],
+    leading_type: Optional[str],
+) -> tuple[set[str], set[str]]:
+    """
+    Resolve the (business, resource) obj_type partition. Rules:
+
+      both None         → all types business, no resources
+      only resources    → all other types are business
+      only business     → all other types are resources
+      both given        → types not in either set are ignored
+    """
+    if business_obj_types is None and resource_types is None:
+        all_types = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT obj_type FROM objects").fetchall()
+        }
+        return all_types, set()
+
+    business = set(business_obj_types) if business_obj_types is not None else None
+    resources = set(resource_types) if resource_types is not None else None
+
+    if business is not None and resources is not None:
+        if business & resources:
+            raise ValueError(
+                "business_obj_types and resource_types must be disjoint; "
+                f"overlap: {sorted(business & resources)}"
+            )
+    elif business is None:  # resources given, infer business from rest
+        all_types = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT obj_type FROM objects").fetchall()
+        }
+        business = all_types - resources
+    else:  # business given, infer resources from rest
+        all_types = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT obj_type FROM objects").fetchall()
+        }
+        resources = all_types - business
+
+    if not business:
+        raise ValueError(
+            "business object set is empty after resolution — pass at least "
+            "one type via business_obj_types or remove some entries from "
+            "resource_types"
+        )
+    if leading_type is not None and leading_type in resources:
+        raise ValueError(
+            f"leading_type={leading_type!r} is declared as a resource type; "
+            "leading_type must be a business object type"
+        )
+    if leading_type is not None and leading_type not in business:
+        raise ValueError(
+            f"leading_type={leading_type!r} is not in the business object "
+            f"set {sorted(business)}"
+        )
+    return business, resources
+
+
+def _materialise_type_partition(
+    conn, business: set[str], resources: set[str]
+) -> None:
+    """
+    Materialise TEMP TABLEs ``business_objects(obj_id, obj_type)`` and
+    ``resource_objects(obj_id, obj_type)`` from the chosen partition.
+    """
+    biz_df = pl.DataFrame(  # noqa: F841 — picked up by DuckDB replacement scan
+        {"obj_type": sorted(business)}, schema={"obj_type": pl.Utf8}
+    )
+    conn.execute(
+        "CREATE OR REPLACE TEMP TABLE business_objects AS "
+        "SELECT o.obj_id, o.obj_type "
+        "FROM objects o JOIN biz_df t ON o.obj_type = t.obj_type"
+    )
+    res_df = pl.DataFrame(  # noqa: F841
+        {"obj_type": sorted(resources)}, schema={"obj_type": pl.Utf8}
+    )
+    conn.execute(
+        "CREATE OR REPLACE TEMP TABLE resource_objects AS "
+        "SELECT o.obj_id, o.obj_type "
+        "FROM objects o JOIN res_df t ON o.obj_type = t.obj_type"
+    )
+
+
+def _enrich_with_resources(
+    conn, groups: List[_iso.VariantGroup]
+) -> int:
+    """
+    Add resource-induced EOG edges to each representative graph in
+    ``groups``. Edges between events that already exist in a rep graph
+    have their ``type`` and ``objects`` attributes merged with the
+    resource obj_type / obj_id; new edges are added with the same schema.
+    Returns the number of (src, tgt, obj_id) rows reintroduced.
+    """
+    if not groups:
+        return 0
+
+    # rep_events(rep_case_id, event_id): one row per (rep, event) in any rep graph
+    rep_rows: list[tuple[str, str]] = []
+    by_rep: dict[str, nx.DiGraph] = {}
+    for rep_id, _members, rep_g in groups:
+        by_rep[rep_id] = rep_g
+        for n in rep_g.nodes():
+            rep_rows.append((rep_id, n))
+
+    rep_df = pl.DataFrame(  # noqa: F841
+        {
+            "rep_case_id": [r[0] for r in rep_rows],
+            "event_id":    [r[1] for r in rep_rows],
+        },
+        schema={"rep_case_id": pl.Utf8, "event_id": pl.Utf8},
+    )
+    conn.execute(
+        "CREATE OR REPLACE TEMP TABLE rep_events AS SELECT * FROM rep_df"
+    )
+
+    rows = conn.execute(_RESOURCE_EDGES_SQL).fetchall()
+
+    # Aggregate per (rep_case_id, src, tgt): set of types, set of obj_ids
+    pair_data: dict[tuple[str, str, str], dict] = defaultdict(
+        lambda: {"types": set(), "objects": set()}
+    )
+    for rep_case_id, obj_id, obj_type, src, tgt in rows:
+        d = pair_data[(rep_case_id, src, tgt)]
+        d["types"].add(obj_type)
+        d["objects"].add(obj_id)
+
+    # Merge into rep graphs.
+    for (rep_case_id, src, tgt), d in pair_data.items():
+        g = by_rep.get(rep_case_id)
+        if g is None:
+            continue
+        if g.has_edge(src, tgt):
+            edata = g[src][tgt]
+            existing_types = (
+                set(edata.get("type", "").split("|"))
+                if edata.get("type")
+                else set()
+            )
+            existing_objs = set(edata.get("objects", []) or [])
+            edata["type"] = "|".join(sorted(existing_types | d["types"]))
+            edata["objects"] = sorted(existing_objs | d["objects"])
+        else:
+            g.add_edge(
+                src,
+                tgt,
+                type="|".join(sorted(d["types"])),
+                objects=sorted(d["objects"]),
+            )
+
+    return len(rows)
 
 
 def _materialise_case_objs(conn, cases: Dict[str, set]) -> None:
@@ -411,14 +699,19 @@ def _group_db_signature(
 def _group_trace(
     conn,
     cases_with_edges: set[str],
+    *,
+    business_only: bool = False,
 ) -> List[_iso.VariantGroup]:
     """
     Bucket cases by their timestamp-ordered trace (with per-event obj-type
     counts), then build a representative graph only for the first rep of
-    each bucket.
+    each bucket. ``business_only`` restricts the per-event obj-type
+    counts to objects in TEMP TABLE ``business_objects``.
     """
     return _group_from_sql_buckets(
-        conn, cases_with_edges, _iso.trace_buckets(conn)
+        conn,
+        cases_with_edges,
+        _iso.trace_buckets(conn, business_only=business_only),
     )
 
 

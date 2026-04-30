@@ -147,3 +147,113 @@ class TestIsoStrategies:
         t1 = sum(len(x.executions) for x in v)
         t2 = sum(len(x.executions) for x in v_exact)
         assert t1 == t2, f"[{ext}/{iso}] total executions differ: {t1} vs {t2}"
+
+
+# ---------------------------------------------------------------------------
+# Oracle 3: business / resource type split
+# ---------------------------------------------------------------------------
+#
+# `container_logistics` has Forklift / Truck / Vehicle as obvious resources
+# — they are used across many unrelated CustomerOrders.
+
+RESOURCE_TYPES = ["Forklift", "Truck", "Vehicle"]
+
+
+class TestBusinessResourceSplit:
+    def test_no_split_matches_default(self):
+        """Passing business=all_types is a no-op vs no params at all."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            all_types = sorted(
+                r[0]
+                for r in db.conn.execute(
+                    "SELECT DISTINCT obj_type FROM objects"
+                ).fetchall()
+            )
+            v_default = find_variants(
+                db, leading_type=LEADING_TYPE, iso="wl+vf2", verbose=False
+            )
+            v_explicit = find_variants(
+                db,
+                leading_type=LEADING_TYPE,
+                iso="wl+vf2",
+                business_obj_types=all_types,
+                verbose=False,
+            )
+            assert len(v_default) == len(v_explicit)
+            s1 = sorted([x.support for x in v_default], reverse=True)
+            s2 = sorted([x.support for x in v_explicit], reverse=True)
+            assert s1 == s2
+        finally:
+            db.close()
+
+    def test_resources_preserve_total_executions(self):
+        """Splitting types must never lose or duplicate executions."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            v = find_variants(
+                db,
+                leading_type=LEADING_TYPE,
+                iso="wl+vf2",
+                resource_types=RESOURCE_TYPES,
+                verbose=False,
+            )
+            v0 = find_variants(
+                db, leading_type=LEADING_TYPE, iso="wl+vf2", verbose=False
+            )
+            t1 = sum(len(x.executions) for x in v)
+            t2 = sum(len(x.executions) for x in v0)
+            assert t1 == t2
+        finally:
+            db.close()
+
+    def test_resource_obj_ids_appear_on_rep_edges(self):
+        """At least one rep graph carries resource obj_ids on its edges."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            v = find_variants(
+                db,
+                leading_type=LEADING_TYPE,
+                iso="wl+vf2",
+                resource_types=RESOURCE_TYPES,
+                verbose=False,
+            )
+            seen_resource_types: set[str] = set()
+            for variant in v:
+                for _u, _w, edata in variant.graph.edges(data=True):
+                    for t in (edata.get("type") or "").split("|"):
+                        if t in RESOURCE_TYPES:
+                            seen_resource_types.add(t)
+            assert seen_resource_types, (
+                "expected at least one resource type to be re-introduced "
+                "on some rep edge after enrichment"
+            )
+        finally:
+            db.close()
+
+    def test_business_resource_overlap_raises(self):
+        db = import_ocel_db(str(SOURCE))
+        try:
+            with pytest.raises(ValueError, match="disjoint"):
+                find_variants(
+                    db,
+                    leading_type=LEADING_TYPE,
+                    business_obj_types=["CustomerOrder", "Container"],
+                    resource_types=["Container"],
+                    verbose=False,
+                )
+        finally:
+            db.close()
+
+    def test_leading_type_as_resource_raises(self):
+        db = import_ocel_db(str(SOURCE))
+        try:
+            with pytest.raises(ValueError, match="resource"):
+                find_variants(
+                    db,
+                    leading_type=LEADING_TYPE,
+                    resource_types=[LEADING_TYPE, "Forklift"],
+                    verbose=False,
+                )
+        finally:
+            db.close()

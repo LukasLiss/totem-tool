@@ -198,7 +198,9 @@ def db_signature_buckets(conn: duckdb.DuckDBPyConnection) -> Dict[str, List[str]
 # the cheapest strategy after `db_signature` and gives a useful baseline
 # for "how much does temporal order match structural equivalence?".
 
-_TRACE_SQL = """
+# Two variants: full (consider all object types) and business-only (consider only
+# object types in the TEMP TABLE `business_objects`).
+_TRACE_SQL_FULL = """
 WITH event_obj_counts AS (
     SELECT ce.case_id, ce.event_id, o.obj_type, COUNT(*) AS n
     FROM case_events ce
@@ -227,8 +229,42 @@ FROM event_step
 GROUP BY case_id
 """
 
+_TRACE_SQL_BUSINESS = """
+WITH event_obj_counts AS (
+    SELECT ce.case_id, ce.event_id, o.obj_type, COUNT(*) AS n
+    FROM case_events ce
+    JOIN event_object eo      ON ce.event_id = eo.event_id
+    JOIN business_objects bo  ON eo.obj_id   = bo.obj_id
+    JOIN objects     o        ON eo.obj_id   = o.obj_id
+    GROUP BY ce.case_id, ce.event_id, o.obj_type
+),
+event_obj_sig AS (
+    SELECT case_id, event_id,
+           STRING_AGG(obj_type || ':' || n, ',' ORDER BY obj_type) AS obj_part
+    FROM event_obj_counts
+    GROUP BY case_id, event_id
+),
+event_step AS (
+    SELECT ce.case_id, ce.event_id, e.activity, e.timestamp_unix,
+           COALESCE(eos.obj_part, '') AS obj_part
+    FROM case_events ce
+    JOIN events e ON ce.event_id = e.event_id
+    LEFT JOIN event_obj_sig eos
+           ON eos.case_id = ce.case_id AND eos.event_id = ce.event_id
+)
+SELECT case_id,
+       STRING_AGG(activity || '{' || obj_part || '}', '|'
+                  ORDER BY timestamp_unix, event_id) AS trace
+FROM event_step
+GROUP BY case_id
+"""
 
-def trace_buckets(conn: duckdb.DuckDBPyConnection) -> Dict[str, List[str]]:
+
+def trace_buckets(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    business_only: bool = False,
+) -> Dict[str, List[str]]:
     """
     Compute one bucket per timestamp-ordered trace in pure SQL.
 
@@ -237,10 +273,14 @@ def trace_buckets(conn: duckdb.DuckDBPyConnection) -> Dict[str, List[str]]:
     event. Cases sharing the exact same trace string land in the same bucket.
 
     Requires a TEMP TABLE `case_events(case_id, event_id)` to be present.
+    When ``business_only`` is True, also requires the TEMP TABLE
+    ``business_objects(obj_id, obj_type)`` and counts only objects whose
+    type is in that table.
 
     Returns: dict[trace -> list of case_ids in that bucket].
     """
-    rows = conn.execute(_TRACE_SQL).fetchall()
+    sql = _TRACE_SQL_BUSINESS if business_only else _TRACE_SQL_FULL
+    rows = conn.execute(sql).fetchall()
     buckets: dict[str, list[str]] = defaultdict(list)
     for case_id, tr in rows:
         buckets[tr].append(case_id)

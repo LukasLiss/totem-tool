@@ -24,18 +24,44 @@ import duckdb
 import networkx as nx
 
 
-def build_object_graph(conn: duckdb.DuckDBPyConnection) -> tuple[nx.Graph, dict[str, str]]:
-    """Build the undirected object co-occurrence graph and an obj_id→type map."""
-    edges = conn.execute(
-        """
-        SELECT DISTINCT eo1.obj_id AS a, eo2.obj_id AS b
-        FROM event_object eo1
-        JOIN event_object eo2
-          ON eo1.event_id = eo2.event_id
-        WHERE eo1.obj_id < eo2.obj_id
-        """
-    ).fetchall()
-    types = dict(conn.execute("SELECT obj_id, obj_type FROM objects").fetchall())
+def build_object_graph(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    business_only: bool = False,
+) -> tuple[nx.Graph, dict[str, str]]:
+    """
+    Build the undirected object co-occurrence graph and an obj_id→type map.
+
+    When ``business_only`` is True, both endpoints of every edge and every
+    node in the returned graph are drawn from the TEMP TABLE
+    ``business_objects(obj_id, obj_type)``. The caller is responsible for
+    materialising that table beforehand.
+    """
+    if business_only:
+        edges = conn.execute(
+            """
+            SELECT DISTINCT eo1.obj_id AS a, eo2.obj_id AS b
+            FROM event_object eo1
+            JOIN event_object eo2 ON eo1.event_id = eo2.event_id
+            JOIN business_objects b1 ON eo1.obj_id = b1.obj_id
+            JOIN business_objects b2 ON eo2.obj_id = b2.obj_id
+            WHERE eo1.obj_id < eo2.obj_id
+            """
+        ).fetchall()
+        types = dict(
+            conn.execute("SELECT obj_id, obj_type FROM business_objects").fetchall()
+        )
+    else:
+        edges = conn.execute(
+            """
+            SELECT DISTINCT eo1.obj_id AS a, eo2.obj_id AS b
+            FROM event_object eo1
+            JOIN event_object eo2
+              ON eo1.event_id = eo2.event_id
+            WHERE eo1.obj_id < eo2.obj_id
+            """
+        ).fetchall()
+        types = dict(conn.execute("SELECT obj_id, obj_type FROM objects").fetchall())
 
     g = nx.Graph()
     g.add_nodes_from(types.keys())
