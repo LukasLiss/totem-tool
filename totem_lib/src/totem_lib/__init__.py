@@ -8,7 +8,7 @@ from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics, discover_occn, occn_playout
 from .dfg import OCDFG, CCDFG
-from .variants import calculate_layout
+from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_distance
 
 # Should be kept alphabetically sorted.
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
@@ -19,6 +19,8 @@ __all__ = [
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
     "discover_oc_petri_net_polars",
+    "Edit",
+    "EditCosts",
     "filter_dead_objects",
     "import_ocel",
     "mlpaDiscovery",
@@ -30,6 +32,7 @@ __all__ = [
     "OCDFG",
     "ocpns_are_similar",
     "mlpaDiscovery",
+    "process_execution_edit_distance",
     "Totem",
     "totemDiscovery",
 ]
