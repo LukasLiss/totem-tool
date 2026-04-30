@@ -12,7 +12,7 @@ urlpatterns = [
     path('health-check/', health_check, name='health-check'), 
     path('greeting/', greeting, name='greeting'),
     path('ocdfg/', OCDFGViewSet, name='ocdfg'),
-    path("", include(router.urls)),
+    path("", include(router.urls)),                                     #This one is to include the automatic urls from the router above
     path("variants/", variants, name="variants"),
-    path("delete-data/", delete_user_data, name="delete_user_data"), #This one is for deleting all user data
+    path("delete-data/", delete_user_data, name="delete_user_data"),    #This one is for deleting all user data
 ]
