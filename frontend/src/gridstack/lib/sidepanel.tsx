@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridstackProvider";
 import {
   Trash, CirclePlus, Image, TextInitial, Hash
 } from "lucide-react"

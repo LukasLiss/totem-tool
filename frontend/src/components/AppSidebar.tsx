@@ -7,10 +7,8 @@ import {
   ChevronRight, LogOut
 } from "lucide-react"
 
-import { NavMain } from "@/components/nav-main"
-import { NavDashboard } from "@/components/nav-dashboard"
-import { NavProjects } from "@/components/nav-projects"
-import { Switcher } from "@/components/team-switcher"
+import { NavDashboard } from "@/components/NavDashboard"
+import { Switcher } from "@/components/TeamSwitcher"
 import {
   Sidebar,
   SidebarContent,
@@ -21,8 +19,8 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
-import { NavOverview } from "./nav-overview";
-import { NavAnalysis } from "./nav-analysis";
+import { NavOverview } from "./NavOverview";
+import { NavAnalysis } from "./NavAnalysis";
 import { getDashboards } from "@/api/dashboardApi";
 import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";

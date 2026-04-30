@@ -9,10 +9,10 @@ router.register(r'files', EventLogViewSet, basename="userfile")
 router.register(r'dashboard', DashboardViewSet, basename="dashboard")
 
 urlpatterns = [
-    path('health-check/', health_check, name='health-check'),
+    path('health-check/', health_check, name='health-check'), 
     path('greeting/', greeting, name='greeting'),
     path('ocdfg/', OCDFGViewSet, name='ocdfg'),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
-    path("delete-data/", delete_user_data, name="delete_user_data"),
+    path("delete-data/", delete_user_data, name="delete_user_data"), #This one is for deleting all user data
 ]

@@ -1,13 +1,13 @@
 import React, { useContext, useEffect } from "react";
 import GridProvider from "../gridstack/lib/gridstackprovider"
-import DashboardGrid from "../gridstack/lib/dashboard_grid";
+import DashboardGrid from "../gridstack/lib/dashboardGrid";
 import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
   SidebarInset,
 } from "@/components/ui/sidebar"
-import GridContainer from "../gridstack/lib/grid_container";
-import { useGrid } from "../gridstack/lib/gridstackprovider";
+import GridContainer from "../gridstack/lib/gridContainer";
+import { useGrid } from "../gridstack/lib/gridstackProvider";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
