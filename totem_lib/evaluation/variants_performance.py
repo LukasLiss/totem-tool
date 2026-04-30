@@ -52,7 +52,8 @@ signal.signal(signal.SIGALRM, _alarm)
 
 
 def _measure(extraction, leading_type, iso, db, timeout_s,
-             business_obj_types=None, resource_types=None):
+             business_obj_types=None, resource_types=None,
+             resource_aware=False):
     tracemalloc.start()
     t0 = time.perf_counter()
     try:
@@ -64,6 +65,7 @@ def _measure(extraction, leading_type, iso, db, timeout_s,
             iso=iso,
             business_obj_types=business_obj_types,
             resource_types=resource_types,
+            resource_aware=resource_aware,
             verbose=False,
         )
         signal.alarm(0)
@@ -141,6 +143,7 @@ def append_row(row: dict) -> None:
 def evaluate(
     duckdb_path: Path, timeout_s: int, extractions, isos,
     business_obj_types=None, resource_types=None,
+    resource_aware=False,
 ) -> None:
     print(f"\n=== {duckdb_path.name} ===", flush=True)
     db = OcelDuckDB.load(str(duckdb_path))
@@ -177,6 +180,7 @@ def evaluate(
                     ext, lt, iso, db, timeout_s,
                     business_obj_types=business_obj_types,
                     resource_types=resource_types,
+                    resource_aware=resource_aware,
                 )
                 last_status = m["status"]
                 row = {
@@ -225,6 +229,8 @@ def main() -> None:
                         help="comma-separated obj_types to treat as resources "
                              "(others become business unless --business-types "
                              "is also given)")
+    parser.add_argument("--resource-aware", action="store_true",
+                        help="add resource-induced edges to the iso comparison")
     args = parser.parse_args()
 
     duckdb_paths = sorted(args.data_dir.glob("*.duckdb"))
@@ -242,6 +248,7 @@ def main() -> None:
                 p, args.timeout, args.extractions, args.isos,
                 business_obj_types=args.business_types,
                 resource_types=args.resource_types,
+                resource_aware=args.resource_aware,
             )
         except Exception as e:
             import traceback

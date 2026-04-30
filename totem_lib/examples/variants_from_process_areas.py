@@ -208,6 +208,12 @@ def main() -> None:
         help="how many top variants to show per area (default: 5)",
     )
     parser.add_argument(
+        "--resource-aware", action="store_true",
+        help="add resource-induced edges to the iso comparison per area "
+             "so that executions with different resource usage patterns "
+             "become different variants",
+    )
+    parser.add_argument(
         "--quiet-mlpa", action="store_true",
         help="suppress the (very verbose) totemDiscovery / mlpaDiscovery "
              "internal prints",
@@ -276,6 +282,7 @@ def main() -> None:
                     iso=args.iso,
                     business_obj_types=area["obj_types"],
                     resource_types=resources or None,
+                    resource_aware=args.resource_aware and bool(resources),
                     verbose=not args.no_verbose,
                 )
             except ValueError as e:

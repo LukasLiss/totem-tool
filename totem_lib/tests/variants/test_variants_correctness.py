@@ -257,3 +257,72 @@ class TestBusinessResourceSplit:
                 )
         finally:
             db.close()
+
+    def test_resource_aware_requires_resource_set(self):
+        """resource_aware=True without any resources is a misuse."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            with pytest.raises(ValueError, match="resource_aware"):
+                find_variants(
+                    db,
+                    leading_type=LEADING_TYPE,
+                    resource_aware=True,
+                    verbose=False,
+                )
+        finally:
+            db.close()
+
+    def test_resource_aware_preserves_total_executions(self):
+        """resource_aware must never lose or duplicate executions."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            v_aware = find_variants(
+                db,
+                leading_type="Container",
+                resource_types=RESOURCE_TYPES,
+                resource_aware=True,
+                iso="db_signature",
+                verbose=False,
+            )
+            v_base = find_variants(
+                db,
+                leading_type="Container",
+                resource_types=RESOURCE_TYPES,
+                iso="db_signature",
+                verbose=False,
+            )
+            t_aware = sum(len(x.executions) for x in v_aware)
+            t_base = sum(len(x.executions) for x in v_base)
+            assert t_aware == t_base
+        finally:
+            db.close()
+
+    def test_resource_aware_can_split_variants(self):
+        """
+        On Container with Vehicle/Truck/Forklift as resources, the resource
+        usage patterns vary across cases — resource_aware grouping must be
+        at least as fine as the resource-blind baseline.
+        """
+        db = import_ocel_db(str(SOURCE))
+        try:
+            v_blind = find_variants(
+                db,
+                leading_type="Container",
+                resource_types=RESOURCE_TYPES,
+                iso="db_signature",
+                verbose=False,
+            )
+            v_aware = find_variants(
+                db,
+                leading_type="Container",
+                resource_types=RESOURCE_TYPES,
+                resource_aware=True,
+                iso="db_signature",
+                verbose=False,
+            )
+            assert len(v_aware) >= len(v_blind), (
+                f"resource_aware should be at least as fine: "
+                f"got {len(v_aware)} vs blind {len(v_blind)}"
+            )
+        finally:
+            db.close()

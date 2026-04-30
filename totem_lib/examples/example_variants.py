@@ -163,6 +163,13 @@ def main() -> None:
              "(others become business unless --business-types is also given)",
     )
     parser.add_argument(
+        "--resource-aware", action="store_true",
+        help="add resource-induced edges to the iso comparison so that "
+             "executions with different resource usage patterns become "
+             "different variants (default: off, resources only added to "
+             "rep graphs after grouping for visualisation)",
+    )
+    parser.add_argument(
         "--no-verbose", action="store_true",
         help="suppress progress bars",
     )
@@ -193,6 +200,8 @@ def main() -> None:
         print(f"  Business   : {business_obj_types}")
     if resource_types is not None:
         print(f"  Resources  : {resource_types}")
+    if args.resource_aware:
+        print(f"  Resource-aware iso: ON")
     print(_sep("═"))
 
     db = OcelDuckDB.load(str(args.db))
@@ -204,6 +213,7 @@ def main() -> None:
             iso=args.iso,
             business_obj_types=business_obj_types,
             resource_types=resource_types,
+            resource_aware=args.resource_aware,
             verbose=not args.no_verbose,
         )
     finally:

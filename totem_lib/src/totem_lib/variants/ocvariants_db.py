@@ -109,6 +109,42 @@ JOIN case_events ce2 ON g.tgt = ce2.event_id
                     AND ce1.case_id = ce2.case_id
 """
 
+# Resource-induced edges added INTO case_edges for every case (not just
+# representatives). Used by `resource_aware=True` so the iso check sees
+# resource patterns. Same case-local EOG semantics as the rep-only
+# enrichment SQL below.
+_INSERT_CASE_RESOURCE_EDGES_SQL = """
+INSERT INTO case_edges (case_id, obj_id, src, tgt)
+WITH res_events_in_case AS (
+    SELECT ce.case_id,
+           ce.event_id,
+           eo.obj_id,
+           e.timestamp_unix
+    FROM case_events  ce
+    JOIN event_object eo ON ce.event_id = eo.event_id
+    JOIN events       e  ON ce.event_id = e.event_id
+    JOIN resource_objects ro ON eo.obj_id = ro.obj_id
+),
+ranked AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY case_id, obj_id
+               ORDER BY timestamp_unix, event_id
+           ) AS rn
+    FROM res_events_in_case
+)
+SELECT a.case_id,
+       a.obj_id,
+       a.event_id AS src,
+       b.event_id AS tgt
+FROM ranked a
+JOIN ranked b
+  ON a.case_id = b.case_id
+ AND a.obj_id  = b.obj_id
+ AND b.rn      = a.rn + 1
+"""
+
+
 # Resource-induced edges between events that already belong to a
 # representative case. We use **case-local** EOG ranking here (rank a
 # resource's events within each rep case by timestamp) instead of the
@@ -181,6 +217,7 @@ def find_variants(
     iso: IsoStrategy = "wl+vf2",
     business_obj_types: Optional[List[str]] = None,
     resource_types: Optional[List[str]] = None,
+    resource_aware: bool = False,
     verbose: bool = True,
 ) -> Variants:
     """
@@ -217,6 +254,16 @@ def find_variants(
           - both given        → types not in either set are ignored entirely.
         Validation: business ∩ resources must be empty; for leading
         extractions, leading_type must be in the business set.
+    :param resource_aware: If True, resource-induced edges (case-local EOG
+        ranking) are added to ``case_edges`` *before* the iso comparison.
+        Process executions are still extracted from the business projection
+        only — so cases stay small — but two executions that share the
+        same business graph will be grouped into different variants if
+        their resource usage patterns differ (e.g. one execution uses the
+        same forklift across two events, another uses two different
+        forklifts). Requires ``resource_types`` (explicit or inferred) to
+        be non-empty. When True, the post-grouping resource enrichment
+        step is skipped because resources are already on the rep graphs.
     :param verbose: Show per-step progress bars in the terminal.
     :return: Variants sorted by support descending.
     """
@@ -237,12 +284,18 @@ def find_variants(
         conn, business_obj_types, resource_types, leading_type
     )
     use_split = bool(resource_set) or business_obj_types is not None
+    if resource_aware and not resource_set:
+        raise ValueError(
+            "resource_aware=True requires a non-empty resource set — pass "
+            "resource_types or business_obj_types so resources can be inferred"
+        )
     if use_split:
         _materialise_type_partition(conn, business_set, resource_set)
         if verbose:
             _msg(
                 f"  business types: {sorted(business_set)}"
                 f"\n  resource types: {sorted(resource_set) or '∅'}"
+                + ("\n  resource-aware iso: ON" if resource_aware else "")
             )
 
     # ---- Step 1: object graph ----
@@ -313,6 +366,12 @@ def find_variants(
         conn.execute(
             _CREATE_CASE_EDGES_SQL_BUSINESS if use_split else _CREATE_CASE_EDGES_SQL
         )
+        if resource_aware and resource_set:
+            # Add resource-induced (case-local EOG) edges so the iso check
+            # sees resource patterns. Inserted into case_edges so every
+            # downstream consumer (graph builders, db_signature) picks
+            # them up uniformly.
+            conn.execute(_INSERT_CASE_RESOURCE_EDGES_SQL)
         pb.set_postfix_str("case_edges ✓")
         pb.update(1)
 
@@ -339,8 +398,12 @@ def find_variants(
             if iso == "db_signature":
                 groups = _group_db_signature(conn, cases_with_edges)
             else:
+                # When the user asked for resource-aware grouping, we want
+                # the trace to include resource obj_types too — fall back
+                # to the full SQL even if the split is configured.
+                trace_business_only = use_split and not resource_aware
                 groups = _group_trace(
-                    conn, cases_with_edges, business_only=use_split
+                    conn, cases_with_edges, business_only=trace_business_only
                 )
             pb.set_postfix_str(f"→ {len(groups):,} variants")
             pb.update(1)
@@ -375,7 +438,10 @@ def find_variants(
             pb.set_postfix_str(f"→ {len(groups):,} variants")
 
     # ---- Step 3b: re-introduce resource objects on the rep graphs ----
-    if resource_set:
+    # Skipped when resource_aware=True because resource edges were already
+    # injected into case_edges before grouping, so the rep graphs already
+    # carry them.
+    if resource_set and not resource_aware:
         with _tqdm(
             total=1,
             desc="[3/4] enriching with resources",
