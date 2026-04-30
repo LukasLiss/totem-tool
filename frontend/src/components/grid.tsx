@@ -1,6 +1,6 @@
 import React, { useContext, useEffect } from "react";
-import GridProvider from "../gridstack/lib/gridstackprovider"
-import DashboardGrid from "../gridstack/lib/dashboard_grid";
+import GridProvider from "../gridstack/lib/gridstackProvider"
+import DashboardGrid from "../gridstack/lib/dashboardGrid";
 import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
@@ -8,12 +8,12 @@ import {
   SidebarTrigger
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
-import GridContainer from "../gridstack/lib/grid_container";
-import { useGrid } from "../gridstack/lib/gridstackprovider";
+import GridContainer from "../gridstack/lib/gridContainer";
+import { useGrid } from "../gridstack/lib/gridstackProvider";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import { useGridMode } from '../gridstack/lib/gridstackprovider';
+import { useGridMode } from '../gridstack/lib/gridstackProvider';
 import {
   Settings, Save, Minus, Plus
 } from "lucide-react"

@@ -1,9 +1,9 @@
-import { AppSidebar } from "@/components/app-sidebar"
+import { AppSidebar } from "@/components/AppSidebar"
 import { useContext } from "react";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
-import { NumberofEvents } from './react_component/numberofevents';
+import { NumberofEvents } from './react_component/NumberOfEvents';
 import VariantsExplorer from './react_component/VariantsExplorer';
-import FileSelect from './react_component/fileselect';
+import FileSelect from './react_component/FileSelect';
 
 import {
   SidebarInset,

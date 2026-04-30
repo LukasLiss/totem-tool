@@ -46,7 +46,7 @@ interface GridProviderProps {
   options?: GridStackOptions;
 }
 
-export const GridProvider: React.FC<GridProviderProps> = ({
+export const gridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
   selectedFile,
@@ -407,4 +407,4 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   );
 };
 
-export default GridProvider;
+export default gridProvider;
