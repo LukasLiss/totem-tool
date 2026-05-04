@@ -4,6 +4,7 @@ import json
 from functools import cached_property
 from typing import List, Tuple, Dict
 from collections import defaultdict
+from totem_lib.simulation.utils.process_area import ProcessArea
 
 EVENTS_SCHEMA = {
     "_eventId": pl.Utf8,
@@ -549,38 +550,48 @@ class ObjectCentricEventLog:
         # 4. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
-    def filter_by_process_area(self, mlpa: dict, level: int, objects: list[str]) -> "ObjectCentricEventLog":
+    def filter_by_process_area(self, mlpa: dict, process_area: ProcessArea) -> "ObjectCentricEventLog":
         """
         Filters the event log to include only object types from a given process area. Additionally, adds higher
         level objects as a resource attribute to each event.
 
         This method performs two main steps:
-        1. Filters the objects DataFrame to keep only those matching the specified object_types.
+        1. Filters the objects DataFrame to keep only those matching the specified object_types & activities.
         2. Filters the events DataFrame to keep only the events that are associated with
         at least one of the objects from the filtered set and adds higher level objects a resource attribute.
 
         Args:
             mlpa (dict): Dictionary defining the process areas.
-            level (int): The level threshold for process areas.
-            objects (list[str]): List of object types to keep in the log.
+            process_area (ProcessArea): The process area to filter by.
 
         Returns:
             ObjectCentricEventLog: A new, filtered instance of the ObjectCentricEventLog.
         """
         # 1. Filter the objects DataFrame to get only the relevant objects
-        filtered_objects = self.objects.filter(pl.col("_objType").is_in(objects))
+        filtered_objects = self.objects.filter(pl.col("_objType").is_in(process_area.object_types))
 
         # 2. Get object IDs of relevant objects
         relevant_object_ids = filtered_objects.get_column("_objId").to_list()
 
-        # 3. Extract the activity types that are used as resources
+        # 3. Get the level of the process area
+        level = get_level_of_process_area(mlpa, process_area)
+
+        # 4. Extract the object types that are used as resources
+        #    - Higher levels: always resources
+        #    - Same level, different process area: also resources
+        objects_set = set(process_area.object_types)
         resource_object_types = []
         for key, item in mlpa.items():
             if key > level:
                 for object_list, activities in item:
                     resource_object_types.extend(object_list)
+            elif key == level:
+                for object_list, activities in item:
+                    for ot in object_list:
+                        if ot not in objects_set:
+                            resource_object_types.append(ot)
 
-        # 4. Get IDs of resources
+        # 5. Get IDs of resources
         resource_object_ids = (
             self.objects
             .filter(pl.col("_objType").is_in(resource_object_types))
@@ -588,14 +599,16 @@ class ObjectCentricEventLog:
             .to_list()
         )
 
-        # 5. Ensure that _attributes column exists
+        # 6. Ensure that _attributes column exists
         events_df = self.events
         if "_attributes" not in events_df.columns:
             events_df = events_df.with_columns(pl.lit("{}").alias("_attributes"))
 
-        # 6. Filter the events DataFrame
+        # 7. Filter the events DataFrame by activities and objects
         filtered_events = (
             events_df
+            # Filter by activities of the process area
+            .filter(pl.col("_activity").is_in(process_area.activities))
             .with_columns([
                 # Objects to stay in the Dataframe
                 pl.col("_objects")
@@ -607,7 +620,7 @@ class ObjectCentricEventLog:
                 .list.eval(pl.element().filter(pl.element().is_in(resource_object_ids)))
                 .alias("_resources_in_event"),
             ])
-            # Keep only events with at least one object
+            # Keep only events with at least one relevant object
             .filter(pl.col("_kept_objects").list.len() > 0)
             .with_columns([
                 # Add objects column back to Dataframe
@@ -631,7 +644,7 @@ class ObjectCentricEventLog:
             .drop(["_kept_objects", "_resources_in_event"])
         )
 
-        # 7. Return a new event log instance with the filtered DataFrames
+        # 8. Return a new event log instance with the filtered DataFrames
         return ObjectCentricEventLog(events=filtered_events, objects=filtered_objects)
 
     def get_object_ids_by_type(self, object_type: str) -> List[str]:
@@ -643,3 +656,13 @@ class ObjectCentricEventLog:
             .get_column("_objId")
             .to_list()
         )
+
+
+    
+def get_level_of_process_area(mlpa, process_area):
+    process_area_activities = set(process_area.activities)
+    for level in sorted(mlpa.keys()):
+        for _, activities in mlpa[level]:
+            if process_area_activities & activities:
+                return level
+    return None
