@@ -1,0 +1,32 @@
+name: Epic
+description: Tracking issue for a feature broken into sub-issues
+title: "[Epic]: "
+labels: ["type:epic"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One paragraph — what does "done" look like for the user?
+    validations:
+      required: true
+  - type: textarea
+    id: subissues
+    attributes:
+      label: Sub-issues
+      description: |
+        Use GitHub's native "Add sub-issue" button to attach concrete work items.
+        This section is a written summary in case the sub-issue list grows long.
+      value: |
+        - [ ]
+        - [ ]
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Things explicitly NOT covered by this epic, to avoid scope creep
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Design refs, related epics, dependencies, open questions

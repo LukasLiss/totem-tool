@@ -1,0 +1,30 @@
+name: Feature
+description: A new user-facing capability
+title: "[Feature]: "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why
+      description: What problem does this solve, for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What's in / what's out
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Bullet list a reviewer can tick off
+      value: |
+        - [ ]
+        - [ ]
+  - type: textarea
+    id: notes
+    attributes:
+      label: Implementation notes
+      description: Files to touch, existing utilities to reuse, design refs
