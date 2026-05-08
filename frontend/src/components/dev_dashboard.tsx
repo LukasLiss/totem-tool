@@ -13,6 +13,7 @@ import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -49,6 +50,15 @@ export function DevDashboard() {
               colWidth={120}
               embedded={true}
             />
+          </CardContent>
+        </Card>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>OC Handover of Work</CardTitle>
+            <CardDescription>Object-centric resource handover analysis</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 pb-0">
+            <OCHandoverExplorer fileId={selectedFile?.id} embedded={true} />
           </CardContent>
         </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />

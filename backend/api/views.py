@@ -880,6 +880,82 @@ def variants(request):
         "object_types": ocel.object_types
     }, status=status.HTTP_200_OK)
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def ochandover(request):
+    from totem_lib.ochandover.ochandover import OCHANDOVER
+
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    method = request.query_params.get("method", "oc")
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            path = uf.file.path
+            if not os.path.exists(path):
+                return Response({"error": f"Path does not exist: {path}"}, status=status.HTTP_400_BAD_REQUEST)
+            ocel = _build_ocel_from_path(path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        if method == "flattened":
+            case_type = request.query_params.get("case_type", "")
+            resource_type = request.query_params.get("resource_type", "")
+            if not case_type or not resource_type:
+                return Response(
+                    {"error": "Missing ?case_type or ?resource_type"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            graph = OCHANDOVER.from_ocel_flattened(ocel, case_type=case_type, resource_type=resource_type)
+        else:
+            resource_types_raw = request.query_params.get("resource_types", "")
+            businessobject_types_raw = request.query_params.get("businessobject_types", "")
+            if not resource_types_raw or not businessobject_types_raw:
+                return Response(
+                    {"error": "Missing ?resource_types or ?businessobject_types"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()]
+            businessobject_types = [t.strip() for t in businessobject_types_raw.split(",") if t.strip()]
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Handover computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    nodes = [
+        {"id": node_id, "object_type": data.get("object_type", "unknown")}
+        for node_id, data in graph.nodes(data=True)
+    ]
+    edges = [
+        {
+            "source": u,
+            "target": v,
+            "businessobject_type": data.get("businessobject_type", "unknown"),
+            "weight": round(data.get("weight", 0), 6),
+            "raw_weight": int(data.get("raw_weight", 0)),
+        }
+        for u, v, data in graph.edges(data=True)
+    ]
+
+    return Response({"nodes": nodes, "edges": edges}, status=status.HTTP_200_OK)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def OCDFGViewSet(request):
