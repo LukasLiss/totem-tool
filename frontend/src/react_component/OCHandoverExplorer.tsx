@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -72,8 +72,19 @@ export default function OCHandoverExplorer({
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
+  const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [maxGap, setMaxGap] = useState<number | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const savedScroll = useRef(0);
+  const scrollPending = useRef(false);
+
+  // Restore scroll position after any view-switch to prevent layout-shift jump
+  useLayoutEffect(() => {
+    if (!scrollPending.current) return;
+    scrollPending.current = false;
+    window.scrollTo({ top: savedScroll.current });
+  }, [selectedNode, viewMode]);
 
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
@@ -86,6 +97,7 @@ export default function OCHandoverExplorer({
       setBoTypes(new Set());
       setData(null);
       setStatus("idle");
+      hasStartedLoadingRef.current = false;
       setHasStartedLoading(false);
       return;
     }
@@ -97,6 +109,7 @@ export default function OCHandoverExplorer({
     setFlatResourceType("");
     setData(null);
     setStatus("idle");
+    hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
 
     const currentFileId = fileId;
@@ -130,14 +143,18 @@ export default function OCHandoverExplorer({
   useEffect(() => {
     setData(null);
     setStatus("idle");
+    hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
     setErrorMsg("");
     setMaxGap(null);
   }, [method]);
 
+  // Reset selected node when data changes
+  useEffect(() => { setSelectedNode(null); }, [data]);
+
   // Phase 2: compute handover when triggered
   useEffect(() => {
-    if (!fileId || !hasStartedLoading) return;
+    if (!fileId || !hasStartedLoadingRef.current) return;
     const currentMethod = method;
     if (currentMethod === "oc" && (resourceTypes.size === 0 || boTypes.size === 0)) return;
     if (currentMethod === "flattened" && (!caseType || !flatResourceType)) return;
@@ -189,8 +206,9 @@ export default function OCHandoverExplorer({
   }, [fileId, hasStartedLoading, onDataLoad]);
 
   const handleCompute = () => {
+    hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
-    setTimeout(() => setHasStartedLoading(true), 0);
+    setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
   const toggleResourceType = (t: string) =>
@@ -321,21 +339,32 @@ export default function OCHandoverExplorer({
         {status === "ready" && data && (
           <>
             <div className="flex gap-2">
-              <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => setViewMode("graph")}>
+              <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setViewMode("graph"); }}>
                 Graph
               </Button>
-              <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => setViewMode("table")}>
+              <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setViewMode("table"); }}>
                 Table
               </Button>
             </div>
 
             {viewMode === "graph" && (
-              <HandoverGraph
-                nodes={data.nodes}
-                edges={data.edges}
-                boTypeColors={boTypeColors}
-                nodeTypeColors={nodeTypeColors}
-              />
+              selectedNode ? (
+                <NodeDetailView
+                  selectedNode={selectedNode}
+                  data={data}
+                  boTypeColors={boTypeColors}
+                  nodeTypeColors={nodeTypeColors}
+                  onBack={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setSelectedNode(null); }}
+                />
+              ) : (
+                <HandoverGraph
+                  nodes={data.nodes}
+                  edges={data.edges}
+                  boTypeColors={boTypeColors}
+                  nodeTypeColors={nodeTypeColors}
+                  onNodeClick={(id) => { savedScroll.current = window.scrollY; scrollPending.current = true; setSelectedNode(id); }}
+                />
+              )
             )}
 
             {viewMode === "table" && (
@@ -439,11 +468,13 @@ function HandoverGraph({
   edges,
   boTypeColors,
   nodeTypeColors,
+  onNodeClick,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
   boTypeColors: Record<string, string>;
   nodeTypeColors: Record<string, string>;
+  onNodeClick?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -451,6 +482,8 @@ function HandoverGraph({
   const [size, setSize] = useState({ width: 700, height: 450 });
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const dragHasMoved = useRef(false);
+  const mouseDownPos = useRef({ x: 0, y: 0 });
 
   // Measure container
   useEffect(() => {
@@ -654,11 +687,15 @@ function HandoverGraph({
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     dragOffset.current = { x: e.clientX - rect.left - pos.x, y: e.clientY - rect.top - pos.y };
+    mouseDownPos.current = { x: e.clientX, y: e.clientY };
+    dragHasMoved.current = false;
     setDragId(id);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragId) return;
+    if (Math.hypot(e.clientX - mouseDownPos.current.x, e.clientY - mouseDownPos.current.y) > 4)
+      dragHasMoved.current = true;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     setPositions(prev => ({
@@ -725,8 +762,9 @@ function HandoverGraph({
               <g
                 key={node.id}
                 transform={`translate(${pos.x},${pos.y})`}
-                style={{ cursor: "grab" }}
+                style={{ cursor: onNodeClick ? "pointer" : "grab" }}
                 onMouseDown={e => handleNodeMouseDown(node.id, e)}
+                onClick={() => { if (!dragHasMoved.current) onNodeClick?.(node.id); }}
               >
                 <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                 <text
@@ -766,6 +804,259 @@ function HandoverGraph({
           </p>
           <div className="space-y-1">
             {boTypes.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: boTypeColors[t] ?? "#94a3b8" }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── NodeDetailView ─────────────────────────────────────────── */
+function NodeDetailView({
+  selectedNode,
+  data,
+  boTypeColors,
+  nodeTypeColors,
+  onBack,
+}: {
+  selectedNode: string;
+  data: HandoverData;
+  boTypeColors: Record<string, string>;
+  nodeTypeColors: Record<string, string>;
+  onBack: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(700);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    setWidth(containerRef.current.getBoundingClientRect().width || 700);
+  }, []);
+
+  const outEdges = data.edges.filter(e => e.source === selectedNode && e.target !== selectedNode);
+  const inEdges = data.edges.filter(e => e.target === selectedNode && e.source !== selectedNode);
+  const selfEdges = data.edges.filter(e => e.source === selectedNode && e.target === selectedNode);
+
+  const counterpartIds = [...new Set([
+    ...outEdges.map(e => e.target),
+    ...inEdges.map(e => e.source),
+  ])];
+
+  const nodeById: Record<string, HandoverNode> = {};
+  data.nodes.forEach(n => { nodeById[n.id] = n; });
+
+  const selectedColor = nodeTypeColors[nodeById[selectedNode]?.object_type ?? ""] ?? "#94a3b8";
+
+  const LEFT_X = 90;
+  const RIGHT_X = width - 90;
+  const MID_X = width / 2;
+  const ROW_H = 72;
+  const PADDING_V = 80;
+  const OFFSET_STEP = 11;
+
+  const nc = counterpartIds.length;
+  const rawSvgH = Math.max(260, (nc === 0 ? 1 : nc) * ROW_H + PADDING_V * 2);
+  const centerY = rawSvgH / 2;
+
+  const midYOf = (i: number) => {
+    if (nc === 0) return centerY;
+    const totalH = (nc - 1) * ROW_H;
+    return centerY - totalH / 2 + i * ROW_H;
+  };
+
+  // Self-arc routes BELOW all counterparts: compute the arc height needed to
+  // clear the bottommost counterpart by 30px, then expand svgHeight to fit.
+  const bottomNodeY = nc > 0 ? midYOf(nc - 1) : centerY;
+  const selfArcBaseH = selfEdges.length > 0
+    ? Math.max(60, Math.ceil(((bottomNodeY + NODE_R - centerY) + 30) * 4 / 3))
+    : 0;
+  const svgHeight = selfEdges.length > 0
+    ? Math.max(rawSvgH, Math.ceil(centerY + selfArcBaseH + (selfEdges.length - 1) * 22 + 30))
+    : rawSvgH;
+
+  const allBoTypes = [...new Set([
+    ...outEdges.map(e => e.businessobject_type),
+    ...inEdges.map(e => e.businessobject_type),
+    ...selfEdges.map(e => e.businessobject_type),
+  ])];
+
+  const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+  const minW = Math.min(...data.edges.map(e => e.weight));
+  const maxW = Math.max(...data.edges.map(e => e.weight), minW + 0.0001);
+  const wRange = maxW - minW;
+  const strokeFor = (w: number) => wRange < 1e-6 ? 2.5 : 1.5 + ((w - minW) / wRange) * 4;
+
+  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string }> = [];
+
+  // Out edges: left node → middle counterpart
+  counterpartIds.forEach((cpId, i) => {
+    const cy = midYOf(i);
+    const outs = outEdges.filter(e => e.target === cpId);
+    if (outs.length === 0) return;
+    const dx = MID_X - LEFT_X, dy = cy - centerY;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const perpX = -uy, perpY = ux;
+    outs.forEach((edge, j) => {
+      const lat = (j - (outs.length - 1) / 2) * OFFSET_STEP;
+      const sx = LEFT_X + ux * NODE_R + perpX * lat;
+      const sy = centerY + uy * NODE_R + perpY * lat;
+      const ex = MID_X - ux * (NODE_R + ARROW_LEN) + perpX * lat;
+      const ey = cy - uy * (NODE_R + ARROW_LEN) + perpY * lat;
+      paths.push({
+        key: `out-${cpId}-${j}`,
+        d: `M ${sx} ${sy} L ${ex} ${ey}`,
+        color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+        strokeWidth: strokeFor(edge.weight),
+        markerId: arrowId(edge.businessobject_type),
+      });
+    });
+  });
+
+  // In edges: middle counterpart → right node
+  counterpartIds.forEach((cpId, i) => {
+    const cy = midYOf(i);
+    const ins = inEdges.filter(e => e.source === cpId);
+    if (ins.length === 0) return;
+    const dx = RIGHT_X - MID_X, dy = centerY - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const perpX = -uy, perpY = ux;
+    ins.forEach((edge, j) => {
+      const lat = (j - (ins.length - 1) / 2) * OFFSET_STEP;
+      const sx = MID_X + ux * NODE_R + perpX * lat;
+      const sy = cy + uy * NODE_R + perpY * lat;
+      const ex = RIGHT_X - ux * (NODE_R + ARROW_LEN) + perpX * lat;
+      const ey = centerY - uy * (NODE_R + ARROW_LEN) + perpY * lat;
+      paths.push({
+        key: `in-${cpId}-${j}`,
+        d: `M ${sx} ${sy} L ${ex} ${ey}`,
+        color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+        strokeWidth: strokeFor(edge.weight),
+        markerId: arrowId(edge.businessobject_type),
+      });
+    });
+  });
+
+  // Self-arc: left node → right node, curved BELOW all counterparts.
+  // Control points drop to centerY + arcH, which clears the bottommost counterpart.
+  // The arrowhead points upward into the bottom of the right node.
+  selfEdges.forEach((edge, j) => {
+    const arcH = selfArcBaseH + j * 22;
+    const c1x = LEFT_X, c1y = centerY + arcH;
+    const c2x = RIGHT_X, c2y = centerY + arcH;
+    const tipX = RIGHT_X, tipY = centerY + NODE_R;
+    const ddx = tipX - c2x, ddy = tipY - c2y;
+    const ddLen = Math.hypot(ddx, ddy) || 1;
+    const ex = tipX - (ddx / ddLen) * ARROW_LEN;
+    const ey = tipY - (ddy / ddLen) * ARROW_LEN;
+    paths.push({
+      key: `self-${j}`,
+      d: `M ${LEFT_X} ${centerY + NODE_R} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${ex} ${ey}`,
+      color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+      strokeWidth: strokeFor(edge.weight),
+      markerId: arrowId(edge.businessobject_type),
+    });
+  });
+
+  const lbl = (id: string) => id.length > 11 ? id.slice(0, 11) + "…" : id;
+
+  const nodeTypesPresent = [...new Set([
+    nodeById[selectedNode]?.object_type,
+    ...counterpartIds.map(id => nodeById[id]?.object_type),
+  ].filter(Boolean) as string[])];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="outline" onClick={onBack}>← Back</Button>
+        <span className="text-sm text-muted-foreground">
+          Handover detail for{" "}
+          <span className="font-mono font-semibold text-foreground">{selectedNode}</span>
+        </span>
+      </div>
+
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
+        <svg width={width} height={svgHeight} style={{ display: "block" }}>
+          <defs>
+            {allBoTypes.map(bt => {
+              const color = boTypeColors[bt] ?? "#94a3b8";
+              const id = arrowId(bt);
+              return (
+                <marker key={id} id={id}
+                  markerWidth={ARROW_LEN} markerHeight={ARROW_H}
+                  refX={0} refY={ARROW_H / 2}
+                  orient="auto" markerUnits="userSpaceOnUse">
+                  <polygon points={`0 0, ${ARROW_LEN} ${ARROW_H / 2}, 0 ${ARROW_H}`} fill={color} />
+                </marker>
+              );
+            })}
+          </defs>
+
+          {/* Column labels */}
+          <text x={LEFT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Sender</text>
+          <text x={MID_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Counterparts</text>
+          <text x={RIGHT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Receiver</text>
+
+          {/* Edges */}
+          {paths.map(p => (
+            <path key={p.key} d={p.d} fill="none"
+              markerEnd={`url(#${p.markerId})`}
+              style={{ stroke: p.color, strokeWidth: p.strokeWidth, opacity: 0.85 }} />
+          ))}
+
+          {/* Left node (selected as sender) */}
+          <g transform={`translate(${LEFT_X},${centerY})`}>
+            <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+              style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+          </g>
+
+          {/* Middle counterpart nodes */}
+          {counterpartIds.map((cpId, i) => {
+            const cy = midYOf(i);
+            const color = nodeTypeColors[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+            return (
+              <g key={cpId} transform={`translate(${MID_X},${cy})`}>
+                <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                  style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+              </g>
+            );
+          })}
+
+          {/* Right node (selected as receiver) */}
+          <g transform={`translate(${RIGHT_X},${centerY})`}>
+            <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+              style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+          </g>
+        </svg>
+      </div>
+
+      {/* Legend */}
+      <div className="flex gap-8 text-xs flex-wrap">
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Resources</p>
+          <div className="space-y-1">
+            {nodeTypesPresent.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: nodeTypeColors[t] ?? "#94a3b8" }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Handover object type</p>
+          <div className="space-y-1">
+            {allBoTypes.map(t => (
               <div key={t} className="flex items-center gap-2">
                 <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: boTypeColors[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
