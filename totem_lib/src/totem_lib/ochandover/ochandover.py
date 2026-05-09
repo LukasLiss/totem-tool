@@ -4,10 +4,9 @@ from typing import List
 import polars as pl
 import networkx as nx
 from totem_lib import ObjectCentricEventLog as OCEL
-from collections import defaultdict
 import matplotlib.pyplot as plt
 
-pl.Config.set_tbl_rows(20)      # to show all rows set this to -1
+pl.Config.set_tbl_rows(-1)      # to show all rows set this to -1
 pl.Config.set_tbl_cols(-1)      # show all columns
 pl.Config.set_fmt_str_lengths(None)  # don't truncate strings
 
@@ -20,7 +19,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str]) -> 'OCHANDOVER':
+    def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -154,29 +153,88 @@ class OCHANDOVER(nx.MultiDiGraph):
         print(eog_arcs_unique)
 
 
-        # Annotate events with resource objects
-        
-        arcs_with_resources = (
-            eog_arcs_unique
-            .join(
-                event_resources.rename({
-                    "_eventId": "source_event",
-                    "resources": "source_resources",
-                }),
-                on="source_event",
-                how="inner",
-            )
-            .join(
-                event_resources.rename({
-                    "_eventId": "target_event",
-                    "resources": "target_resources",
-                }),
-                on="target_event",
-                how="inner",
+        # Assign a sequential position to every event within each business object's
+        # lifecycle so that gaps can be measured as the count of intermediate
+        # non-resource EOG nodes between two consecutive resource events.
+
+        eog_with_positions = (
+            event_businessobjects
+            .select(["_eventId", "_timestampUnix", "businessobject_id", "businessobject_type"])
+            .sort(["businessobject_id", "_timestampUnix", "_eventId"])
+            .with_row_index("global_idx")
+            .with_columns(
+                (pl.col("global_idx") - pl.col("global_idx").min().over("businessobject_id")).alias("position")
             )
         )
-        print("Arcs with Resources")
+
+        print("EOG with positions")
+        print(eog_with_positions)
+        
+        # Resource events annotated with their position in the business object lifecycle
+        resource_eog_events = (
+            eog_with_positions
+            .join(event_resources, on="_eventId", how="inner")
+        )
+
+        print("Resource EOG events (with position)")
+        print(resource_eog_events)
+
+        # For each resource event find the NEXT resource event in the same business
+        # object lifecycle by shifting the scalar _eventId column (safe with .over()),
+        # then join back to retrieve the next event's resource list.
+        # gap = next_position - current_position - 1
+        #     = number of intermediate EOG nodes that carry no selected resource
+        # gap = 0 means directly adjacent resource events (equivalent to original behavior)
+
+        consecutive_resource_pairs = (
+            resource_eog_events
+            .sort(["businessobject_id", "_timestampUnix", "_eventId"])
+            .with_columns([
+                pl.col("_eventId").shift(-1).over("businessobject_id").alias("next_event_id"),
+                pl.col("position").shift(-1).over("businessobject_id").alias("next_position"),
+            ])
+            .filter(pl.col("next_event_id").is_not_null())
+            .join(
+                event_resources.rename({"_eventId": "next_event_id", "resources": "next_resources"}),
+                on="next_event_id",
+                how="inner",
+            )
+            .with_columns(
+                (pl.col("next_position") - pl.col("position") - 1).alias("gap")
+            )
+        )
+
+        print("Consecutive resource pairs (with gap, per business object)")
+        print(consecutive_resource_pairs)
+
+        # Collapse multiple business objects for the same (source event, target event) pair
+        # into a single arc — mirroring eog_arcs_unique in the original approach.
+        # For the gap we take the minimum across all business objects for the same event pair:
+        # the arc is reachable with gap k if ANY business object achieves it with gap <= k.
+
+        arcs_with_resources = (
+            consecutive_resource_pairs
+            .group_by(["_eventId", "next_event_id"])
+            .agg([
+                pl.col("resources").first().alias("source_resources"),
+                pl.col("next_resources").first().alias("target_resources"),
+                pl.col("businessobject_type").unique().alias("businessobject_types"),
+                pl.col("gap").min().alias("gap"),
+            ])
+        )
+
+        print("Arcs with Resources (unique, with gap)")
         print(arcs_with_resources)
+
+        # Shouldn't it be divided by the sum of the weights and not the number of arcs, matrix entries should equal 1?
+        # arcs_with_resources.height        <-- slides
+        # handover_edges.select(pl.col("weight").sum()).item()
+
+        total_weight = arcs_with_resources.height
+        print("arcs with resources height (before gap filter)", arcs_with_resources.height)
+
+        if max_gap is not None:
+            arcs_with_resources = arcs_with_resources.filter(pl.col("gap") <= max_gap)
 
         # not differentiating between types
         """
@@ -218,13 +276,8 @@ class OCHANDOVER(nx.MultiDiGraph):
         print(handover_edges)
 
 
-        # Shouldn't it be divided by the sum of the weights and not the number of arcs, matrix entries should equal 1?
-        # arcs_with_resources.height        <-- slides
-        # handover_edges.select(pl.col("weight").sum()).item()
-
-        total_weight = arcs_with_resources.height
         print("weights sum", handover_edges.select(pl.col("weight").sum()).item())
-        print("arcs with resources height", arcs_with_resources.height)
+        print("arcs with resources height (after gap filter)", arcs_with_resources.height)
 
 
         handover_edges = handover_edges.with_columns(
@@ -277,7 +330,7 @@ class OCHANDOVER(nx.MultiDiGraph):
 
 
     @classmethod
-    def from_ocel_flattened(cls, ocel: OCEL, case_type: str, resource_type: str) -> 'OCHANDOVER':
+    def from_ocel_flattened(cls, ocel: OCEL, case_type: str, resource_type: str, max_gap: int | None = None) -> 'OCHANDOVER':
 
         """
             Huge uncertainty:
@@ -286,6 +339,10 @@ class OCHANDOVER(nx.MultiDiGraph):
             The issue here is that if we only look at one object type in the flattened version, the way we do here, we do not detect those gaps.
             The result is that if there is a resource o1 from our resource object type, and then some activities from other object types followed by an activity of o1,
             which is another resource, this is counted as a handover from o1 to o2. However this would have to be seen as a handover from o1 to the objects in between and then to o2?
+
+            max_gap: if set, only handovers where the number of intervening case events
+            (events that belong to the case but have no resource) is <= max_gap are kept.
+            Gap 0 means the two resource events are directly adjacent in the case trace.
         """
 
         case_ids = set(ocel.get_object_ids_by_type(case_type))
@@ -328,37 +385,53 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Resources")
         print(resource_df)
 
-        base_df = (
+        # All events that belong to a case (including those without a resource),
+        # assigned a sequential position within each case so we can measure
+        # how many non-resource events sit between two consecutive resource events.
+        all_case_events = (
             ocel.events
-            .select(["_eventId", "_activity", "_timestampUnix"])
+            .select(["_eventId", "_timestampUnix"])
             .join(case_df, on="_eventId", how="inner")
-            .join(resource_df, on="_eventId", how="inner")
             .sort(["case_id", "_timestampUnix", "_eventId"])
+            .with_row_index("global_idx")
+            .with_columns(
+                (pl.col("global_idx") - pl.col("global_idx").min().over("case_id")).alias("position")
+            )
         )
 
-        print("Base DF (case_id and resource_id to the corresponding event)")
-        print(base_df)
+        print("All case events (with position)")
+        print(all_case_events.head(20))
 
+        # Resource events with their within-case position
+        resource_case_events = (
+            all_case_events
+            .join(resource_df, on="_eventId", how="inner")
+        )
 
+        print("Resource case events")
+        print(resource_case_events)
 
-        # Dict for storing handovers and their count
-        handover_count = defaultdict(int)
-
-        # Detect handover
-        
+        # Detect handover: consecutive resource events within each case.
+        # gap = number of intervening case events (position difference minus 1).
         handovers_raw = (
-            base_df
+            resource_case_events
             .sort(["case_id", "_timestampUnix", "_eventId"])
             .with_columns([
                 pl.col("resource_id").shift(-1).over("case_id").alias("next_resource_id"),
-                pl.col("_activity").shift(-1).over("case_id").alias("next_activity"),
-                pl.col("_eventId").shift(-1).over("case_id").alias("next_event_id"),
+                pl.col("position").shift(-1).over("case_id").alias("next_position"),
             ])
             .filter(pl.col("next_resource_id").is_not_null())
+            .with_columns(
+                (pl.col("next_position") - pl.col("position") - 1).alias("gap")
+            )
         )
 
-        print("Handovers raw")
+        print("Handovers raw (with gap)")
         print(handovers_raw)
+
+        # Apply gap filter when requested
+        if max_gap is not None:
+            handovers_raw = handovers_raw.filter(pl.col("gap") <= max_gap)
 
         handover_edges = (
             handovers_raw
@@ -371,9 +444,9 @@ class OCHANDOVER(nx.MultiDiGraph):
             })
             .sort("weight", descending=True)
         )
-        
+
         # total = handover_edges.select(pl.col("weight").sum()).item()
-        total = base_df.select(pl.col("case_id").n_unique()).item()
+        total = case_df.select(pl.col("case_id").n_unique()).item()
 
         handover_edges = handover_edges.with_columns(
             (pl.col("weight") / total).alias("norm_weight")

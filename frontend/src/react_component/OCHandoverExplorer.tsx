@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 
 /* ── Types ─────────────────────────────────────────────────── */
 export type HandoverNode = { id: string; object_type: string };
@@ -72,6 +73,7 @@ export default function OCHandoverExplorer({
   const [errorMsg, setErrorMsg] = useState("");
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [maxGap, setMaxGap] = useState<number | null>(null);
 
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
@@ -130,6 +132,7 @@ export default function OCHandoverExplorer({
     setStatus("idle");
     setHasStartedLoading(false);
     setErrorMsg("");
+    setMaxGap(null);
   }, [method]);
 
   // Phase 2: compute handover when triggered
@@ -144,9 +147,11 @@ export default function OCHandoverExplorer({
     if (currentMethod === "oc") {
       params.resource_types = [...resourceTypes].join(",");
       params.businessobject_types = [...boTypes].join(",");
+      if (maxGap !== null) params.max_gap = String(maxGap);
     } else {
       params.case_type = caseType;
       params.resource_type = flatResourceType;
+      if (maxGap !== null) params.max_gap = String(maxGap);
     }
     let cancelled = false;
 
@@ -238,16 +243,52 @@ export default function OCHandoverExplorer({
         )}
 
         {fileId && objectTypes.length > 0 && method === "oc" && (
-          <div className="flex gap-4 flex-wrap">
+          <div className="flex gap-4 flex-wrap items-start">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
+            <div className="border rounded-md p-3 min-w-[160px]">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
+              <Input
+                type="number"
+                min={0}
+                placeholder="unlimited"
+                value={maxGap ?? ""}
+                onChange={e => {
+                  const v = e.target.value;
+                  setMaxGap(v === "" ? null : Math.max(0, parseInt(v, 10)));
+                }}
+                className="h-8 w-28 text-sm"
+              />
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Max non-resource events between two resource events on a business object arc (0 = adjacent only)
+              </p>
+            </div>
           </div>
         )}
 
         {fileId && objectTypes.length > 0 && method === "flattened" && (
-          <div className="flex gap-4 flex-wrap">
+          <div className="flex gap-4 flex-wrap items-start">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
+            <div className="border rounded-md p-3 min-w-[160px]">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  placeholder="unlimited"
+                  value={maxGap ?? ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setMaxGap(v === "" ? null : Math.max(0, parseInt(v, 10)));
+                  }}
+                  className="h-8 w-28 text-sm"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Max intervening events between resource events (0 = adjacent only)
+              </p>
+            </div>
           </div>
         )}
 

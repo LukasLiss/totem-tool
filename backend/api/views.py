@@ -921,7 +921,9 @@ def ochandover(request):
                     {"error": "Missing ?case_type or ?resource_type"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            graph = OCHANDOVER.from_ocel_flattened(ocel, case_type=case_type, resource_type=resource_type)
+            max_gap_raw = request.query_params.get("max_gap")
+            max_gap = int(max_gap_raw) if max_gap_raw is not None else None
+            graph = OCHANDOVER.from_ocel_flattened(ocel, case_type=case_type, resource_type=resource_type, max_gap=max_gap)
         else:
             resource_types_raw = request.query_params.get("resource_types", "")
             businessobject_types_raw = request.query_params.get("businessobject_types", "")
@@ -932,7 +934,9 @@ def ochandover(request):
                 )
             resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()]
             businessobject_types = [t.strip() for t in businessobject_types_raw.split(",") if t.strip()]
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types)
+            max_gap_raw = request.query_params.get("max_gap")
+            max_gap = int(max_gap_raw) if max_gap_raw is not None else None
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap)
     except Exception as e:
         import traceback
         traceback.print_exc()
