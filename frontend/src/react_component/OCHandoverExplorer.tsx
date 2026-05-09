@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -76,15 +76,10 @@ export default function OCHandoverExplorer({
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [maxGap, setMaxGap] = useState<number | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const savedScroll = useRef(0);
-  const scrollPending = useRef(false);
-
-  // Restore scroll position after any view-switch to prevent layout-shift jump
-  useLayoutEffect(() => {
-    if (!scrollPending.current) return;
-    scrollPending.current = false;
-    window.scrollTo({ top: savedScroll.current });
-  }, [selectedNode, viewMode]);
+  const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const viewModeRef = useRef(viewMode);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
 
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
@@ -149,8 +144,22 @@ export default function OCHandoverExplorer({
     setMaxGap(null);
   }, [method]);
 
-  // Reset selected node when data changes
-  useEffect(() => { setSelectedNode(null); }, [data]);
+  // Reset selected node and locked height when data changes
+  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
+
+  // Measure and lock the results area height 50ms after data loads.
+  // viewMode is intentionally NOT in the deps — the timer must not be cancelled
+  // if the user switches to table view before it fires.
+  // The viewModeRef check inside guards against accidentally locking the table height.
+  useEffect(() => {
+    if (status !== "ready" || lockedHeight !== null) return;
+    const id = setTimeout(() => {
+      if (viewModeRef.current !== "graph") return;
+      const h = resultsRef.current?.offsetHeight;
+      if (h && h > 0) setLockedHeight(h);
+    }, 50);
+    return () => clearTimeout(id);
+  }, [status, lockedHeight]);
 
   // Phase 2: compute handover when triggered
   useEffect(() => {
@@ -339,14 +348,15 @@ export default function OCHandoverExplorer({
         {status === "ready" && data && (
           <>
             <div className="flex gap-2">
-              <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setViewMode("graph"); }}>
+              <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => setViewMode("graph")}>
                 Graph
               </Button>
-              <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setViewMode("table"); }}>
+              <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => setViewMode("table")}>
                 Table
               </Button>
             </div>
 
+            <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
             {viewMode === "graph" && (
               selectedNode ? (
                 <NodeDetailView
@@ -354,7 +364,7 @@ export default function OCHandoverExplorer({
                   data={data}
                   boTypeColors={boTypeColors}
                   nodeTypeColors={nodeTypeColors}
-                  onBack={() => { savedScroll.current = window.scrollY; scrollPending.current = true; setSelectedNode(null); }}
+                  onBack={() => setSelectedNode(null)}
                 />
               ) : (
                 <HandoverGraph
@@ -362,15 +372,15 @@ export default function OCHandoverExplorer({
                   edges={data.edges}
                   boTypeColors={boTypeColors}
                   nodeTypeColors={nodeTypeColors}
-                  onNodeClick={(id) => { savedScroll.current = window.scrollY; scrollPending.current = true; setSelectedNode(id); }}
+                  onNodeClick={setSelectedNode}
                 />
               )
             )}
 
             {viewMode === "table" && (
-              <div className="overflow-auto rounded-md border">
+              <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
                 <table className="w-full text-sm">
-                  <thead>
+                  <thead className="sticky top-0 z-10">
                     <tr className="border-b bg-muted/50">
                       <th className="px-3 py-2 text-left font-medium">Source</th>
                       <th className="px-3 py-2 text-left font-medium">Target</th>
@@ -410,6 +420,7 @@ export default function OCHandoverExplorer({
                 </table>
               </div>
             )}
+            </div>
           </>
         )}
       </CardContent>
