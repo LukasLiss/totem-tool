@@ -20,7 +20,8 @@ class OCHANDOVER(nx.MultiDiGraph):
 
     @classmethod
     def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
-                  normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog") -> 'OCHANDOVER':
+                  normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog",
+                  normalization_scope: Literal["global", "per_bo_type"] = "global") -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -252,47 +253,67 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Handover edges")
         print(handover_edges)
 
-        # Compute normalised weight according to the chosen strategy
+        # Compute normalised weight according to the chosen strategy and scope.
+        # global: denominator is computed across all business object types together.
+        # per_bo_type: denominator is computed separately for each business object type,
+        #              so high-traffic types no longer dominate low-traffic ones visually.
         if normalization == "by_source":
-            # Each row (source) sums to 1: given A hands over, where does it go?
-            source_totals = (
-                handover_edges
-                .group_by("source")
-                .agg(pl.col("weight").sum().alias("_source_total"))
-            )
+            group_cols = ["source", "businessobject_type"] if normalization_scope == "per_bo_type" else ["source"]
+            source_totals = handover_edges.group_by(group_cols).agg(pl.col("weight").sum().alias("_source_total"))
             handover_edges = (
                 handover_edges
-                .join(source_totals, on="source", how="left")
+                .join(source_totals, on=group_cols, how="left")
                 .with_columns((pl.col("weight") / pl.col("_source_total")).alias("norm_weight"))
                 .drop("_source_total")
             )
 
         elif normalization == "by_target":
-            # Each column (target) sums to 1: given B receives, where did it come from?
-            target_totals = (
-                handover_edges
-                .group_by("target")
-                .agg(pl.col("weight").sum().alias("_target_total"))
-            )
+            group_cols = ["target", "businessobject_type"] if normalization_scope == "per_bo_type" else ["target"]
+            target_totals = handover_edges.group_by(group_cols).agg(pl.col("weight").sum().alias("_target_total"))
             handover_edges = (
                 handover_edges
-                .join(target_totals, on="target", how="left")
+                .join(target_totals, on=group_cols, how="left")
                 .with_columns((pl.col("weight") / pl.col("_target_total")).alias("norm_weight"))
                 .drop("_target_total")
             )
 
         elif normalization == "by_arcs_in_eog":
-            # Divide by total number of arcs in the event-object graph
-            handover_edges = handover_edges.with_columns(
-                (pl.col("weight") / eog_arc_count).alias("norm_weight")
-            )
+            if normalization_scope == "per_bo_type":
+                # Count unique EOG arcs per business object type
+                bo_arc_counts = (
+                    eog_arcs
+                    .select(["source_event", "target_event", "businessobject_type"])
+                    .unique()
+                    .group_by("businessobject_type")
+                    .len()
+                    .rename({"len": "_arc_count"})
+                )
+                print("bo arc counts", bo_arc_counts)
+                handover_edges = (
+                    handover_edges
+                    .join(bo_arc_counts, on="businessobject_type", how="left")
+                    .with_columns((pl.col("weight") / pl.col("_arc_count")).alias("norm_weight"))
+                    .drop("_arc_count")
+                )
+            else:
+                handover_edges = handover_edges.with_columns(
+                    (pl.col("weight") / eog_arc_count).alias("norm_weight")
+                )
 
         elif normalization == "by_total_weight":
-            # All cells together sum to 1: what fraction of all handovers is this one?
-            total = handover_edges.select(pl.col("weight").sum()).item()
-            handover_edges = handover_edges.with_columns(
-                (pl.col("weight") / total).alias("norm_weight")
-            )
+            if normalization_scope == "per_bo_type":
+                bo_totals = handover_edges.group_by("businessobject_type").agg(pl.col("weight").sum().alias("_bo_total"))
+                handover_edges = (
+                    handover_edges
+                    .join(bo_totals, on="businessobject_type", how="left")
+                    .with_columns((pl.col("weight") / pl.col("_bo_total")).alias("norm_weight"))
+                    .drop("_bo_total")
+                )
+            else:
+                total = handover_edges.select(pl.col("weight").sum()).item()
+                handover_edges = handover_edges.with_columns(
+                    (pl.col("weight") / total).alias("norm_weight")
+                )
 
         print("norm_weight sum", handover_edges.select(pl.col("norm_weight").sum()).item())
 

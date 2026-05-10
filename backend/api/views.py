@@ -936,7 +936,14 @@ def ochandover(request):
             businessobject_types = [t.strip() for t in businessobject_types_raw.split(",") if t.strip()]
             max_gap_raw = request.query_params.get("max_gap")
             max_gap = int(max_gap_raw) if max_gap_raw is not None else None
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap)
+            normalization_raw = request.query_params.get("normalization", "by_arcs_in_eog")
+            valid_normalizations = {"by_source", "by_target", "by_arcs_in_eog", "by_total_weight"}
+            if normalization_raw not in valid_normalizations:
+                return Response({"error": f"Invalid normalization: {normalization_raw}"}, status=status.HTTP_400_BAD_REQUEST)
+            normalization_scope_raw = request.query_params.get("normalization_scope", "global")
+            if normalization_scope_raw not in {"global", "per_bo_type"}:
+                return Response({"error": f"Invalid normalization_scope: {normalization_scope_raw}"}, status=status.HTTP_400_BAD_REQUEST)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw)
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -37,8 +37,16 @@ type OCHandoverExplorerProps = {
 
 type ViewMode = "table" | "graph";
 type Method = "oc" | "flattened";
+type Normalization = "by_source" | "by_target" | "by_arcs_in_eog" | "by_total_weight";
 type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
 type SortDir = "asc" | "desc";
+
+const NORMALIZATION_LABELS: Record<Normalization, string> = {
+  by_source:       "By Source",
+  by_target:       "By Target",
+  by_arcs_in_eog:  "By Arcs in EOG",
+  by_total_weight: "By Total Weight",
+};
 
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
@@ -65,6 +73,8 @@ export default function OCHandoverExplorer({
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [maxGap, setMaxGap] = useState<number | null>(null);
+  const [normalization, setNormalization] = useState<Normalization>("by_arcs_in_eog");
+  const [normalizationScope, setNormalizationScope] = useState<"global" | "per_bo_type">("global");
   const [sortCol, setSortCol] = useState<SortCol>("weight");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -136,6 +146,15 @@ export default function OCHandoverExplorer({
     setMaxGap(null);
   }, [method]);
 
+  // Reset results when normalization or scope changes
+  useEffect(() => {
+    setData(null);
+    setStatus("idle");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    setErrorMsg("");
+  }, [normalization, normalizationScope]);
+
   // Reset selected node and locked height when data changes
   useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
 
@@ -166,6 +185,8 @@ export default function OCHandoverExplorer({
       params.resource_types = [...resourceTypes].join(",");
       params.businessobject_types = [...boTypes].join(",");
       if (maxGap !== null) params.max_gap = String(maxGap);
+      params.normalization = normalization;
+      params.normalization_scope = normalizationScope;
     } else {
       params.case_type = caseType;
       params.resource_type = flatResourceType;
@@ -318,6 +339,40 @@ export default function OCHandoverExplorer({
                 </Button>
               </div>
             </div>
+            {method === "oc" && (
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-semibold">Normalization:</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="min-w-[170px] justify-between">
+                      {NORMALIZATION_LABELS[normalization]}
+                      <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[200px]">
+                    <DropdownMenuRadioGroup value={normalization} onValueChange={v => setNormalization(v as Normalization)}>
+                      {(Object.keys(NORMALIZATION_LABELS) as Normalization[]).map(key => (
+                        <DropdownMenuRadioItem key={key} value={key}>
+                          {NORMALIZATION_LABELS[key]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+            {method === "oc" && (
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="norm-scope"
+                  checked={normalizationScope === "per_bo_type"}
+                  onCheckedChange={v => setNormalizationScope(v ? "per_bo_type" : "global")}
+                />
+                <Label htmlFor="norm-scope" className="text-lg font-semibold cursor-pointer">
+                  Per Object Type
+                </Label>
+              </div>
+            )}
           </div>
         )}
 
