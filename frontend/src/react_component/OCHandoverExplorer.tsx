@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -9,6 +9,13 @@ import { mapTypesToColors } from "@/utils/objectColors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -30,6 +37,8 @@ type OCHandoverExplorerProps = {
 
 type ViewMode = "table" | "graph";
 type Method = "oc" | "flattened";
+type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
+type SortDir = "asc" | "desc";
 
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
@@ -56,6 +65,8 @@ export default function OCHandoverExplorer({
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [maxGap, setMaxGap] = useState<number | null>(null);
+  const [sortCol, setSortCol] = useState<SortCol>("weight");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -209,10 +220,27 @@ export default function OCHandoverExplorer({
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
-  const sortedEdges = useMemo(
-    () => data ? [...data.edges].sort((a, b) => b.weight - a.weight) : [],
-    [data],
-  );
+  const handleSort = (col: SortCol) => {
+    if (sortCol === col) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortCol(col);
+      setSortDir("desc");
+    }
+  };
+
+  const sortedEdges = useMemo(() => {
+    if (!data) return [];
+    return [...data.edges].sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === "source") cmp = a.source.localeCompare(b.source);
+      else if (sortCol === "target") cmp = a.target.localeCompare(b.target);
+      else if (sortCol === "bo_type") cmp = a.businessobject_type.localeCompare(b.businessobject_type);
+      else if (sortCol === "count") cmp = a.raw_weight - b.raw_weight;
+      else cmp = a.weight - b.weight;
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [data, sortCol, sortDir]);
   const maxRaw = useMemo(
     () => sortedEdges.reduce((m, e) => Math.max(m, e.raw_weight), 1),
     [sortedEdges],
@@ -222,9 +250,11 @@ export default function OCHandoverExplorer({
 
   return (
     <Wrapper className="w-full">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-lg">OC Handover of Work</CardTitle>
-      </CardHeader>
+      {!embedded && (
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">OC Handover of Work</CardTitle>
+        </CardHeader>
+      )}
 
       <CardContent className="space-y-4">
         {!fileId && (
@@ -232,14 +262,62 @@ export default function OCHandoverExplorer({
         )}
 
         {fileId && objectTypes.length > 0 && (
-          <div className="flex items-center gap-3">
-            <span className={`text-sm ${method === "oc" ? "font-semibold" : "text-muted-foreground"}`}>
-              Object-Centric
-            </span>
-            <Switch checked={method === "flattened"} onCheckedChange={v => setMethod(v ? "flattened" : "oc")} />
-            <span className={`text-sm ${method === "flattened" ? "font-semibold" : "text-muted-foreground"}`}>
-              Flattened
-            </span>
+          <div className="flex items-center gap-6 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-semibold">Method:</span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="min-w-[150px] justify-between">
+                    {method === "oc" ? "Object-Centric" : "Flattened"}
+                    <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[180px]">
+                  <DropdownMenuRadioGroup value={method} onValueChange={v => setMethod(v as Method)}>
+                    <DropdownMenuRadioItem value="oc">Object-Centric</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="flattened">Flattened</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg font-semibold">Max Gap:</span>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 flex-shrink-0"
+                  disabled={maxGap === null}
+                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
+                >
+                  <MinusIcon className="h-4 w-4" />
+                </Button>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="∞"
+                  value={maxGap ?? ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v === "") { setMaxGap(null); return; }
+                    const n = parseInt(v, 10);
+                    if (!isNaN(n) && n >= 0) setMaxGap(n);
+                  }}
+                  className="h-9 w-16 text-sm text-center"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 flex-shrink-0"
+                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
+                >
+                  <PlusIcon className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -247,47 +325,6 @@ export default function OCHandoverExplorer({
           <div className="flex gap-4 flex-wrap items-start">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
-            <div className="border rounded-md p-3 min-w-[160px]">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="h-7 w-7 flex-shrink-0"
-                  disabled={maxGap === null}
-                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
-                >
-                  <MinusIcon className="h-3 w-3" />
-                </Button>
-                <Input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="∞"
-                  value={maxGap ?? ""}
-                  onChange={e => {
-                    const v = e.target.value;
-                    if (v === "") { setMaxGap(null); return; }
-                    const n = parseInt(v, 10);
-                    if (!isNaN(n) && n >= 0) setMaxGap(n);
-                  }}
-                  className="h-7 w-14 text-sm text-center"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="h-7 w-7 flex-shrink-0"
-                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
-                >
-                  <PlusIcon className="h-3 w-3" />
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Max non-resource events between two resource events on a business object arc (0 = adjacent only)
-              </p>
-            </div>
           </div>
         )}
 
@@ -295,47 +332,6 @@ export default function OCHandoverExplorer({
           <div className="flex gap-4 flex-wrap items-start">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
-            <div className="border rounded-md p-3 min-w-[160px]">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="h-7 w-7 flex-shrink-0"
-                  disabled={maxGap === null}
-                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
-                >
-                  <MinusIcon className="h-3 w-3" />
-                </Button>
-                <Input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="∞"
-                  value={maxGap ?? ""}
-                  onChange={e => {
-                    const v = e.target.value;
-                    if (v === "") { setMaxGap(null); return; }
-                    const n = parseInt(v, 10);
-                    if (!isNaN(n) && n >= 0) setMaxGap(n);
-                  }}
-                  className="h-7 w-14 text-sm text-center"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="h-7 w-7 flex-shrink-0"
-                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
-                >
-                  <PlusIcon className="h-3 w-3" />
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Max intervening events between resource events (0 = adjacent only)
-              </p>
-            </div>
           </div>
         )}
 
@@ -344,18 +340,22 @@ export default function OCHandoverExplorer({
             ? resourceTypes.size > 0 && boTypes.size > 0
             : caseType !== "" && flatResourceType !== "";
           return (
-            <Button onClick={handleCompute} disabled={status === "loading" || !canCompute}>
-              {status === "loading" ? "Computing…" : "Compute Handover"}
-            </Button>
+            <div className="flex flex-col gap-3 items-center py-4">
+              <div className="text-sm text-muted-foreground text-center">
+                Click below when ready to start the computation.
+              </div>
+              <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+                {status === "loading" ? "Computing…" : "Compute Handover"}
+              </Button>
+              {status === "loading" && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                  Computing handover graph…
+                </div>
+              )}
+            </div>
           );
         })()}
-
-        {status === "loading" && (
-          <div className="flex items-center gap-2 text-sm">
-            <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-            Computing handover graph…
-          </div>
-        )}
 
         {status === "error" && (
           <div className="text-sm text-destructive">Error: {errorMsg}</div>
@@ -399,12 +399,27 @@ export default function OCHandoverExplorer({
               <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10">
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-3 py-2 text-left font-medium">Source</th>
-                      <th className="px-3 py-2 text-left font-medium">Target</th>
-                      <th className="px-3 py-2 text-left font-medium">Business object type</th>
-                      <th className="px-3 py-2 text-left font-medium">Count</th>
-                      <th className="px-3 py-2 text-left font-medium w-40">Weight</th>
+                    <tr className="border-b bg-muted">
+                      {(["source", "target", "bo_type", "count", "weight"] as SortCol[]).map((col, i) => {
+                        const labels: Record<SortCol, string> = {
+                          source: "Source", target: "Target", bo_type: "Business object type",
+                          count: "Count", weight: "Weight",
+                        };
+                        const active = sortCol === col;
+                        const Icon = active ? (sortDir === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
+                        return (
+                          <th
+                            key={col}
+                            onClick={() => handleSort(col)}
+                            className={`px-3 py-2 text-left font-medium cursor-pointer select-none hover:bg-muted/80${i === 4 ? " w-40" : ""}`}
+                          >
+                            <div className="flex items-center gap-1">
+                              {labels[col]}
+                              <Icon className={`h-3 w-3 flex-shrink-0${active ? "" : " opacity-30"}`} />
+                            </div>
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
