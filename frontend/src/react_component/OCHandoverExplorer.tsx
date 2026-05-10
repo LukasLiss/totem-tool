@@ -585,6 +585,7 @@ function HandoverGraph({
   const dragOffset = useRef({ x: 0, y: 0 });
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
 
   // Measure container
   useEffect(() => {
@@ -665,6 +666,8 @@ function HandoverGraph({
       color: string;
       strokeWidth: number;
       markerId: string;
+      count: number;
+      weight: number;
     }> = [];
 
     const wRange = maxWeight - minWeight;
@@ -713,7 +716,7 @@ function HandoverGraph({
           result.push({
             key: `${pairKey}-${edge.businessobject_type}-${idx}`,
             d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
-            color, strokeWidth, markerId,
+            color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
           });
         });
         return;
@@ -774,7 +777,7 @@ function HandoverGraph({
           d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
         }
 
-        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId });
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight });
       });
     });
 
@@ -880,13 +883,32 @@ function HandoverGraph({
 
           {/* Edges */}
           {edgePaths.map(ep => (
-            <path
-              key={ep.key}
-              d={ep.d}
-              fill="none"
-              markerEnd={`url(#${ep.markerId})`}
-              style={{ stroke: ep.color, strokeWidth: ep.strokeWidth, opacity: 0.85 }}
-            />
+            <g key={ep.key}>
+              <path
+                d={ep.d}
+                fill="none"
+                markerEnd={`url(#${ep.markerId})`}
+                style={{ stroke: ep.color, strokeWidth: ep.strokeWidth, opacity: 0.85, pointerEvents: "none" }}
+              />
+              <path
+                d={ep.d}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={12}
+                onMouseEnter={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect || dragId) return;
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: ep.count, weight: ep.weight });
+                }}
+                onMouseMove={e => {
+                  if (dragId) return;
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                }}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            </g>
           ))}
 
           {/* Nodes */}
@@ -953,6 +975,26 @@ function HandoverGraph({
             {isLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
           </Button>
         </div>
+
+        {tooltip && (
+          <div style={{
+            position: "absolute",
+            left: tooltip.x + 14,
+            top: tooltip.y - 10,
+            background: "white",
+            border: "1px solid #E2E8F0",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+            pointerEvents: "none",
+            zIndex: 10,
+            whiteSpace: "nowrap",
+          }}>
+            <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
+            <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+          </div>
+        )}
       </div>
 
       {/* Legends */}
@@ -1002,6 +1044,8 @@ function NodeDetailView({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
+  const [egoNorm, setEgoNorm] = useState(false);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1057,12 +1101,34 @@ function NodeDetailView({
 
   const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
-  const minW = Math.min(...data.edges.map(e => e.weight));
-  const maxW = Math.max(...data.edges.map(e => e.weight), minW + 0.0001);
+  const selfTotal = selfEdges.reduce((s, e) => s + e.raw_weight, 0);
+  const outTotal = outEdges.reduce((s, e) => s + e.raw_weight, 0) + selfTotal;
+  const inTotal  = inEdges.reduce((s, e) => s + e.raw_weight, 0);
+
+  // Returns the weight to use for rendering: backend norm_weight when off,
+  // ego-normalised raw counts when on (independent of the backend strategy).
+  // Out-edges and self-arcs are normalised by the selected node's total outgoing count;
+  // in-edges are normalised by its total incoming count.
+  const getW = (edge: HandoverEdge, dir: "out" | "in" | "self") => {
+    if (!egoNorm) return edge.weight;
+    const total = dir === "in" ? inTotal : outTotal;
+    return total > 0 ? edge.raw_weight / total : 0;
+  };
+
+  const displayWeights = egoNorm
+    ? [
+        ...outEdges.map(e => getW(e, "out")),
+        ...inEdges.map(e => getW(e, "in")),
+        ...selfEdges.map(e => getW(e, "self")),
+      ]
+    : data.edges.map(e => e.weight);
+
+  const minW = displayWeights.length > 0 ? Math.min(...displayWeights) : 0;
+  const maxW = Math.max(minW + 0.0001, ...displayWeights);
   const wRange = maxW - minW;
   const strokeFor = (w: number) => wRange < 1e-6 ? 2.5 : 1.5 + ((w - minW) / wRange) * 4;
 
-  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string }> = [];
+  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
 
   // Out edges: left node → middle counterpart
   counterpartIds.forEach((cpId, i) => {
@@ -1083,8 +1149,10 @@ function NodeDetailView({
         key: `out-${cpId}-${j}`,
         d: `M ${sx} ${sy} L ${ex} ${ey}`,
         color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-        strokeWidth: strokeFor(edge.weight),
+        strokeWidth: strokeFor(getW(edge, "out")),
         markerId: arrowId(edge.businessobject_type),
+        count: edge.raw_weight,
+        weight: getW(edge, "out"),
       });
     });
   });
@@ -1108,8 +1176,10 @@ function NodeDetailView({
         key: `in-${cpId}-${j}`,
         d: `M ${sx} ${sy} L ${ex} ${ey}`,
         color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-        strokeWidth: strokeFor(edge.weight),
+        strokeWidth: strokeFor(getW(edge, "in")),
         markerId: arrowId(edge.businessobject_type),
+        count: edge.raw_weight,
+        weight: getW(edge, "in"),
       });
     });
   });
@@ -1130,8 +1200,10 @@ function NodeDetailView({
       key: `self-${j}`,
       d: `M ${LEFT_X} ${centerY + NODE_R} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${ex} ${ey}`,
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-      strokeWidth: strokeFor(edge.weight),
+      strokeWidth: strokeFor(getW(edge, "self")),
       markerId: arrowId(edge.businessobject_type),
+      count: edge.raw_weight,
+      weight: getW(edge, "self"),
     });
   });
 
@@ -1144,15 +1216,21 @@ function NodeDetailView({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="outline" onClick={onBack}>← Back</Button>
-        <span className="text-sm text-muted-foreground">
-          Handover detail for{" "}
-          <span className="font-mono font-semibold text-foreground">{selectedNode}</span>
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onBack}>← Back</Button>
+          <span className="text-sm text-muted-foreground">
+            Handover detail for{" "}
+            <span className="font-mono font-semibold text-foreground">{selectedNode}</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch id="ego-norm" checked={egoNorm} onCheckedChange={setEgoNorm} />
+          <Label htmlFor="ego-norm" className="text-sm cursor-pointer">Ego normalization</Label>
+        </div>
       </div>
 
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
         <svg width={width} height={svgHeight} style={{ display: "block" }}>
           <defs>
             {allBoTypes.map(bt => {
@@ -1176,9 +1254,24 @@ function NodeDetailView({
 
           {/* Edges */}
           {paths.map(p => (
-            <path key={p.key} d={p.d} fill="none"
-              markerEnd={`url(#${p.markerId})`}
-              style={{ stroke: p.color, strokeWidth: p.strokeWidth, opacity: 0.85 }} />
+            <g key={p.key}>
+              <path d={p.d} fill="none"
+                markerEnd={`url(#${p.markerId})`}
+                style={{ stroke: p.color, strokeWidth: p.strokeWidth, opacity: 0.85, pointerEvents: "none" }} />
+              <path d={p.d} fill="none" stroke="transparent" strokeWidth={12}
+                onMouseEnter={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: p.count, weight: p.weight });
+                }}
+                onMouseMove={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                }}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            </g>
           ))}
 
           {/* Left node (selected as sender) */}
@@ -1208,6 +1301,26 @@ function NodeDetailView({
               style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
           </g>
         </svg>
+
+        {tooltip && (
+          <div style={{
+            position: "absolute",
+            left: tooltip.x + 14,
+            top: tooltip.y - 10,
+            background: "white",
+            border: "1px solid #E2E8F0",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+            pointerEvents: "none",
+            zIndex: 10,
+            whiteSpace: "nowrap",
+          }}>
+            <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
+            <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+          </div>
+        )}
       </div>
 
       {/* Legend */}
