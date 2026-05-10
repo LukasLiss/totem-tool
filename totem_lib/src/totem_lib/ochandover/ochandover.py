@@ -1,5 +1,5 @@
 import math
-from typing import List
+from typing import List, Literal
 
 import polars as pl
 import networkx as nx
@@ -19,7 +19,8 @@ class OCHANDOVER(nx.MultiDiGraph):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None) -> 'OCHANDOVER':
+    def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
+                  normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog") -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -226,35 +227,12 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Arcs with Resources (unique, with gap)")
         print(arcs_with_resources)
 
-        # Shouldn't it be divided by the sum of the weights and not the number of arcs, matrix entries should equal 1?
-        # arcs_with_resources.height        <-- slides
-        # handover_edges.select(pl.col("weight").sum()).item()
-
-        total_weight = arcs_with_resources.height
-        print("arcs with resources height (before gap filter)", arcs_with_resources.height)
+        eog_arc_count = eog_arcs_unique.height
 
         if max_gap is not None:
             arcs_with_resources = arcs_with_resources.filter(pl.col("gap") <= max_gap)
 
-        # not differentiating between types
-        """
-        handover_edges = (
-            arcs_with_resources
-            .explode("source_resources")
-            .explode("target_resources")
-            .group_by(["source_resources", "target_resources"])
-            .len()
-            .rename({
-                "source_resources": "source",
-                "target_resources": "target",
-                "len": "weight",
-            })
-            .sort("weight", descending=True)
-        )
-        """
-
-        # Compute the handover edges
-
+        # Compute the handover edges (raw counts, differentiated by business object type)
         handover_edges = (
             arcs_with_resources
             .explode("source_resources")
@@ -271,31 +249,52 @@ class OCHANDOVER(nx.MultiDiGraph):
             .sort("weight", descending=True)
         )
 
-
         print("Handover edges")
         print(handover_edges)
 
+        # Compute normalised weight according to the chosen strategy
+        if normalization == "by_source":
+            # Each row (source) sums to 1: given A hands over, where does it go?
+            source_totals = (
+                handover_edges
+                .group_by("source")
+                .agg(pl.col("weight").sum().alias("_source_total"))
+            )
+            handover_edges = (
+                handover_edges
+                .join(source_totals, on="source", how="left")
+                .with_columns((pl.col("weight") / pl.col("_source_total")).alias("norm_weight"))
+                .drop("_source_total")
+            )
 
-        print("weights sum", handover_edges.select(pl.col("weight").sum()).item())
-        print("arcs with resources height (after gap filter)", arcs_with_resources.height)
+        elif normalization == "by_target":
+            # Each column (target) sums to 1: given B receives, where did it come from?
+            target_totals = (
+                handover_edges
+                .group_by("target")
+                .agg(pl.col("weight").sum().alias("_target_total"))
+            )
+            handover_edges = (
+                handover_edges
+                .join(target_totals, on="target", how="left")
+                .with_columns((pl.col("weight") / pl.col("_target_total")).alias("norm_weight"))
+                .drop("_target_total")
+            )
 
+        elif normalization == "by_arcs_in_eog":
+            # Divide by total number of arcs in the event-object graph
+            handover_edges = handover_edges.with_columns(
+                (pl.col("weight") / eog_arc_count).alias("norm_weight")
+            )
 
-        handover_edges = handover_edges.with_columns(
-            (pl.col("weight") / total_weight).alias("norm_weight")
-        )
+        elif normalization == "by_total_weight":
+            # All cells together sum to 1: what fraction of all handovers is this one?
+            total = handover_edges.select(pl.col("weight").sum()).item()
+            handover_edges = handover_edges.with_columns(
+                (pl.col("weight") / total).alias("norm_weight")
+            )
 
-        print("sum", handover_edges.select(pl.col("norm_weight").sum()).item())
-
-        """
-        print("Event-object graph arcs")
-        print(eog_arcs_unique)
-
-        print("Handover edges")
-        print(handover_edges)
-        """
-
-        number_of_arcs = eog_arcs_unique.height
-        print("Number of gaps", number_of_arcs - arcs_with_resources.height)
+        print("norm_weight sum", handover_edges.select(pl.col("norm_weight").sum()).item())
 
 
         graph = cls()
