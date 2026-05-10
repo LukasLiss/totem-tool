@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
   type SimulationNodeDatum, type SimulationLinkDatum,
 } from "d3-force";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { mapTypesToColors } from "@/utils/objectColors";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -28,27 +30,6 @@ type OCHandoverExplorerProps = {
 
 type ViewMode = "table" | "graph";
 type Method = "oc" | "flattened";
-
-/* ── Colors ─────────────────────────────────────────────────── */
-// Golden angle gives maximum perceptual hue separation for any number of colors.
-const GOLDEN_ANGLE = 137.508;
-
-// Muted/pastel for resource nodes (low saturation, high lightness — like matplotlib Set2)
-function nodeColor(i: number): string {
-  return `hsl(${(i * GOLDEN_ANGLE) % 360}, 42%, 67%)`;
-}
-
-// Saturated/dark for business object edges (like matplotlib tab10)
-// Offset by 60° so the first node and first edge are never the same hue.
-function edgeColor(i: number): string {
-  return `hsl(${(i * GOLDEN_ANGLE + 60) % 360}, 68%, 42%)`;
-}
-
-function buildColorMap(keys: string[], colorFn: (i: number) => string): Record<string, string> {
-  const map: Record<string, string> = {};
-  keys.forEach((k, i) => { map[k] = colorFn(i); });
-  return map;
-}
 
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
@@ -226,14 +207,7 @@ export default function OCHandoverExplorer({
   const toggleBoType = (t: string) =>
     setBoTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
 
-  const boTypeColors = useMemo(
-    () => buildColorMap(data ? [...new Set(data.edges.map(e => e.businessobject_type))] : [], edgeColor),
-    [data],
-  );
-  const nodeTypeColors = useMemo(
-    () => buildColorMap(data ? [...new Set(data.nodes.map(n => n.object_type))] : [], nodeColor),
-    [data],
-  );
+  const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
   const sortedEdges = useMemo(
     () => data ? [...data.edges].sort((a, b) => b.weight - a.weight) : [],
@@ -362,16 +336,14 @@ export default function OCHandoverExplorer({
                 <NodeDetailView
                   selectedNode={selectedNode}
                   data={data}
-                  boTypeColors={boTypeColors}
-                  nodeTypeColors={nodeTypeColors}
+                  typeColorMap={typeColorMap}
                   onBack={() => setSelectedNode(null)}
                 />
               ) : (
                 <HandoverGraph
                   nodes={data.nodes}
                   edges={data.edges}
-                  boTypeColors={boTypeColors}
-                  nodeTypeColors={nodeTypeColors}
+                  typeColorMap={typeColorMap}
                   onNodeClick={setSelectedNode}
                 />
               )
@@ -391,7 +363,7 @@ export default function OCHandoverExplorer({
                   </thead>
                   <tbody>
                     {sortedEdges.map((edge, i) => {
-                      const color = boTypeColors[edge.businessobject_type] ?? "#94a3b8";
+                      const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
                       const barPct = Math.round((edge.raw_weight / maxRaw) * 100);
                       return (
                         <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
@@ -477,20 +449,22 @@ type SimLink = SimulationLinkDatum<SimNode>;
 function HandoverGraph({
   nodes,
   edges,
-  boTypeColors,
-  nodeTypeColors,
+  typeColorMap,
   onNodeClick,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
-  boTypeColors: Record<string, string>;
-  nodeTypeColors: Record<string, string>;
+  typeColorMap: Record<string, string>;
   onNodeClick?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [size, setSize] = useState({ width: 700, height: 450 });
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 700, h: 450 });
+  const [isLocked, setIsLocked] = useState(false);
+  const viewBoxRef = useRef(viewBox);
+  useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
   const dragHasMoved = useRef(false);
@@ -539,6 +513,7 @@ function HandoverGraph({
       };
     });
     setPositions(pos);
+    setViewBox({ x: 0, y: 0, w: size.width, h: size.height });
   }, [nodes, edges, size]);
 
   // Detect which pairs have a reverse edge
@@ -589,7 +564,7 @@ function HandoverGraph({
       // ── Self-loop ──────────────────────────────────────────
       if (srcId === tgtId) {
         groupEdges.forEach((edge, idx) => {
-          const color = boTypeColors[edge.businessobject_type] ?? "#94a3b8";
+          const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
           const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
           const strokeWidth = strokeFor(edge.weight);
 
@@ -641,7 +616,7 @@ function HandoverGraph({
       const py = ux;
 
       groupEdges.forEach((edge, idx) => {
-        const color = boTypeColors[edge.businessobject_type] ?? "#94a3b8";
+        const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
         const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
         const strokeWidth = strokeFor(edge.weight);
 
@@ -688,32 +663,66 @@ function HandoverGraph({
     });
 
     return result;
-  }, [positions, edgeGroups, reverseSet, boTypeColors, minWeight, maxWeight]);
+  }, [positions, edgeGroups, reverseSet, typeColorMap, minWeight, maxWeight]);
+
+  const zoomIn = () => {
+    setViewBox(vb => {
+      const nw = vb.w / 1.25, nh = vb.h / 1.25;
+      return { x: vb.x + (vb.w - nw) / 2, y: vb.y + (vb.h - nh) / 2, w: nw, h: nh };
+    });
+  };
+
+  const zoomOut = () => {
+    setViewBox(vb => {
+      const nw = vb.w * 1.25, nh = vb.h * 1.25;
+      return { x: vb.x - (nw - vb.w) / 2, y: vb.y - (nh - vb.h) / 2, w: nw, h: nh };
+    });
+  };
+
+  const fitToView = () => {
+    if (Object.keys(positions).length === 0) {
+      setViewBox({ x: 0, y: 0, w: size.width, h: size.height });
+      return;
+    }
+    const xs = Object.values(positions).map(p => p.x);
+    const ys = Object.values(positions).map(p => p.y);
+    const pad = NODE_R + 20;
+    const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
+    const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+    setViewBox({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+  };
 
   // Node drag handlers
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
+    if (isLocked) return;
     e.preventDefault();
     const pos = positions[id];
     if (!pos) return;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
-    dragOffset.current = { x: e.clientX - rect.left - pos.x, y: e.clientY - rect.top - pos.y };
+    const vb = viewBoxRef.current;
+    const userX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const userY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
+    dragOffset.current = { x: userX - pos.x, y: userY - pos.y };
     mouseDownPos.current = { x: e.clientX, y: e.clientY };
     dragHasMoved.current = false;
     setDragId(id);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!dragId) return;
+    if (!dragId || isLocked) return;
     if (Math.hypot(e.clientX - mouseDownPos.current.x, e.clientY - mouseDownPos.current.y) > 4)
       dragHasMoved.current = true;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const vb = viewBoxRef.current;
+    const userX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const userY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
     setPositions(prev => ({
       ...prev,
       [dragId]: {
-        x: Math.max(NODE_R, Math.min(size.width - NODE_R, e.clientX - rect.left - dragOffset.current.x)),
-        y: Math.max(NODE_R, Math.min(size.height - NODE_R, e.clientY - rect.top - dragOffset.current.y)),
+        x: Math.max(NODE_R, Math.min(size.width - NODE_R, userX - dragOffset.current.x)),
+        y: Math.max(NODE_R, Math.min(size.height - NODE_R, userY - dragOffset.current.y)),
       },
     }));
   };
@@ -722,11 +731,12 @@ function HandoverGraph({
 
   return (
     <div className="space-y-3">
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
+          viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
@@ -734,7 +744,7 @@ function HandoverGraph({
         >
           <defs>
             {boTypes.map(bt => {
-              const color = boTypeColors[bt] ?? "#94a3b8";
+              const color = typeColorMap[bt] ?? "#94a3b8";
               const id = `arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
               // markerUnits="userSpaceOnUse" keeps the arrowhead a fixed pixel size
               // regardless of stroke width, so thick and thin edges all get the same arrow.
@@ -767,7 +777,7 @@ function HandoverGraph({
           {nodes.map(node => {
             const pos = positions[node.id];
             if (!pos) return null;
-            const color = nodeTypeColors[node.object_type] ?? "#94a3b8";
+            const color = typeColorMap[node.object_type] ?? "#94a3b8";
             const label = node.id.length > 11 ? node.id.slice(0, 11) + "…" : node.id;
             return (
               <g
@@ -792,6 +802,41 @@ function HandoverGraph({
             );
           })}
         </svg>
+
+        {/* Button bar */}
+        <div style={{
+          position: "absolute",
+          bottom: 12,
+          right: 12,
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          background: "#FFFFFF",
+          border: "1px solid #E2E8F0",
+          borderRadius: 9999,
+          padding: "6px 12px",
+          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
+        }}>
+          <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9">
+            <PlusIcon className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={zoomOut} className="rounded-full h-9 w-9">
+            <MinusIcon className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9">
+            <ScanIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={isLocked ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => setIsLocked(prev => !prev)}
+            className="rounded-full h-9 w-9"
+            title={isLocked ? "Unlock interactions" : "Lock interactions"}
+          >
+            {isLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
 
       {/* Legends */}
@@ -803,7 +848,7 @@ function HandoverGraph({
           <div className="space-y-1">
             {nodeTypes.map(t => (
               <div key={t} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: nodeTypeColors[t] ?? "#94a3b8" }} />
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
               </div>
             ))}
@@ -816,7 +861,7 @@ function HandoverGraph({
           <div className="space-y-1">
             {boTypes.map(t => (
               <div key={t} className="flex items-center gap-2">
-                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: boTypeColors[t] ?? "#94a3b8" }} />
+                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
               </div>
             ))}
@@ -831,14 +876,12 @@ function HandoverGraph({
 function NodeDetailView({
   selectedNode,
   data,
-  boTypeColors,
-  nodeTypeColors,
+  typeColorMap,
   onBack,
 }: {
   selectedNode: string;
   data: HandoverData;
-  boTypeColors: Record<string, string>;
-  nodeTypeColors: Record<string, string>;
+  typeColorMap: Record<string, string>;
   onBack: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -861,7 +904,7 @@ function NodeDetailView({
   const nodeById: Record<string, HandoverNode> = {};
   data.nodes.forEach(n => { nodeById[n.id] = n; });
 
-  const selectedColor = nodeTypeColors[nodeById[selectedNode]?.object_type ?? ""] ?? "#94a3b8";
+  const selectedColor = typeColorMap[nodeById[selectedNode]?.object_type ?? ""] ?? "#94a3b8";
 
   const LEFT_X = 90;
   const RIGHT_X = width - 90;
@@ -923,7 +966,7 @@ function NodeDetailView({
       paths.push({
         key: `out-${cpId}-${j}`,
         d: `M ${sx} ${sy} L ${ex} ${ey}`,
-        color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
         strokeWidth: strokeFor(edge.weight),
         markerId: arrowId(edge.businessobject_type),
       });
@@ -948,7 +991,7 @@ function NodeDetailView({
       paths.push({
         key: `in-${cpId}-${j}`,
         d: `M ${sx} ${sy} L ${ex} ${ey}`,
-        color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
         strokeWidth: strokeFor(edge.weight),
         markerId: arrowId(edge.businessobject_type),
       });
@@ -970,7 +1013,7 @@ function NodeDetailView({
     paths.push({
       key: `self-${j}`,
       d: `M ${LEFT_X} ${centerY + NODE_R} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${ex} ${ey}`,
-      color: boTypeColors[edge.businessobject_type] ?? "#94a3b8",
+      color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
       strokeWidth: strokeFor(edge.weight),
       markerId: arrowId(edge.businessobject_type),
     });
@@ -997,7 +1040,7 @@ function NodeDetailView({
         <svg width={width} height={svgHeight} style={{ display: "block" }}>
           <defs>
             {allBoTypes.map(bt => {
-              const color = boTypeColors[bt] ?? "#94a3b8";
+              const color = typeColorMap[bt] ?? "#94a3b8";
               const id = arrowId(bt);
               return (
                 <marker key={id} id={id}
@@ -1032,7 +1075,7 @@ function NodeDetailView({
           {/* Middle counterpart nodes */}
           {counterpartIds.map((cpId, i) => {
             const cy = midYOf(i);
-            const color = nodeTypeColors[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+            const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
             return (
               <g key={cpId} transform={`translate(${MID_X},${cy})`}>
                 <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
@@ -1058,7 +1101,7 @@ function NodeDetailView({
           <div className="space-y-1">
             {nodeTypesPresent.map(t => (
               <div key={t} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: nodeTypeColors[t] ?? "#94a3b8" }} />
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
               </div>
             ))}
@@ -1069,7 +1112,7 @@ function NodeDetailView({
           <div className="space-y-1">
             {allBoTypes.map(t => (
               <div key={t} className="flex items-center gap-2">
-                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: boTypeColors[t] ?? "#94a3b8" }} />
+                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
               </div>
             ))}
