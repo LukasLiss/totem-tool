@@ -249,17 +249,41 @@ export default function OCHandoverExplorer({
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
             <div className="border rounded-md p-3 min-w-[160px]">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
-              <Input
-                type="number"
-                min={0}
-                placeholder="unlimited"
-                value={maxGap ?? ""}
-                onChange={e => {
-                  const v = e.target.value;
-                  setMaxGap(v === "" ? null : Math.max(0, parseInt(v, 10)));
-                }}
-                className="h-8 w-28 text-sm"
-              />
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 flex-shrink-0"
+                  disabled={maxGap === null}
+                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
+                >
+                  <MinusIcon className="h-3 w-3" />
+                </Button>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="∞"
+                  value={maxGap ?? ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v === "") { setMaxGap(null); return; }
+                    const n = parseInt(v, 10);
+                    if (!isNaN(n) && n >= 0) setMaxGap(n);
+                  }}
+                  className="h-7 w-14 text-sm text-center"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 flex-shrink-0"
+                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
+                >
+                  <PlusIcon className="h-3 w-3" />
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground mt-1.5">
                 Max non-resource events between two resource events on a business object arc (0 = adjacent only)
               </p>
@@ -273,18 +297,40 @@ export default function OCHandoverExplorer({
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
             <div className="border rounded-md p-3 min-w-[160px]">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Max gap</p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 flex-shrink-0"
+                  disabled={maxGap === null}
+                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
+                >
+                  <MinusIcon className="h-3 w-3" />
+                </Button>
                 <Input
-                  type="number"
-                  min={0}
-                  placeholder="unlimited"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="∞"
                   value={maxGap ?? ""}
                   onChange={e => {
                     const v = e.target.value;
-                    setMaxGap(v === "" ? null : Math.max(0, parseInt(v, 10)));
+                    if (v === "") { setMaxGap(null); return; }
+                    const n = parseInt(v, 10);
+                    if (!isNaN(n) && n >= 0) setMaxGap(n);
                   }}
-                  className="h-8 w-28 text-sm"
+                  className="h-7 w-14 text-sm text-center"
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 flex-shrink-0"
+                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
+                >
+                  <PlusIcon className="h-3 w-3" />
+                </Button>
               </div>
               <p className="text-xs text-muted-foreground mt-1.5">
                 Max intervening events between resource events (0 = adjacent only)
