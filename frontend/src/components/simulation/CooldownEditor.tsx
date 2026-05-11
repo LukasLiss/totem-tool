@@ -17,6 +17,28 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)}h`;
 }
 
+/** Choose a uniform step size based on the scale of the max value. */
+function uniformStep(maxVal: number): number {
+  if (maxVal <= 120) return 1;          // up to 2min: 1s steps
+  if (maxVal <= 600) return 5;          // up to 10min: 5s steps
+  if (maxVal <= 3600) return 30;        // up to 1h: 30s steps
+  if (maxVal <= 36000) return 300;      // up to 10h: 5min steps
+  return 1800;                          // above: 30min steps
+}
+
+/** Format step unit for display. */
+function stepLabel(step: number): string {
+  if (step < 60) return `${step}s steps`;
+  return `${step / 60}min steps`;
+}
+
+/** Get the display unit label and conversion factor for input fields based on step size. */
+function inputUnit(step: number): { label: string; toDisplay: (s: number) => number; toSeconds: (v: number) => number; displayStep: number } {
+  if (step <= 5) return { label: "s", toDisplay: (s) => Math.round(s), toSeconds: (v) => v, displayStep: step };
+  if (step <= 300) return { label: "min", toDisplay: (s) => Math.round((s / 60) * 10) / 10, toSeconds: (v) => v * 60, displayStep: Math.round((step / 60) * 10) / 10 };
+  return { label: "h", toDisplay: (s) => Math.round((s / 3600) * 100) / 100, toSeconds: (v) => v * 3600, displayStep: Math.round((step / 3600) * 100) / 100 };
+}
+
 export const CooldownEditor: React.FC<Props> = ({ cooldowns, onUpdate }) => {
   const [textMode, setTextMode] = useState(false);
   const activities = Object.keys(cooldowns).sort();
@@ -77,7 +99,17 @@ export const CooldownEditor: React.FC<Props> = ({ cooldowns, onUpdate }) => {
                     const low = Math.max(0, stats.mean_duration_s - 2 * stats.std_duration_s);
                     const high = stats.mean_duration_s + 2 * stats.std_duration_s;
                     const sliderMax = sliderMaxes[act]?.[resType] ?? 60;
-                    const step = Math.max(1, Math.round(sliderMax / 200));
+                    const step = uniformStep(sliderMax);
+
+                    const unit = inputUnit(step);
+
+                    const applyRange = (newLow: number, newHigh: number) => {
+                      const cLow = Math.max(0, Math.min(newLow, newHigh));
+                      const cHigh = Math.max(cLow, newHigh);
+                      const mean = (cLow + cHigh) / 2;
+                      const std = Math.max(0, (cHigh - cLow) / 4);
+                      onUpdate(act, resType, mean, std);
+                    };
 
                     return (
                       <div key={resType} className="space-y-1.5">
@@ -118,25 +150,45 @@ export const CooldownEditor: React.FC<Props> = ({ cooldowns, onUpdate }) => {
                           </div>
                         ) : (
                           <>
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs font-mono w-14 text-right">{formatDuration(low)}</span>
+                            <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-0.5">
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step={unit.displayStep}
+                                  value={unit.toDisplay(low)}
+                                  onChange={(e) => applyRange(unit.toSeconds(parseFloat(e.target.value) || 0), high)}
+                                  className="h-6 w-20 text-xs font-mono"
+                                  title={`Lower bound (${unit.label})`}
+                                />
+                                <span className="text-[10px] text-muted-foreground w-6">{unit.label}</span>
+                              </div>
                               <Slider
                                 value={[low, high]}
-                                onValueChange={([newLow, newHigh]) => {
-                                  const mean = (newLow + newHigh) / 2;
-                                  const std = Math.max(0, (newHigh - newLow) / 4);
-                                  onUpdate(act, resType, mean, std);
-                                }}
+                                onValueChange={([newLow, newHigh]) => applyRange(newLow, newHigh)}
                                 min={0}
                                 max={sliderMax}
                                 step={step}
                                 className="flex-1"
                               />
-                              <span className="text-xs font-mono w-14">{formatDuration(high)}</span>
+                              <div className="flex items-center gap-0.5">
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step={unit.displayStep}
+                                  value={unit.toDisplay(high)}
+                                  onChange={(e) => applyRange(low, unit.toSeconds(parseFloat(e.target.value) || 0))}
+                                  className="h-6 w-20 text-xs font-mono"
+                                  title={`Upper bound (${unit.label})`}
+                                />
+                                <span className="text-[10px] text-muted-foreground w-6">{unit.label}</span>
+                              </div>
                             </div>
                             <div className="flex justify-center">
                               <span className="text-[10px] text-muted-foreground">
-                                mean: {formatDuration(stats.mean_duration_s)} · std: {formatDuration(stats.std_duration_s)}
+                                {formatDuration(low)} – {formatDuration(high)}
+                                {" · "}mean: {formatDuration(stats.mean_duration_s)} · std: {formatDuration(stats.std_duration_s)}
+                                {" · "}{stepLabel(step)}
                               </span>
                             </div>
                           </>

@@ -32,11 +32,75 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 
+/** Collapsible card wrapper: shows title + description when collapsed. */
+const CollapsibleSection: React.FC<{
+  title: string;
+  description: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, description, defaultOpen = true, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <div className="flex items-center gap-3 cursor-pointer group">
+          <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+            {open ? "\u25BC" : "\u25B6"}
+          </span>
+          <div className="flex-1 min-w-0">
+            <span className="font-semibold text-base">{title}</span>
+            {!open && (
+              <span className="text-xs text-muted-foreground ml-2">{description}</span>
+            )}
+          </div>
+        </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
 // Frontend cache for process areas data per file
 const processAreasCache: Record<number, ProcessAreasResponse> = {};
 const simulationDetailsCache: Record<string, SimulationDetailsResponse> = {};
 
 type Phase = "configure" | "details" | "running" | "results";
+
+/** Animated step progress indicator — cycles through steps on a timer. */
+const StepProgress: React.FC<{ steps: string[] }> = ({ steps }) => {
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setActive((prev) => Math.min(prev + 1, steps.length - 1));
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [steps.length]);
+
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <div className="space-y-2">
+          {steps.map((step, idx) => (
+            <div key={idx} className="flex items-center gap-2 text-xs">
+              {idx < active ? (
+                <span className="w-4 h-4 rounded-full bg-primary flex items-center justify-center text-white text-[10px]">✓</span>
+              ) : idx === active ? (
+                <span className="w-4 h-4 rounded-full border-2 border-primary animate-pulse" />
+              ) : (
+                <span className="w-4 h-4 rounded-full border border-muted-foreground/30" />
+              )}
+              <span className={idx <= active ? "text-foreground" : "text-muted-foreground"}>
+                {step}
+              </span>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 export const SimulationDashboard: React.FC = () => {
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
@@ -72,12 +136,14 @@ export const SimulationDashboard: React.FC = () => {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState("");
 
-  // Editable constraints
+  // Editable constraints (per-variant + global)
   const [editedConstraints, setEditedConstraints] = useState<Record<number, VariantConstraints>>({});
+  const [globalConstraints, setGlobalConstraints] = useState<VariantConstraints>({});
 
   // Resource calendars (from details response)
   const [typeCalendars, setTypeCalendars] = useState<Record<string, CalendarProbability>>({});
   const [resourceCalendars, setResourceCalendars] = useState<Record<string, CalendarProbability>>({});
+  const [discoveredTypeCalendars, setDiscoveredTypeCalendars] = useState<Record<string, CalendarProbability>>({});
 
   // Cooldowns and allocation strategy
   const [cooldowns, setCooldowns] = useState<CooldownDistribution>({});
@@ -133,8 +199,10 @@ export const SimulationDashboard: React.FC = () => {
     setResult(null);
     setDetails(null);
     setEditedConstraints({});
+    setGlobalConstraints({});
     setTypeCalendars({});
     setResourceCalendars({});
+    setDiscoveredTypeCalendars({});
     setCooldowns({});
     setAllocationStrategy({});
     setPhase("configure");
@@ -208,9 +276,18 @@ export const SimulationDashboard: React.FC = () => {
   };
 
   const toggleObjectType = (ot: string) => {
-    setSelectedObjectTypes((prev) =>
-      prev.includes(ot) ? prev.filter((t) => t !== ot) : [...prev, ot]
-    );
+    setSelectedObjectTypes((prev) => {
+      const wasSelected = prev.includes(ot);
+      if (!wasSelected) {
+        // Selecting this OT — remove it from resource pool
+        setResourcePool((pool) => {
+          const next = { ...pool };
+          delete next[ot];
+          return next;
+        });
+      }
+      return wasSelected ? prev.filter((t) => t !== ot) : [...prev, ot];
+    });
   };
 
   const toggleActivity = (act: string) => {
@@ -274,13 +351,24 @@ export const SimulationDashboard: React.FC = () => {
       });
       setEditedConstraints(initialConstraints);
 
-      // Initialize calendars for all pool types, using discovered data or defaults
+      // Store raw discovered calendars for reference display
+      setDiscoveredTypeCalendars(data.type_calendars || {});
+
+      // Initialize editable calendars: convert discovered probabilities to working-hour ranges
+      const PROB_THRESHOLD = 0.3;
       const defaultWeekdayHours = Array.from({ length: 24 }, (_, h) => (h >= 8 && h < 17 ? 1 : 0));
       const defaultWeekendHours = Array(24).fill(0);
       const mergedTypeCalendars: Record<string, CalendarProbability> = {};
       for (const rt of resourceTypes) {
-        if (data.type_calendars?.[rt]) {
-          mergedTypeCalendars[rt] = data.type_calendars[rt];
+        const discovered = data.type_calendars?.[rt];
+        if (discovered) {
+          // Convert probabilities to binary working hours using threshold
+          const converted: CalendarProbability = {};
+          for (const day of ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]) {
+            const probs = discovered[day] || Array(24).fill(0);
+            converted[day] = probs.map((p) => (p >= PROB_THRESHOLD ? 1 : 0));
+          }
+          mergedTypeCalendars[rt] = converted;
         } else {
           mergedTypeCalendars[rt] = {
             Monday: [...defaultWeekdayHours], Tuesday: [...defaultWeekdayHours],
@@ -582,14 +670,14 @@ export const SimulationDashboard: React.FC = () => {
                   </div>
                 ))}
 
-                {resourceSuggestions.filter((ot) => !resourcePool[ot]).length > 0 && (
+                {resourceSuggestions.filter((ot) => !resourcePool[ot] && !selectedObjectTypes.includes(ot)).length > 0 && (
                   <div className="pt-2">
                     <Label className="text-xs text-muted-foreground">
-                      Suggested (same/higher MLPA level, not selected):
+                      Suggested (same/higher MLPA level):
                     </Label>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {resourceSuggestions
-                        .filter((ot) => !resourcePool[ot])
+                        .filter((ot) => !resourcePool[ot] && !selectedObjectTypes.includes(ot))
                         .map((ot) => (
                           <Badge key={ot} variant="outline" className="cursor-pointer text-xs" onClick={() => addResourceType(ot)}>
                             + {ot}
@@ -600,13 +688,13 @@ export const SimulationDashboard: React.FC = () => {
                 )}
 
                 {processAreasData?.all_object_types
-                  .filter((ot) => !resourcePool[ot] && !resourceSuggestions.includes(ot))
+                  .filter((ot) => !resourcePool[ot] && !resourceSuggestions.includes(ot) && !selectedObjectTypes.includes(ot))
                   .length ? (
                   <div className="pt-2">
                     <Label className="text-xs text-muted-foreground">Other:</Label>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {processAreasData.all_object_types
-                        .filter((ot) => !resourcePool[ot] && !resourceSuggestions.includes(ot))
+                        .filter((ot) => !resourcePool[ot] && !resourceSuggestions.includes(ot) && !selectedObjectTypes.includes(ot))
                         .map((ot) => (
                           <Badge key={ot} variant="outline" className="cursor-pointer text-xs opacity-60" onClick={() => addResourceType(ot)}>
                             + {ot}
@@ -688,6 +776,15 @@ export const SimulationDashboard: React.FC = () => {
             </Card>
 
             {/* Action Buttons */}
+            {detailsLoading && (
+              <StepProgress steps={[
+                "Filtering event log by process area",
+                "Mining variants and arrival distributions",
+                "Discovering resource constraints",
+                "Computing resource cooldowns",
+                "Discovering resource calendars",
+              ]} />
+            )}
             {mode === "simple" ? (
               <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
                 onClick={handleLoadDetails}>
@@ -717,196 +814,222 @@ export const SimulationDashboard: React.FC = () => {
           </div>
 
           {/* Configuration Summary */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Configuration Summary</CardTitle></CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
-                <div>
-                  <span className="text-muted-foreground">Mode:</span>{" "}
-                  <span className="font-medium">{mode === "simple" ? "Simple" : "Advanced"}</span>
+          <CollapsibleSection title="Configuration Summary" description={`${mode} mode, ${simDurationDays}d, ${selectedObjectTypes.length} types, ${selectedActivities.length} activities`} defaultOpen={false}>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Mode:</span>{" "}
+                    <span className="font-medium">{mode === "simple" ? "Simple" : "Advanced"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Duration:</span>{" "}
+                    <span className="font-medium">{simDurationDays} days</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Tick:</span>{" "}
+                    <span className="font-medium">{tickSize}s</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Violation degree:</span>{" "}
+                    <span className="font-medium">{violationDegree.toFixed(2)}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">Object Types:</span>{" "}
+                    <span className="font-medium">{selectedObjectTypes.join(", ")}</span>
+                  </div>
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">Resource Pool:</span>{" "}
+                    <span className="font-medium">
+                      {Object.entries(resourcePool).filter(([, c]) => c > 0).map(([t, c]) => `${t} (${c})`).join(", ") || "\u2014"}
+                    </span>
+                  </div>
+                  <div className="col-span-2 md:col-span-4">
+                    <span className="text-muted-foreground">Activities ({selectedActivities.length}):</span>{" "}
+                    <span className="font-medium">{selectedActivities.join(", ")}</span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-muted-foreground">Duration:</span>{" "}
-                  <span className="font-medium">{simDurationDays} days</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Tick:</span>{" "}
-                  <span className="font-medium">{tickSize}s</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Violation degree:</span>{" "}
-                  <span className="font-medium">{violationDegree.toFixed(2)}</span>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-muted-foreground">Object Types:</span>{" "}
-                  <span className="font-medium">{selectedObjectTypes.join(", ")}</span>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-muted-foreground">Resource Pool:</span>{" "}
-                  <span className="font-medium">
-                    {Object.entries(resourcePool).filter(([, c]) => c > 0).map(([t, c]) => `${t} (${c})`).join(", ") || "—"}
-                  </span>
-                </div>
-                <div className="col-span-2 md:col-span-4">
-                  <span className="text-muted-foreground">Activities ({selectedActivities.length}):</span>{" "}
-                  <span className="font-medium">{selectedActivities.join(", ")}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </CollapsibleSection>
 
           {/* Arrival Distribution Editor */}
-          <ArrivalDistributionEditor
-            variants={details.variants}
-            onArrivalUpdate={(variantId, weekday, hour, value) => {
-              setDetails((prev) => {
-                if (!prev) return prev;
-                const updated = { ...prev };
-                updated.variants = updated.variants.map((v) => {
-                  if (v.id !== variantId) return v;
-                  const arrival = { ...v.arrival_distribution };
-                  const hourly = { ...(arrival.avg_arrivals_per_hour || {}) };
-                  const dayData = { ...(hourly[weekday] || {}) };
-                  dayData[hour.toString()] = value;
-                  hourly[weekday] = dayData;
-                  arrival.avg_arrivals_per_hour = hourly;
-                  return { ...v, arrival_distribution: arrival };
-                });
-                return updated;
-              });
-            }}
-          />
-
-          {/* Resource Calendar */}
-          <ResourceCalendarEditor
-            resourcePool={resourcePool}
-            typeCalendars={typeCalendars}
-            resourceCalendars={resourceCalendars}
-            onTypeCalendarUpdate={(resourceType, weekday, hours) => {
-              setTypeCalendars((prev) => ({
-                ...prev,
-                [resourceType]: { ...prev[resourceType], [weekday]: hours },
-              }));
-            }}
-            onResourceCalendarUpdate={(resourceId, weekday, hours) => {
-              setResourceCalendars((prev) => ({
-                ...prev,
-                [resourceId]: { ...prev[resourceId], [weekday]: hours },
-              }));
-            }}
-          />
-
-          {/* Cooldown Editor */}
-          {Object.keys(cooldowns).length > 0 && (
-            <CooldownEditor
-              cooldowns={cooldowns}
-              onUpdate={(activity, resourceType, meanDuration, stdDuration) => {
-                setCooldowns((prev) => {
+          <CollapsibleSection title="Arrival Distribution" description={`${details.num_variants} variant(s), configure arrival rates`}>
+            <ArrivalDistributionEditor
+              variants={details.variants}
+              onArrivalUpdate={(variantId, weekday, hour, value) => {
+                setDetails((prev) => {
+                  if (!prev) return prev;
                   const updated = { ...prev };
-                  updated[activity] = { ...updated[activity] };
-                  updated[activity][resourceType] = {
-                    ...updated[activity][resourceType],
-                    mean_duration_s: meanDuration,
-                    std_duration_s: stdDuration,
-                  };
+                  updated.variants = updated.variants.map((v) => {
+                    if (v.id !== variantId) return v;
+                    const arrival = { ...v.arrival_distribution };
+                    const hourly = { ...(arrival.avg_arrivals_per_hour || {}) };
+                    const dayData = { ...(hourly[weekday] || {}) };
+                    dayData[hour.toString()] = value;
+                    hourly[weekday] = dayData;
+                    arrival.avg_arrivals_per_hour = hourly;
+                    return { ...v, arrival_distribution: arrival };
+                  });
                   return updated;
                 });
               }}
             />
+          </CollapsibleSection>
+
+          {/* Resource Calendar */}
+          <CollapsibleSection title="Resource Calendar" description="Working hours per resource type">
+            <ResourceCalendarEditor
+              resourcePool={resourcePool}
+              typeCalendars={typeCalendars}
+              resourceCalendars={resourceCalendars}
+              discoveredTypeCalendars={discoveredTypeCalendars}
+              onTypeCalendarUpdate={(resourceType, weekday, hours) => {
+                setTypeCalendars((prev) => ({
+                  ...prev,
+                  [resourceType]: { ...prev[resourceType], [weekday]: hours },
+                }));
+              }}
+              onResourceCalendarUpdate={(resourceId, weekday, hours) => {
+                setResourceCalendars((prev) => ({
+                  ...prev,
+                  [resourceId]: { ...prev[resourceId], [weekday]: hours },
+                }));
+              }}
+            />
+          </CollapsibleSection>
+
+          {/* Cooldown Editor */}
+          {Object.keys(cooldowns).length > 0 && (
+            <CollapsibleSection title="Resource Cooldowns" description={`${Object.keys(cooldowns).length} activity cooldown(s)`}>
+              <CooldownEditor
+                cooldowns={cooldowns}
+                onUpdate={(activity, resourceType, meanDuration, stdDuration) => {
+                  setCooldowns((prev) => {
+                    const updated = { ...prev };
+                    updated[activity] = { ...updated[activity] };
+                    updated[activity][resourceType] = {
+                      ...updated[activity][resourceType],
+                      mean_duration_s: meanDuration,
+                      std_duration_s: stdDuration,
+                    };
+                    return updated;
+                  });
+                }}
+              />
+            </CollapsibleSection>
           )}
 
           {/* Allocation Strategy */}
           {Object.keys(allocationStrategy).length > 0 && (
-            <Card>
-              <CardHeader><CardTitle>Resource Allocation Strategy</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground mb-3">
-                  How resources are assigned when multiple are available for an activity.
-                </p>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {Object.entries(allocationStrategy).sort(([a], [b]) => a.localeCompare(b)).map(([resType, strategy]) => (
-                    <div key={resType} className="flex items-center gap-2">
-                      <span className="text-sm flex-1 min-w-0 truncate">{resType}</span>
-                      <select
-                        className="text-xs border rounded px-2 py-1 bg-background"
-                        value={strategy}
-                        onChange={(e) => {
-                          setAllocationStrategy((prev) => ({ ...prev, [resType]: e.target.value }));
-                        }}
-                      >
-                        <option value="FIFO">FIFO</option>
-                        <option value="LIFO">LIFO</option>
-                        <option value="random">Random</option>
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <CollapsibleSection title="Resource Allocation Strategy" description="FIFO / LIFO / Random per resource type">
+              <Card>
+                <CardContent className="pt-4">
+                  <p className="text-xs text-muted-foreground mb-3">
+                    How resources are assigned when multiple are available for an activity.
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {Object.entries(allocationStrategy)
+                      .filter(([resType]) => resourcePool[resType] && resourcePool[resType] > 0)
+                      .sort(([a], [b]) => a.localeCompare(b)).map(([resType, strategy]) => (
+                      <div key={resType} className="flex items-center gap-2">
+                        <span className="text-sm flex-1 min-w-0 truncate">{resType}</span>
+                        <select
+                          className="text-xs border rounded px-2 py-1 bg-background"
+                          value={strategy}
+                          onChange={(e) => {
+                            setAllocationStrategy((prev) => ({ ...prev, [resType]: e.target.value }));
+                          }}
+                        >
+                          <option value="FIFO">FIFO</option>
+                          <option value="LIFO">LIFO</option>
+                          <option value="random">Random</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </CollapsibleSection>
           )}
 
           {/* Constraints Editor */}
-          <ConstraintsEditorPanel
-            variants={details.variants}
-            editedConstraints={editedConstraints}
-            activities={selectedActivities}
-            onAdd={addConstraint}
-            onRemove={removeConstraint}
-          />
+          <CollapsibleSection title="Resource Constraints" description={`Per-variant + global activity constraints`}>
+            <ConstraintsEditorPanel
+              variants={details.variants}
+              editedConstraints={editedConstraints}
+              activities={selectedActivities}
+              onAdd={addConstraint}
+              onRemove={removeConstraint}
+              globalConstraints={globalConstraints}
+              onAddGlobal={(act1, act2, type) => {
+                setGlobalConstraints((prev) => {
+                  const updated = { ...prev };
+                  if (!updated[act1]) updated[act1] = {};
+                  updated[act1] = { ...updated[act1], [act2]: type };
+                  return updated;
+                });
+              }}
+              onRemoveGlobal={(act1, act2) => {
+                setGlobalConstraints((prev) => {
+                  const updated = { ...prev };
+                  if (updated[act1]) {
+                    const acts = { ...updated[act1] };
+                    delete acts[act2];
+                    if (Object.keys(acts).length === 0) delete updated[act1];
+                    else updated[act1] = acts;
+                  }
+                  return updated;
+                });
+              }}
+            />
+          </CollapsibleSection>
 
-          {/* Resource Distribution - Collapsible */}
-          <Collapsible>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" className="w-full justify-start text-muted-foreground">
-                + Additional Information (Resource Distribution per Activity)
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <Card className="mt-2">
-                <CardHeader><CardTitle className="text-sm">Resource Distribution per Activity</CardTitle></CardHeader>
-                <CardContent className="space-y-4">
-                  {details.variants.map((variant) => (
-                    <div key={variant.id} className="border rounded p-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Badge variant="outline">Variant {variant.id + 1}</Badge>
-                        <span className="text-xs text-muted-foreground">Support: {variant.support}</span>
-                      </div>
-                      {Object.keys(variant.resource_distribution).length > 0 ? (
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="border-b">
-                              <th className="text-left py-1">Activity</th>
-                              <th className="text-left py-1">Resource Type</th>
-                              <th className="text-right py-1">Mean</th>
-                              <th className="text-right py-1">Min</th>
-                              <th className="text-right py-1">Max</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {Object.entries(variant.resource_distribution).map(([act, resTypes]) =>
-                              Object.entries(resTypes).map(([resType, stats], idx) => (
-                                <tr key={`${act}-${resType}`} className="border-b last:border-0">
-                                  {idx === 0 && (
-                                    <td className="py-1 font-medium" rowSpan={Object.keys(resTypes).length}>{act}</td>
-                                  )}
-                                  <td className="py-1">{resType}</td>
-                                  <td className="text-right py-1">{stats.mean_count.toFixed(2)}</td>
-                                  <td className="text-right py-1">{stats.min_count}</td>
-                                  <td className="text-right py-1">{stats.max_count}</td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No resource data</p>
-                      )}
+          {/* Resource Distribution */}
+          <CollapsibleSection title="Resource Distribution" description="Mean/min/max resource counts per activity" defaultOpen={false}>
+            <Card>
+              <CardContent className="pt-4 space-y-4">
+                {details.variants.map((variant) => (
+                  <div key={variant.id} className="border rounded p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="outline">Variant {variant.id + 1}</Badge>
+                      <span className="text-xs text-muted-foreground">Support: {variant.support}</span>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </CollapsibleContent>
-          </Collapsible>
+                    {Object.keys(variant.resource_distribution).length > 0 ? (
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left py-1">Activity</th>
+                            <th className="text-left py-1">Resource Type</th>
+                            <th className="text-right py-1">Mean</th>
+                            <th className="text-right py-1">Min</th>
+                            <th className="text-right py-1">Max</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(variant.resource_distribution).map(([act, resTypes]) =>
+                            Object.entries(resTypes).map(([resType, stats], idx) => (
+                              <tr key={`${act}-${resType}`} className="border-b last:border-0">
+                                {idx === 0 && (
+                                  <td className="py-1 font-medium" rowSpan={Object.keys(resTypes).length}>{act}</td>
+                                )}
+                                <td className="py-1">{resType}</td>
+                                <td className="text-right py-1">{stats.mean_count.toFixed(2)}</td>
+                                <td className="text-right py-1">{stats.min_count}</td>
+                                <td className="text-right py-1">{stats.max_count}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No resource data</p>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </CollapsibleSection>
 
           {/* Run button at bottom */}
           <Button className="w-full" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
@@ -918,15 +1041,24 @@ export const SimulationDashboard: React.FC = () => {
 
       {/* Phase: Running */}
       {phase === "running" && (
-        <Card>
-          <CardContent className="py-12 flex flex-col items-center gap-4">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-            <p className="text-muted-foreground">Simulation running...</p>
-            <p className="text-xs text-muted-foreground">
-              Mode: {mode} | Duration: {simDurationDays} days | Tick: {tickSize}s
-            </p>
-          </CardContent>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="py-8 flex flex-col items-center gap-3">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+              <p className="text-muted-foreground font-medium">Simulation running...</p>
+              <p className="text-xs text-muted-foreground">
+                Mode: {mode} | Duration: {simDurationDays} days | Tick: {tickSize}s
+              </p>
+            </CardContent>
+          </Card>
+          <StepProgress steps={[
+            "Building simulation model from configuration",
+            "Generating arrival schedule",
+            "Allocating resources and simulating events",
+            "Computing evaluation metrics",
+            "Saving simulated event log",
+          ]} />
+        </div>
       )}
 
       {/* Phase: Results */}

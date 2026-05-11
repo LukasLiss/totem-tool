@@ -1,13 +1,6 @@
-const BASE_URL = "http://localhost:8000/api";
+import { authFetch } from "./authApi";
 
-function getAuthHeaders(): HeadersInit {
-  const token = localStorage.getItem("access_token");
-  if (!token) throw new Error("Not authenticated");
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-}
+const BASE_URL = "http://localhost:8000/api";
 
 export type ProcessAreaInfo = {
   level: number;
@@ -67,8 +60,9 @@ export type SimulationResult = {
 export type VariantArrivalDistribution = {
   weekday_counts: Record<string, number>;
   weekday_probabilities: Record<string, number>;
-  avg_arrivals_per_hour: Record<string, Record<string, number>>;
   hourly_counts: Record<string, Record<string, number>>;
+  hourly_probabilities: Record<string, Record<string, number>>;
+  avg_arrivals_per_hour: Record<string, Record<string, number>>;
 };
 
 export type ResourceDistEntry = {
@@ -87,10 +81,8 @@ export type CooldownEntry = {
   sample_count: number;
 };
 
-// cooldown_distribution: { activity: { resource_type: CooldownEntry } }
 export type CooldownDistribution = Record<string, Record<string, CooldownEntry>>;
 
-// allocation_strategy: { resource_type: "FIFO" | "LIFO" | "random" }
 export type AllocationStrategy = Record<string, string>;
 
 export type VariantDetail = {
@@ -125,17 +117,15 @@ export type SimulationDetailsRequest = {
 };
 
 export async function fetchProcessAreas(fileId: number): Promise<ProcessAreasResponse> {
-  const res = await fetch(`${BASE_URL}/simulation/process-areas/?file_id=${fileId}`, {
-    headers: getAuthHeaders(),
-  });
+  const res = await authFetch(`${BASE_URL}/simulation/process-areas/?file_id=${fileId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
 export async function fetchSimulationDetails(config: SimulationDetailsRequest): Promise<SimulationDetailsResponse> {
-  const res = await fetch(`${BASE_URL}/simulation/details/`, {
+  const res = await authFetch(`${BASE_URL}/simulation/details/`, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
   if (!res.ok) {
@@ -146,9 +136,9 @@ export async function fetchSimulationDetails(config: SimulationDetailsRequest): 
 }
 
 export async function runSimulation(config: SimulationConfig): Promise<SimulationResult> {
-  const res = await fetch(`${BASE_URL}/simulation/run/`, {
+  const res = await authFetch(`${BASE_URL}/simulation/run/`, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
   if (!res.ok) {

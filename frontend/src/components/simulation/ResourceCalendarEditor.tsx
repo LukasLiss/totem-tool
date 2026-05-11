@@ -13,6 +13,8 @@ type Props = {
   resourcePool: Record<string, number>;
   typeCalendars: Record<string, CalendarProbability>;
   resourceCalendars: Record<string, CalendarProbability>;
+  /** Original discovered probability calendars (before user edits) for reference display */
+  discoveredTypeCalendars?: Record<string, CalendarProbability>;
   onTypeCalendarUpdate: (resourceType: string, weekday: string, hours: number[]) => void;
   onResourceCalendarUpdate: (resourceId: string, weekday: string, hours: number[]) => void;
 };
@@ -43,6 +45,7 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   resourcePool,
   typeCalendars,
   resourceCalendars,
+  discoveredTypeCalendars,
   onTypeCalendarUpdate,
   onResourceCalendarUpdate,
 }) => {
@@ -54,6 +57,8 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   if (resourceTypes.length === 0) return null;
 
   const currentCalendar = selectedType ? typeCalendars[selectedType] : null;
+  const discoveredCalendar = selectedType ? discoveredTypeCalendars?.[selectedType] : undefined;
+  const isDefaultCalendar = selectedType && (!discoveredCalendar || !hasNonTrivialData(discoveredCalendar));
   const resourceCount = selectedType ? (resourcePool[selectedType] || 0) : 0;
   const individualResourceIds = Array.from({ length: resourceCount }, (_, i) => `${selectedType}_${i + 1}`);
 
@@ -90,13 +95,25 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
             <p className="text-xs font-medium">
               Working hours for <strong>{selectedType}</strong>:
             </p>
+            {isDefaultCalendar && (
+              <p className="text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+                No calendar data discovered from event log — using default (Mon–Fri 08:00–17:00).
+              </p>
+            )}
             <WeeklySchedule
               calendar={currentCalendar}
               onChange={(weekday, hours) => onTypeCalendarUpdate(selectedType, weekday, hours)}
             />
 
-            {/* Heatmap summary */}
-            <CalendarHeatmap calendar={currentCalendar} />
+            {/* Discovered probability heatmap if available */}
+            {discoveredCalendar && hasNonTrivialData(discoveredCalendar) ? (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Discovered availability (from event log):</p>
+                <CalendarHeatmap calendar={discoveredCalendar} showProbabilities />
+              </div>
+            ) : (
+              <CalendarHeatmap calendar={currentCalendar} />
+            )}
           </div>
         )}
 
@@ -156,7 +173,6 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        // Initialize individual calendar from type calendar
                         if (currentCalendar) {
                           for (const day of WEEKDAYS) {
                             const hours = currentCalendar[day] || Array(24).fill(0);
@@ -178,6 +194,15 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   );
 };
 
+/** Check if calendar has any non-zero probabilities. */
+function hasNonTrivialData(cal: CalendarProbability): boolean {
+  for (const day of WEEKDAYS) {
+    const hours = cal[day];
+    if (hours && hours.some((v) => v > 0)) return true;
+  }
+  return false;
+}
+
 /** Weekly schedule editor: one row per weekday with a time-range slider. */
 const WeeklySchedule: React.FC<{
   calendar: CalendarProbability;
@@ -191,7 +216,6 @@ const WeeklySchedule: React.FC<{
 
       return (
         <div key={day} className="flex items-center gap-2">
-          {/* Day label + toggle */}
           <button
             className={`w-10 text-xs text-left font-medium transition-colors ${
               isActive ? "" : "text-muted-foreground line-through"
@@ -240,7 +264,8 @@ const WeeklySchedule: React.FC<{
 /** Compact heatmap: 7 days x 24 hours grid. */
 const CalendarHeatmap: React.FC<{
   calendar: CalendarProbability;
-}> = ({ calendar }) => (
+  showProbabilities?: boolean;
+}> = ({ calendar, showProbabilities }) => (
   <div className="space-y-0.5">
     {WEEKDAYS.map((day) => (
       <div key={day} className="flex items-center gap-1">
@@ -255,13 +280,12 @@ const CalendarHeatmap: React.FC<{
                   ? `color-mix(in srgb, ${CHART_BLUE} ${Math.round(Math.max(20, val * 100))}%, transparent)`
                   : "rgb(240, 240, 240)",
               }}
-              title={`${day} ${h}:00 – ${val > 0 ? "working" : "off"}`}
+              title={`${day} ${h}:00 – ${showProbabilities ? `${(val * 100).toFixed(0)}% availability` : val > 0 ? "working" : "off"}`}
             />
           ))}
         </div>
       </div>
     ))}
-    {/* Hour labels */}
     <div className="flex items-center gap-1">
       <span className="w-5" />
       <div className="flex-1 flex">
