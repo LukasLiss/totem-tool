@@ -52,7 +52,7 @@ axios.interceptors.response.use(
           return axios(error.config);
         }
       } catch (refreshError) {
-        if (localStorage.getItem("local_mode") === "true") {
+        if (import.meta.env.VITE_LOCAL_MODE) {
           // Local mode: silently re-authenticate as Guest instead of redirecting
           try {
             await guestReAuth();

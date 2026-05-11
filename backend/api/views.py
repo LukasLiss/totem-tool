@@ -204,12 +204,6 @@ def health_check(request):
     return Response({"status": "ok", "message": "Backend is running."})
 
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def local_mode_config(request):
-    from django.conf import settings
-    return Response({"local_mode": settings.LOCAL_MODE})
-
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]

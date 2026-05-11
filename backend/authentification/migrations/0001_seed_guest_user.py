@@ -4,16 +4,20 @@ from django.contrib.auth.hashers import make_password
 
 def seed_guest_user(apps, schema_editor):
     User = apps.get_model('auth', 'User')
-    User.objects.get_or_create(
+    guest, _ = User.objects.get_or_create(
         username='Guest',
         defaults={
-            'password': make_password('guest'),
             'email': 'guest@local.host',
             'is_staff': False,
             'is_superuser': False,
             'is_active': True,
         },
     )
+    # Always reset the password so the Guest account stays usable for local-mode
+    # auto-login even if a previous run created it with a different password.
+    guest.password = make_password('guest')
+    guest.is_active = True
+    guest.save()
 
 
 def remove_guest_user(apps, schema_editor):

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
@@ -13,37 +13,66 @@ import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
 
+const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+
+async function guestLogin() {
+  const { data } = await axios.post("http://localhost:8000/token/", {
+    username: "Guest",
+    password: "guest",
+  });
+  axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
+  localStorage.setItem("access_token", data.access);
+  if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
+}
+
 function AppRoutes({ selectedFile, setSelectedFile }) {
-  const navigate = useNavigate();
+  const [ready, setReady] = useState(!LOCAL_MODE);
 
   useEffect(() => {
+    if (!LOCAL_MODE) return;
+    let cancelled = false;
     (async () => {
-      try {
-        const { data } = await axios.get("/api/local-mode/");
-        if (!data.local_mode) return;
-
-        localStorage.setItem("local_mode", "true");
-
-        if (!localStorage.getItem("access_token")) {
-          const tokenResp = await axios.post("http://localhost:8000/token/", {
-            username: "Guest",
-            password: "guest",
-          });
-          const { access, refresh } = tokenResp.data;
-          axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;
-          localStorage.setItem("access_token", access);
-          if (refresh) localStorage.setItem("refresh_token", refresh);
+      // Retry only while the backend is unreachable (Electron may open the
+      // window before Django finishes booting). Stop immediately on any HTTP
+      // response — a 401 means the Guest user/password is wrong in the DB,
+      // and retrying won't fix that.
+      for (let attempt = 0; attempt < 20 && !cancelled; attempt++) {
+        try {
+          if (!localStorage.getItem("access_token")) {
+            await guestLogin();
+          } else {
+            axios.defaults.headers.common["Authorization"] =
+              `Bearer ${localStorage.getItem("access_token")}`;
+          }
+          if (!cancelled) setReady(true);
+          return;
+        } catch (err: any) {
+          if (err?.response) {
+            console.error(
+              "Guest auto-login rejected by backend. Is the Guest user seeded " +
+                "with password 'guest'? Run `node scripts/run-python.js " +
+                "backend/manage.py migrate` and try again."
+            );
+            if (!cancelled) setReady(true);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 500));
         }
-
-        const path = window.location.pathname;
-        if (path === "/" || path === "/title" || path === "/login") {
-          navigate("/upload", { replace: true });
-        }
-      } catch {
-        // Backend not reachable yet or not local mode — proceed normally
       }
+      if (!cancelled) setReady(true);
     })();
-  }, [navigate]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!ready) {
+    return (
+      <div className="website-background">
+        <div className="flex items-center justify-center h-dvh" />
+      </div>
+    );
+  }
 
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
@@ -52,14 +81,25 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           <Toaster position="top-center" richColors />
 
           <Routes>
-            <Route path="/title" element={<Title />} />
-            <Route path="/login" element={<Login />} />
+            <Route
+              path="/title"
+              element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Title />}
+            />
+            <Route
+              path="/login"
+              element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
+            />
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
-            <Route path="/" element={<Navigate to="/title" replace />} />
+            <Route
+              path="/"
+              element={
+                <Navigate to={LOCAL_MODE ? "/upload" : "/title"} replace />
+              }
+            />
           </Routes>
         </div>
       </DashboardProvider>

@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (authState !== "expired") return;
 
-    if (localStorage.getItem("local_mode") === "true") {
+    if (import.meta.env.VITE_LOCAL_MODE) {
       guestReAuth()
         .then(() => setAuthState("authenticated"))
         .catch(() => setAuthState("anonymous"));

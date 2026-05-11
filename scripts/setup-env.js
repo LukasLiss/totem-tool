@@ -103,7 +103,11 @@ function confirm(question) {
         run(venvPython, ['-m', 'pip', 'install', '-e', 'totem_lib[test]']);
     }
 
-    // 8. NPM INSTALL
+    // 8. APPLY DJANGO MIGRATIONS (creates db.sqlite3 + seeds Guest user for local mode)
+    console.log('🗄️  Applying database migrations...');
+    run(venvPython, ['manage.py', 'migrate'], BACKEND_DIR);
+
+    // 9. NPM INSTALL
     console.log('📦 Installing Frontend Dependencies...');
     run('npm', ['install'], path.join(ROOT_DIR, 'frontend'));
 
