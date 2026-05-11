@@ -203,6 +203,7 @@ def greeting(request):
 def health_check(request):
     return Response({"status": "ok", "message": "Backend is running."})
 
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 from datetime import timedelta
 from corsheaders.defaults import default_headers
@@ -162,3 +163,18 @@ SIMPLE_JWT = {
 
 MEDIA_ROOT = BASE_DIR / "user_files"
 MEDIA_URL = "/files/"
+
+# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
+
+if LOCAL_MODE:
+    SIMPLE_JWT = {
+        'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+        'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+        'ROTATE_REFRESH_TOKENS': True,
+        'BLACKLIST_AFTER_ROTATION': True,
+    }
+
+# Credentials used for the auto-seeded Guest account in local mode
+LOCAL_GUEST_USERNAME = 'Guest'
+LOCAL_GUEST_PASSWORD = 'guest'
