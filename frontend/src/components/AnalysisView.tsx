@@ -13,6 +13,7 @@ import {
 import ProcessArea from "@/react_component/ProcessArea";
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
+import SimulationDashboard from "@/SimulationDashboard";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
@@ -62,6 +63,13 @@ export function AnalysisView() {
                 />
               </CardContent>
             </Card>
+          </div>
+        );
+
+      case 'simulation':
+        return (
+          <div className="w-full max-w-7xl">
+            <SimulationDashboard />
           </div>
         );
 

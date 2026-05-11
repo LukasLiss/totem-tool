@@ -19,13 +19,23 @@ from totem_lib.ocel.importer import (
     load_events_from_xml, load_objects_from_xml,
     import_ocel_from_csv,
 )
+from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration, quick_evaluation
+from totem_lib.simulation.utils.process_area import ProcessArea
+from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
+from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
+from totem_lib.simulation.utils.resource_calendar import discover_resource_calendars
+from totem_lib.simulation.utils.resource_statistics import resource_cooldown_distribution as compute_resource_cooldown, calculate_resource_allocation_strategy
+from totem_lib.variants.ocvariants import find_object_variants_connected_component
 import networkx as nx
 
 from collections import defaultdict
 
 from django.core.cache import cache
+from django.core.files.base import ContentFile
+from django.conf import settings
 
 import os
+import datetime as dt
 from hashlib import sha1
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -2033,6 +2043,468 @@ def OCDFGViewSet(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def _export_ocel_to_json(ocel) -> str:
+    """Export an ObjectCentricEventLog to OCEL 2.0 JSON string."""
+    events_list = []
+    if ocel.events is not None and ocel.events.height > 0:
+        for row in ocel.events.iter_rows(named=True):
+            ts_unix = row.get("_timestampUnix", 0)
+            ts_str = dt.datetime.fromtimestamp(ts_unix, tz=dt.timezone.utc).isoformat()
+            objects = row.get("_objects", []) or []
+            qualifiers = row.get("_qualifiers", []) or []
+            relationships = []
+            for oid, qual in zip(objects, qualifiers):
+                relationships.append({"objectId": oid, "qualifier": qual})
+            events_list.append({
+                "id": row.get("_eventId", ""),
+                "type": row.get("_activity", ""),
+                "time": ts_str,
+                "relationships": relationships,
+            })
+
+    objects_list = []
+    if ocel.objects is not None and ocel.objects.height > 0:
+        for row in ocel.objects.iter_rows(named=True):
+            targets = row.get("_targetObjects", []) or []
+            quals = row.get("_qualifiers", []) or []
+            relationships = []
+            for tid, qual in zip(targets, quals):
+                relationships.append({"objectId": tid, "qualifier": qual})
+            objects_list.append({
+                "id": row.get("_objId", ""),
+                "type": row.get("_objType", ""),
+                "relationships": relationships,
+            })
+
+    return json.dumps({"events": events_list, "objects": objects_list}, indent=2)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def run_simulation(request):
+    """
+    Run an OC Process Area simulation.
+
+    Expected JSON body:
+    {
+        "file_id": int,
+        "object_types": ["Type1", "Type2"],
+        "activities": ["Act1", "Act2"],
+        "resource_pool": {"ResourceType1": 3, "ResourceType2": 5},
+        "sim_duration_days": 7,
+        "tick_size_s": 60,
+        "resource_constraint_violation_degree": 0.0,
+        "constraint_lookback_length": null
+    }
+    """
+    file_id = request.data.get("file_id")
+    object_types = request.data.get("object_types", [])
+    activities = request.data.get("activities", [])
+    resource_pool = request.data.get("resource_pool", {})
+    sim_duration_days = request.data.get("sim_duration_days", 7)
+    tick_size_s = request.data.get("tick_size_s", 60)
+    violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
+    lookback_length = request.data.get("constraint_lookback_length", None)
+    mode = request.data.get("mode", "simple")  # "simple" or "advanced"
+
+    if not file_id:
+        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+    if not object_types:
+        return Response({"error": "Missing object_types"}, status=status.HTTP_400_BAD_REQUEST)
+    if not activities:
+        return Response({"error": "Missing activities"}, status=status.HTTP_400_BAD_REQUEST)
+    if not resource_pool:
+        return Response({"error": "Missing resource_pool"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Verify user access
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    # Load OCEL
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        # Build Process Area
+        process_area = ProcessArea(object_types=object_types, activities=activities)
+
+        # Build simulation model based on mode
+        if mode == "advanced":
+            simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(ocel, process_area)
+        else:
+            simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(ocel, process_area)
+
+        # Override config if provided
+        simulation_model.simulation_config = OCProcessAreaSimulationConfiguration(
+            resource_constraint_violation_degree=violation_degree,
+            constraint_lookback_length=lookback_length,
+        )
+
+        # Run simulation
+        sim_duration_s = int(sim_duration_days * 24 * 3600)
+        sim_log, finished_count = simulation_model.run(
+            sim_duration_s=sim_duration_s,
+            resource_pool=resource_pool,
+            tick_size_s=tick_size_s,
+        )
+
+        # Filter original OCEL by process area for comparison
+        totem = totemDiscovery(ocel)
+        mlpa = mlpaDiscovery(totem)
+        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+
+        # Run quick evaluation
+        evaluation = quick_evaluation(filtered_ocel, sim_log)
+
+        # Save simulated OCEL as a new EventLog entry
+        original_log = EventLog.objects.get(pk=file_id)
+        original_name = os.path.splitext(os.path.basename(original_log.file.name))[0]
+        timestamp_str = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        sim_filename = f"{original_name}_sim_{timestamp_str}.json"
+
+        json_content = _export_ocel_to_json(sim_log)
+        sim_log_entry = EventLog(project=original_log.project)
+        sim_log_entry.file.save(sim_filename, ContentFile(json_content.encode("utf-8")), save=True)
+
+        # Build response
+        response_data = {
+            "finished_instances": finished_count,
+            "simulated_events": sim_log.events.height if sim_log.events is not None else 0,
+            "simulated_objects": sim_log.objects.height if sim_log.objects is not None else 0,
+            "evaluation": evaluation,
+            "simulated_file": {
+                "id": sim_log_entry.id,
+                "project": sim_log_entry.project_id,
+                "file": sim_log_entry.file.name,
+                "uploaded_at": sim_log_entry.uploaded_at.isoformat(),
+            },
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Simulation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_process_areas(request):
+    """
+    Get discovered process areas (via MLPA) for a given file.
+    Returns object types, activities, their groupings, and the object_type_to_event_types mapping.
+    """
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        totem = totemDiscovery(ocel)
+        mlpa = mlpaDiscovery(totem)
+
+        # Get all object types and activities
+        all_object_types = sorted(ocel.object_types)
+        all_activities = sorted(ocel.events.select('_activity').unique().to_series().to_list())
+
+        # Get object type counts
+        obj_type_event_count = {}
+        for obj_type in all_object_types:
+            type_objects = ocel.objects.filter(pl.col("_objType") == obj_type).select("_objId").to_series().to_list()
+            obj_type_event_count[obj_type] = len(type_objects)
+
+        # Build object_type_to_activities mapping from the totem
+        object_type_to_activities = {}
+        ot_to_evt = getattr(totem, "object_type_to_event_types", {})
+        for obj_type, events in ot_to_evt.items():
+            if isinstance(events, set):
+                object_type_to_activities[obj_type] = sorted(events)
+            else:
+                object_type_to_activities[obj_type] = sorted(list(events))
+
+        # Serialize MLPA process areas
+        process_areas = []
+        sorted_levels = sorted(mlpa.keys())
+        for level in sorted_levels:
+            for obj_types_set, evt_types_set in mlpa[level]:
+                process_areas.append({
+                    "level": int(level),
+                    "object_types": sorted(list(obj_types_set)),
+                    "activities": sorted(list(evt_types_set)),
+                })
+
+        return Response({
+            "all_object_types": all_object_types,
+            "all_activities": all_activities,
+            "object_type_counts": obj_type_event_count,
+            "object_type_to_activities": object_type_to_activities,
+            "process_areas": process_areas,
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Failed to discover process areas: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_simulation_details(request):
+    """
+    Pre-compute all simulation details: variants, arrival distribution, resource distribution,
+    constraints, cooldowns, allocation strategy, and resource calendars.
+
+    Expected JSON body:
+    {
+        "file_id": int,
+        "object_types": ["Type1", "Type2"],
+        "activities": ["Act1", "Act2"],
+        "resource_types": ["ResourceType1", "ResourceType2"],
+        "support_threshold": 0.8,
+        "min_occurrences_within": 5,
+        "min_occurrences_across": 10
+    }
+    """
+    file_id = request.data.get("file_id")
+    object_types = request.data.get("object_types", [])
+    activities = request.data.get("activities", [])
+    resource_types = request.data.get("resource_types", [])
+    support_threshold = request.data.get("support_threshold", 0.8)
+    min_occurrences_within = request.data.get("min_occurrences_within", 5)
+    min_occurrences_across = request.data.get("min_occurrences_across", 10)
+
+    if not file_id:
+        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+    if not object_types or not activities:
+        return Response({"error": "Missing object_types or activities"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        # Build process area and filter OCEL
+        process_area = ProcessArea(object_types=object_types, activities=activities)
+        totem = totemDiscovery(ocel)
+        mlpa = mlpaDiscovery(totem)
+        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+
+        # Compute variants
+        variants = find_object_variants_connected_component(filtered_ocel)
+
+        # Compute arrival distribution
+        arrival_dist = compute_variant_arrival_distribution(filtered_ocel, variants)
+
+        # Compute resource distribution
+        res_dist = resource_distribution_of_variants(filtered_ocel, variants)
+
+        # Compute constraints
+        constraints = generate_resource_constraints(
+            filtered_ocel, variants, support_threshold, min_occurrences_within, min_occurrences_across
+        )
+
+        # Serialize variants
+        serialized_variants = []
+        for idx, variant in enumerate(variants):
+            # Serialize arrival distribution for this variant
+            var_arrival = arrival_dist.get(variant, {})
+            serialized_arrival = {
+                "weekday_counts": var_arrival.get("weekday_counts", {}),
+                "weekday_probabilities": var_arrival.get("weekday_probabilities", {}),
+                "avg_arrivals_per_hour": var_arrival.get("avg_arrivals_per_hour", {}),
+                "hourly_counts": var_arrival.get("hourly_counts", {}),
+            }
+
+            # Serialize resource distribution for this variant
+            var_res_dist = res_dist.get(variant, {})
+            serialized_res_dist = {}
+            for act, type_stats in var_res_dist.items():
+                serialized_res_dist[act] = {
+                    res_type: {
+                        "mean_count": stats["mean_count"],
+                        "min_count": stats["min_count"],
+                        "max_count": stats["max_count"],
+                    }
+                    for res_type, stats in type_stats.items()
+                }
+
+            # Serialize constraints for this variant
+            var_constraints = constraints.get(variant, {})
+
+            # Get activity sequence from variant graph
+            activity_sequence = []
+            if hasattr(variant, 'graph') and variant.graph is not None:
+                for _, node_data in sorted(variant.graph.nodes(data=True), key=lambda x: x[0]):
+                    activity_sequence.append(node_data.get('label', ''))
+
+            serialized_variants.append({
+                "id": idx,
+                "support": int(variant.support),
+                "activity_sequence": activity_sequence,
+                "arrival_distribution": serialized_arrival,
+                "resource_distribution": serialized_res_dist,
+                "constraints": var_constraints,
+            })
+
+        # Compute resource cooldown distribution
+        cooldown_dist = compute_resource_cooldown(ocel, object_types, activities)
+        serialized_cooldowns = {}
+        for act, type_stats in cooldown_dist.items():
+            serialized_cooldowns[act] = {
+                res_type: {
+                    "mean_duration_s": round(stats["mean_duration_s"], 2),
+                    "std_duration_s": round(stats["std_duration_s"], 2),
+                    "min_duration_s": round(stats["min_duration_s"], 2),
+                    "max_duration_s": round(stats["max_duration_s"], 2),
+                    "sample_count": stats["sample_count"],
+                }
+                for res_type, stats in type_stats.items()
+            }
+
+        # Compute resource allocation strategy
+        allocation_strategy = calculate_resource_allocation_strategy(
+            filtered_ocel, cooldown_dist, ocel.obj_type_map
+        )
+
+        # Compute resource calendars
+        serialized_type_calendars = {}
+        serialized_resource_calendars = {}
+        if resource_types:
+            try:
+                type_cals, res_cals = discover_resource_calendars(
+                    filtered_ocel, resource_types, activities
+                )
+                for rtype, cal in type_cals.items():
+                    serialized_type_calendars[rtype] = cal.probability
+                for rid, cal in res_cals.items():
+                    serialized_resource_calendars[rid] = cal.probability
+            except Exception as e:
+                print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
+
+        return Response({
+            "variants": serialized_variants,
+            "num_variants": len(variants),
+            "cooldown_distribution": serialized_cooldowns,
+            "allocation_strategy": allocation_strategy,
+            "type_calendars": serialized_type_calendars,
+            "resource_calendars": serialized_resource_calendars,
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Failed to compute simulation details: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_resource_calendars(request):
+    """
+    Discover resource calendars for the given process area and resource types.
+
+    Expected JSON body:
+    {
+        "file_id": int,
+        "object_types": ["Type1", "Type2"],
+        "activities": ["Act1", "Act2"],
+        "resource_types": ["ResourceType1", "ResourceType2"]
+    }
+
+    Returns per-type and per-resource calendars as probability matrices (weekday x hour).
+    """
+    file_id = request.data.get("file_id")
+    object_types = request.data.get("object_types", [])
+    activities = request.data.get("activities", [])
+    resource_types = request.data.get("resource_types", [])
+
+    if not file_id:
+        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+    if not resource_types:
+        return Response({"error": "Missing resource_types"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        # Filter OCEL by process area
+        process_area = ProcessArea(object_types=object_types, activities=activities)
+        totem = totemDiscovery(ocel)
+        mlpa = mlpaDiscovery(totem)
+        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+
+        # Discover calendars
+        type_calendars, resource_calendars = discover_resource_calendars(
+            filtered_ocel, resource_types, activities
+        )
+
+        # Serialize type calendars
+        serialized_type_calendars = {}
+        for rtype, cal in type_calendars.items():
+            serialized_type_calendars[rtype] = cal.probability
+
+        # Serialize individual resource calendars
+        serialized_resource_calendars = {}
+        for rid, cal in resource_calendars.items():
+            serialized_resource_calendars[rid] = cal.probability
+
+        return Response({
+            "type_calendars": serialized_type_calendars,
+            "resource_calendars": serialized_resource_calendars,
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Failed to discover resource calendars: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])

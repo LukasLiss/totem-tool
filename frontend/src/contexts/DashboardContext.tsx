@@ -1,6 +1,6 @@
 import React, { createContext, useState } from "react";
 
-export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants';
+export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'simulation';
 
 export type ViewMode =
   | { type: 'overview' }
