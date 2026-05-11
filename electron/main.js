@@ -50,7 +50,8 @@ function startBackend() {
     backendProcess = spawn(executable, args, {
       cwd: cwd,
       shell: false, // CRITICAL: Keep false to allow direct signal handling
-      stdio: 'pipe'
+      stdio: 'pipe',
+      env: { ...process.env, LOCAL_MODE: '1' },
     });
 
     backendProcess.stdout.on('data', (data) => {
