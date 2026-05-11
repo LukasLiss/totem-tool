@@ -4,14 +4,14 @@
   "description": "TOTeM-Tool - React + Django + Electron Desktop App",
   "scripts": {
     "install-all": "npm run setup-env",
-    "start-backend": "cd backend && .\\.venv\\Scripts\\python manage.py runserver 8000",
-    "start-backend-mac": "cd backend && ./venv/bin/python manage.py runserver 8000",
+    "start-backend": "node scripts/run-python.js backend/manage.py runserver 8000",
     "start-frontend": "cd frontend && npm start",
-    "start-electron": "cd electron && NODE_ENV=development npm start",
+    "start-electron": "cd electron && cross-env NODE_ENV=development npm start",
+    "test-backend": "node scripts/run-python.js -m pytest totem_lib/tests",
     "build-frontend": "cd frontend && npm run build-no-typecheck",
     "build-electron": "cd electron && npm run build",
     "build-electron-win": "cd electron && npm run build-win",
-    "build-backend": "backend\\.venv\\Scripts\\pyinstaller totem_backend.spec --noconfirm --clean",
+    "build-backend": "node scripts/run-python.js -m PyInstaller totem_backend.spec --noconfirm --clean",
     "db:migrate": ".\\dist\\totem_backend\\totem_backend.exe migrate",
     "db:seed": ".\\dist\\totem_backend\\totem_backend.exe loaddata .\\dist\\totem_backend\\_internal\\initial_user.json",
     "prebuild:electron": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend",
@@ -22,12 +22,12 @@
     "package-win": "npm run build-frontend && cd electron && shx mkdir -p resources && shx cp -r ../frontend/dist resources/frontend-build && shx cp -r ../backend resources/backend && shx cp -r ../totem_lib resources/totem_lib && shx rm -rf resources/backend/venv resources/backend/__pycache__ && shx rm -rf resources/totem_lib/src/totem_lib.egg-info resources/totem_lib/__pycache__ && npm run package-win",
     "build-all": "npm run build-backend && npm run db:migrate && npm run db:seed && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && cd electron && npm run build-win",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
-    "electron-dev": "concurrently \"npm run start-backend\" \"wait-on http://localhost:8000 && npm run start-frontend\" \"wait-on http://localhost:3000 && npm run start-electron\"",
-    "electron-dev-mac": "concurrently \"npm run start-backend-mac\" \"npm run start-frontend\" \"wait-on http://localhost:3000 --delay 1000 && npm run start-electron\"",
+    "electron-dev": "concurrently \"npm run start-backend\" \"wait-on http-get://localhost:8000/api/health-check/ && npm run start-frontend\" \"wait-on http-get://localhost:3000 && npm run start-electron\"",
     "setup-env": "node ./scripts/setup-env.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
     "shx": "^0.4.0",
     "wait-on": "^7.2.0"
   },

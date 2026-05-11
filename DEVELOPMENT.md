@@ -30,14 +30,25 @@ If prompted, type `y` to proceed.
 
 We use a **Unified Development Environment** strategy to avoid confusion.
 
-- **Location**: `backend/.venv`
+- **Location**: `backend/.venv` on **all** operating systems (Windows, macOS, Linux).
 - **Purpose**: This SINGLE virtual environment is used for:
     - Running the Django Backend.
     - Developing `totem_lib`.
-    - running Tests (`pytest`).
+    - Running Tests (`pytest`).
     - Building the App (`pyinstaller`).
 
-### Activating the Environment manually
+The folder name is identical across OSes — only the path *inside* the venv differs (`Scripts\python.exe` on Windows vs `bin/python` elsewhere). All npm scripts go through `scripts/run-python.js`, which resolves the correct interpreter for the host platform, so you usually don't need to activate the venv at all.
+
+### Running an arbitrary python command
+
+```bash
+node scripts/run-python.js <args...>
+# e.g.
+node scripts/run-python.js -m pytest totem_lib/tests
+node scripts/run-python.js backend/manage.py migrate
+```
+
+### Activating the Environment manually (optional)
 
 **Windows (PowerShell):**
 ```powershell
@@ -86,11 +97,13 @@ Tools like `pyinstaller` and `pytest` are listed in **`backend/requirements-dev.
 Since `totem_lib` is installed in editable mode, you can test it directly from the root using the unified environment.
 
 ```bash
-# Activate the environment first!
-.\backend\.venv\Scripts\Activate.ps1  # Windows
+# Cross-platform — no activation needed
+npm run test-backend
+# or, equivalently:
+node scripts/run-python.js -m pytest totem_lib/tests
 
-# Run library tests
-pytest totem_lib/tests
+# Single test:
+node scripts/run-python.js -m pytest totem_lib/tests/test_foo.py::test_bar
 ```
 
 ---
@@ -119,10 +132,11 @@ Starts everything: Backend (Port 8000), Frontend (Port 3000), and Electron Windo
 **Option 2: Manual Start**
 If you want to run components separately:
 
-1.  **Backend**:
+1.  **Backend** (cross-platform):
     ```bash
-    cd backend
-    ..\backend\.venv\Scripts\python manage.py runserver
+    npm run start-backend
+    # or:
+    node scripts/run-python.js backend/manage.py runserver 8000
     ```
 2.  **Frontend**:
     ```bash

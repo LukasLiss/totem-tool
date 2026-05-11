@@ -112,6 +112,8 @@ function confirm(question) {
 
 
     console.log('\n✅ Setup Complete!');
-    console.log(`   To activate manually: source backend/.venv/Scripts/activate`);
-    console.log(`   (or backend/.venv/bin/activate on Mac/Linux)`);
+    console.log(`   Run dev stack:        npm run dev`);
+    console.log(`   Run a python command: node scripts/run-python.js <args...>`);
+    console.log(`   Manual activation:    source backend/.venv/bin/activate   (Mac/Linux)`);
+    console.log(`                         backend\\.venv\\Scripts\\Activate.ps1 (Windows PS)`);
 })();
