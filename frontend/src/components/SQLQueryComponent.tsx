@@ -12,7 +12,7 @@ interface OCELQueryComponentProps {
     component_name?: string;
     query?: string;
   };
-  onUpdate?: (updates: Partial<GridStackNode>) => void;
+  onUpdate?: (updates: Partial<GridStackNode> & Record<string, any>) => void;
   isEditMode?: boolean;
   dashboardId: number;
   selectedFile?: { id: number; [key: string]: any };
@@ -126,7 +126,7 @@ const OCELQueryComponent: React.FC<OCELQueryComponentProps> = ({
         <div>
           <Textarea
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => handleQueryChange(e.target.value)}
             placeholder="Enter SQL query..."
             className="w-full h-24"
           />

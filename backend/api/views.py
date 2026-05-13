@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, SQLQueryComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, SQLQueryComponent, PieChartComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -498,6 +498,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(OCDFGComponent.objects.get(id=comp.id))
             elif comp.component_name == 'SQLQueryComponent':
                 components.append(SQLQueryComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'PieChartComponent':
+                components.append(PieChartComponent.objects.get(id=comp.id))
+            
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -617,6 +620,23 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     query=item.get('query', 'SELECT * FROM data LIMIT 10'),
                 )            # Add more as needed
+            elif component_name == 'PieChartComponent':
+                PieChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    query=item.get('query', ''),
+                    ring_text=item.get('ring_text', ''),
+                    chart_type=item.get('chart_type', 'donut'),
+                    title=item.get('title', ''),
+                    show_legend=item.get('show_legend', True),
+                    show_tooltip=item.get('show_tooltip', True),
+                    label_column=item.get('label_column', ''),
+                    value_column=item.get('value_column', ''),
+                )
 
         return Response({"status": "saved"})
 

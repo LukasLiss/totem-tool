@@ -103,6 +103,29 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .piechart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 6,
+        content: "Pie Chart",
+        component_name: "PieChartComponent",
+        query: "",
+        ring_text: "",
+        chart_type: "donut",
+        title: "",
+        show_legend: true,
+        show_tooltip: true,
+        label_column: "",
+        value_column: "",
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -146,6 +169,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/variants-preview.png" width="100" height="50"/>
         <div>SQL Query</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item piechart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/variants-preview.png" width="100" height="50"/>
+        <div>Pie Chart</div>
       </div>
     </div>
   );

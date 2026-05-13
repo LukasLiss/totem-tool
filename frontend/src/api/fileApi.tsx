@@ -59,7 +59,7 @@ export async function processFile(token: string, fileId: string) {
 }
 
 // Execute a SQL query on OCEL data
-export async function executeQuery(token: string, fileId: string, query: string) {
+export async function executeQuery(token: string, fileId: string, query: string, signal?: AbortSignal) {
   const response = await fetch(`http://localhost:8000/api/files/${fileId}/execute_query/`, {
     method: "POST",
     headers: {
@@ -67,6 +67,7 @@ export async function executeQuery(token: string, fileId: string, query: string)
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ query }),
+    signal,
   });
   if (response.status === 401) {
     throw new Error("UNAUTHORIZED");
@@ -78,6 +79,7 @@ export async function executeQuery(token: string, fileId: string, query: string)
 
   return await response.json();
 }
+
 /*
 // Export query results to CSV
 export async function exportQueryToCSV(token: string, fileId: string, query: string) {

@@ -12,7 +12,7 @@ import { componentMap } from "../../components/componentMap";
 
 interface GridContextValue {
   grid: GridStack | null;
-  gridRef: React.RefObject<HTMLDivElement>;
+  gridRef: React.RefObject<GridStack | null>;
   addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
   getLayout: () => any[];
   loadLayout: (layout: any[]) => void;
@@ -71,44 +71,72 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     return componentIdCounter.current++;
   };
 
+  const renderGridComponent = (el: HTMLElement, w: GridStackNode) => {
+    const component_name = (w as any).component_name || el.dataset.componentName;
+    const Component = componentMap[component_name];
+    const node = w as any;
+
+    // Preserve custom props via DOM dataset when gridstack does not retain them on the node
+    if (node.query == null && el.dataset.query) node.query = el.dataset.query;
+    if (node.ring_text == null && el.dataset.ringText) node.ring_text = el.dataset.ringText;
+    if (node.chart_type == null && el.dataset.chartType) node.chart_type = el.dataset.chartType as any;
+    if (node.title == null && el.dataset.title) node.title = el.dataset.title;
+    if (node.show_legend == null && el.dataset.showLegend) node.show_legend = el.dataset.showLegend === 'true';
+    if (node.show_tooltip == null && el.dataset.showTooltip) node.show_tooltip = el.dataset.showTooltip === 'true';
+    if (node.label_column == null && el.dataset.labelColumn) node.label_column = el.dataset.labelColumn;
+    if (node.value_column == null && el.dataset.valueColumn) node.value_column = el.dataset.valueColumn;
+
+    if (Component) {
+      if (component_name === "PieChartComponent") {
+        console.log("Rendering PieChartComponent with node props:", {
+          query: node.query,
+          label_column: node.label_column,
+          value_column: node.value_column,
+          chart_type: node.chart_type,
+          title: node.title,
+          ring_text: node.ring_text,
+          show_legend: node.show_legend,
+          show_tooltip: node.show_tooltip,
+          dataset: el.dataset,
+        });
+      }
+      el.innerHTML = '';
+      const root = ReactDOM.createRoot(el);
+      root.render(
+        <Component
+          node={node}
+          isEditMode={isEditMode}
+          selectedFile={selectedFile}
+          dashboardId={dashboardId}
+          onUpdate={(updates) => {
+            Object.assign(node, updates);
+            gridRef.current?.update(el, updates);
+          }}
+        />
+      );
+      (el as any)._reactRoot = root;
+      (el as any).gridstackNode = node; // Store node for re-rendering
+    } else {
+      el.innerHTML = (node as any).content || '';
+    }
+  };
+
   useEffect(() => {
-    // Initialize GridStack without renderCB (set later)
-    const instance = GridStack.init(gridOptions);
+    // Initialize GridStack with renderCB set immediately
+    GridStack.renderCB = renderGridComponent;
+    const instance = GridStack.init({ ...gridOptions, renderCB: renderGridComponent } as any);
     gridRef.current = instance;
     setGrid(instance);
 
-    return () => instance.destroy(false);
+    return () => {
+      instance.destroy(false);
+    };
   }, []); // Empty dependency: run once on mount
 
-  // Separate effect for setting renderCB and updating grid static state when edit mode changes
+  // Separate effect for updating grid static state when edit mode changes
   useEffect(() => {
     console.log('GridProvider useEffect - isEditMode changed to:', isEditMode);
-    // Update renderCB with current isEditMode
-    GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
-      const component_name = (w as any).component_name || el.dataset.componentName;
-      const Component = componentMap[component_name];
-
-      if (Component) {
-        el.innerHTML = '';
-        const root = ReactDOM.createRoot(el);
-        root.render(
-          <Component
-            node={w}
-            isEditMode={isEditMode}
-            selectedFile={selectedFile}
-            dashboardId={dashboardId}  // Pass dashboardId
-            onUpdate={(updates) => {
-              Object.assign(w, updates);
-              gridRef.current?.update(el, updates);
-            }}
-          />
-        );
-        (el as any)._reactRoot = root;
-        (el as any).gridstackNode = w; // Store node for re-rendering
-      } else {
-        el.innerHTML = w.content || '';
-      }
-    };
+    GridStack.renderCB = renderGridComponent;
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
@@ -117,10 +145,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       const items = document.querySelectorAll('.grid-stack-item');
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
+        const itemEl = item as HTMLElement;
         console.log(`Re-rendering item ${index}`);
-        const root = (item as any)._reactRoot;
-        const node = (item as any).gridstackNode;
-        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        const root = (itemEl as any)._reactRoot;
+        const node = (itemEl as any).gridstackNode;
+        const component_name = (node as any)?.component_name || itemEl.dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -137,6 +166,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               }}
             />
           );
+        } else if (Component && node) {
+          console.log(`Creating missing root for item ${index}`);
+          renderGridComponent(item as HTMLElement, node);
         } else {
           console.log(`Skipping re-render for item ${index} - missing root, Component, or node`);
         }
@@ -158,9 +190,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       content,
       component_name: componentName,
       component_id: newId,
-    });
+    } as any);
     if (widgetEl) {
-      const node = grid.getGridItems().find(item => item.el === widgetEl)?.gridstackNode;
+      const node = (grid.getGridItems() as any[]).find((item: any) => item.el === widgetEl)?.gridstackNode;
       if (node) {
         (node as any).component_name = componentName;
         (node as any).component_id = newId;
@@ -180,7 +212,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         // Clear the DOM manually to ensure clean state
         if (gridRef.current) {
           console.log("Clearing DOM");
-          gridRef.current.innerHTML = '';
+          ((gridRef.current as any).el as HTMLElement).innerHTML = '';
         }
         
         console.log("Grid reset complete - kept instance");
@@ -192,8 +224,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       // If reset fails, try to recreate the grid
       try {
         if (gridRef.current) {
-          gridRef.current.innerHTML = '';
-          const newGrid = GridStack.init(gridOptions, gridRef.current);
+          (gridRef.current as any).el.innerHTML = '';
+          const newGrid = GridStack.init(gridOptions as any, (gridRef.current as any).el);
           setGrid(newGrid);
           console.log("Grid recreated after reset failure");
         }
@@ -244,6 +276,21 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+        };
+      } else if (component_name === "SQLQueryComponent") {
+        props = {
+          query: (node as any).query || node.el?.dataset.query || "",
+        };
+      } else if (component_name === "PieChartComponent") {
+        props = {
+          query: (node as any).query || node.el?.dataset.query || "",
+          ring_text: (node as any).ring_text || node.el?.dataset.ringText || "",
+          chart_type: (node as any).chart_type || (node.el?.dataset.chartType as any) || "donut",
+          title: (node as any).title || node.el?.dataset.title || "",
+          show_legend: (node as any).show_legend ?? (node.el?.dataset.showLegend === 'false' ? false : true),
+          show_tooltip: (node as any).show_tooltip ?? (node.el?.dataset.showTooltip === 'false' ? false : true),
+          label_column: (node as any).label_column || node.el?.dataset.labelColumn || "",
+          value_column: (node as any).value_column || node.el?.dataset.valueColumn || "",
         };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
@@ -322,7 +369,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
-        } else {
+        } else if (item.component_name === "SQLQueryComponent") {
+          content = "SQL Component";
+        }  else if (item.component_name === "PieChartComponent") {
+          content = "Piechart Component";
+          }
+          else {
           content = "Unknown";
         }
         
@@ -336,14 +388,24 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w: item.w,
             h: item.h,
             content,  // Keep for GridStack compatibility
-            text: item.text,
-            component_name: item.component_name,
+            text: (item as any).text,
+            component_name: (item as any).component_name,
             component_id,  // Now always set
-            color: item.color,
-            font_size: item.font_size,
-            image: item.image,
-            automatic_loading: item.automatic_loading,
-            leading_object_type: item.leading_object_type,
+            color: (item as any).color,
+            font_size: (item as any).font_size,
+            image: (item as any).image,
+            automatic_loading: (item as any).automatic_loading,
+            leading_object_type: (item as any).leading_object_type,
+            // OCELQueryComponent properties
+            query: item.query,
+            // PieChartComponent properties
+            ring_text: item.ring_text,
+            chart_type: item.chart_type,
+            title: item.title,
+            show_legend: item.show_legend,
+            show_tooltip: item.show_tooltip,
+            label_column: item.label_column,
+            value_column: item.value_column,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -355,36 +417,58 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
-          });
+          } as any);
+          const node = widgetEl
+            ? (gridRef.current?.getGridItems() as any[]).find((gridItem: any) => gridItem.el === widgetEl)?.gridstackNode
+            : undefined;
           // After adding, ensure custom properties are on the node
-          if (widgetEl) {
-            const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
-            if (node) {
-              (node as any).component_name = item.component_name;
-              (node as any).component_id = component_id;  // Ensure it's set
-              (node as any).text = item.text;
-              (node as any).color = item.color; // For NumberOfEventsComponent
-              (node as any).font_size = item.font_size;
-              (node as any).image = item.image; // For ImageComponent
-              (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
-              (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
-              // LogStatisticsComponent properties
-              (node as any).show_num_events = item.show_num_events;
-              (node as any).show_num_activities = item.show_num_activities;
-              (node as any).show_num_objects = item.show_num_objects;
-              (node as any).show_num_object_types = item.show_num_object_types;
-              (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
-              (node as any).show_newest_timestamp = item.show_newest_timestamp;
-              (node as any).show_duration = item.show_duration;
-              // OCDFGComponent properties
-              (node as any).show_controls = item.show_controls;
-              (node as any).initial_interaction_locked = item.initial_interaction_locked;
-            }
+          if (node) {
+            (node as any).component_name = item.component_name;
+            (node as any).component_id = component_id;  // Ensure it's set
+            (node as any).text = item.text;
+            (node as any).color = item.color; // For NumberOfEventsComponent
+            (node as any).font_size = item.font_size;
+            (node as any).image = item.image; // For ImageComponent
+            (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
+            (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+            (node as any).query = item.query; // For SQLQueryComponent and PieChartComponent
+            // PieChartComponent properties
+            (node as any).ring_text = item.ring_text;
+            (node as any).chart_type = item.chart_type;
+            (node as any).title = item.title;
+            (node as any).show_legend = item.show_legend;
+            (node as any).show_tooltip = item.show_tooltip;
+            (node as any).label_column = item.label_column;
+            (node as any).value_column = item.value_column;
+            // LogStatisticsComponent properties
+            (node as any).show_num_events = item.show_num_events;
+            (node as any).show_num_activities = item.show_num_activities;
+            (node as any).show_num_objects = item.show_num_objects;
+            (node as any).show_num_object_types = item.show_num_object_types;
+            (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
+            (node as any).show_newest_timestamp = item.show_newest_timestamp;
+            (node as any).show_duration = item.show_duration;
+            // OCDFGComponent properties
+            (node as any).show_controls = item.show_controls;
+            (node as any).initial_interaction_locked = item.initial_interaction_locked;
           }
-          // Set data attribute for persistence
+          // Set data attribute for persistence and fallback
           if (widgetEl) {
             widgetEl.dataset.componentName = item.component_name;
+            widgetEl.dataset.query = item.query || '';
+            widgetEl.dataset.ringText = item.ring_text || '';
+            widgetEl.dataset.chartType = item.chart_type || 'donut';
+            widgetEl.dataset.title = item.title || '';
+            widgetEl.dataset.showLegend = String(item.show_legend ?? true);
+            widgetEl.dataset.showTooltip = String(item.show_tooltip ?? true);
+            widgetEl.dataset.labelColumn = item.label_column || '';
+            widgetEl.dataset.valueColumn = item.value_column || '';
           }
+
+          if (widgetEl && node) {
+            renderGridComponent(widgetEl, node);
+          }
+
           console.log("Widget added:", widgetEl);
         } catch (error) {
           console.error(`Error adding widget ${index}:`, error);

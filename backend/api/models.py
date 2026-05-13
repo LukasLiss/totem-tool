@@ -99,3 +99,12 @@ class OCDFGComponent(DashboardComponent):
 class SQLQueryComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM data LIMIT 10")
 
+class PieChartComponent(DashboardComponent):
+    query = models.TextField()
+    ring_text = models.TextField()
+    chart_type = models.CharField(max_length=10, choices=[('pie', 'Pie'), ('donut', 'Donut')], default='donut')
+    title = models.CharField(max_length=100, blank=True, default='')
+    show_legend = models.BooleanField(default=True)
+    show_tooltip = models.BooleanField(default=True)
+    label_column = models.CharField(max_length=100, blank=True, default='')
+    value_column = models.CharField(max_length=100, blank=True, default='')

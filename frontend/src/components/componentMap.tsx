@@ -31,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import SQLQueryComponent from './SQLQueryComponent';
+import PieChartComponent from './PieChartComponent';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -56,8 +57,16 @@ interface ComponentProps {
     initial_interaction_locked?: boolean;
     // OCELQueryComponent properties
     query?: string;
+    // PieChartComponent properties
+    ring_text?: string;
+    chart_type?: 'pie' | 'donut';
+    title?: string;
+    show_legend?: boolean;
+    show_tooltip?: boolean;
+    label_column?: string;
+    value_column?: string;
   };
-  onUpdate?: (updates: Partial<GridStackNode>) => void;
+  onUpdate?: (updates: Partial<GridStackNode> & Record<string, any>) => void;
   isEditMode?: boolean; // Now passed globally
   dashboardId: number;  // Added for API calls
   selectedFile?: { id: number; [key: string]: any }; // Selected event log file
@@ -596,4 +605,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   LogStatisticsComponent,
   OCDFGComponent,
   SQLQueryComponent,
+  PieChartComponent,
 };
