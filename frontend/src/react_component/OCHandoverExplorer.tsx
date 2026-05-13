@@ -40,6 +40,7 @@ type Method = "oc" | "flattened";
 type Normalization = "by_source" | "by_target" | "by_arcs_in_eog" | "by_total_weight";
 type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
 type SortDir = "asc" | "desc";
+type DetailLayout = "counterpart-center" | "ego-center";
 
 const NORMALIZATION_LABELS: Record<Normalization, string> = {
   by_source:       "By Source",
@@ -1045,6 +1046,7 @@ function NodeDetailView({
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
   const [egoNorm, setEgoNorm] = useState(false);
+  const [detailLayout, setDetailLayout] = useState<DetailLayout>("counterpart-center");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
 
   useEffect(() => {
@@ -1086,10 +1088,10 @@ function NodeDetailView({
   // Self-arc routes BELOW all counterparts: compute the arc height needed to
   // clear the bottommost counterpart by 30px, then expand svgHeight to fit.
   const bottomNodeY = nc > 0 ? midYOf(nc - 1) : centerY;
-  const selfArcBaseH = selfEdges.length > 0
+  const selfArcBaseH = (detailLayout === "counterpart-center" && selfEdges.length > 0)
     ? Math.max(60, Math.ceil(((bottomNodeY + NODE_R - centerY) + 30) * 4 / 3))
     : 0;
-  const svgHeight = selfEdges.length > 0
+  const svgHeight = (detailLayout === "counterpart-center" && selfEdges.length > 0)
     ? Math.max(rawSvgH, Math.ceil(centerY + selfArcBaseH + (selfEdges.length - 1) * 22 + 30))
     : rawSvgH;
 
@@ -1101,26 +1103,15 @@ function NodeDetailView({
 
   const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
-  const selfTotal = selfEdges.reduce((s, e) => s + e.raw_weight, 0);
-  const outTotal = outEdges.reduce((s, e) => s + e.raw_weight, 0) + selfTotal;
-  const inTotal  = inEdges.reduce((s, e) => s + e.raw_weight, 0);
+  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.raw_weight, 0);
 
-  // Returns the weight to use for rendering: backend norm_weight when off,
-  // ego-normalised raw counts when on (independent of the backend strategy).
-  // Out-edges and self-arcs are normalised by the selected node's total outgoing count;
-  // in-edges are normalised by its total incoming count.
-  const getW = (edge: HandoverEdge, dir: "out" | "in" | "self") => {
+  const getW = (edge: HandoverEdge) => {
     if (!egoNorm) return edge.weight;
-    const total = dir === "in" ? inTotal : outTotal;
-    return total > 0 ? edge.raw_weight / total : 0;
+    return allEdgesTotal > 0 ? edge.raw_weight / allEdgesTotal : 0;
   };
 
   const displayWeights = egoNorm
-    ? [
-        ...outEdges.map(e => getW(e, "out")),
-        ...inEdges.map(e => getW(e, "in")),
-        ...selfEdges.map(e => getW(e, "self")),
-      ]
+    ? [...outEdges, ...inEdges, ...selfEdges].map(e => getW(e))
     : data.edges.map(e => e.weight);
 
   const minW = displayWeights.length > 0 ? Math.min(...displayWeights) : 0;
@@ -1130,82 +1121,113 @@ function NodeDetailView({
 
   const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
 
-  // Out edges: left node → middle counterpart
-  counterpartIds.forEach((cpId, i) => {
-    const cy = midYOf(i);
-    const outs = outEdges.filter(e => e.target === cpId);
-    if (outs.length === 0) return;
-    const dx = MID_X - LEFT_X, dy = cy - centerY;
+  const pushEdge = (key: string, srcX: number, srcY: number, tgtX: number, tgtY: number,
+    edge: HandoverEdge, lat: number) => {
+    const dx = tgtX - srcX, dy = tgtY - srcY;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len;
     const perpX = -uy, perpY = ux;
-    outs.forEach((edge, j) => {
-      const lat = (j - (outs.length - 1) / 2) * OFFSET_STEP;
-      const sx = LEFT_X + ux * NODE_R + perpX * lat;
-      const sy = centerY + uy * NODE_R + perpY * lat;
-      const ex = MID_X - ux * (NODE_R + ARROW_LEN) + perpX * lat;
-      const ey = cy - uy * (NODE_R + ARROW_LEN) + perpY * lat;
-      paths.push({
-        key: `out-${cpId}-${j}`,
-        d: `M ${sx} ${sy} L ${ex} ${ey}`,
-        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-        strokeWidth: strokeFor(getW(edge, "out")),
-        markerId: arrowId(edge.businessobject_type),
-        count: edge.raw_weight,
-        weight: getW(edge, "out"),
-      });
-    });
-  });
-
-  // In edges: middle counterpart → right node
-  counterpartIds.forEach((cpId, i) => {
-    const cy = midYOf(i);
-    const ins = inEdges.filter(e => e.source === cpId);
-    if (ins.length === 0) return;
-    const dx = RIGHT_X - MID_X, dy = centerY - cy;
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len, uy = dy / len;
-    const perpX = -uy, perpY = ux;
-    ins.forEach((edge, j) => {
-      const lat = (j - (ins.length - 1) / 2) * OFFSET_STEP;
-      const sx = MID_X + ux * NODE_R + perpX * lat;
-      const sy = cy + uy * NODE_R + perpY * lat;
-      const ex = RIGHT_X - ux * (NODE_R + ARROW_LEN) + perpX * lat;
-      const ey = centerY - uy * (NODE_R + ARROW_LEN) + perpY * lat;
-      paths.push({
-        key: `in-${cpId}-${j}`,
-        d: `M ${sx} ${sy} L ${ex} ${ey}`,
-        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-        strokeWidth: strokeFor(getW(edge, "in")),
-        markerId: arrowId(edge.businessobject_type),
-        count: edge.raw_weight,
-        weight: getW(edge, "in"),
-      });
-    });
-  });
-
-  // Self-arc: left node → right node, curved BELOW all counterparts.
-  // Control points drop to centerY + arcH, which clears the bottommost counterpart.
-  // The arrowhead points upward into the bottom of the right node.
-  selfEdges.forEach((edge, j) => {
-    const arcH = selfArcBaseH + j * 22;
-    const c1x = LEFT_X, c1y = centerY + arcH;
-    const c2x = RIGHT_X, c2y = centerY + arcH;
-    const tipX = RIGHT_X, tipY = centerY + NODE_R;
-    const ddx = tipX - c2x, ddy = tipY - c2y;
-    const ddLen = Math.hypot(ddx, ddy) || 1;
-    const ex = tipX - (ddx / ddLen) * ARROW_LEN;
-    const ey = tipY - (ddy / ddLen) * ARROW_LEN;
+    const sx = srcX + ux * NODE_R + perpX * lat;
+    const sy = srcY + uy * NODE_R + perpY * lat;
+    const ex = tgtX - ux * (NODE_R + ARROW_LEN) + perpX * lat;
+    const ey = tgtY - uy * (NODE_R + ARROW_LEN) + perpY * lat;
     paths.push({
-      key: `self-${j}`,
-      d: `M ${LEFT_X} ${centerY + NODE_R} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${ex} ${ey}`,
+      key,
+      d: `M ${sx} ${sy} L ${ex} ${ey}`,
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
-      strokeWidth: strokeFor(getW(edge, "self")),
+      strokeWidth: strokeFor(getW(edge)),
       markerId: arrowId(edge.businessobject_type),
       count: edge.raw_weight,
-      weight: getW(edge, "self"),
+      weight: getW(edge),
     });
-  });
+  };
+
+  if (detailLayout === "counterpart-center") {
+    // Out edges: ego (left) → counterpart (center)
+    counterpartIds.forEach((cpId, i) => {
+      const cy = midYOf(i);
+      outEdges.filter(e => e.target === cpId).forEach((edge, j, arr) => {
+        pushEdge(`out-${cpId}-${j}`, LEFT_X, centerY, MID_X, cy, edge,
+          (j - (arr.length - 1) / 2) * OFFSET_STEP);
+      });
+    });
+
+    // In edges: counterpart (center) → ego (right)
+    counterpartIds.forEach((cpId, i) => {
+      const cy = midYOf(i);
+      inEdges.filter(e => e.source === cpId).forEach((edge, j, arr) => {
+        pushEdge(`in-${cpId}-${j}`, MID_X, cy, RIGHT_X, centerY, edge,
+          (j - (arr.length - 1) / 2) * OFFSET_STEP);
+      });
+    });
+
+    // Self-arc: ego (left) → ego (right), curved below all counterparts
+    selfEdges.forEach((edge, j) => {
+      const arcH = selfArcBaseH + j * 22;
+      const c1x = LEFT_X, c1y = centerY + arcH;
+      const c2x = RIGHT_X, c2y = centerY + arcH;
+      const tipX = RIGHT_X, tipY = centerY + NODE_R;
+      const ddx = tipX - c2x, ddy = tipY - c2y;
+      const ddLen = Math.hypot(ddx, ddy) || 1;
+      const ex = tipX - (ddx / ddLen) * ARROW_LEN;
+      const ey = tipY - (ddy / ddLen) * ARROW_LEN;
+      paths.push({
+        key: `self-${j}`,
+        d: `M ${LEFT_X} ${centerY + NODE_R} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${ex} ${ey}`,
+        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
+        strokeWidth: strokeFor(getW(edge)),
+        markerId: arrowId(edge.businessobject_type),
+        count: edge.raw_weight,
+        weight: getW(edge),
+      });
+    });
+  } else {
+    // Out edges: ego (center) → counterpart (right)
+    counterpartIds.forEach((cpId, i) => {
+      const cy = midYOf(i);
+      outEdges.filter(e => e.target === cpId).forEach((edge, j, arr) => {
+        pushEdge(`out-${cpId}-${j}`, MID_X, centerY, RIGHT_X, cy, edge,
+          (j - (arr.length - 1) / 2) * OFFSET_STEP);
+      });
+    });
+
+    // In edges: counterpart (left) → ego (center)
+    counterpartIds.forEach((cpId, i) => {
+      const cy = midYOf(i);
+      inEdges.filter(e => e.source === cpId).forEach((edge, j, arr) => {
+        pushEdge(`in-${cpId}-${j}`, LEFT_X, cy, MID_X, centerY, edge,
+          (j - (arr.length - 1) / 2) * OFFSET_STEP);
+      });
+    });
+
+    // Self-loop on ego node (center), arcing above
+    selfEdges.forEach((edge, j) => {
+      const spread = j * NODE_R * 0.9;
+      const loopH = NODE_R * 2.4 + spread;
+      const loopW = NODE_R * 1.6 + spread;
+      const startA = -Math.PI * 0.72;
+      const startX = MID_X + NODE_R * Math.cos(startA);
+      const startY = centerY + NODE_R * Math.sin(startA);
+      const cp1x = MID_X - loopW, cp1y = centerY - loopH;
+      const cp2x = MID_X + loopW, cp2y = centerY - loopH;
+      const endA = -Math.PI * 0.28;
+      const endTX = MID_X + NODE_R * Math.cos(endA);
+      const endTY = centerY + NODE_R * Math.sin(endA);
+      const edx = endTX - cp2x, edy = endTY - cp2y;
+      const eLen = Math.hypot(edx, edy) || 1;
+      const endX = endTX - (edx / eLen) * ARROW_LEN;
+      const endY = endTY - (edy / eLen) * ARROW_LEN;
+      paths.push({
+        key: `self-${j}`,
+        d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
+        color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
+        strokeWidth: strokeFor(getW(edge)),
+        markerId: arrowId(edge.businessobject_type),
+        count: edge.raw_weight,
+        weight: getW(edge),
+      });
+    });
+  }
 
   const lbl = (id: string) => id.length > 11 ? id.slice(0, 11) + "…" : id;
 
@@ -1224,9 +1246,15 @@ function NodeDetailView({
             <span className="font-mono font-semibold text-foreground">{selectedNode}</span>
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Switch id="ego-norm" checked={egoNorm} onCheckedChange={setEgoNorm} />
-          <Label htmlFor="ego-norm" className="text-sm cursor-pointer">Ego normalization</Label>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch id="detail-layout" checked={detailLayout === "ego-center"} onCheckedChange={v => setDetailLayout(v ? "ego-center" : "counterpart-center")} />
+            <Label htmlFor="detail-layout" className="text-sm cursor-pointer">Ego center</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch id="ego-norm" checked={egoNorm} onCheckedChange={setEgoNorm} />
+            <Label htmlFor="ego-norm" className="text-sm cursor-pointer">Ego normalization</Label>
+          </div>
         </div>
       </div>
 
@@ -1248,9 +1276,15 @@ function NodeDetailView({
           </defs>
 
           {/* Column labels */}
-          <text x={LEFT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Sender</text>
-          <text x={MID_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Counterparts</text>
-          <text x={RIGHT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Receiver</text>
+          {detailLayout === "counterpart-center" ? <>
+            <text x={LEFT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Sender</text>
+            <text x={MID_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Counterparts</text>
+            <text x={RIGHT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Receiver</text>
+          </> : <>
+            <text x={LEFT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Sender</text>
+            <text x={MID_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Ego</text>
+            <text x={RIGHT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Receiver</text>
+          </>}
 
           {/* Edges */}
           {paths.map(p => (
@@ -1274,32 +1308,63 @@ function NodeDetailView({
             </g>
           ))}
 
-          {/* Left node (selected as sender) */}
-          <g transform={`translate(${LEFT_X},${centerY})`}>
-            <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
-            <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
-              style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
-          </g>
-
-          {/* Middle counterpart nodes */}
-          {counterpartIds.map((cpId, i) => {
-            const cy = midYOf(i);
-            const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
-            return (
-              <g key={cpId} transform={`translate(${MID_X},${cy})`}>
-                <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
-                <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
-                  style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
-              </g>
-            );
-          })}
-
-          {/* Right node (selected as receiver) */}
-          <g transform={`translate(${RIGHT_X},${centerY})`}>
-            <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
-            <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
-              style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
-          </g>
+          {detailLayout === "counterpart-center" ? <>
+            {/* Left: ego as sender */}
+            <g transform={`translate(${LEFT_X},${centerY})`}>
+              <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+              <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+            </g>
+            {/* Center: counterpart nodes */}
+            {counterpartIds.map((cpId, i) => {
+              const cy = midYOf(i);
+              const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+              return (
+                <g key={cpId} transform={`translate(${MID_X},${cy})`}>
+                  <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                    style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+                </g>
+              );
+            })}
+            {/* Right: ego as receiver */}
+            <g transform={`translate(${RIGHT_X},${centerY})`}>
+              <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+              <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+            </g>
+          </> : <>
+            {/* Left: counterpart nodes (as senders) */}
+            {counterpartIds.map((cpId, i) => {
+              const cy = midYOf(i);
+              const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+              return (
+                <g key={`left-${cpId}`} transform={`translate(${LEFT_X},${cy})`}>
+                  <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                    style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+                </g>
+              );
+            })}
+            {/* Center: ego node */}
+            <g transform={`translate(${MID_X},${centerY})`}>
+              <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+              <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+            </g>
+            {/* Right: counterpart nodes (as receivers) */}
+            {counterpartIds.map((cpId, i) => {
+              const cy = midYOf(i);
+              const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+              return (
+                <g key={`right-${cpId}`} transform={`translate(${RIGHT_X},${cy})`}>
+                  <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                  <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                    style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+                </g>
+              );
+            })}
+          </>}
         </svg>
 
         {tooltip && (
