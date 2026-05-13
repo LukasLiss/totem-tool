@@ -23,7 +23,7 @@ import networkx as nx
 
 from collections import defaultdict
 
-from django.core.cache import cache
+from api.cache import result_cache
 
 import os
 from hashlib import sha1
@@ -230,12 +230,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        cached = result_cache.get(request, "noe", file_pk=user_file.pk)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
         try:
             ocel = _build_ocel_from_path(user_file.file.path)
             processed = len(ocel.events.unique(subset='_eventId'))
         except Exception as e:
             return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        result_cache.set("noe", processed, file_pk=user_file.pk)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -246,18 +251,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        cache_key = f"ocel_object_{pk}"
-        ocel = cache.get(cache_key)
+        cached = result_cache.get(request, "object_types", file_pk=user_file.pk)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
 
-        if not ocel:
-            try:
-                # We reuse the utility function that handles file format detection
-                ocel = _build_ocel_from_path(user_file.file.path)
-                cache.set(cache_key, ocel, timeout=3600)
-            except Exception as e:
-                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+            result = ocel.object_types
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response(ocel.object_types, status=status.HTTP_200_OK)
+        result_cache.set("object_types", result, file_pk=user_file.pk)
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -266,17 +271,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            cache_key = f"totem_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+        cached_result = result_cache.get(request, "discover_totem", file_pk=user_file.pk)
+        if cached_result is not None:
+            return Response(cached_result, status=status.HTTP_200_OK)
 
+        try:
             ocel = _build_ocel_from_path(user_file.file.path)
             totem = totemDiscovery(ocel)
             serialized = _serialize_totem(totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            result_cache.set("discover_totem", serialized, file_pk=user_file.pk)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -290,18 +294,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            cache_key = f"mlpa_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+        cached_result = result_cache.get(request, "discover_mlpa", file_pk=user_file.pk)
+        if cached_result is not None:
+            return Response(cached_result, status=status.HTTP_200_OK)
 
+        try:
             ocel = _build_ocel_from_path(user_file.file.path)
             totem = totemDiscovery(ocel)
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            result_cache.set("discover_mlpa", serialized, file_pk=user_file.pk)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -314,15 +317,14 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        cache_key = f"ocel_object_{pk}"
-        ocel = cache.get(cache_key)
+        cached = result_cache.get(request, "statistics", file_pk=user_file.pk)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
 
-        if not ocel:
-            try:
-                ocel = _build_ocel_from_path(user_file.file.path)
-                cache.set(cache_key, ocel, timeout=3600)
-            except Exception as e:
-                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            ocel = _build_ocel_from_path(user_file.file.path)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
             num_events = len(ocel.events.unique(subset='_eventId'))
@@ -332,14 +334,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
             earliest_timestamp = ocel.events.select('_timestampUnix').min().item()
             newest_timestamp = ocel.events.select('_timestampUnix').max().item()
 
-            return Response({
+            result = {
                 "num_events": num_events,
                 "num_unique_activities": num_unique_activities,
                 "num_objects": num_objects,
                 "num_object_types": num_object_types,
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
-            }, status=status.HTTP_200_OK)
+            }
+            result_cache.set("statistics", result, file_pk=user_file.pk)
+            return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -799,32 +803,26 @@ def variants(request):
 
     # Verify user has access to this file
     try:
-        EventLog.objects.get(pk=file_id, project__users=request.user)
+        user_file = EventLog.objects.get(pk=file_id, project__users=request.user)
     except EventLog.DoesNotExist:
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
-    cache_key = f"ocel_object_{file_id}"
-    ocel = cache.get(cache_key)
-
-    if not ocel:
-        print(f"CACHE MISS for file_id: {file_id}. Building OCEL from scratch...")
-        try:
-            uf = EventLog.objects.get(pk=file_id)
-            path = uf.file.path
-            if not os.path.exists(path):
-                return Response({"error": f"Path does not exist: {path}"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            ocel = _build_ocel_from_path(path)
-            cache.set(cache_key, ocel, timeout=3600)
-        except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    else:
-        print(f"CACHE HIT for file_id: {file_id}. Using cached OCEL object.")
+    leading_type = request.query_params.get("leading_type", "")
+    cached = result_cache.get(request, "variants", file_pk=user_file.pk, leading_type=leading_type)
+    if cached is not None:
+        return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        leading_object_type = request.query_params.get("leading_type")
+        path = user_file.file.path
+        if not os.path.exists(path):
+            return Response({"error": f"Path does not exist: {path}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        ocel = _build_ocel_from_path(path)
+    except Exception as e:
+        return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        leading_object_type = leading_type or None
 
         # If no leading_type provided or it doesn't exist, use first alphabetically sorted type
         if not leading_object_type or leading_object_type not in ocel.object_types:
@@ -875,10 +873,12 @@ def variants(request):
             },
         })
 
-    return Response({
+    response_data = {
         "variants": out,
         "object_types": ocel.object_types
-    }, status=status.HTTP_200_OK)
+    }
+    result_cache.set("variants", response_data, file_pk=user_file.pk, leading_type=leading_type)
+    return Response(response_data, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -1983,18 +1983,17 @@ def OCDFGViewSet(request):
     if raw_object_types:
         object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
 
-    cache_key = f"ocel_object_{file_id}"
-    ocel = cache.get(cache_key)
+    cached = result_cache.get(request, "ocdfg", file_pk=int(file_id), object_types=raw_object_types or "")
+    if cached is not None:
+        return Response(cached, status=status.HTTP_200_OK)
 
-    if not ocel:  # i.e. if we have a cache-miss
-        try:
-            user_file =  EventLog.objects.get(id=file_id)
-            ocel = _build_ocel_from_path(user_file.file.path)
-            cache.set(cache_key, ocel, timeout=3600)  # Cache for 1 hour
-        except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": f"Failed to load OCEL from file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    try:
+        user_file = EventLog.objects.get(id=file_id)
+        ocel = _build_ocel_from_path(user_file.file.path)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": f"Failed to load OCEL from file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     try:
         # Full OCDFG (unfiltered) for register
@@ -2049,6 +2048,7 @@ def OCDFGViewSet(request):
         if trace_variants:
             response_payload["trace_variants"] = trace_variants
 
+        result_cache.set("ocdfg", response_payload, file_pk=int(file_id), object_types=raw_object_types or "")
         return Response(response_payload, status=status.HTTP_200_OK)
 
     except Exception as e:

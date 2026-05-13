@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 from datetime import timedelta
 from corsheaders.defaults import default_headers
@@ -162,3 +163,32 @@ SIMPLE_JWT = {
 
 MEDIA_ROOT = BASE_DIR / "user_files"
 MEDIA_URL = "/files/"
+
+# ---------- Result Cache ----------
+# Default: in-process memory cache (ideal for single-process desktop app).
+# To switch to Redis: set TOTEM_CACHE_BACKEND=redis and TOTEM_REDIS_URL=redis://localhost:6379/0
+_cache_backend = os.environ.get("TOTEM_CACHE_BACKEND", "locmem")
+
+if _cache_backend == "redis":
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": os.environ.get("TOTEM_REDIS_URL", "redis://localhost:6379/0"),
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "totem-result-cache",
+            "OPTIONS": {
+                "MAX_ENTRIES": int(os.environ.get("TOTEM_CACHE_MAX_ENTRIES", "300")),
+            },
+        }
+    }
+
+# Keep the current 3600s default; configurable via env var for future tuning
+TOTEM_CACHE_TIMEOUT = int(os.environ.get("TOTEM_CACHE_TIMEOUT", "3600"))
