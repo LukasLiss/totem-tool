@@ -192,3 +192,17 @@ else:
 
 # Keep the current 3600s default; configurable via env var for future tuning
 TOTEM_CACHE_TIMEOUT = int(os.environ.get("TOTEM_CACHE_TIMEOUT", "3600"))
+# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
+
+if LOCAL_MODE:
+    SIMPLE_JWT = {
+        'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+        'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+        'ROTATE_REFRESH_TOKENS': True,
+        'BLACKLIST_AFTER_ROTATION': True,
+    }
+
+# Credentials used for the auto-seeded Guest account in local mode
+LOCAL_GUEST_USERNAME = 'Guest'
+LOCAL_GUEST_PASSWORD = 'guest'

@@ -203,6 +203,7 @@ def greeting(request):
 def health_check(request):
     return Response({"status": "ok", "message": "Backend is running."})
 
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
@@ -1996,9 +1997,10 @@ def OCDFGViewSet(request):
         return Response({"error": f"Failed to load OCEL from file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     try:
-        # Full OCDFG (unfiltered) for register
+        # Full OCDFG (unfiltered) for register.
+        # edges="links" preserves the pre-NetworkX-3.4 key name the frontend expects.
         ocdfg_full = OCDFG.from_ocel(ocel)
-        dfg_json_full = nx.node_link_data(ocdfg_full)
+        dfg_json_full = nx.node_link_data(ocdfg_full, edges="links")
         all_nodes = [
             {
                 "id": n.get("id"),
@@ -2021,7 +2023,7 @@ def OCDFGViewSet(request):
                     dfg_json = {"directed": True, "multigraph": False, "graph": {"kind": "ocdfg"}, "nodes": [], "links": []}
                 else:
                     ocdfg_filtered = OCDFG.from_ocel(filtered_ocel)
-                    dfg_json = nx.node_link_data(ocdfg_filtered)
+                    dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
 
                 # Extract actual trace variants from the OCEL per object type
                 trace_variants = _extract_trace_variants_per_type(ocel, object_type_filter)
