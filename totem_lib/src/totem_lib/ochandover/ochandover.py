@@ -18,15 +18,20 @@ class OCHANDOVER(nx.MultiDiGraph):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    
+
     @classmethod
     def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
                   normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog",
-                  normalization_scope: Literal["global", "per_bo_type"] = "global") -> 'OCHANDOVER':
+                  normalization_scope: Literal["global", "per_bo_type"] = "global",
+                  parallel_threshold: float | None = None) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
             For example when differentiating the different object types, do we divide for each type individually or with the same value
         """
+
+        
 
         # Get the object ids of the resources and business objects
         
@@ -209,6 +214,57 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Consecutive resource pairs (with gap, per business object)")
         print(consecutive_resource_pairs)
 
+        if parallel_threshold is not None:
+            footprint = cls.compute_footprint(ocel, businessobject_types)
+
+            # Add source and target activity to each pair so we can look up dependency
+            event_activity = ocel.events.select(["_eventId", "_activity"])
+            annotated = (
+                consecutive_resource_pairs
+                .join(event_activity.rename({"_activity": "source_activity"}), on="_eventId", how="left")
+                .join(event_activity.rename({"_eventId": "next_event_id", "_activity": "target_activity"}), on="next_event_id", how="left")
+                .join(
+                    footprint.select(["businessobject_type", "activity_a", "activity_b", "dependency"]),
+                    left_on=["businessobject_type", "source_activity", "target_activity"],
+                    right_on=["businessobject_type", "activity_a", "activity_b"],
+                    how="left",
+                )
+            )
+
+            filtered_out = annotated.filter(
+                pl.col("dependency").is_not_null() & (pl.col("dependency") < parallel_threshold)
+            )
+
+            parallel_pairs = (
+                filtered_out
+                .select(["businessobject_type", "source_activity", "target_activity", "dependency"])
+                .unique()
+                .sort(["businessobject_type", "source_activity", "target_activity"])
+            )
+            print(f"\n── Parallel filter (threshold={parallel_threshold}) ──")
+            print(f"Filtered activity pairs:")
+            for row in parallel_pairs.to_dicts():
+                print(f"  [{row['businessobject_type']}]  {row['source_activity']} → {row['target_activity']}  (dep={row['dependency']:.4f})")
+
+            handover_pairs = (
+                filtered_out
+                .explode("resources")
+                .explode("next_resources")
+                .select(["resources", "next_resources", "source_activity", "target_activity"])
+                .unique()
+                .sort(["resources", "next_resources"])
+            )
+            print(f"Filtered handovers:")
+            for row in handover_pairs.to_dicts():
+                print(f"  {row['resources']} → {row['next_resources']}  ({row['source_activity']} → {row['target_activity']})")
+            print()
+
+            consecutive_resource_pairs = (
+                annotated
+                .filter(pl.col("dependency").is_null() | (pl.col("dependency") >= parallel_threshold))
+                .drop(["source_activity", "target_activity", "dependency"])
+            )
+
         # Collapse multiple business objects for the same (source event, target event) pair
         # into a single arc — mirroring eog_arcs_unique in the original approach.
         # For the gap we take the minimum across all business objects for the same event pair:
@@ -346,7 +402,6 @@ class OCHANDOVER(nx.MultiDiGraph):
 
         return graph
     
-
 
 
     @classmethod
@@ -685,5 +740,99 @@ class OCHANDOVER(nx.MultiDiGraph):
         plt.axis("off")
         plt.tight_layout()
         plt.show()
-    
-    
+    @classmethod
+    def compute_footprint(
+        cls,
+        ocel: OCEL,
+        object_types: List[str],
+    ) -> pl.DataFrame:
+        """
+        Compute a per-object-type footprint matrix over activities using each
+        object type's lifecycles as traces independently.
+
+        For each ordered pair (A, B) within a given object type the relation is:
+          →   A directly precedes B but B does not directly precede A
+          ←   B directly precedes A but A does not directly precede B
+          ||  both A→B and B→A appear (likely parallel / concurrent)
+          #   neither direction appears
+
+        Returns a long-format DataFrame with columns:
+          businessobject_type, activity_a, activity_b,
+          relation, count_ab, count_ba, dependency
+
+        dependency = (count_ab - count_ba) / (count_ab + count_ba + 1)
+        Values near 0 are the strongest candidates for parallelism.
+        """
+        event_objects_all = (
+            ocel.events
+            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
+            .explode("_objects")
+            .rename({"_objects": "_objId"})
+        )
+
+        all_rows = []
+
+        for obj_type in object_types:
+            object_ids = set(ocel.get_object_ids_by_type(obj_type))
+
+            event_objects = event_objects_all.filter(pl.col("_objId").is_in(object_ids))
+
+            # Directly-follows pairs within each object's lifecycle
+            df_pairs = (
+                event_objects
+                .sort(["_objId", "_timestampUnix", "_eventId"])
+                .with_columns(
+                    pl.col("_activity").shift(-1).over("_objId").alias("next_activity")
+                )
+                .filter(pl.col("next_activity").is_not_null())
+                .select([
+                    pl.col("_activity").alias("source_activity"),
+                    pl.col("next_activity").alias("target_activity"),
+                ])
+            )
+
+            df_counts = (
+                df_pairs
+                .group_by(["source_activity", "target_activity"])
+                .len()
+                .rename({"len": "count"})
+            )
+
+            counts_dict: dict[tuple[str, str], int] = {
+                (row["source_activity"], row["target_activity"]): row["count"]
+                for row in df_counts.to_dicts()
+            }
+
+            activities = sorted(
+                event_objects.select("_activity").unique().to_series().to_list()
+            )
+
+            for a in activities:
+                for b in activities:
+                    if a == b:
+                        # Self-succession tells us an activity repeats, not whether
+                        # two distinct activities are concurrent — irrelevant for
+                        # parallel handover filtering.
+                        continue
+                    count_ab = counts_dict.get((a, b), 0)
+                    count_ba = counts_dict.get((b, a), 0)
+                    if count_ab > 0 and count_ba > 0:
+                        relation = "||"
+                    elif count_ab > 0:
+                        relation = "→"
+                    elif count_ba > 0:
+                        relation = "←"
+                    else:
+                        relation = "#"
+                    dependency = (count_ab - count_ba) / (count_ab + count_ba + 1)
+                    all_rows.append({
+                        "businessobject_type": obj_type,
+                        "activity_a": a,
+                        "activity_b": b,
+                        "relation": relation,
+                        "count_ab": count_ab,
+                        "count_ba": count_ba,
+                        "dependency": round(dependency, 4),
+                    })
+
+        return pl.DataFrame(all_rows)

@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 
 /* ── Types ─────────────────────────────────────────────────── */
 export type HandoverNode = { id: string; object_type: string };
@@ -78,6 +79,8 @@ export default function OCHandoverExplorer({
   const [normalizationScope, setNormalizationScope] = useState<"global" | "per_bo_type">("global");
   const [sortCol, setSortCol] = useState<SortCol>("weight");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [parallelFilterEnabled, setParallelFilterEnabled] = useState(false);
+  const [parallelThreshold, setParallelThreshold] = useState(0.5);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -147,14 +150,14 @@ export default function OCHandoverExplorer({
     setMaxGap(null);
   }, [method]);
 
-  // Reset results when normalization or scope changes
+  // Reset results when normalization, scope, or parallel filter changes
   useEffect(() => {
     setData(null);
     setStatus("idle");
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
     setErrorMsg("");
-  }, [normalization, normalizationScope]);
+  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold]);
 
   // Reset selected node and locked height when data changes
   useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
@@ -188,6 +191,7 @@ export default function OCHandoverExplorer({
       if (maxGap !== null) params.max_gap = String(maxGap);
       params.normalization = normalization;
       params.normalization_scope = normalizationScope;
+      if (parallelFilterEnabled) params.parallel_threshold = String(parallelThreshold);
     } else {
       params.case_type = caseType;
       params.resource_type = flatResourceType;
@@ -372,6 +376,31 @@ export default function OCHandoverExplorer({
                 <Label htmlFor="norm-scope" className="text-lg font-semibold cursor-pointer">
                   Per Object Type
                 </Label>
+              </div>
+            )}
+            {method === "oc" && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <Switch
+                  id="parallel-filter"
+                  checked={parallelFilterEnabled}
+                  onCheckedChange={setParallelFilterEnabled}
+                />
+                <Label htmlFor="parallel-filter" className="text-lg font-semibold cursor-pointer">
+                  Parallel Filter
+                </Label>
+                {parallelFilterEnabled && (
+                  <div className="flex items-center gap-3 ml-2">
+                    <Slider
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={[parallelThreshold]}
+                      onValueChange={([v]) => setParallelThreshold(v)}
+                      className="w-36"
+                    />
+                    <span className="text-sm font-mono w-10 text-right">{parallelThreshold.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>

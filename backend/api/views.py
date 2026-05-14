@@ -943,7 +943,16 @@ def ochandover(request):
             normalization_scope_raw = request.query_params.get("normalization_scope", "global")
             if normalization_scope_raw not in {"global", "per_bo_type"}:
                 return Response({"error": f"Invalid normalization_scope: {normalization_scope_raw}"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw)
+            parallel_threshold = None
+            parallel_threshold_raw = request.query_params.get("parallel_threshold")
+            if parallel_threshold_raw is not None:
+                try:
+                    parallel_threshold = float(parallel_threshold_raw)
+                    if not (0.0 <= parallel_threshold <= 1.0):
+                        return Response({"error": "parallel_threshold must be between 0 and 1"}, status=status.HTTP_400_BAD_REQUEST)
+                except ValueError:
+                    return Response({"error": "Invalid parallel_threshold value"}, status=status.HTTP_400_BAD_REQUEST)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold)
     except Exception as e:
         import traceback
         traceback.print_exc()
