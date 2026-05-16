@@ -390,9 +390,18 @@ function ResourceGraph({
     setSize({ width: w, height: Math.max(400, w * 0.62) });
   }, []);
 
-  // Convert screen coords → SVG user coords using the current full-canvas mapping.
-  // When not zoomed viewBox == full canvas, so this is always a simple linear map.
-  const toUser = (clientX: number, clientY: number, vb: ZoomedView) => {
+  // Current viewBox — always normalized to the container aspect ratio so
+  // preserveAspectRatio="meet" never letterboxes and toUser stays a simple linear map.
+  const BADGE_R = 5;
+  const vb = zoomed ?? { x: 0, y: 0, w: size.width, h: size.height };
+  // Because vb is always aspect-ratio-matched, both axes have the same scale factor.
+  const effectiveScale = size.width / vb.w;
+  const nodeR  = NODE_R  / effectiveScale;
+  const badgeR = BADGE_R / effectiveScale;
+
+  // Convert screen coords → SVG user coords using the current viewBox.
+  // Works at every zoom level because vb is always aspect-matched to the SVG element.
+  const toUser = (clientX: number, clientY: number) => {
     const rect = svgRef.current!.getBoundingClientRect();
     return {
       x: (clientX - rect.left) / rect.width  * vb.w + vb.x,
@@ -401,9 +410,8 @@ function ResourceGraph({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (zoomed || e.button !== 0) return;
-    const vb = { x: 0, y: 0, w: size.width, h: size.height };
-    const { x, y } = toUser(e.clientX, e.clientY, vb);
+    if (e.button !== 0) return;
+    const { x, y } = toUser(e.clientX, e.clientY);
     dragStart.current = { x, y };
     const el = rbRef.current;
     if (el) { el.setAttribute("x", String(x)); el.setAttribute("y", String(y)); el.setAttribute("width", "0"); el.setAttribute("height", "0"); el.setAttribute("display", "block"); }
@@ -411,8 +419,7 @@ function ResourceGraph({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragStart.current) return;
-    const vb = { x: 0, y: 0, w: size.width, h: size.height };
-    const { x, y } = toUser(e.clientX, e.clientY, vb);
+    const { x, y } = toUser(e.clientX, e.clientY);
     const rx = Math.min(dragStart.current.x, x), ry = Math.min(dragStart.current.y, y);
     const rw = Math.abs(x - dragStart.current.x), rh = Math.abs(y - dragStart.current.y);
     const el = rbRef.current;
@@ -421,14 +428,20 @@ function ResourceGraph({
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (!dragStart.current) return;
-    const vb = { x: 0, y: 0, w: size.width, h: size.height };
-    const { x, y } = toUser(e.clientX, e.clientY, vb);
+    const { x, y } = toUser(e.clientX, e.clientY);
     const x0 = dragStart.current.x, y0 = dragStart.current.y;
     dragStart.current = null;
     rbRef.current?.setAttribute("display", "none");
-    const rw = Math.abs(x - x0), rh = Math.abs(y - y0);
-    if (rw < 10 || rh < 10) return;
-    setZoomed({ x: Math.min(x0, x), y: Math.min(y0, y), w: rw, h: rh });
+    let rw = Math.abs(x - x0), rh = Math.abs(y - y0);
+    // Minimum selection of 10 screen pixels in each direction
+    if (rw * effectiveScale < 10 || rh * effectiveScale < 10) return;
+    // Expand the shorter side to match the container aspect ratio so the next
+    // viewBox is also aspect-matched → no letterboxing at any zoom depth.
+    const aspect = size.width / size.height;
+    const cx = Math.min(x0, x) + rw / 2;
+    const cy = Math.min(y0, y) + rh / 2;
+    if (rw / rh > aspect) { rh = rw / aspect; } else { rw = rh * aspect; }
+    setZoomed({ x: cx - rw / 2, y: cy - rh / 2, w: rw, h: rh });
   };
 
   // Group resources with identical profiles into one node
@@ -481,16 +494,6 @@ function ResourceGraph({
     return [...types].sort();
   }, [data.resource_object_types]);
 
-  const BADGE_R = 5;
-  const vb = zoomed ?? { x: 0, y: 0, w: size.width, h: size.height };
-  // preserveAspectRatio="meet" uses the minimum of the two scale factors,
-  // so node compensation must use the same value to stay at a fixed screen size.
-  const effectiveScale = zoomed
-    ? Math.min(size.width / vb.w, size.height / vb.h)
-    : 1;
-  const nodeR  = NODE_R  / effectiveScale;
-  const badgeR = BADGE_R / effectiveScale;
-
   return (
     <div className="space-y-3">
       <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
@@ -499,7 +502,7 @@ function ResourceGraph({
           width={size.width}
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-          style={{ cursor: zoomed ? "default" : "crosshair", userSelect: "none" }}
+          style={{ cursor: "crosshair", userSelect: "none" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
