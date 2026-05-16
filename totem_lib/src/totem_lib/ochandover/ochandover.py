@@ -217,6 +217,8 @@ class OCHANDOVER(nx.MultiDiGraph):
         if parallel_threshold is not None:
             footprint = cls.compute_footprint(ocel, businessobject_types)
 
+            print("footprint", footprint)
+
             # Add source and target activity to each pair so we can look up dependency
             event_activity = ocel.events.select(["_eventId", "_activity"])
             annotated = (
@@ -230,6 +232,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                     how="left",
                 )
             )
+
+            print("annotated", annotated)
 
             filtered_out = annotated.filter(
                 pl.col("dependency").is_not_null() & (pl.col("dependency") < parallel_threshold)
@@ -264,6 +268,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                 .filter(pl.col("dependency").is_null() | (pl.col("dependency") >= parallel_threshold))
                 .drop(["source_activity", "target_activity", "dependency"])
             )
+
+            print("consecutive resource pairs", consecutive_resource_pairs)
 
         # Collapse multiple business objects for the same (source event, target event) pair
         # into a single arc — mirroring eog_arcs_unique in the original approach.
