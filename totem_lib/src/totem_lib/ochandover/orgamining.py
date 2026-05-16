@@ -16,11 +16,12 @@ class ResourceActivityMatrix:
     The matrix is the basis for measuring similarity between resources and for clustering.
     """
 
-    def __init__(self, matrix: pl.DataFrame, resources: list[str], activities: list[str]):
+    def __init__(self, matrix: pl.DataFrame, resources: list[str], activities: list[str], resource_object_types: dict[str, str] | None = None):
         # matrix: _objId column + one column per activity, values are fractions
         self.matrix = matrix
         self.resources = resources
         self.activities = activities
+        self.resource_object_types = resource_object_types or {}
 
     @classmethod
     def from_ocel(
@@ -39,8 +40,11 @@ class ResourceActivityMatrix:
             resource_types = ocel.object_types
 
         resource_ids = set()
+        resource_object_types: dict[str, str] = {}
         for obj_type in resource_types:
-            resource_ids.update(ocel.get_object_ids_by_type(obj_type))
+            for obj_id in ocel.get_object_ids_by_type(obj_type):
+                resource_ids.add(obj_id)
+                resource_object_types[obj_id] = obj_type
 
         event_resource_activity = (
             ocel.events
@@ -93,7 +97,7 @@ class ResourceActivityMatrix:
         print("\nResource-Activity Matrix (wide form)")
         print(matrix)
 
-        return cls(matrix, resources, activities)
+        return cls(matrix, resources, activities, resource_object_types)
 
     def to_numpy(self) -> np.ndarray:
         """Matrix as numpy array, shape (n_resources, n_activities)."""
@@ -134,9 +138,10 @@ class ResourceActivityMatrix:
         return labels.tolist()
 
     def to_dict(self) -> dict:
-        """Serialisable representation: resources list, activities list, and the value matrix."""
+        """Serialisable representation: resources list, activities list, value matrix, and resource object types."""
         return {
             "resources": self.resources,
             "activities": self.activities,
             "values": self.to_numpy().tolist(),
+            "resource_object_types": self.resource_object_types,
         }
