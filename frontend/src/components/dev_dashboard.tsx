@@ -14,6 +14,7 @@ import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
 import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
+import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -59,6 +60,15 @@ export function DevDashboard() {
           </CardHeader>
           <CardContent className="p-0 pb-0">
             <OCHandoverExplorer fileId={selectedFile?.id} embedded={true} />
+          </CardContent>
+        </Card>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>Resource-Activity Matrix</CardTitle>
+            <CardDescription>Organizational mining — who does what</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 pb-0">
+            <OrgaMiningExplorer fileId={selectedFile?.id} embedded={true} />
           </CardContent>
         </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />

@@ -1,17 +1,20 @@
 from totem_lib.ocel.importer import import_ocel
 from totem_lib import ocel
 from ochandover import OCHANDOVER
+from orgamining import ResourceActivityMatrix
 import polars as pl
 
 if __name__ == "__main__":
 
     
 
-    ocel = import_ocel("container_logistics.json")
+    ocel = import_ocel("runningexample.json")
 
     print("Object types", ocel.object_types)
     for obj_type in ocel.object_types:
         print(obj_type, len(ocel.get_object_ids_by_type(obj_type)))
+
+    """
     
     handover_graph_flattened = OCHANDOVER.from_ocel_flattened(ocel, "Container", "Forklift")
     
@@ -23,6 +26,15 @@ if __name__ == "__main__":
 
     handover_graph = OCHANDOVER.from_ocel(ocel, ["Truck", "Forklift"], ["Container", "Vehicle"])
     handover_graph.plot()
+
+    """
+
+    print("\n---------------- Resource-Activity Matrix ----------------")
+    ram = ResourceActivityMatrix.from_ocel(ocel, resource_types=["employee", "machine"])
+    print("\nResources:", ram.resources)
+    print("Activities:", ram.activities)
+    print("\nDistance matrix (euclidean):")
+    print(ram.distance_matrix())
 
     """
 

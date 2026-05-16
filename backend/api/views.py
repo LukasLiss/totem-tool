@@ -976,6 +976,43 @@ def ochandover(request):
     return Response({"nodes": nodes, "edges": edges}, status=status.HTTP_200_OK)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def resource_activity_matrix(request):
+    from totem_lib.ochandover.orgamining import ResourceActivityMatrix
+
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    resource_types_raw = request.query_params.get("resource_types", "")
+    resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()] or None
+
+    try:
+        ram = ResourceActivityMatrix.from_ocel(ocel, resource_types=resource_types)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response(ram.to_dict(), status=status.HTTP_200_OK)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def OCDFGViewSet(request):
