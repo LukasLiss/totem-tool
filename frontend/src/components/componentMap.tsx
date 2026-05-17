@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useContext } from "react";
+import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
 import {
@@ -130,16 +131,9 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
       
       setIsLoading(true);
       setError(null);
-      
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        setError("No access token found");
-        setIsLoading(false);
-        return;
-      }
-      
+
       try {
-        const result = await processFile(token, selectedFile.id);
+        const result = await processFile(selectedFile.id);
         setProcessedResult(result);
         console.log("Processing result:", result);
       } catch (err) {
@@ -183,14 +177,12 @@ const ImageComponent: React.FC<ComponentProps> = ({
     if (!file) return;
 
     setUploading(true);
-    const token = localStorage.getItem("access_token");
 
     try {
       const data = await uploadImageToComponent(
         dashboardId,
         node.component_id,
-        file,
-        token
+        file
       );
 
       // Single source of truth
@@ -265,16 +257,9 @@ const VariantsComponent: React.FC<ComponentProps> = ({
 
     const fetchTypes = async () => {
       setLoadingTypes(true);
-      const token = localStorage.getItem('access_token');
       try {
-        const res = await fetch(`/api/files/${selectedFile.id}/object_types/`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const types = await res.json();
-          setAvailableTypes(types.sort());
-        }
+        const { data } = await axios.get(`/api/files/${selectedFile.id}/object_types/`);
+        setAvailableTypes(data.sort());
       } catch (err) {
         console.error('Failed to fetch object types:', err);
       } finally {

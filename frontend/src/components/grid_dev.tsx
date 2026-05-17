@@ -41,15 +41,9 @@ const GridContent: React.FC = () => {
         return;
       }
       
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        console.log("No token found");
-        return;
-      }
-      
       try {
         console.log("Fetching layout for dashboard:", selectedDashboard);
-        const response = await getLayout(selectedDashboard, token);
+        const response = await getLayout(selectedDashboard);
         console.log("Layout response:", response);
         
         if (Array.isArray(response) && response.length > 0) {
@@ -73,11 +67,9 @@ const GridContent: React.FC = () => {
       return;
     }
     const layout = getGridLayout();
-    console.log('Layout to save:', layout); // Debug: Check what's being saved
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
+    console.log('Layout to save:', layout);
     try {
-      const response = await saveLayout(selectedDashboard, layout, token);
+      const response = await saveLayout(selectedDashboard, layout);
       console.log('Save response:', response); // Debug: Check API response
       alert("Layout saved!");
     } catch (error) {
@@ -91,9 +83,7 @@ const GridContent: React.FC = () => {
       alert("No dashboard selected!");
       return;
     }
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
-    const response = await getLayout(selectedDashboard, token);
+    const response = await getLayout(selectedDashboard);
     // Small delay to ensure any pending operations complete
     setTimeout(() => loadLayout(response), 50);
   };

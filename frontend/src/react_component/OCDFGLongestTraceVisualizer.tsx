@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
+import axios from 'axios';
 import {
   ReactFlow,
   useReactFlow,
@@ -211,9 +212,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   );
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/ocdfg/')
-      .then((response) => response.json())
-      .then((data: DfgData) => {
+    axios.get<DfgData>('http://127.0.0.1:8000/api/ocdfg/')
+      .then(({ data }) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
         // Accept trace variants from either the dfg payload or top-level.
         const traceVariants = data.dfg?.trace_variants ?? data.trace_variants;

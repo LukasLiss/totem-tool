@@ -6,28 +6,22 @@ export function NumberofEvents() {
     const [processedResult, setProcessedResult] = useState(null);
 
     const { selectedFile } = useContext(SelectedFileContext);
-    
+
     useEffect(() => {
         const handleProcessFile = async () => {
             console.log("handleProcessFile");
 
             if (!selectedFile?.id) {
-            alert("Please select a file first");
-            return;
+                alert("Please select a file first");
+                return;
             }
-        
-            const token = localStorage.getItem("access_token");
 
             try {
-            if (!token) {
-                console.error("No token found!");
-                return;
-                }
-            const result = await processFile(token, selectedFile.id);
-            setProcessedResult(result);
-            console.log(result);
+                const result = await processFile(selectedFile.id);
+                setProcessedResult(result);
+                console.log(result);
             } catch (err) {
-            console.error("Failed to process file:", err);
+                console.error("Failed to process file:", err);
             }
         };
 

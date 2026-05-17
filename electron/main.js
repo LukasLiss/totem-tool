@@ -9,6 +9,7 @@ let mainWindow;
 let backendProcess = null;
 let frontendServer = null;
 const isDev = process.env.NODE_ENV === 'development';
+const isWin = process.platform === 'win32';
 
 // 1. ROBUST BACKEND SPAWNER
 function startBackend() {
@@ -26,22 +27,16 @@ function startBackend() {
     let cwd;
 
     if (isDev) {
-      // DEV: Use global/root python venv
-      // Adjust this path to point to your ROOT .venv
-      executable = path.join(__dirname, '..', '.venv', 'Scripts', 'python.exe');
-      // Point to manage.py in the backend folder
+      const venvBin = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python'];
+      executable = path.join(__dirname, '..', 'backend', '.venv', ...venvBin);
       const scriptPath = path.join(__dirname, '..', 'backend', 'manage.py');
       args = [scriptPath, 'runserver', '8000', '--noreload'];
       cwd = path.join(__dirname, '..', 'backend');
     } else {
-      // PROD: Use the compiled EXE inside resources
-      // process.resourcesPath points to the 'resources' folder in the installed app
       const backendDir = path.join(process.resourcesPath, 'backend');
-      executable = path.join(backendDir, 'totem_backend.exe');
-      
-      // The EXE handles 'runserver' internally if you configured your spec entry point correctly, 
-      // otherwise pass the args your exe expects.
-      args = ['runserver', '8000', '--noreload']; 
+      const exeName = isWin ? 'totem_backend.exe' : 'totem_backend';
+      executable = path.join(backendDir, exeName);
+      args = ['runserver', '8000', '--noreload'];
       cwd = backendDir;
     }
 
@@ -92,7 +87,7 @@ function startFrontendServer() {
   return new Promise((resolve) => {
     const expressApp = express();
     // In prod, frontend is in resources/app/resources/frontend-build
-    const frontendPath = path.join(process.resourcesPath, '/app/resources/frontend-build');
+    const frontendPath = path.join(process.resourcesPath, 'frontend-build');
     
     expressApp.use(express.static(frontendPath));
     expressApp.use((req, res) => res.sendFile(path.join(frontendPath, 'index.html')));

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
+import axios from 'axios';
 import {
   ReactFlow,
   useReactFlow,
@@ -578,9 +579,8 @@ function OCDFGVisualizer({
       ? `http://127.0.0.1:8000/api/ocdfg/?file_id=${fileId}`
       : 'http://127.0.0.1:8000/api/ocdfg/';
 
-    fetch(url)
-      .then((response) => response.json())
-      .then((payload: DfgData) => {
+    axios.get<DfgData>(url)
+      .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
         if (graph) {

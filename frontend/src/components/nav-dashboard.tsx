@@ -65,10 +65,9 @@ export function NavDashboard({
   const { selectedFile } = useContext(SelectedFileContext);
   console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
-    const token = localStorage.getItem("access_token");
     if (!selectedFile?.project) return;
     try {
-      await addDashboard(dashboardname, selectedFile.project, token);
+      await addDashboard(dashboardname, selectedFile.project);
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
@@ -86,11 +85,10 @@ export function NavDashboard({
 };
 
   const handleChangeName = async () => {
-  if (!dashboardToRename) return; // nothing selected
+  if (!dashboardToRename) return;
 
-  const token = localStorage.getItem("access_token");
   try {
-    await renameDashboard(dashboardToRename.id, dashboardname, token);  // ✅ pass ID here
+    await renameDashboard(dashboardToRename.id, dashboardname);
     await refreshDashboards();
     setOpenRename(false);
     setDashboardname("");
@@ -110,9 +108,8 @@ export function NavDashboard({
 
   const handleDeleteDashboard = async () => {
 
-  const token = localStorage.getItem("access_token");
   try {
-    await deleteDashboard(dashboardToDelete.id, token);  
+    await deleteDashboard(dashboardToDelete.id);
     await refreshDashboards();
     setOpenDelete(false);
     setDashboardToDelete(null); // reset

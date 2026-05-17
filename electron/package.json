@@ -7,6 +7,7 @@
     "start": "electron .",
     "build": "electron-builder",
     "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -31,6 +32,13 @@
     ],
     "win": {
       "target": "dir"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "category": "public.app-category.productivity"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}.dmg"
     },
     "asar": false
   },

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
   MinusCircle, PlusCircle
@@ -175,27 +176,9 @@ export default function VariantsExplorer({
           return;  // File changed, abort this stale closure
         }
 
-        const token = localStorage.getItem("access_token");
-        if (!token) {
-          throw new Error("Not authenticated");
-        }
-
-        const url = `/api/files/${currentFileId}/object_types/`;
-        const res = await fetch(url, {
-          credentials: "include",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (res.status === 401) {
-          throw new Error("UNAUTHORIZED");
-        }
-
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-        const objectTypes: string[] = await res.json();
+        const { data: objectTypes }: { data: string[] } = await axios.get(
+          `/api/files/${currentFileId}/object_types/`
+        );
 
         // Check again after async operation
         if (fileIdRef.current !== currentFileId) {
@@ -265,34 +248,8 @@ export default function VariantsExplorer({
       setErrorMsg("");
 
       try {
-        const token = localStorage.getItem("access_token");
-        if (!token) {
-          throw new Error("Not authenticated");
-        }
-
-        const url = `/api/variants/${qs}`;
-        const res = await fetch(url, {
-          credentials: "include",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (res.status === 401) {
-          throw new Error("UNAUTHORIZED");
-        }
-
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-        const ct = res.headers.get("content-type") || "";
-        if (!ct.includes("application/json")) {
-          const text = await res.text();
-          throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
-        }
-
-        const data = await res.json();
-        const arr: Variant[] = Array.isArray(data) ? data : data.variants;
+        const { data: rawData } = await axios.get(`/api/variants/${qs}`);
+        const arr: Variant[] = Array.isArray(rawData) ? rawData : rawData.variants;
 
         // Check again after async operation
         if (fileIdRef.current !== currentFileId) {
