@@ -56,9 +56,14 @@ export function FileUploadValidator() {
         file.name.toLowerCase().endsWith(".db"));
     const isCsv =
       type?.ext === "csv" || file.name.toLowerCase().endsWith(".csv");
+    // The `file-type` library has no DuckDB signature, so `type?.ext` is
+    // undefined for valid DuckDB files. Fall back to filename matching, in
+    // line with how isJson / isCsv are handled.
+    const isDuckDB =
+      file.name.toLowerCase().endsWith(".duckdb");
 
-    if (!(isJson || isXml || isSqlite || isCsv)){
-        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', or 'csv'."});
+    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
+        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
         return false;
     }
 

@@ -6,6 +6,12 @@ import os
 import re
 from collections import defaultdict
 from . import ObjectCentricEventLog, schema_base_filtering, propagate_filtering
+from .importer_duckdb import (
+    import_ocel_from_duckdb,
+    load_events_from_duckdb,
+    load_objects_from_duckdb,
+    load_object_attributes_from_duckdb,
+)
 
 
 def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
@@ -14,13 +20,20 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
 
     Args:
         file_path (str): The path to the OCEL file.
-        file_format (str, optional): The format of the OCEL file. Must be one of "sqlite", "json", "xml", or "csv".
+        file_format (str, optional): The format of the OCEL file. Must be one
+            of "sqlite", "json", "xml", "csv", or "duckdb".
 
     Returns:
         ObjectCentricEventLog: The imported object-centric event log.
     """
     if file_format is None:
-        extension_map = {".sqlite": "sqlite", ".json": "json", ".xml": "xml", ".csv": "csv"}
+        extension_map = {
+            ".sqlite": "sqlite",
+            ".json": "json",
+            ".xml": "xml",
+            ".csv": "csv",
+            ".duckdb": "duckdb",
+        }
         _, ext = os.path.splitext(file_path)
         file_format = extension_map.get(ext.lower())
         if file_format is None:
@@ -31,6 +44,16 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
 
     if file_format == "csv":
         return import_ocel_from_csv(file_path)
+
+    if file_format == "duckdb":
+        # The DuckDB importer already produces fully-shaped events + objects
+        # + object_attributes dataframes. We still run the standard
+        # post-filtering so the result is byte-identical to importing the
+        # original source.
+        ocel = import_ocel_from_duckdb(file_path)
+        ocel = schema_base_filtering(ocel)
+        ocel = propagate_filtering(ocel)
+        return ocel
 
     loaders = {
         "sqlite": (load_events_from_sqlite, load_objects_from_sqlite),

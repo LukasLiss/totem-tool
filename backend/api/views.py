@@ -18,6 +18,7 @@ from totem_lib.ocel.importer import (
     load_events_from_json, load_objects_from_json,
     load_events_from_xml, load_objects_from_xml,
     import_ocel_from_csv,
+    import_ocel_from_duckdb,
 )
 import networkx as nx
 
@@ -570,8 +571,13 @@ def _build_ocel_from_path(path: str) -> ObjectCentricEventLog:
     elif ext == ".csv":
         # CSV importer returns the complete ObjectCentricEventLog with attributes
         log = import_ocel_from_csv(path)
+    elif ext == ".duckdb":
+        # DuckDB importer also returns the complete ObjectCentricEventLog
+        # (events + objects + object_attributes reconstructed from the
+        # OcelDuckDB schema).
+        log = import_ocel_from_duckdb(path)
     else:
-        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .csv")
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .csv, .duckdb")
 
     return log
 
