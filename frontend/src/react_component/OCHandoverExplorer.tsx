@@ -687,13 +687,13 @@ function EventLogTable({
       )}
       <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
         <table className="w-full text-sm border-collapse">
-          <thead className="sticky top-0 z-10">
+          <thead>
             <tr className="border-b bg-muted">
-              <th className="px-3 py-2 text-left font-medium sticky left-0 bg-muted z-20 border-r whitespace-nowrap">Event</th>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Activity</th>
-              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Timestamp</th>
+              <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">Event</th>
+              <th className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">Activity</th>
+              <th className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">Timestamp</th>
               {logData.object_types.map(t => (
-                <th key={t} className="px-3 py-2 text-left font-medium whitespace-nowrap">
+                <th key={t} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                     {t}

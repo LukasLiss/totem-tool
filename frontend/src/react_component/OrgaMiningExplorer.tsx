@@ -200,7 +200,7 @@ export default function OrgaMiningExplorer({
     return () => clearTimeout(id);
   }, [status, lockedHeight]);
 
-  useEffect(() => { setLockedHeight(null); }, [data]);
+  useEffect(() => { setLockedHeight(null); setViewMode("graph"); }, [data]);
 
   const handleCompute = () => {
     hasStartedLoadingRef.current = false;
@@ -287,13 +287,13 @@ export default function OrgaMiningExplorer({
                   style={lockedHeight ? { maxHeight: lockedHeight } : undefined}
                 >
                   <table className="w-full text-sm border-collapse">
-                    <thead className="sticky top-0 z-10">
+                    <thead>
                       <tr className="border-b bg-muted">
-                        <th className="px-3 py-2 text-left font-medium sticky left-0 bg-muted z-20 border-r whitespace-nowrap">
+                        <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">
                           Resource
                         </th>
                         {data.activities.map(act => (
-                          <th key={act} className="px-3 py-2 text-left font-medium whitespace-nowrap">
+                          <th key={act} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
                             {act}
                           </th>
                         ))}
