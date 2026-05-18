@@ -214,103 +214,148 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Consecutive resource pairs (with gap, per business object)")
         print(consecutive_resource_pairs)
 
+        eog_arc_count = eog_arcs_unique.height
+
         if parallel_threshold is not None:
             footprint = cls.compute_footprint(ocel, businessobject_types)
 
             print("footprint", footprint)
 
-            # Add source and target activity to each pair so we can look up dependency
-            event_activity = ocel.events.select(["_eventId", "_activity"])
-            annotated = (
-                consecutive_resource_pairs
-                .join(event_activity.rename({"_activity": "source_activity"}), on="_eventId", how="left")
-                .join(event_activity.rename({"_eventId": "next_event_id", "_activity": "target_activity"}), on="next_event_id", how="left")
+            # Activities where both A→B and B→A appear are parallel (||).
+            parallel_transitions = (
+                footprint
+                .filter(pl.col("relation") == "||")
+                .select(["businessobject_type", "activity_a", "activity_b"])
+                .with_columns(pl.lit(True).alias("_is_parallel"))
+            )
+
+            # All business object events in lifecycle order.
+            all_bo_events = (
+                event_businessobjects
+                .select(["_eventId", "_activity", "_timestampUnix", "businessobject_id", "businessobject_type"])
+                .sort(["businessobject_id", "_timestampUnix", "_eventId"])
+            )
+
+            # Label every transition (event_i → event_{i+1}) as parallel or sequential.
+            all_bo_events_labeled = (
+                all_bo_events
+                .with_columns(
+                    pl.col("_activity").shift(-1).over("businessobject_id").alias("_next_activity")
+                )
                 .join(
-                    footprint.select(["businessobject_type", "activity_a", "activity_b", "dependency"]),
-                    left_on=["businessobject_type", "source_activity", "target_activity"],
+                    parallel_transitions,
+                    left_on=["businessobject_type", "_activity", "_next_activity"],
                     right_on=["businessobject_type", "activity_a", "activity_b"],
                     how="left",
                 )
+                .with_columns(pl.col("_is_parallel").fill_null(False))
             )
 
-            print("annotated", annotated)
-
-            filtered_out = annotated.filter(
-                pl.col("dependency").is_not_null() & (pl.col("dependency") < parallel_threshold)
+            # Assign block IDs: a sequential transition opens a new block for the following event.
+            # starts_new_block[i] = NOT is_parallel[i-1]
+            # → shift ~is_parallel forward by 1, fill null (first event of each group) with False, cumsum.
+            all_bo_events_with_blocks = (
+                all_bo_events_labeled
+                .sort(["businessobject_id", "_timestampUnix", "_eventId"])
+                .with_columns(
+                    (
+                        (~pl.col("_is_parallel"))
+                        .shift(1)
+                        .over("businessobject_id")
+                        .fill_null(False)
+                        .cast(pl.UInt32)
+                        .cum_sum()
+                        .over("businessobject_id")
+                    ).alias("block_id")
+                )
             )
 
-            parallel_pairs = (
-                filtered_out
-                .select(["businessobject_type", "source_activity", "target_activity", "dependency"])
-                .unique()
-                .sort(["businessobject_type", "source_activity", "target_activity"])
-            )
-            print(f"\n── Parallel filter (threshold={parallel_threshold}) ──")
-            print(f"Filtered activity pairs:")
-            for row in parallel_pairs.to_dicts():
-                print(f"  [{row['businessobject_type']}]  {row['source_activity']} → {row['target_activity']}  (dep={row['dependency']:.4f})")
+            print("Events with block IDs")
+            print(all_bo_events_with_blocks.select(["businessobject_id", "_eventId", "_activity", "block_id"]))
 
-            handover_pairs = (
-                filtered_out
+            # Resource events annotated with their block ID, one row per resource.
+            block_resource_events = (
+                all_bo_events_with_blocks
+                .join(event_resources, on="_eventId", how="inner")
                 .explode("resources")
-                .explode("next_resources")
-                .select(["resources", "next_resources", "source_activity", "target_activity"])
-                .unique()
-                .sort(["resources", "next_resources"])
-            )
-            print(f"Filtered handovers:")
-            for row in handover_pairs.to_dicts():
-                print(f"  {row['resources']} → {row['next_resources']}  ({row['source_activity']} → {row['target_activity']})")
-            print()
-
-            consecutive_resource_pairs = (
-                annotated
-                .filter(pl.col("dependency").is_null() | (pl.col("dependency") >= parallel_threshold))
-                .drop(["source_activity", "target_activity", "dependency"])
+                .select(["businessobject_id", "businessobject_type", "block_id", "resources"])
             )
 
-            print("consecutive resource pairs", consecutive_resource_pairs)
+            # Unique resources present in each (business-object instance, block).
+            block_resources_agg = (
+                block_resource_events
+                .group_by(["businessobject_id", "businessobject_type", "block_id"])
+                .agg(pl.col("resources").unique().alias("block_resources"))
+            )
 
-        # Collapse multiple business objects for the same (source event, target event) pair
-        # into a single arc — mirroring eog_arcs_unique in the original approach.
-        # For the gap we take the minimum across all business objects for the same event pair:
-        # the arc is reachable with gap k if ANY business object achieves it with gap <= k.
+            print("Block resources")
+            print(block_resources_agg.sort(["businessobject_id", "block_id"]))
 
-        arcs_with_resources = (
-            consecutive_resource_pairs
-            .group_by(["_eventId", "next_event_id"])
-            .agg([
-                pl.col("resources").first().alias("source_resources"),
-                pl.col("next_resources").first().alias("target_resources"),
-                pl.col("businessobject_type").unique().alias("businessobject_types"),
-                pl.col("gap").min().alias("gap"),
-            ])
-        )
+            # Handover pairs = cross-product between every pair of consecutive blocks.
+            # Block k → block k+1: every resource in block k hands over to every resource in block k+1.
+            # Resources within the same parallel block have no handover between them.
+            block_handovers = (
+                block_resources_agg
+                .join(
+                    block_resources_agg.rename({
+                        "block_id": "next_block_id",
+                        "block_resources": "next_block_resources",
+                    }),
+                    on=["businessobject_id", "businessobject_type"],
+                    how="inner",
+                )
+                .filter(pl.col("next_block_id") == pl.col("block_id") + 1)
+                .explode("block_resources")
+                .explode("next_block_resources")
+                .rename({"block_resources": "source", "next_block_resources": "target"})
+                .select(["source", "target", "businessobject_type"])
+            )
 
-        print("Arcs with Resources (unique, with gap)")
-        print(arcs_with_resources)
+            print("Block handovers (parallel-aware)")
+            print(block_handovers.sort(["source", "target"]))
 
-        eog_arc_count = eog_arcs_unique.height
+            handover_edges = (
+                block_handovers
+                .group_by(["source", "target", "businessobject_type"])
+                .len()
+                .rename({"len": "weight"})
+                .sort("weight", descending=True)
+            )
 
-        if max_gap is not None:
-            arcs_with_resources = arcs_with_resources.filter(pl.col("gap") <= max_gap)
+        else:
+            # Original approach: consecutive adjacent resource pairs in the EOG.
+            arcs_with_resources = (
+                consecutive_resource_pairs
+                .group_by(["_eventId", "next_event_id"])
+                .agg([
+                    pl.col("resources").first().alias("source_resources"),
+                    pl.col("next_resources").first().alias("target_resources"),
+                    pl.col("businessobject_type").unique().alias("businessobject_types"),
+                    pl.col("gap").min().alias("gap"),
+                ])
+            )
 
-        # Compute the handover edges (raw counts, differentiated by business object type)
-        handover_edges = (
-            arcs_with_resources
-            .explode("source_resources")
-            .explode("target_resources")
-            .explode("businessobject_types")
-            .group_by(["source_resources", "target_resources", "businessobject_types"])
-            .len()
-            .rename({
-                "source_resources": "source",
-                "target_resources": "target",
-                "businessobject_types": "businessobject_type",
-                "len": "weight",
-            })
-            .sort("weight", descending=True)
-        )
+            print("Arcs with Resources (unique, with gap)")
+            print(arcs_with_resources)
+
+            if max_gap is not None:
+                arcs_with_resources = arcs_with_resources.filter(pl.col("gap") <= max_gap)
+
+            handover_edges = (
+                arcs_with_resources
+                .explode("source_resources")
+                .explode("target_resources")
+                .explode("businessobject_types")
+                .group_by(["source_resources", "target_resources", "businessobject_types"])
+                .len()
+                .rename({
+                    "source_resources": "source",
+                    "target_resources": "target",
+                    "businessobject_types": "businessobject_type",
+                    "len": "weight",
+                })
+                .sort("weight", descending=True)
+            )
 
         print("Handover edges")
         print(handover_edges)
