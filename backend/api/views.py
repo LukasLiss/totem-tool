@@ -978,6 +978,67 @@ def ochandover(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+def event_log_table(request):
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        EventLog.objects.get(pk=file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    cache_key = f"ocel_object_{file_id}"
+    ocel = cache.get(cache_key)
+    if not ocel:
+        try:
+            uf = EventLog.objects.get(pk=file_id)
+            ocel = _build_ocel_from_path(uf.file.path)
+            cache.set(cache_key, ocel, timeout=3600)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        # Build object_id → object_type lookup
+        obj_type_map = {}
+        for obj_type in ocel.object_types:
+            for obj_id in ocel.get_object_ids_by_type(obj_type):
+                obj_type_map[obj_id] = obj_type
+
+        events_df = (
+            ocel.events
+            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
+            .sort("_timestampUnix")
+        )
+
+        events = []
+        for row in events_df.to_dicts():
+            objects_by_type: dict[str, list[str]] = {t: [] for t in ocel.object_types}
+            for obj_id in (row["_objects"] or []):
+                t = obj_type_map.get(obj_id)
+                if t:
+                    objects_by_type[t].append(obj_id)
+            ts = row["_timestampUnix"]
+            # Normalise to milliseconds for the frontend
+            if isinstance(ts, (int, float)):
+                ts_ms = int(ts) if ts > 1e12 else int(ts * 1000)
+            else:
+                ts_ms = str(ts)
+            events.append({
+                "event_id": row["_eventId"],
+                "activity": row["_activity"],
+                "timestamp": ts_ms,
+                "objects": objects_by_type,
+            })
+
+        return Response({"object_types": ocel.object_types, "events": events}, status=status.HTTP_200_OK)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return Response({"error": f"Failed to build event log: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def resource_activity_matrix(request):
     from totem_lib.ochandover.orgamining import ResourceActivityMatrix
 

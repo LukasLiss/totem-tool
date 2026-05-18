@@ -36,8 +36,18 @@ type OCHandoverExplorerProps = {
   embedded?: boolean;
 };
 
-type ViewMode = "table" | "graph";
+type ViewMode = "table" | "graph" | "log";
 type Method = "oc" | "flattened";
+
+type EventLogData = {
+  object_types: string[];
+  events: {
+    event_id: string;
+    activity: string;
+    timestamp: number | string;
+    objects: Record<string, string[]>;
+  }[];
+};
 type Normalization = "by_source" | "by_target" | "by_arcs_in_eog" | "by_total_weight";
 type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
 type SortDir = "asc" | "desc";
@@ -83,6 +93,9 @@ export default function OCHandoverExplorer({
   const [parallelThreshold, setParallelThreshold] = useState(0.5);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const [logData, setLogData] = useState<EventLogData | null>(null);
+  const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [logError, setLogError] = useState("");
   const resultsRef = useRef<HTMLDivElement>(null);
   const viewModeRef = useRef(viewMode);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
@@ -161,6 +174,44 @@ export default function OCHandoverExplorer({
 
   // Reset selected node and locked height when data changes
   useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
+
+  // Reset log data when fileId changes
+  useEffect(() => {
+    setLogData(null);
+    setLogStatus("idle");
+    setLogError("");
+  }, [fileId]);
+
+  // Fetch event log lazily when the Log view is opened
+  useEffect(() => {
+    if (viewMode !== "log" || !fileId || logStatus !== "idle") return;
+    let cancelled = false;
+    setLogStatus("loading");
+    (async () => {
+      const token = localStorage.getItem("access_token");
+      if (!token) { setLogStatus("error"); setLogError("Not authenticated"); return; }
+      try {
+        const res = await fetch(`/api/event-log/?file_id=${fileId}`, {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+        if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+        const result: EventLogData = await res.json();
+        if (cancelled) return;
+        setLogData(result);
+        setLogStatus("ready");
+      } catch (e: any) {
+        if (cancelled) return;
+        setLogStatus("error");
+        setLogError(e?.message || "Failed to load event log");
+      }
+    })();
+    return () => { cancelled = true; };
+  // logStatus intentionally omitted: the guard inside prevents re-entry,
+  // and including it would cancel the in-flight fetch on every status change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, fileId]);
 
   // Measure and lock the results area height 50ms after data loads.
   // viewMode is intentionally NOT in the deps — the timer must not be cancelled
@@ -459,6 +510,9 @@ export default function OCHandoverExplorer({
               <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => setViewMode("table")}>
                 Table
               </Button>
+              <Button size="sm" variant={viewMode === "log" ? "default" : "outline"} onClick={() => setViewMode("log")}>
+                Log
+              </Button>
             </div>
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
@@ -478,6 +532,10 @@ export default function OCHandoverExplorer({
                   onNodeClick={setSelectedNode}
                 />
               )
+            )}
+
+            {viewMode === "log" && (
+              <EventLogTable logData={logData} logStatus={logStatus} logError={logError} typeColorMap={typeColorMap} lockedHeight={lockedHeight} />
             )}
 
             {viewMode === "table" && (
@@ -583,6 +641,89 @@ function SingleTypeSelector({
             <span className="text-sm">{t}</span>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── EventLogTable ──────────────────────────────────────────── */
+function EventLogTable({
+  logData, logStatus, logError, typeColorMap, lockedHeight,
+}: {
+  logData: EventLogData | null;
+  logStatus: "idle" | "loading" | "ready" | "error";
+  logError: string;
+  typeColorMap: Record<string, string>;
+  lockedHeight: number | null;
+}) {
+  if (logStatus === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 px-4">
+        <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+        Loading event log…
+      </div>
+    );
+  }
+  if (logStatus === "error") {
+    return <div className="text-sm text-destructive px-4 py-6">Error: {logError}</div>;
+  }
+  if (!logData) return null;
+
+  const MAX_ROWS = 500;
+  const truncated = logData.events.length > MAX_ROWS;
+  const visibleEvents = truncated ? logData.events.slice(0, MAX_ROWS) : logData.events;
+
+  const fmt = (ts: number | string) => {
+    const d = new Date(typeof ts === "number" ? ts : ts);
+    return isNaN(d.getTime()) ? String(ts) : d.toISOString().replace("T", " ").slice(0, 19);
+  };
+
+  return (
+    <div className="space-y-2">
+      {truncated && (
+        <div className="text-xs text-muted-foreground px-1">
+          Showing first {MAX_ROWS} of {logData.events.length} events — export the file to see the full log.
+        </div>
+      )}
+      <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
+        <table className="w-full text-sm border-collapse">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b bg-muted">
+              <th className="px-3 py-2 text-left font-medium sticky left-0 bg-muted z-20 border-r whitespace-nowrap">Event</th>
+              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Activity</th>
+              <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Timestamp</th>
+              {logData.object_types.map(t => (
+                <th key={t} className="px-3 py-2 text-left font-medium whitespace-nowrap">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                    {t}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleEvents.map((ev, i) => (
+              <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+                <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">{ev.event_id}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{ev.activity}</td>
+                <td className="px-3 py-2 font-mono text-xs tabular-nums whitespace-nowrap text-muted-foreground">{fmt(ev.timestamp)}</td>
+                {logData.object_types.map(t => {
+                  const objs = ev.objects[t] ?? [];
+                  return (
+                    <td key={t} className="px-3 py-2 whitespace-nowrap">
+                      {objs.length === 0 ? (
+                        <span className="text-muted-foreground/40">—</span>
+                      ) : (
+                        <span className="font-mono text-xs">{objs.join(", ")}</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
