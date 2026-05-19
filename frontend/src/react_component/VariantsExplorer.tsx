@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
-  ChevronDown, ChevronRight, ZoomIn, ZoomOut, Search,
-  MinusCircle, PlusCircle
+  ChevronDown, ChevronRight, ZoomIn, ZoomOut,
+  MinusCircle, PlusCircle, Settings,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,37 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+
+/* ============================
+   Advanced-settings type aliases
+   Must mirror totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}
+   and backend api.views._VALID_EXTRACTIONS / _VALID_ISOS.
+   ============================ */
+export type Extraction = "leading_1hop" | "leading_bfs" | "connected";
+export type IsoStrategy =
+  | "db_signature" | "trace" | "signature" | "wl" | "wl+vf2" | "exact";
+
+export type AdvancedSettings = {
+  extraction: Extraction;
+  iso: IsoStrategy;
+  timeout_s: number;
+};
+
+const EXTRACTION_OPTIONS: { value: Extraction; label: string; hint: string }[] = [
+  { value: "leading_1hop", label: "Leading type — 1-hop", hint: "Fast. Default." },
+  { value: "leading_bfs",  label: "Leading type — BFS",   hint: "Paper-faithful. Slower." },
+  { value: "connected",    label: "Connected components", hint: "No leading type required." },
+];
+
+const ISO_OPTIONS: { value: IsoStrategy; label: string; hint: string }[] = [
+  { value: "db_signature", label: "SQL signature",      hint: "Cheapest. May over-merge." },
+  { value: "trace",        label: "Trace",              hint: "Linearisation-sensitive." },
+  { value: "signature",    label: "Python signature",   hint: "Topology-blind multiset." },
+  { value: "wl",           label: "WL hash",            hint: "Sound on real OCEL data." },
+  { value: "wl+vf2",       label: "WL + VF2",           hint: "Recommended default." },
+  { value: "exact",        label: "Exact (slow)",       hint: "Full pairwise VF2." },
+];
 
 /* =========================
    Types shared with callers
@@ -113,6 +144,12 @@ type VariantsExplorerProps = {
   colWidth?: number;                              // Column width (default: 120)
   embedded?: boolean;                             // When true, removes outer Card wrapper
   defaultLeadingType?: string;                    // Pre-select this type if provided and valid
+  defaultExtraction?: Extraction;                 // Persisted advanced settings
+  defaultIso?: IsoStrategy;
+  defaultTimeoutS?: number;
+  /** Called when the user clicks Apply in the advanced-settings popover so
+   * the parent dashboard can persist the choices on the VariantsComponent. */
+  onAdvancedChange?: (s: AdvancedSettings) => void;
 };
 
 export default function VariantsExplorer({
@@ -123,6 +160,10 @@ export default function VariantsExplorer({
   colWidth = 120,
   embedded = false,
   defaultLeadingType,
+  defaultExtraction = "leading_1hop",
+  defaultIso = "wl+vf2",
+  defaultTimeoutS = 10,
+  onAdvancedChange,
 }: VariantsExplorerProps) {
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -135,7 +176,26 @@ export default function VariantsExplorer({
   // UI state
   const [zoom, setZoom] = useState<number>(1);
   const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
-  const [query, setQuery] = useState<string>("");
+
+  // Advanced settings: now displayed inline in the header row. Each change
+  // commits immediately and triggers a refetch + persists to the dashboard,
+  // matching how the Perspective dropdown already behaves. The 10s default
+  // timeout protects against an accidental click on `exact` triggering a
+  // runaway computation.
+  const [extraction, setExtraction] = useState<Extraction>(defaultExtraction);
+  const [iso, setIso]               = useState<IsoStrategy>(defaultIso);
+  const [timeoutS, setTimeoutS]     = useState<number>(defaultTimeoutS);
+
+  // Persist whenever any advanced setting changes. Skipped on the initial
+  // mount so we don't echo back the values the parent just gave us.
+  const isFirstAdvSync = useRef(true);
+  useEffect(() => {
+    if (isFirstAdvSync.current) {
+      isFirstAdvSync.current = false;
+      return;
+    }
+    onAdvancedChange?.({ extraction, iso, timeout_s: timeoutS });
+  }, [extraction, iso, timeoutS, onAdvancedChange]);
 
   // Track current fileId to detect stale closures
   const fileIdRef = useRef<number | undefined>(fileId);
@@ -242,7 +302,19 @@ export default function VariantsExplorer({
         return;  // File changed, abort this stale closure
       }
 
-      const qs = `?file_id=${currentFileId}&leading_type=${encodeURIComponent(currentLeadingType)}`;
+      // Build the query string with the advanced-settings params. For
+      // `extraction="connected"` the leading_type is ignored by the backend
+      // — omit it to keep URLs clean.
+      const params: Record<string, string> = {
+        file_id: String(currentFileId),
+        extraction,
+        iso,
+        timeout_s: String(timeoutS),
+      };
+      if (extraction.startsWith("leading")) {
+        params.leading_type = currentLeadingType;
+      }
+      const qs = "?" + new URLSearchParams(params).toString();
 
       setStatus("loading");
       setErrorMsg("");
@@ -258,7 +330,6 @@ export default function VariantsExplorer({
 
         if (!cancelled) {
           setVariants(arr ?? []);
-          {console.log(arr)}
           setStatus(arr && arr.length ? "ready" : "empty");
           onVariantsLoad?.(arr ?? []);
         }
@@ -270,20 +341,28 @@ export default function VariantsExplorer({
 
         if (!cancelled) {
           setStatus("error");
-          setErrorMsg(e?.message || "Unknown error while loading variants.");
+          // Backend returns HTTP 408 + {code: "timeout", timeout_s, hint}
+          // when find_variants tripped its watchdog. Surface a specific
+          // message so the user knows what to change instead of seeing a
+          // generic error.
+          const d = e?.response?.data;
+          if (e?.response?.status === 408 && d?.code === "timeout") {
+            setErrorMsg(
+              `Computation timed out after ${d.timeout_s}s. ${d.hint ?? ""}`
+            );
+          } else {
+            setErrorMsg(e?.message || "Unknown error while loading variants.");
+          }
         }
       }
     })();
 
     return () => { cancelled = true; };
-  }, [leadingType, automaticLoading, hasStartedLoading, onVariantsLoad]);
+  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return variants
-      .filter((v) => q ? (String(v.id).toLowerCase().includes(q) || v.signature.toLowerCase().includes(q)) : true)
-      .sort((a, b) => b.support - a.support);
-  }, [variants, query]);
+    return [...variants].sort((a, b) => b.support - a.support);
+  }, [variants]);
 
   //console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
 
@@ -297,8 +376,19 @@ export default function VariantsExplorer({
             <span className="text-lg font-semibold">Perspective:</span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="min-w-[150px] justify-between">
-                  {leadingType || "Select type"}
+                <Button
+                  variant="outline"
+                  className="min-w-[150px] justify-between"
+                  disabled={extraction === "connected"}
+                  title={
+                    extraction === "connected"
+                      ? "Leading type is ignored for Connected components extraction"
+                      : undefined
+                  }
+                >
+                  {extraction === "connected"
+                    ? "— (connected)"
+                    : (leadingType || "Select type")}
                   <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
@@ -318,6 +408,119 @@ export default function VariantsExplorer({
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Inline advanced settings — gear icon plus three compact
+                controls living in the same row as the Perspective dropdown.
+                Each change commits immediately and triggers a refetch;
+                onAdvancedChange persists the choice to the dashboard. */}
+            <Settings
+              className="ml-1 h-4 w-4 text-muted-foreground shrink-0"
+              aria-label="Advanced settings"
+            />
+
+            {/* Extraction picker */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="min-w-[180px] justify-between font-normal"
+                  title="Process-execution extraction strategy"
+                >
+                  <span className="truncate">
+                    {EXTRACTION_OPTIONS.find((o) => o.value === extraction)?.label
+                      ?? extraction}
+                  </span>
+                  <ChevronDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[320px]">
+                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={extraction}
+                  onValueChange={(v) => setExtraction(v as Extraction)}
+                >
+                  {EXTRACTION_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {opt.hint}
+                        </span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Isomorphism picker */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="min-w-[150px] justify-between font-normal"
+                  title="Graph-isomorphism strategy"
+                >
+                  <span className="truncate">
+                    {ISO_OPTIONS.find((o) => o.value === iso)?.label ?? iso}
+                  </span>
+                  <ChevronDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[300px]">
+                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={iso}
+                  onValueChange={(v) => setIso(v as IsoStrategy)}
+                >
+                  {ISO_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {opt.hint}
+                        </span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Timeout (seconds) */}
+            <div className="flex items-center gap-1">
+              <Label
+                htmlFor="adv-timeout"
+                className="text-xs text-muted-foreground"
+                title="Per-request wall-clock budget in seconds"
+              >
+                Timeout
+              </Label>
+              <Input
+                id="adv-timeout"
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={timeoutS}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setTimeoutS(Number.isFinite(n) && n > 0 ? n : 10);
+                }}
+                className="w-[72px]"
+                title="Per-request wall-clock budget in seconds"
+              />
+            </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -344,18 +547,6 @@ export default function VariantsExplorer({
                 id="label-mode"
                 checked={labelMode === "compact"}
                 onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
-              />
-            </div>
-
-            {/* Search */}
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Filter by id or signature…"
-                className="pl-9 w-[260px]"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="Filter variants"
               />
             </div>
           </div>
@@ -435,6 +626,14 @@ export default function VariantsExplorer({
       {status === "ready" && (
         <CardContent className="pt-2">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* Variant count summary — left-aligned, muted, above the list. */}
+            <div
+              className="text-sm text-muted-foreground"
+              aria-live="polite"
+            >
+              Found <span className="font-medium text-foreground">{filtered.length}</span>{" "}
+              variant{filtered.length === 1 ? "" : "s"}
+            </div>
             {filtered.map((v) => (
               <VariantRow
                 key={v.signature_hash}
@@ -446,9 +645,6 @@ export default function VariantsExplorer({
                 typeColorsOverride={typeColors}
               />
             ))}
-            {filtered.length === 0 && (
-              <div style={{ fontSize: 12, color: UI.textSecondary }}>No variants match your filters.</div>
-            )}
           </div>
         </CardContent>
       )}

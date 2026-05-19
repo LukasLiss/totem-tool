@@ -42,6 +42,10 @@ interface ComponentProps {
     image?: string;
     automatic_loading?: boolean;
     leading_object_type?: string;
+    // Persisted advanced settings for the Variants Explorer
+    extraction?: "leading_1hop" | "leading_bfs" | "connected";
+    iso?: "db_signature" | "trace" | "signature" | "wl" | "wl+vf2" | "exact";
+    timeout_s?: number;
     // LogStatisticsComponent properties
     show_num_events?: boolean;
     show_num_activities?: boolean;
@@ -333,6 +337,16 @@ const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
+          defaultExtraction={node.extraction ?? "leading_1hop"}
+          defaultIso={node.iso ?? "wl+vf2"}
+          defaultTimeoutS={node.timeout_s ?? 10}
+          onAdvancedChange={(s) =>
+            onUpdate?.({
+              extraction: s.extraction,
+              iso: s.iso,
+              timeout_s: s.timeout_s,
+            } as any)
+          }
         />
       </CardContent>
     </Card>

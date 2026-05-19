@@ -434,6 +434,17 @@ class OcelDuckDB:
         """Close the DuckDB connection."""
         self.conn.close()
 
+    def __del__(self):
+        # Native DuckDBPyConnection holds OS resources (file handles, memory
+        # arenas). Release them eagerly when the OcelDuckDB is GC'd — e.g.
+        # when the Django views.py registry entry is evicted. Wrapped in
+        # try/except because __del__ runs during interpreter teardown when
+        # half the runtime may already be gone.
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def __enter__(self) -> "OcelDuckDB":
         return self
 

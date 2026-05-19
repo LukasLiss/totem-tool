@@ -465,6 +465,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     automatic_loading=item.get('automatic_loading', False),
                     leading_object_type=item.get('leading_object_type', ''),
+                    extraction=item.get('extraction') or 'leading_1hop',
+                    iso=item.get('iso') or 'wl+vf2',
+                    timeout_s=item.get('timeout_s', 10.0),
                 )
             elif component_name == 'ProcessAreaComponent':
                 ProcessAreaComponent.objects.create(
@@ -855,6 +858,12 @@ def discover_totem_mock(request, pk: int):
     payload = TOTEM_MOCK_2 # if variant == "2" else TOTEM_MOCK
     return Response(payload, status=status.HTTP_200_OK)
 
+# Accepted enums for the advanced-settings query params on the variants
+# endpoint. Keep in sync with totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}.
+_VALID_EXTRACTIONS = {"leading_1hop", "leading_bfs", "connected"}
+_VALID_ISOS = {"db_signature", "trace", "signature", "wl", "wl+vf2", "exact"}
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def variants(request):
@@ -875,33 +884,73 @@ def variants(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # --- Advanced settings (query params, all optional with sane defaults) ---
+    extraction = request.query_params.get("extraction") or "leading_1hop"
+    iso        = request.query_params.get("iso")        or "wl+vf2"
+    if extraction not in _VALID_EXTRACTIONS:
+        return Response(
+            {"error": f"Invalid extraction '{extraction}'. "
+                      f"Allowed: {sorted(_VALID_EXTRACTIONS)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if iso not in _VALID_ISOS:
+        return Response(
+            {"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        timeout_s = float(request.query_params.get("timeout_s", "10.0"))
+        if timeout_s <= 0:
+            timeout_s = None  # disable
+    except (TypeError, ValueError):
+        timeout_s = 10.0
+
     try:
         with _with_ocel_db(user_file) as db:
             obj_types = _object_types(db)
+
+            # Leading type is only needed for the leading_* extractions.
+            # For "connected" we skip the default-to-first-alphabetical
+            # fallback entirely — the param is ignored downstream anyway.
             leading_object_type = request.query_params.get("leading_type")
+            if extraction.startswith("leading"):
+                if not leading_object_type or leading_object_type not in obj_types:
+                    if not obj_types:
+                        return Response({
+                            "variants": [],
+                            "object_types": [],
+                        }, status=status.HTTP_200_OK)
+                    leading_object_type = obj_types[0]
+            else:
+                leading_object_type = None
 
-            # If no leading_type provided or it doesn't exist, pick the first
-            # alphabetically (matches previous behaviour).
-            if not leading_object_type or leading_object_type not in obj_types:
-                if not obj_types:
-                    return Response({
-                        "variants": [],
-                        "object_types": [],
-                    }, status=status.HTTP_200_OK)
-                leading_object_type = obj_types[0]
-
-            # `find_variants` from `totem_lib.variants` is the DuckDB-backed
-            # implementation. Default iso strategy ("wl+vf2") is sound and
-            # exact. It creates connection-scoped TEMP TABLEs — the per-file
-            # lock makes that safe under concurrent requests.
+            # The default iso strategy ("wl+vf2") is sound and exact.
+            # `find_variants` creates connection-scoped TEMP TABLEs — the
+            # per-file lock from `_with_ocel_db` makes that safe under
+            # concurrent requests. `timeout_s` arms a watchdog that
+            # interrupts long SQL and raises TimeoutError.
             mined = find_variants(
                 db,
+                extraction=extraction,
                 leading_type=leading_object_type,
+                iso=iso,
+                timeout_s=timeout_s,
                 verbose=False,
             )
             # `calculate_layout` only reads `ocel.obj_type_map` — give it a
             # tiny shim backed by a SELECT against the DuckDB.
             layout_ocel = _layout_shim(db)
+    except TimeoutError as e:
+        return Response(
+            {
+                "error": str(e),
+                "code": "timeout",
+                "timeout_s": timeout_s,
+                "hint": "Try a coarser iso strategy (db_signature / trace) "
+                        "or a different extraction.",
+            },
+            status=status.HTTP_408_REQUEST_TIMEOUT,
+        )
     except Exception as e:
         import traceback
         print(f"ERROR in find_variants: {e}")
