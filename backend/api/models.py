@@ -76,6 +76,11 @@ class ImageComponent(DashboardComponent):
 class VariantsComponent(DashboardComponent):
     automatic_loading = models.BooleanField(default=False, null=True, blank=True)
     leading_object_type = models.CharField(max_length=100, null=True, blank=True)
+    # Advanced settings — persist user's chosen extraction / iso / timeout
+    # so reloading the dashboard restores them. Defaults match `find_variants`.
+    extraction = models.CharField(max_length=32, default="leading_1hop", null=True, blank=True)
+    iso = models.CharField(max_length=32, default="wl+vf2", null=True, blank=True)
+    timeout_s = models.FloatField(default=10.0, null=True, blank=True)
 
 
 class ProcessAreaComponent(DashboardComponent):

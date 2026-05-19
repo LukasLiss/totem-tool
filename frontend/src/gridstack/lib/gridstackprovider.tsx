@@ -229,6 +229,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           automatic_loading: (node as any).automatic_loading ?? false,
           leading_object_type: (node as any).leading_object_type ?? '',
+          // Persisted advanced settings — see VariantsExplorer.tsx for semantics.
+          extraction: (node as any).extraction ?? 'leading_1hop',
+          iso: (node as any).iso ?? 'wl+vf2',
+          timeout_s: (node as any).timeout_s ?? 10.0,
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -344,6 +348,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             image: item.image,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
+            // VariantsComponent — persisted advanced settings
+            extraction: item.extraction,
+            iso: item.iso,
+            timeout_s: item.timeout_s,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -368,6 +376,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).image = item.image; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+              (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
+              (node as any).iso = item.iso;                 // For VariantsComponent advanced settings
+              (node as any).timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               // LogStatisticsComponent properties
               (node as any).show_num_events = item.show_num_events;
               (node as any).show_num_activities = item.show_num_activities;

@@ -13,9 +13,11 @@ backwards-compat wrapper for code that pre-dates the new API.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import defaultdict
-from typing import Dict, List, Literal, Optional
+from contextlib import contextmanager
+from typing import Dict, Iterator, List, Literal, Optional
 
 import networkx as nx
 import polars as pl
@@ -31,6 +33,60 @@ Extraction = Literal["leading_1hop", "leading_bfs", "connected"]
 IsoStrategy = Literal[
     "db_signature", "trace", "signature", "wl", "wl+vf2", "exact"
 ]
+
+
+# ---------------------------------------------------------------------------
+# Timeout watchdog
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _timeout_watchdog(
+    ocel_db: OcelDuckDB, timeout_s: Optional[float]
+) -> Iterator[Optional[threading.Event]]:
+    """
+    Hybrid timeout: schedules `conn.interrupt()` (cancels any in-flight SQL)
+    and sets a `threading.Event` that pure-Python iso loops poll between
+    cases. Returns the event (or `None` when `timeout_s is None`) so the
+    grouping functions can receive it via `_cancel_event=`.
+
+    When the watchdog trips, DuckDB raises `RuntimeError("Query interrupted
+    by user")` from whatever query is running; `find_variants` catches that
+    and re-raises as `TimeoutError`.
+    """
+    if timeout_s is None or timeout_s <= 0:
+        # No timeout — the iso loops will receive None and skip the check.
+        yield None
+        return
+
+    cancel_event = threading.Event()
+
+    def _trip() -> None:
+        cancel_event.set()
+        # `interrupt()` is documented to be thread-safe; ignore failures
+        # (e.g. connection already closed in a race).
+        try:
+            ocel_db.conn.interrupt()
+        except Exception:
+            pass
+
+    timer = threading.Timer(timeout_s, _trip)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield cancel_event
+    finally:
+        timer.cancel()
+
+
+def _is_interrupted_error(exc: BaseException) -> bool:
+    """
+    DuckDB surfaces an interrupted query as `_duckdb.InterruptException` on
+    modern versions; older versions raised `RuntimeError("...interrupted...")`.
+    Match on class name / message rather than importing the specific symbol
+    (which moved across releases) so we keep working through upgrades.
+    """
+    cls = type(exc).__name__.lower()
+    return "interrupt" in cls or "interrupt" in str(exc).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +153,7 @@ def find_variants(
     extraction: Extraction = "leading_1hop",
     leading_type: Optional[str] = None,
     iso: IsoStrategy = "wl+vf2",
+    timeout_s: Optional[float] = 10.0,
     verbose: bool = True,
 ) -> Variants:
     """
@@ -117,6 +174,10 @@ def find_variants(
         - "wl":           Weisfeiler-Lehman hash only.
         - "wl+vf2":       WL bucketing + VF2 refinement (recommended default).
         - "exact":        full pairwise VF2.
+    :param timeout_s: Wall-clock budget for the whole call in seconds.
+        On expiry, in-flight SQL is interrupted via `conn.interrupt()` and
+        pure-Python iso loops abort between cases; `TimeoutError` is raised.
+        Pass `None` to disable (used by offline evaluation scripts).
     :param verbose: Show per-step progress bars in the terminal.
     :return: Variants sorted by support descending.
     """
@@ -131,6 +192,44 @@ def find_variants(
 
     total_t0 = time.time()
     conn = ocel_db.conn
+
+    with _timeout_watchdog(ocel_db, timeout_s) as cancel_event:
+        try:
+            return _find_variants_inner(
+                ocel_db, conn, extraction, leading_type, iso,
+                cancel_event, _bar_kw, _msg, total_t0,
+            )
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            # DuckDB's "Query interrupted..." raised from inside a `.execute()`
+            # call → re-classify as TimeoutError. The cancel_event check is
+            # belt-and-braces: if interrupted from outside the watchdog
+            # somehow, we don't want to mis-label that as our timeout.
+            if (
+                cancel_event is not None
+                and cancel_event.is_set()
+                and _is_interrupted_error(exc)
+            ):
+                raise TimeoutError(
+                    f"find_variants timed out after {timeout_s}s"
+                ) from exc
+            raise
+
+
+def _find_variants_inner(
+    ocel_db: OcelDuckDB,
+    conn,
+    extraction: Extraction,
+    leading_type: Optional[str],
+    iso: IsoStrategy,
+    cancel_event: Optional[threading.Event],
+    _bar_kw: dict,
+    _msg,
+    total_t0: float,
+) -> Variants:
+    """The actual `find_variants` body — split out so the timeout context
+    manager wraps the whole thing cleanly."""
 
     # ---- Step 1: object graph ----
     with _tqdm(
@@ -204,7 +303,8 @@ def find_variants(
         r[0] for r in conn.execute("SELECT DISTINCT case_id FROM case_edges").fetchall()
     }
     n_filtered = len(cases) - len(cases_with_edges)
-    if n_filtered and verbose:
+    if n_filtered:
+        # `_msg` itself respects the verbose flag (it's the closure passed in).
         _msg(f"         {n_filtered} case(s) skipped (no edges)")
 
     # ---- Step 3: group into variants ----
@@ -244,13 +344,21 @@ def find_variants(
             **_bar_kw,
         ) as pb:
             if iso == "signature":
-                groups = _iso.group_signature(case_graphs, _progress_bar=pb)
+                groups = _iso.group_signature(
+                    case_graphs, _progress_bar=pb, _cancel_event=cancel_event,
+                )
             elif iso == "wl":
-                groups = _iso.group_wl(case_graphs, _progress_bar=pb)
+                groups = _iso.group_wl(
+                    case_graphs, _progress_bar=pb, _cancel_event=cancel_event,
+                )
             elif iso == "wl+vf2":
-                groups = _iso.group_wl_vf2(case_graphs, _progress_bar=pb)
+                groups = _iso.group_wl_vf2(
+                    case_graphs, _progress_bar=pb, _cancel_event=cancel_event,
+                )
             elif iso == "exact":
-                groups = _iso.group_exact(case_graphs, _progress_bar=pb)
+                groups = _iso.group_exact(
+                    case_graphs, _progress_bar=pb, _cancel_event=cancel_event,
+                )
             else:
                 raise ValueError(f"unknown iso strategy: {iso!r}")
             pb.set_postfix_str(f"→ {len(groups):,} variants")
@@ -276,12 +384,17 @@ def find_variants(
 
 
 def find_variants_naive_db(ocel_db: OcelDuckDB, leading_type: str) -> Variants:
-    """Backwards-compat wrapper: leading_1hop extraction + exact VF2 isomorphism."""
+    """Backwards-compat wrapper: leading_1hop extraction + exact VF2 isomorphism.
+
+    Explicitly disables the timeout to preserve pre-timeout semantics for
+    existing offline/evaluation callers.
+    """
     return find_variants(
         ocel_db,
         extraction="leading_1hop",
         leading_type=leading_type,
         iso="exact",
+        timeout_s=None,
     )
 
 

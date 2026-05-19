@@ -147,3 +147,59 @@ class TestIsoStrategies:
         t1 = sum(len(x.executions) for x in v)
         t2 = sum(len(x.executions) for x in v_exact)
         assert t1 == t2, f"[{ext}/{iso}] total executions differ: {t1} vs {t2}"
+
+
+# ---------------------------------------------------------------------------
+# Timeout — `find_variants(..., timeout_s=...)` must bound wall-clock work
+# ---------------------------------------------------------------------------
+
+class TestTimeout:
+    def test_zero_timeout_raises_TimeoutError(self):
+        """A sub-millisecond budget must trip the watchdog before completion."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            with pytest.raises(TimeoutError):
+                find_variants(
+                    db,
+                    extraction="leading_1hop",
+                    leading_type=LEADING_TYPE,
+                    iso="exact",
+                    timeout_s=0.001,
+                    verbose=False,
+                )
+        finally:
+            db.close()
+
+    def test_none_timeout_runs_to_completion(self):
+        """`timeout_s=None` keeps pre-timeout semantics — no watchdog at all."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            v = find_variants(
+                db,
+                extraction="leading_1hop",
+                leading_type=LEADING_TYPE,
+                iso="exact",
+                timeout_s=None,
+                verbose=False,
+            )
+            assert len(v) > 0
+        finally:
+            db.close()
+
+    def test_connection_usable_after_timeout(self):
+        """After a watchdog-tripped run, the same OcelDuckDB stays healthy."""
+        db = import_ocel_db(str(SOURCE))
+        try:
+            with pytest.raises(TimeoutError):
+                find_variants(
+                    db, leading_type=LEADING_TYPE,
+                    iso="exact", timeout_s=0.001, verbose=False,
+                )
+            # Subsequent call without timeout must succeed.
+            v = find_variants(
+                db, leading_type=LEADING_TYPE,
+                iso="wl+vf2", timeout_s=None, verbose=False,
+            )
+            assert len(v) > 0
+        finally:
+            db.close()
