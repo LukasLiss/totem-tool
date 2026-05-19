@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+
 
 /* ── Types ─────────────────────────────────────────────────── */
 export type HandoverNode = { id: string; object_type: string };
@@ -341,7 +343,14 @@ export default function OCHandoverExplorer({
         {fileId && objectTypes.length > 0 && (
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">Method:</span>
+              <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                  <span className="text-lg font-semibold cursor-default">Method:</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[220px] text-xs">
+                  Object-Centric uses all object types directly. Flattened projects the log onto a single object type.
+                </TooltipContent>
+              </Tooltip>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" className="min-w-[150px] justify-between">
@@ -358,7 +367,14 @@ export default function OCHandoverExplorer({
               </DropdownMenu>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">Max Gap:</span>
+              <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                  <span className="text-lg font-semibold cursor-default">Max Gap:</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[220px] text-xs">
+                  Maximum number of events allowed between two consecutive events of the same object. Leave empty for no limit.
+                </TooltipContent>
+              </Tooltip>
               <div className="flex items-center gap-1">
                 <Button
                   type="button"
@@ -397,7 +413,14 @@ export default function OCHandoverExplorer({
             </div>
             {method === "oc" && (
               <div className="flex items-center gap-2">
-                <span className="text-lg font-semibold">Normalization:</span>
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <span className="text-lg font-semibold cursor-default">Normalization:</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    Controls how edge weights are scaled. 'None' uses raw counts. 'Relative' divides by total handovers per resource. 'Max' divides by the maximum weight.
+                  </TooltipContent>
+                </Tooltip>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className="min-w-[170px] justify-between">
@@ -424,9 +447,16 @@ export default function OCHandoverExplorer({
                   checked={normalizationScope === "per_bo_type"}
                   onCheckedChange={v => setNormalizationScope(v ? "per_bo_type" : "global")}
                 />
-                <Label htmlFor="norm-scope" className="text-lg font-semibold cursor-pointer">
-                  Per Object Type
-                </Label>
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="norm-scope" className="text-lg font-semibold cursor-pointer">
+                      Per Object Type
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    When enabled, normalization is applied separately for each object type instead of across the whole graph.
+                  </TooltipContent>
+                </Tooltip>
               </div>
             )}
             {method === "oc" && (
@@ -436,9 +466,16 @@ export default function OCHandoverExplorer({
                   checked={parallelFilterEnabled}
                   onCheckedChange={setParallelFilterEnabled}
                 />
-                <Label htmlFor="parallel-filter" className="text-lg font-semibold cursor-pointer">
-                  Parallel Filter
-                </Label>
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="parallel-filter" className="text-lg font-semibold cursor-pointer">
+                      Parallel Filter
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    Removes direct handovers between resources working in parallel. The threshold controls how often two activities must co-occur to be considered parallel.
+                  </TooltipContent>
+                </Tooltip>
                 {parallelFilterEnabled && (
                   <div className="flex items-center gap-3 ml-2">
                     <Slider
@@ -458,14 +495,14 @@ export default function OCHandoverExplorer({
         )}
 
         {fileId && objectTypes.length > 0 && method === "oc" && (
-          <div className="flex gap-4 flex-wrap items-start">
+          <div className="flex gap-4 flex-wrap justify-center">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
           </div>
         )}
 
         {fileId && objectTypes.length > 0 && method === "flattened" && (
-          <div className="flex gap-4 flex-wrap items-start">
+          <div className="flex gap-4 flex-wrap justify-center">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
           </div>
