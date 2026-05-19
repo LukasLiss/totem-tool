@@ -36,13 +36,13 @@ export type AdvancedSettings = {
   timeout_s: number;
 };
 
-const EXTRACTION_OPTIONS: { value: Extraction; label: string; hint: string }[] = [
+export const EXTRACTION_OPTIONS: { value: Extraction; label: string; hint: string }[] = [
   { value: "leading_1hop", label: "Leading type — 1-hop", hint: "Fast. Default." },
   { value: "leading_bfs",  label: "Leading type — BFS",   hint: "Paper-faithful. Slower." },
   { value: "connected",    label: "Connected components", hint: "No leading type required." },
 ];
 
-const ISO_OPTIONS: { value: IsoStrategy; label: string; hint: string }[] = [
+export const ISO_OPTIONS: { value: IsoStrategy; label: string; hint: string }[] = [
   { value: "db_signature", label: "SQL signature",      hint: "Cheapest. May over-merge." },
   { value: "trace",        label: "Trace",              hint: "Linearisation-sensitive." },
   { value: "signature",    label: "Python signature",   hint: "Topology-blind multiset." },

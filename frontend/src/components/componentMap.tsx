@@ -16,7 +16,12 @@ import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
-import VariantsExplorer from '@/react_component/VariantsExplorer';
+import VariantsExplorer, {
+  EXTRACTION_OPTIONS,
+  ISO_OPTIONS,
+  type Extraction,
+  type IsoStrategy,
+} from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
@@ -26,8 +31,10 @@ import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
@@ -246,14 +253,30 @@ const VariantsComponent: React.FC<ComponentProps> = ({
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [extraction, setExtraction] = useState<Extraction>(
+    (node.extraction as Extraction) ?? 'leading_1hop'
+  );
+  const [iso, setIso] = useState<IsoStrategy>(
+    (node.iso as IsoStrategy) ?? 'wl+vf2'
+  );
+  const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 10);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
 
-  // Sync with node when it changes
+  // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
-  }, [node.automatic_loading, node.leading_object_type]);
+    setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
+    setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
+    setTimeoutS(node.timeout_s ?? 10);
+  }, [
+    node.automatic_loading,
+    node.leading_object_type,
+    node.extraction,
+    node.iso,
+    node.timeout_s,
+  ]);
 
   // Fetch object types when file changes (for edit mode dropdown)
   useEffect(() => {
@@ -284,14 +307,37 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ leading_object_type: value } as any);
   };
 
+  const handleExtractionChange = (value: string) => {
+    const v = value as Extraction;
+    setExtraction(v);
+    onUpdate?.({ extraction: v } as any);
+  };
+
+  const handleIsoChange = (value: string) => {
+    const v = value as IsoStrategy;
+    setIso(v);
+    onUpdate?.({ iso: v } as any);
+  };
+
+  const handleTimeoutChange = (raw: string) => {
+    const n = Number(raw);
+    const safe = Number.isFinite(n) && n > 0 ? n : 10;
+    setTimeoutS(safe);
+    onUpdate?.({ timeout_s: safe } as any);
+  };
+
   if (isEditMode) {
     // EDIT MODE: Configuration form
+    const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
+    const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
+    const leadingTypeIgnored = extraction === 'connected';
+
     return (
       <Card className="w-full h-full rounded-none">
         <CardHeader>
           <CardTitle>Variants Explorer Settings</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 overflow-auto">
           {/* Automatic Loading Toggle */}
           <div className="flex items-center justify-between">
             <Label htmlFor="auto-loading">Automatic variant computation</Label>
@@ -307,8 +353,19 @@ const VariantsComponent: React.FC<ComponentProps> = ({
             <Label>Leading object type</Label>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between">
-                  {leadingType || 'Select object type (optional)'}
+                <Button
+                  variant="outline"
+                  className="w-full justify-between"
+                  disabled={leadingTypeIgnored}
+                  title={
+                    leadingTypeIgnored
+                      ? 'Ignored when extraction is "Connected components"'
+                      : undefined
+                  }
+                >
+                  {leadingTypeIgnored
+                    ? '— (ignored for Connected components)'
+                    : (leadingType || 'Select object type (optional)')}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56">
@@ -322,6 +379,93 @@ const VariantsComponent: React.FC<ComponentProps> = ({
             </DropdownMenu>
             {loadingTypes && <p className="text-sm text-muted-foreground">Loading types...</p>}
             {!selectedFile?.id && <p className="text-sm text-muted-foreground">Select a file to see available types</p>}
+          </div>
+
+          {/* Extraction strategy */}
+          <div className="space-y-2">
+            <Label>Extraction strategy</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {extractionOpt?.label ?? extraction}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[320px]">
+                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={extraction} onValueChange={handleExtractionChange}>
+                  {EXTRACTION_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {extractionOpt && (
+              <p className="text-xs text-muted-foreground">{extractionOpt.hint}</p>
+            )}
+          </div>
+
+          {/* Isomorphism strategy */}
+          <div className="space-y-2">
+            <Label>Isomorphism strategy</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">{isoOpt?.label ?? iso}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[300px]">
+                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={iso} onValueChange={handleIsoChange}>
+                  {ISO_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {isoOpt && (
+              <p className="text-xs text-muted-foreground">{isoOpt.hint}</p>
+            )}
+          </div>
+
+          {/* Timeout (seconds) */}
+          <div className="space-y-2">
+            <Label htmlFor="variants-timeout">Timeout (seconds)</Label>
+            <Input
+              id="variants-timeout"
+              type="number"
+              min={1}
+              max={120}
+              step={1}
+              value={timeoutS}
+              onChange={(e) => handleTimeoutChange(e.target.value)}
+              className="w-[120px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Wall-clock budget per computation. The default of 10 s protects
+              against runaway runs on hard combinations.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -337,16 +481,21 @@ const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
-          defaultExtraction={node.extraction ?? "leading_1hop"}
-          defaultIso={node.iso ?? "wl+vf2"}
-          defaultTimeoutS={node.timeout_s ?? 10}
-          onAdvancedChange={(s) =>
+          defaultExtraction={extraction}
+          defaultIso={iso}
+          defaultTimeoutS={timeoutS}
+          onAdvancedChange={(s) => {
+            // Mirror the explorer's choices into our local state so this
+            // wrapper stays in sync with what the user sees inside.
+            setExtraction(s.extraction);
+            setIso(s.iso);
+            setTimeoutS(s.timeout_s);
             onUpdate?.({
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,
-            } as any)
-          }
+            } as any);
+          }}
         />
       </CardContent>
     </Card>
