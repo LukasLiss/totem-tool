@@ -30,6 +30,4 @@ The Windows executable is built using Electron and includes everything needed to
 ## 📚 Documentation
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) - Development setup
-- [BUILD_GUIDE.md](docs/BUILD_GUIDE.md) - Building executables
-- [SETUP.md](docs/SETUP.md) - Detailed setup instructions
 - [GIT_GUIDE.md](docs/GIT_GUIDE.md) - Git management guidelines
