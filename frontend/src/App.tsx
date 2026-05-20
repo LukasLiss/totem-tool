@@ -12,6 +12,7 @@ import { DashboardProvider } from "./contexts/DashboardContext";
 import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
+import { SplashAnimation } from "./components/SplashAnimation";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -27,6 +28,13 @@ async function guestLogin() {
 
 function AppRoutes({ selectedFile, setSelectedFile }) {
   const [ready, setReady] = useState(!LOCAL_MODE);
+  // Splash plays on every mount — including dev — until dismissed. Press Esc
+  // or click anywhere to skip.
+  const [splashDone, setSplashDone] = useState(false);
+
+  const handleSplashComplete = () => {
+    setSplashDone(true);
+  };
 
   useEffect(() => {
     if (!LOCAL_MODE) return;
@@ -79,6 +87,9 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
       <DashboardProvider>
         <div className="website-background">
           <Toaster position="top-center" richColors />
+          {!splashDone && (
+            <SplashAnimation onComplete={handleSplashComplete} />
+          )}
 
           <Routes>
             <Route

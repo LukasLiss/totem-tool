@@ -18,6 +18,7 @@
     },
     "files": [
       "main.js",
+      "build/icon.png",
       "resources/frontend-build"
     ],
     "extraResources": [
@@ -31,11 +32,16 @@
       }
     ],
     "win": {
-      "target": "dir"
+      "target": "dir",
+      "icon": "build/icon.png"
     },
     "mac": {
       "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "icon": "build/icon.png"
     },
     "dmg": {
       "artifactName": "${productName}-${version}.dmg"
