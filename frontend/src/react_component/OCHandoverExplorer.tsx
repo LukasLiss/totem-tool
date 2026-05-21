@@ -566,6 +566,7 @@ export default function OCHandoverExplorer({
                   nodes={data.nodes}
                   edges={data.edges}
                   typeColorMap={typeColorMap}
+                  normalizationScope={normalizationScope}
                   onNodeClick={setSelectedNode}
                 />
               )
@@ -774,11 +775,13 @@ function HandoverGraph({
   nodes,
   edges,
   typeColorMap,
+  normalizationScope,
   onNodeClick,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
   typeColorMap: Record<string, string>;
+  normalizationScope: string;
   onNodeClick?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -858,8 +861,7 @@ function HandoverGraph({
     return g;
   }, [edges]);
 
-  const minWeight = useMemo(() => Math.min(...edges.map(e => e.weight)), [edges]);
-  const maxWeight = useMemo(() => Math.max(...edges.map(e => e.weight), minWeight + 0.0001), [edges, minWeight]);
+  const maxWeight = useMemo(() => Math.max(...edges.map(e => e.weight), 0.0001), [edges]);
 
   const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
@@ -878,9 +880,7 @@ function HandoverGraph({
       weight: number;
     }> = [];
 
-    const wRange = maxWeight - minWeight;
-    const strokeFor = (w: number) =>
-      wRange < 1e-6 ? 3 : 1.5 + ((w - minWeight) / wRange) * 4.5;
+    const strokeFor = (w: number) => 1.5 + (w / maxWeight) * 4.5;
 
     edgeGroups.forEach((groupEdges, pairKey) => {
       const [srcId, tgtId] = pairKey.split("\x00");
@@ -990,7 +990,7 @@ function HandoverGraph({
     });
 
     return result;
-  }, [positions, edgeGroups, reverseSet, typeColorMap, minWeight, maxWeight]);
+  }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight]);
 
   const zoomIn = () => {
     setViewBox(vb => {
@@ -1221,16 +1221,33 @@ function HandoverGraph({
           </div>
         </div>
         <div>
-          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
-            Handover object type
-          </p>
+          <div className="flex items-center gap-4 mb-1.5">
+            <p className="font-semibold text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+              Handover object type
+            </p>
+            <p className="font-semibold text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+              Scale (max weight)
+            </p>
+          </div>
           <div className="space-y-1">
-            {boTypes.map(t => (
-              <div key={t} className="flex items-center gap-2">
-                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
-                <span>{t}</span>
-              </div>
-            ))}
+            {boTypes.map(t => {
+              const color = typeColorMap[t] ?? "#94a3b8";
+              const typeMax = Math.max(...edges.filter(e => e.businessobject_type === t).map(e => e.weight), 0.0001);
+              const stroke = normalizationScope === "per_bo_type"
+                ? 1.5 + (typeMax / maxWeight) * 4.5
+                : 6;
+              const displayMax = normalizationScope === "per_bo_type" ? typeMax : maxWeight;
+              return (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: color }} />
+                  <span className="w-24">{t}</span>
+                  <svg width="32" height="10" className="flex-shrink-0">
+                    <line x1="0" y1="5" x2="32" y2="5" stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+                  </svg>
+                  <span className="tabular-nums text-muted-foreground">{displayMax.toFixed(4)}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1321,10 +1338,8 @@ function NodeDetailView({
     ? [...outEdges, ...inEdges, ...selfEdges].map(e => getW(e))
     : data.edges.map(e => e.weight);
 
-  const minW = displayWeights.length > 0 ? Math.min(...displayWeights) : 0;
-  const maxW = Math.max(minW + 0.0001, ...displayWeights);
-  const wRange = maxW - minW;
-  const strokeFor = (w: number) => wRange < 1e-6 ? 2.5 : 1.5 + ((w - minW) / wRange) * 4;
+  const maxW = Math.max(0.0001, ...displayWeights);
+  const strokeFor = (w: number) => 1.5 + (w / maxW) * 4;
 
   const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
 
