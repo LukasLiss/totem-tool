@@ -566,7 +566,6 @@ export default function OCHandoverExplorer({
                   nodes={data.nodes}
                   edges={data.edges}
                   typeColorMap={typeColorMap}
-                  normalizationScope={normalizationScope}
                   onNodeClick={setSelectedNode}
                 />
               )
@@ -775,13 +774,11 @@ function HandoverGraph({
   nodes,
   edges,
   typeColorMap,
-  normalizationScope,
   onNodeClick,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
   typeColorMap: Record<string, string>;
-  normalizationScope: string;
   onNodeClick?: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -880,7 +877,7 @@ function HandoverGraph({
       weight: number;
     }> = [];
 
-    const strokeFor = (w: number) => 1.5 + (w / maxWeight) * 4.5;
+    const strokeFor = (w: number) => (w / maxWeight) * 6;
 
     edgeGroups.forEach((groupEdges, pairKey) => {
       const [srcId, tgtId] = pairKey.split("\x00");
@@ -1221,33 +1218,34 @@ function HandoverGraph({
           </div>
         </div>
         <div>
-          <div className="flex items-center gap-4 mb-1.5">
-            <p className="font-semibold text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
-              Handover object type
-            </p>
-            <p className="font-semibold text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
-              Scale (max weight)
-            </p>
-          </div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Handover object type
+          </p>
           <div className="space-y-1">
-            {boTypes.map(t => {
-              const color = typeColorMap[t] ?? "#94a3b8";
-              const typeMax = Math.max(...edges.filter(e => e.businessobject_type === t).map(e => e.weight), 0.0001);
-              const stroke = normalizationScope === "per_bo_type"
-                ? 1.5 + (typeMax / maxWeight) * 4.5
-                : 6;
-              const displayMax = normalizationScope === "per_bo_type" ? typeMax : maxWeight;
-              return (
-                <div key={t} className="flex items-center gap-2">
-                  <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: color }} />
-                  <span className="w-24">{t}</span>
-                  <svg width="32" height="10" className="flex-shrink-0">
-                    <line x1="0" y1="5" x2="32" y2="5" stroke={color} strokeWidth={stroke} strokeLinecap="round" />
-                  </svg>
-                  <span className="tabular-nums text-muted-foreground">{displayMax.toFixed(4)}</span>
-                </div>
-              );
-            })}
+            {boTypes.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Scale (weight of thickest arc)
+          </p>
+          <div className="flex items-center gap-2">
+            <svg width="32" height="10" className="flex-shrink-0">
+              <line x1="3" y1="5" x2="29" y2="5" stroke="#374151" strokeWidth={6} strokeLinecap="round" />
+            </svg>
+            <Tooltip delayDuration={600}>
+              <TooltipTrigger asChild>
+                <span className="tabular-nums text-muted-foreground cursor-default">{maxWeight.toFixed(4)}</span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-[200px] text-xs">
+                Maximum normalized handover weight in this graph. The thickest arc corresponds to this value.
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
       </div>
@@ -1339,7 +1337,7 @@ function NodeDetailView({
     : data.edges.map(e => e.weight);
 
   const maxW = Math.max(0.0001, ...displayWeights);
-  const strokeFor = (w: number) => 1.5 + (w / maxW) * 4;
+  const strokeFor = (w: number) => (w / maxW) * 6;
 
   const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
 
