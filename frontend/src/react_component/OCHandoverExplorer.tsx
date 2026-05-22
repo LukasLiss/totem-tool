@@ -93,6 +93,8 @@ export default function OCHandoverExplorer({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [parallelFilterEnabled, setParallelFilterEnabled] = useState(false);
   const [parallelThreshold, setParallelThreshold] = useState(0.5);
+  const [minParallelObs, setMinParallelObs] = useState(1);
+  const [minParallelObsStr, setMinParallelObsStr] = useState("1");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const [logData, setLogData] = useState<EventLogData | null>(null);
@@ -172,7 +174,7 @@ export default function OCHandoverExplorer({
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
     setErrorMsg("");
-  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold]);
+  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs]);
 
   // Reset selected node and locked height when data changes
   useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
@@ -244,7 +246,10 @@ export default function OCHandoverExplorer({
       if (maxGap !== null) params.max_gap = String(maxGap);
       params.normalization = normalization;
       params.normalization_scope = normalizationScope;
-      if (parallelFilterEnabled) params.parallel_threshold = String(parallelThreshold);
+      if (parallelFilterEnabled) {
+        params.parallel_threshold = String(parallelThreshold);
+        params.min_parallel_observations = String(minParallelObs);
+      }
     } else {
       params.case_type = caseType;
       params.resource_type = flatResourceType;
@@ -477,16 +482,67 @@ export default function OCHandoverExplorer({
                   </TooltipContent>
                 </Tooltip>
                 {parallelFilterEnabled && (
-                  <div className="flex items-center gap-3 ml-2">
-                    <Slider
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={[parallelThreshold]}
-                      onValueChange={([v]) => setParallelThreshold(v)}
-                      className="w-36"
-                    />
-                    <span className="text-sm font-mono w-10 text-right">{parallelThreshold.toFixed(2)}</span>
+                  <div className="flex items-center gap-4 ml-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Tooltip delayDuration={600}>
+                        <TooltipTrigger asChild>
+                          <span className="text-sm text-muted-foreground cursor-default">Dependency threshold:</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[220px] text-xs">
+                          Maximum allowed absolute dependency value. Lower values require more balanced co-occurrence in both directions to be considered parallel.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={[parallelThreshold]}
+                        onValueChange={([v]) => setParallelThreshold(v)}
+                        className="w-36"
+                      />
+                      <span className="text-sm font-mono w-10">{parallelThreshold.toFixed(2)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Tooltip delayDuration={600}>
+                        <TooltipTrigger asChild>
+                          <span className="text-sm text-muted-foreground cursor-default">Min observations:</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[220px] text-xs">
+                          Minimum total number of transitions (in both directions combined) required before a pair is considered parallel. Filters out coincidental reversals in sparse data.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8 flex-shrink-0"
+                        disabled={minParallelObs <= 1}
+                        onClick={() => {
+                          const v = Math.max(1, minParallelObs - 1);
+                          setMinParallelObs(v);
+                          setMinParallelObsStr(String(v));
+                        }}>
+                        <MinusIcon className="h-3 w-3" />
+                      </Button>
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={minParallelObsStr}
+                        onChange={e => {
+                          const raw = e.target.value;
+                          setMinParallelObsStr(raw);
+                          const n = parseInt(raw, 10);
+                          if (!isNaN(n) && n >= 1) setMinParallelObs(n);
+                        }}
+                        onBlur={() => setMinParallelObsStr(String(minParallelObs))}
+                        className="h-8 w-14 text-sm text-center"
+                      />
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8 flex-shrink-0"
+                        onClick={() => {
+                          const v = minParallelObs + 1;
+                          setMinParallelObs(v);
+                          setMinParallelObsStr(String(v));
+                        }}>
+                        <PlusIcon className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>

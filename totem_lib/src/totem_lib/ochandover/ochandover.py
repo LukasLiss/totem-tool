@@ -24,7 +24,8 @@ class OCHANDOVER(nx.MultiDiGraph):
     def from_ocel(cls, ocel: OCEL, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
                   normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog",
                   normalization_scope: Literal["global", "per_bo_type"] = "global",
-                  parallel_threshold: float | None = None) -> 'OCHANDOVER':
+                  parallel_threshold: float | None = None,
+                  min_parallel_observations: int = 1) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -221,10 +222,16 @@ class OCHANDOVER(nx.MultiDiGraph):
 
             print("footprint", footprint)
 
-            # Activities where both A→B and B→A appear are parallel (||).
+            # Activities where both A→B and B→A appear (||), the dependency is
+            # balanced enough (abs(dependency) <= parallel_threshold), and the
+            # total observations meet the minimum count.
             parallel_transitions = (
                 footprint
-                .filter(pl.col("relation") == "||")
+                .filter(
+                    (pl.col("relation") == "||") &
+                    (pl.col("dependency").abs() <= parallel_threshold) &
+                    ((pl.col("count_ab") + pl.col("count_ba")) >= min_parallel_observations)
+                )
                 .select(["businessobject_type", "activity_a", "activity_b"])
                 .with_columns(pl.lit(True).alias("_is_parallel"))
             )
@@ -291,20 +298,29 @@ class OCHANDOVER(nx.MultiDiGraph):
             print("Block resources")
             print(block_resources_agg.sort(["businessobject_id", "block_id"]))
 
-            # Handover pairs = cross-product between every pair of consecutive blocks.
-            # Block k → block k+1: every resource in block k hands over to every resource in block k+1.
-            # Resources within the same parallel block have no handover between them.
-            block_handovers = (
+            # Handover pairs = cross-product between consecutive resource-containing blocks.
+            # Empty blocks (no resources) are skipped automatically since block_resources_agg only
+            # contains blocks with at least one resource. A run of empty blocks (parallel section
+            # with no resources) counts as a gap of 1, regardless of how many events it spans.
+            # block_gap = next_block_id - block_id - 1: number of empty blocks between two resource blocks.
+            block_handovers_raw = (
                 block_resources_agg
-                .join(
-                    block_resources_agg.rename({
-                        "block_id": "next_block_id",
-                        "block_resources": "next_block_resources",
-                    }),
-                    on=["businessobject_id", "businessobject_type"],
-                    how="inner",
+                .sort(["businessobject_id", "businessobject_type", "block_id"])
+                .with_columns([
+                    pl.col("block_resources").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("next_block_resources"),
+                    pl.col("block_id").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("next_block_id"),
+                ])
+                .filter(pl.col("next_block_resources").is_not_null())
+                .with_columns(
+                    (pl.col("next_block_id") - pl.col("block_id") - 1).alias("block_gap")
                 )
-                .filter(pl.col("next_block_id") == pl.col("block_id") + 1)
+            )
+
+            if max_gap is not None:
+                block_handovers_raw = block_handovers_raw.filter(pl.col("block_gap") <= max_gap)
+
+            block_handovers = (
+                block_handovers_raw
                 .explode("block_resources")
                 .explode("next_block_resources")
                 .rename({"block_resources": "source", "next_block_resources": "target"})

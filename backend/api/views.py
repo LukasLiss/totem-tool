@@ -952,7 +952,16 @@ def ochandover(request):
                         return Response({"error": "parallel_threshold must be between 0 and 1"}, status=status.HTTP_400_BAD_REQUEST)
                 except ValueError:
                     return Response({"error": "Invalid parallel_threshold value"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold)
+            min_parallel_observations = 1
+            min_parallel_observations_raw = request.query_params.get("min_parallel_observations")
+            if min_parallel_observations_raw is not None:
+                try:
+                    min_parallel_observations = int(min_parallel_observations_raw)
+                    if min_parallel_observations < 1:
+                        return Response({"error": "min_parallel_observations must be at least 1"}, status=status.HTTP_400_BAD_REQUEST)
+                except ValueError:
+                    return Response({"error": "Invalid min_parallel_observations value"}, status=status.HTTP_400_BAD_REQUEST)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations)
     except Exception as e:
         import traceback
         traceback.print_exc()
