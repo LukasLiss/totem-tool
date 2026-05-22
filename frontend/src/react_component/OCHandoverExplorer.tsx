@@ -850,6 +850,7 @@ function HandoverGraph({
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; label: string } | null>(null);
 
   // Measure container
   useEffect(() => {
@@ -1076,6 +1077,7 @@ function HandoverGraph({
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
     if (isLocked) return;
     e.preventDefault();
+    setNodeTooltip(null);
     const pos = positions[id];
     if (!pos) return;
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1185,6 +1187,19 @@ function HandoverGraph({
                 style={{ cursor: onNodeClick ? "pointer" : "grab" }}
                 onMouseDown={e => handleNodeMouseDown(node.id, e)}
                 onClick={() => { if (!dragHasMoved.current) onNodeClick?.(node.id); }}
+                onMouseEnter={e => {
+                  if (dragId) return;
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, label: node.id });
+                }}
+                onMouseMove={e => {
+                  if (dragId) return;
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setNodeTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                }}
+                onMouseLeave={() => setNodeTooltip(null)}
               >
                 <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                 <text
@@ -1256,6 +1271,26 @@ function HandoverGraph({
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
           </div>
         )}
+        {nodeTooltip && (() => {
+          const TW = 180, TH = 32;
+          const cw = containerRef.current?.offsetWidth ?? size.width;
+          const ch = containerRef.current?.offsetHeight ?? size.height;
+          const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
+          const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
+          return (
+            <div style={{
+              position: "absolute", left, top,
+              background: "white", border: "1px solid #E2E8F0",
+              borderRadius: 8, padding: "5px 10px",
+              fontSize: 12, fontWeight: 600,
+              boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+              pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap",
+              maxWidth: TW,
+            }}>
+              {nodeTooltip.label}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Legends */}
@@ -1326,6 +1361,7 @@ function NodeDetailView({
   const [egoNorm, setEgoNorm] = useState(false);
   const [detailLayout, setDetailLayout] = useState<DetailLayout>("counterpart-center");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; label: string } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1507,6 +1543,20 @@ function NodeDetailView({
 
   const lbl = (id: string) => id.length > 11 ? id.slice(0, 11) + "…" : id;
 
+  const nodeHandlers = (label: string) => ({
+    onMouseEnter: (e: React.MouseEvent<SVGGElement>) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, label });
+    },
+    onMouseMove: (e: React.MouseEvent<SVGGElement>) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setNodeTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+    },
+    onMouseLeave: () => setNodeTooltip(null),
+  });
+
   const nodeTypesPresent = [...new Set([
     nodeById[selectedNode]?.object_type,
     ...counterpartIds.map(id => nodeById[id]?.object_type),
@@ -1586,7 +1636,7 @@ function NodeDetailView({
 
           {detailLayout === "counterpart-center" ? <>
             {/* Left: ego as sender */}
-            <g transform={`translate(${LEFT_X},${centerY})`}>
+            <g transform={`translate(${LEFT_X},${centerY})`} {...nodeHandlers(selectedNode)}>
               <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
               <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                 style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
@@ -1596,7 +1646,7 @@ function NodeDetailView({
               const cy = midYOf(i);
               const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
               return (
-                <g key={cpId} transform={`translate(${MID_X},${cy})`}>
+                <g key={cpId} transform={`translate(${MID_X},${cy})`} {...nodeHandlers(cpId)}>
                   <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                   <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                     style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
@@ -1604,7 +1654,7 @@ function NodeDetailView({
               );
             })}
             {/* Right: ego as receiver */}
-            <g transform={`translate(${RIGHT_X},${centerY})`}>
+            <g transform={`translate(${RIGHT_X},${centerY})`} {...nodeHandlers(selectedNode)}>
               <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
               <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                 style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
@@ -1615,7 +1665,7 @@ function NodeDetailView({
               const cy = midYOf(i);
               const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
               return (
-                <g key={`left-${cpId}`} transform={`translate(${LEFT_X},${cy})`}>
+                <g key={`left-${cpId}`} transform={`translate(${LEFT_X},${cy})`} {...nodeHandlers(cpId)}>
                   <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                   <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                     style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
@@ -1623,7 +1673,7 @@ function NodeDetailView({
               );
             })}
             {/* Center: ego node */}
-            <g transform={`translate(${MID_X},${centerY})`}>
+            <g transform={`translate(${MID_X},${centerY})`} {...nodeHandlers(selectedNode)}>
               <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
               <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                 style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
@@ -1633,7 +1683,7 @@ function NodeDetailView({
               const cy = midYOf(i);
               const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
               return (
-                <g key={`right-${cpId}`} transform={`translate(${RIGHT_X},${cy})`}>
+                <g key={`right-${cpId}`} transform={`translate(${RIGHT_X},${cy})`} {...nodeHandlers(cpId)}>
                   <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                   <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
                     style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
@@ -1662,6 +1712,26 @@ function NodeDetailView({
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
           </div>
         )}
+        {nodeTooltip && (() => {
+          const TW = 180, TH = 32;
+          const cw = containerRef.current?.offsetWidth ?? width;
+          const ch = containerRef.current?.offsetHeight ?? svgHeight;
+          const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
+          const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
+          return (
+            <div style={{
+              position: "absolute", left, top,
+              background: "white", border: "1px solid #E2E8F0",
+              borderRadius: 8, padding: "5px 10px",
+              fontSize: 12, fontWeight: 600,
+              boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+              pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap",
+              maxWidth: TW,
+            }}>
+              {nodeTooltip.label}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Legend */}
