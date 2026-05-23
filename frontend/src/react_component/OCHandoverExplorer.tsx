@@ -934,7 +934,7 @@ function HandoverGraph({
       weight: number;
     }> = [];
 
-    const strokeFor = (w: number) => (w / maxWeight) * 6;
+    const strokeFor = (w: number) => Math.max(0.3, (w / maxWeight) * 6);
 
     edgeGroups.forEach((groupEdges, pairKey) => {
       const [srcId, tgtId] = pairKey.split("\x00");
@@ -1429,7 +1429,7 @@ function NodeDetailView({
     : data.edges.map(e => e.weight);
 
   const maxW = Math.max(0.0001, ...displayWeights);
-  const strokeFor = (w: number) => (w / maxW) * 6;
+  const strokeFor = (w: number) => Math.max(0.3, (w / maxW) * 6);
 
   const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
 

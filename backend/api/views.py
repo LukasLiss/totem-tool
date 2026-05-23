@@ -1048,8 +1048,8 @@ def event_log_table(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def resource_activity_matrix(request):
-    from totem_lib.ochandover.orgamining import ResourceActivityMatrix
+def profile_matrix(request):
+    from totem_lib.ochandover.orgamining import ProfileMatrix
 
     file_id = request.query_params.get("file_id")
     if not file_id:
@@ -1074,13 +1074,13 @@ def resource_activity_matrix(request):
     resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()] or None
 
     try:
-        ram = ResourceActivityMatrix.from_ocel(ocel, resource_types=resource_types)
+        pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types)
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    return Response(ram.to_dict(), status=status.HTTP_200_OK)
+    return Response(pm.to_dict(), status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import List, Literal
 
 import polars as pl
@@ -5,47 +8,90 @@ import numpy as np
 from totem_lib import ObjectCentricEventLog as OCEL
 
 
-class ResourceActivityMatrix:
+@dataclass
+class ResourceProfile:
     """
-    Resource-Activity Matrix for organizational mining.
+    All computed features for a single resource object.
 
-    Each cell (resource, activity) = fraction of all events performed by that resource
-    that carry the given activity label.
-
-    Rows are individual resource objects; columns are activity labels.
-    The matrix is the basis for measuring similarity between resources and for clustering.
+    The base feature group is ``activity_fractions``: the fraction of this
+    resource's events that carry each activity label.  Additional feature
+    groups (co-occurrence counts, event-attribute means, …) are added as
+    new fields without changing the interface of the rest of the system.
     """
 
-    def __init__(self, matrix: pl.DataFrame, resources: list[str], activities: list[str], resource_object_types: dict[str, str] | None = None):
-        # matrix: _objId column + one column per activity, values are fractions
-        self.matrix = matrix
-        self.resources = resources
-        self.activities = activities
-        self.resource_object_types = resource_object_types or {}
+    resource_id: str
+    object_type: str
+    activity_fractions: dict[str, float]
+
+    def feature_vector(self, activities: list[str]) -> list[float]:
+        """
+        Ordered numeric vector used for distance computation, MDS, and clustering.
+
+        Parameters
+        ----------
+        activities : list[str]
+            The full ordered activity space defined by the ProfileMatrix this
+            profile belongs to.  Activities absent from this profile get 0.
+        """
+        return [self.activity_fractions.get(a, 0.0) for a in activities]
+
+
+class ProfileMatrix:
+    """
+    Collection of ResourceProfiles, one per resource.
+
+    Provides the matrix view needed for similarity measurement, MDS projection,
+    and clustering.  The feature space is defined by ``activities`` (and later
+    by additional feature groups); ``to_numpy()`` assembles uniform feature
+    vectors from every profile.
+    """
+
+    def __init__(
+        self,
+        profiles: list[ResourceProfile],
+        activities: list[str],
+    ) -> None:
+        self.profiles = profiles
+        self.activities = activities  # ordered feature space
+
+    # ── convenience accessors ──────────────────────────────────────────────────
+
+    @property
+    def resources(self) -> list[str]:
+        return [p.resource_id for p in self.profiles]
+
+    @property
+    def resource_object_types(self) -> dict[str, str]:
+        return {p.resource_id: p.object_type for p in self.profiles}
+
+    # ── construction ──────────────────────────────────────────────────────────
 
     @classmethod
     def from_ocel(
         cls,
         ocel: OCEL,
         resource_types: List[str] | None = None,
-    ) -> "ResourceActivityMatrix":
+    ) -> "ProfileMatrix":
         """
+        Build a ProfileMatrix from an OCEL.
+
         Parameters
         ----------
         ocel : OCEL
         resource_types : list[str] | None
-            Object types treated as resources. Defaults to all object types in the log.
+            Object types treated as resources. Defaults to all object types.
         """
         if resource_types is None:
             resource_types = ocel.object_types
 
-        resource_ids = set()
+        resource_ids: set[str] = set()
         resource_object_types: dict[str, str] = {}
         for obj_type in resource_types:
             for obj_id in ocel.get_object_ids_by_type(obj_type):
                 resource_ids.add(obj_id)
                 resource_object_types[obj_id] = obj_type
 
+        # ── activity fractions ─────────────────────────────────────────────
         event_resource_activity = (
             ocel.events
             .select(["_eventId", "_activity", "_objects"])
@@ -53,26 +99,20 @@ class ResourceActivityMatrix:
             .rename({"_objects": "_objId"})
             .filter(pl.col("_objId").is_in(resource_ids))
         )
-        print("Event-Resource-Activity (one row per event × resource)")
-        print(event_resource_activity)
 
         counts = (
             event_resource_activity
             .group_by(["_objId", "_activity"])
             .agg(pl.len().alias("count"))
         )
-        print("\nCounts (resource × activity)")
-        print(counts.sort(["_objId", "_activity"]))
 
         totals = (
             event_resource_activity
             .group_by("_objId")
             .agg(pl.len().alias("total"))
         )
-        print("\nTotals (events per resource)")
-        print(totals.sort("_objId"))
 
-        fractions = (
+        fractions_df = (
             counts
             .join(totals, on="_objId", how="left")
             .with_columns(
@@ -80,37 +120,38 @@ class ResourceActivityMatrix:
             )
             .select(["_objId", "_activity", "fraction"])
         )
-        print("\nFractions (count / total per resource)")
-        print(fractions.sort(["_objId", "_activity"]))
 
-        matrix = (
-            fractions
-            .pivot(index="_objId", on="_activity", values="fraction")
-            .fill_null(0.0)
-            .sort("_objId")
-        )
+        # Build per-resource fraction dicts
+        fractions_by_resource: dict[str, dict[str, float]] = {
+            rid: {} for rid in resource_ids
+        }
+        for row in fractions_df.iter_rows(named=True):
+            fractions_by_resource[row["_objId"]][row["_activity"]] = row["fraction"]
 
-        activities = sorted(c for c in matrix.columns if c != "_objId")
-        matrix = matrix.select(["_objId"] + activities)
-        resources = matrix["_objId"].to_list()
+        all_activities = sorted({row["_activity"] for row in fractions_df.select("_activity").iter_rows(named=True)})
 
-        print("\nResource-Activity Matrix (wide form)")
-        print(matrix)
+        profiles = [
+            ResourceProfile(
+                resource_id=rid,
+                object_type=resource_object_types[rid],
+                activity_fractions=fractions_by_resource[rid],
+            )
+            for rid in sorted(resource_ids)
+        ]
 
-        return cls(matrix, resources, activities, resource_object_types)
+        return cls(profiles, all_activities)
+
+    # ── matrix operations ─────────────────────────────────────────────────────
 
     def to_numpy(self) -> np.ndarray:
-        """Matrix as numpy array, shape (n_resources, n_activities)."""
-        return self.matrix.select(self.activities).to_numpy()
+        """Feature matrix, shape (n_resources, n_features)."""
+        return np.array([p.feature_vector(self.activities) for p in self.profiles])
 
     def distance_matrix(
         self,
         metric: Literal["euclidean", "cosine", "manhattan"] = "euclidean",
     ) -> np.ndarray:
-        """
-        Pairwise distance matrix between resources based on their activity profiles.
-        Shape: (n_resources, n_resources).
-        """
+        """Pairwise distance matrix, shape (n_resources, n_resources)."""
         from scipy.spatial.distance import cdist
         X = self.to_numpy()
         return cdist(X, X, metric=metric)
@@ -121,24 +162,21 @@ class ResourceActivityMatrix:
         method: Literal["kmeans", "agglomerative"] = "kmeans",
     ) -> list[int]:
         """
-        Cluster resources by activity profile similarity.
-
-        Returns a label per resource in the same order as self.resources.
+        Cluster resources by profile similarity.
+        Returns a label per resource in the same order as self.profiles.
         """
         from sklearn.cluster import KMeans, AgglomerativeClustering
         X = self.to_numpy()
-
         if method == "kmeans":
             labels = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto").fit_predict(X)
         elif method == "agglomerative":
             labels = AgglomerativeClustering(n_clusters=n_clusters).fit_predict(X)
         else:
             raise ValueError(f"Unknown method: {method!r}. Use 'kmeans' or 'agglomerative'.")
-
         return labels.tolist()
 
     def to_dict(self) -> dict:
-        """Serialisable representation: resources list, activities list, value matrix, and resource object types."""
+        """Serialisable representation — matches the existing API response shape."""
         return {
             "resources": self.resources,
             "activities": self.activities,

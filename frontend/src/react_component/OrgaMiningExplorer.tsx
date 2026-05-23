@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 
 /* ── Types ─────────────────────────────────────────────────── */
-type RAMData = {
+type ProfileMatrixData = {
   resources: string[];
   activities: string[];
   values: number[][];
@@ -88,7 +88,7 @@ export default function OrgaMiningExplorer({
 }: OrgaMiningExplorerProps) {
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
   const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set());
-  const [data, setData] = useState<RAMData | null>(null);
+  const [data, setData] = useState<ProfileMatrixData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
@@ -166,7 +166,7 @@ export default function OrgaMiningExplorer({
       if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
 
       try {
-        const res = await fetch(`/api/resource-activity-matrix/?${new URLSearchParams(params)}`, {
+        const res = await fetch(`/api/profile-matrix/?${new URLSearchParams(params)}`, {
           credentials: "include",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         });
@@ -175,7 +175,7 @@ export default function OrgaMiningExplorer({
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        const result: RAMData = await res.json();
+        const result: ProfileMatrixData = await res.json();
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
         setStatus("ready");
@@ -219,7 +219,7 @@ export default function OrgaMiningExplorer({
     <Wrapper className="w-full">
       {!embedded && (
         <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Resource-Activity Matrix</CardTitle>
+          <CardTitle className="text-lg">Profile Matrix</CardTitle>
         </CardHeader>
       )}
 
@@ -250,12 +250,12 @@ export default function OrgaMiningExplorer({
               disabled={status === "loading" || resourceTypes.size === 0}
               className="min-w-[200px]"
             >
-              {status === "loading" ? "Computing…" : "Compute Matrix"}
+              {status === "loading" ? "Computing…" : "Compute Profile Matrix"}
             </Button>
             {status === "loading" && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-                Computing resource-activity matrix…
+                Computing profile matrix…
               </div>
             )}
           </div>
@@ -281,45 +281,57 @@ export default function OrgaMiningExplorer({
                 <ResourceGraph data={data} typeColorMap={typeColorMap} />
               )}
 
-              {viewMode === "table" && (
-                <div
-                  className="overflow-auto rounded-md border"
-                  style={lockedHeight ? { maxHeight: lockedHeight } : undefined}
-                >
-                  <table className="w-full text-sm border-collapse">
-                    <thead>
-                      <tr className="border-b bg-muted">
-                        <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">
-                          Resource
-                        </th>
-                        {data.activities.map(act => (
-                          <th key={act} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
-                            {act}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.resources.map((resource, ri) => (
-                        <tr key={ri} className="border-b last:border-0 hover:bg-muted/30">
-                          <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">
-                            {resource}
-                          </td>
-                          {data.values[ri].map((val, ai) => (
-                            <td key={ai} className="px-3 py-2 tabular-nums text-right">
-                              {val === 0 ? (
-                                <span className="text-muted-foreground">0</span>
-                              ) : (
-                                val.toFixed(3)
-                              )}
-                            </td>
+              {viewMode === "table" && (() => {
+                const MAX_ROWS = 500;
+                const truncated = data.resources.length > MAX_ROWS;
+                const visibleResources = truncated ? data.resources.slice(0, MAX_ROWS) : data.resources;
+                return (
+                  <div className="space-y-2">
+                    {truncated && (
+                      <div className="text-xs text-muted-foreground px-1">
+                        Showing first {MAX_ROWS} of {data.resources.length} resources.
+                      </div>
+                    )}
+                    <div
+                      className="overflow-auto rounded-md border"
+                      style={lockedHeight ? { maxHeight: lockedHeight } : undefined}
+                    >
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="border-b bg-muted">
+                            <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">
+                              Resource
+                            </th>
+                            {data.activities.map(act => (
+                              <th key={act} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
+                                {act}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleResources.map((resource, ri) => (
+                            <tr key={ri} className="border-b last:border-0 hover:bg-muted/30">
+                              <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">
+                                {resource}
+                              </td>
+                              {data.values[ri].map((val, ai) => (
+                                <td key={ai} className="px-3 py-2 tabular-nums text-right">
+                                  {val === 0 ? (
+                                    <span className="text-muted-foreground">0</span>
+                                  ) : (
+                                    val.toFixed(3)
+                                  )}
+                                </td>
+                              ))}
+                            </tr>
                           ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </>
         )}
@@ -373,7 +385,7 @@ function ResourceGraph({
   data,
   typeColorMap,
 }: {
-  data: RAMData;
+  data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -623,12 +635,12 @@ function TypeSelector({
         {types.map(t => (
           <div key={t} className="flex items-center gap-2">
             <Switch
-              id={`ram-${title}-${t}`}
+              id={`pm-${title}-${t}`}
               checked={selected.has(t)}
               onCheckedChange={() => onToggle(t)}
               style={{ backgroundColor: colorMap[t] ?? "#94a3b8", opacity: selected.has(t) ? 1 : 0.35 }}
             />
-            <Label htmlFor={`ram-${title}-${t}`} className="text-sm cursor-pointer">
+            <Label htmlFor={`pm-${title}-${t}`} className="text-sm cursor-pointer">
               {t}
             </Label>
           </div>
