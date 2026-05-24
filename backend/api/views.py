@@ -1073,6 +1073,15 @@ def profile_matrix(request):
     resource_types_raw = request.query_params.get("resource_types", "")
     resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()] or None
 
+    width = height = None
+    try:
+        w_raw = request.query_params.get("width")
+        h_raw = request.query_params.get("height")
+        if w_raw and h_raw:
+            width, height = int(w_raw), int(h_raw)
+    except ValueError:
+        return Response({"error": "Invalid width or height"}, status=status.HTTP_400_BAD_REQUEST)
+
     try:
         pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types)
     except Exception as e:
@@ -1080,7 +1089,7 @@ def profile_matrix(request):
         traceback.print_exc()
         return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    return Response(pm.to_dict(), status=status.HTTP_200_OK)
+    return Response(pm.to_dict(width=width, height=height), status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

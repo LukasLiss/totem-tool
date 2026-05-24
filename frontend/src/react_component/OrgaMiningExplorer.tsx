@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type ProfileMatrixData = {
@@ -11,6 +12,9 @@ type ProfileMatrixData = {
   activities: string[];
   values: number[][];
   resource_object_types: Record<string, string>;
+  mds_positions: { x: number; y: number }[];
+  mds_stress: number;
+  mds_explained_variance: number;
 };
 
 type OrgaMiningExplorerProps = {
@@ -22,64 +26,6 @@ type ViewMode = "table" | "graph";
 
 const NODE_R = 8;
 
-/* ── Classical MDS ──────────────────────────────────────────── */
-// Projects n points from high-dimensional space to 2D preserving pairwise distances.
-function classicalMDS(vectors: number[][]): { x: number; y: number }[] {
-  const n = vectors.length;
-  if (n === 0) return [];
-  if (n === 1) return [{ x: 0, y: 0 }];
-
-  // Squared euclidean distance matrix
-  const D2: number[][] = Array.from({ length: n }, (_, i) =>
-    Array.from({ length: n }, (_, j) => {
-      let d = 0;
-      for (let k = 0; k < vectors[i].length; k++) d += (vectors[i][k] - vectors[j][k]) ** 2;
-      return d;
-    })
-  );
-
-  // Double-center: B = -0.5 * H * D2 * H,  H = I - (1/n) * 11'
-  const rowMeans = D2.map(row => row.reduce((s, v) => s + v, 0) / n);
-  const totalMean = rowMeans.reduce((s, v) => s + v, 0) / n;
-  const B: number[][] = Array.from({ length: n }, (_, i) =>
-    Array.from({ length: n }, (_, j) =>
-      -0.5 * (D2[i][j] - rowMeans[i] - rowMeans[j] + totalMean)
-    )
-  );
-
-  // Power iteration for the top 2 eigenvectors of B
-  const matVec = (M: number[][], v: number[]) =>
-    M.map(row => row.reduce((s, m, k) => s + m * v[k], 0));
-
-  const norm = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-
-  const powerIter = (M: number[][], seed: number[]) => {
-    let v = seed.map((_, i) => i === 0 ? 1 : Math.sin(i));
-    const n2 = norm(v); v = v.map(x => x / n2);
-    for (let iter = 0; iter < 200; iter++) {
-      const w = matVec(M, v);
-      const wn = norm(w);
-      if (wn < 1e-12) break;
-      v = w.map(x => x / wn);
-    }
-    const lambda = v.reduce((s, vi, i) => s + vi * matVec(M, v)[i], 0);
-    return { lambda, v };
-  };
-
-  // First eigenvector
-  const { lambda: l1, v: v1 } = powerIter(B, Array.from({ length: n }, (_, i) => i + 1));
-
-  // Deflate and get second eigenvector
-  const B2: number[][] = B.map((row, i) =>
-    row.map((b, j) => b - l1 * v1[i] * v1[j])
-  );
-  const { lambda: l2, v: v2 } = powerIter(B2, Array.from({ length: n }, (_, i) => Math.cos(i + 1)));
-
-  const s1 = Math.sqrt(Math.max(0, l1));
-  const s2 = Math.sqrt(Math.max(0, l2));
-
-  return v1.map((_, i) => ({ x: v1[i] * s1, y: v2[i] * s2 }));
-}
 
 /* ── Main component ─────────────────────────────────────────── */
 export default function OrgaMiningExplorer({
@@ -95,11 +41,42 @@ export default function OrgaMiningExplorer({
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
+  const graphContainerRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const viewModeRef = useRef(viewMode);
+  const statusRef = useRef(status);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+  useEffect(() => { statusRef.current = status; }, [status]);
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
+
+  // Measure the graph container; reset results if the width changes after data loaded.
+  // Skip zero-width measurements (element hidden, e.g. in an inactive tab) so we
+  // don't fall back to the 700 px default and then compute with the wrong width.
+  useEffect(() => {
+    const el = graphContainerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const raw = Math.round(el.getBoundingClientRect().width);
+      if (raw === 0) return;                       // not visible yet — wait for next event
+      const w = raw;
+      setGraphSize(prev => {
+        if (prev.width === w) return prev;
+        if (statusRef.current !== "idle") {        // reset even during "loading"
+          setData(null);
+          setStatus("idle");
+          hasStartedLoadingRef.current = false;
+          setHasStartedLoading(false);
+        }
+        return { width: w, height: Math.min(1000, Math.max(400, Math.round(w * 0.62))) };
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Load object types when fileId changes
   useEffect(() => {
@@ -154,6 +131,8 @@ export default function OrgaMiningExplorer({
     const currentFileId = fileId;
     const params: Record<string, string> = { file_id: String(currentFileId) };
     if (resourceTypes.size > 0) params.resource_types = [...resourceTypes].join(",");
+    params.width  = String(graphSize.width);
+    params.height = String(graphSize.height);
 
     let cancelled = false;
 
@@ -228,6 +207,8 @@ export default function OrgaMiningExplorer({
           <p className="text-sm text-muted-foreground">Select a file to start.</p>
         )}
 
+        {fileId && <div ref={graphContainerRef} className="w-full" />}
+
         {fileId && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap items-start">
             <TypeSelector
@@ -278,7 +259,7 @@ export default function OrgaMiningExplorer({
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
               {viewMode === "graph" && (
-                <ResourceGraph data={data} typeColorMap={typeColorMap} />
+                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} />
               )}
 
               {viewMode === "table" && (() => {
@@ -384,23 +365,18 @@ type ZoomedView = { x: number; y: number; w: number; h: number };
 function ResourceGraph({
   data,
   typeColorMap,
+  size,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
+  size: { width: number; height: number };
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const rbRef = useRef<SVGRectElement>(null);
-  const [size, setSize] = useState({ width: 700, height: 450 });
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; resources: string[] } | null>(null);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const w = containerRef.current.getBoundingClientRect().width || 700;
-    setSize({ width: w, height: Math.max(400, w * 0.62) });
-  }, []);
 
   // Current viewBox — always normalized to the container aspect ratio so
   // preserveAspectRatio="meet" never letterboxes and toUser stays a simple linear map.
@@ -480,25 +456,14 @@ function ResourceGraph({
     return [...map.values()];
   }, [data]);
 
-  // MDS on unique group profiles, scaled to fit the SVG canvas
-  const positions = useMemo(() => {
-    const { width, height } = size;
-    const pts = classicalMDS(groups.map(g => g.profile));
-    if (pts.length === 0) return [];
-
-    const xs = pts.map(p => p.x);
-    const ys = pts.map(p => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const rangeX = maxX - minX || 1;
-    const rangeY = maxY - minY || 1;
-
-    const pad = NODE_R + 30;
-    return pts.map(p => ({
-      x: pad + ((p.x - minX) / rangeX) * (width - 2 * pad),
-      y: pad + ((p.y - minY) / rangeY) * (height - 2 * pad),
-    }));
-  }, [groups, size]);
+  // Map each group to its MDS position using the first resource in the group.
+  // All resources in a group share an identical profile so their positions are identical.
+  const positions = useMemo(() =>
+    groups.map(g => {
+      const idx = data.resources.indexOf(g.resources[0]);
+      return idx >= 0 ? data.mds_positions[idx] : { x: size.width / 2, y: size.height / 2 };
+    }),
+  [groups, data.resources, data.mds_positions, size]);
 
   // Legend: unique resource object types present in this data
   const legendTypes = useMemo(() => {
@@ -508,13 +473,13 @@ function ResourceGraph({
 
   return (
     <div className="space-y-3">
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative flex justify-center">
         <svg
           ref={svgRef}
           width={size.width}
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-          style={{ cursor: "crosshair", userSelect: "none" }}
+          style={{ cursor: "crosshair", userSelect: "none", display: "block" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -589,6 +554,39 @@ function ResourceGraph({
               </div>
             ))}
           </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            MDS Stress
+          </p>
+          <Tooltip delayDuration={600}>
+            <TooltipTrigger asChild>
+              <span className="tabular-nums cursor-default">{data.mds_stress.toFixed(3)}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px] text-xs">
+              Normalised stress-1 — measures how much the 2D embedding distorts the original distances.
+              0 = perfect preservation, 1 = complete distortion. Values below 0.1 are good, above 0.2 are poor.
+              Computed on unique profiles only; resources sharing an identical profile are deduplicated before
+              MDS so their trivial zero distance does not artificially lower the stress.
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Explained Variance
+          </p>
+          <Tooltip delayDuration={600}>
+            <TooltipTrigger asChild>
+              <span className="tabular-nums cursor-default">{(data.mds_explained_variance * 100).toFixed(1)}%</span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[260px] text-xs">
+              Fraction of total variance captured by the 2D projection, computed from the eigenvalue spectrum
+              of the distance matrix — independent of the MDS result. High values mean the 2D layout
+              faithfully represents the data's structure; low values indicate the data has more intrinsic
+              dimensions than 2 can show. Computed on unique profiles only; duplicate resources do not affect
+              this value because identical profiles contribute zero eigenvalues.
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>

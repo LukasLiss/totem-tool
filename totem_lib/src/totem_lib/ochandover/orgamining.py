@@ -175,11 +175,104 @@ class ProfileMatrix:
             raise ValueError(f"Unknown method: {method!r}. Use 'kmeans' or 'agglomerative'.")
         return labels.tolist()
 
-    def to_dict(self) -> dict:
-        """Serialisable representation — matches the existing API response shape."""
-        return {
+    def mds_2d(
+        self,
+        width: int,
+        height: int,
+        pad: int = 38,
+    ) -> tuple[list[dict[str, float]], float, float]:
+        """
+        Project resources to 2D using SMACOF MDS, then scale uniformly to fit
+        the canvas so no axis distortion is introduced.
+
+        Parameters
+        ----------
+        width, height : int
+            Canvas dimensions in pixels.
+        pad : int
+            Padding around the point cloud (default 38 = NODE_R 8 + 30).
+
+        Returns
+        -------
+        positions         : list of {x, y} dicts, one per resource in self.profiles order.
+        stress            : normalised stress-1 ∈ [0, 1] (0 = perfect embedding).
+        explained_variance: fraction of total variance captured by the 2D projection ∈ [0, 1].
+        """
+        from sklearn.manifold import MDS
+
+        X = self.to_numpy()
+        n = len(self.profiles)
+
+        if n == 0:
+            return [], 0.0, 1.0
+        if n == 1:
+            return [{"x": float(width / 2), "y": float(height / 2)}], 0.0, 1.0
+
+        # Deduplicate: MDS only needs to run on unique profiles; resources that
+        # share a profile are guaranteed to land on the same point anyway.
+        X_unique, inverse = np.unique(X, axis=0, return_inverse=True)
+        m = len(X_unique)
+
+        if m == 1:
+            return [{"x": float(width / 2), "y": float(height / 2)}] * n, 0.0, 1.0
+
+        mds = MDS(
+            n_components=2,
+            random_state=0,
+            normalized_stress=True,
+            n_init=1,
+        )
+        coords = mds.fit_transform(X_unique)
+        stress = float(mds.stress_)  # normalised stress-1 ∈ [0, 1]
+
+        # ── Explained variance from eigenvalue spectrum of double-centred D² ──
+        # Measures what fraction of the data's total variance the 2D projection
+        # preserves — independent of the SMACOF result.
+        norms = np.einsum("ij,ij->i", X_unique, X_unique)
+        D2 = np.maximum(norms[:, None] + norms[None, :] - 2.0 * (X_unique @ X_unique.T), 0.0)
+        row_means = D2.mean(axis=1, keepdims=True)
+        B = -0.5 * (D2 - row_means - row_means.T + D2.mean())
+        eigenvalues = np.linalg.eigvalsh(B)          # eigenvalues only — cheap
+        pos_eigs = np.maximum(eigenvalues, 0.0)
+        total = pos_eigs.sum()
+        explained_variance = float(pos_eigs[-2:].sum() / total) if total > 0.0 else 1.0
+
+        # ── Uniform scaling ───────────────────────────────────────────────────
+        min_x, max_x = float(coords[:, 0].min()), float(coords[:, 0].max())
+        min_y, max_y = float(coords[:, 1].min()), float(coords[:, 1].max())
+        range_x = max_x - min_x or 1.0
+        range_y = max_y - min_y or 1.0
+        scale = min((width - 2 * pad) / range_x, (height - 2 * pad) / range_y)
+        mid_x = (min_x + max_x) / 2
+        mid_y = (min_y + max_y) / 2
+
+        pixel_coords = np.column_stack([
+            width  / 2 + (coords[:, 0] - mid_x) * scale,
+            height / 2 + (coords[:, 1] - mid_y) * scale,
+        ])
+
+        # Map back to all resources via the deduplication inverse index
+        positions = [
+            {"x": float(pixel_coords[inverse[i], 0]), "y": float(pixel_coords[inverse[i], 1])}
+            for i in range(n)
+        ]
+        return positions, stress, explained_variance
+
+    def to_dict(self, width: int | None = None, height: int | None = None) -> dict:
+        """
+        Serialisable representation for the API response.
+        When ``width`` and ``height`` are provided, MDS pixel positions and
+        stress are included; otherwise only the matrix data is returned.
+        """
+        result: dict = {
             "resources": self.resources,
             "activities": self.activities,
             "values": self.to_numpy().tolist(),
             "resource_object_types": self.resource_object_types,
         }
+        if width is not None and height is not None:
+            positions, stress, explained_variance = self.mds_2d(width, height)
+            result["mds_positions"] = positions
+            result["mds_stress"] = stress
+            result["mds_explained_variance"] = explained_variance
+        return result
