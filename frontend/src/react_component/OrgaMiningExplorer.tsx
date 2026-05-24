@@ -478,8 +478,13 @@ function ResourceGraph({
   const rbRef = useRef<SVGRectElement>(null);
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
   const [tooltip, setTooltip] = useState<{
-    x: number; y: number; resources: string[]; profile: number[]; pinned: boolean;
-    cw: number; ch: number;   // actual container div size at event time — used for clamping
+    x: number; y: number;
+    resources: string[];
+    profile: number[];
+    clusterLabel: number;
+    isCluster: boolean;   // true = cluster hull tooltip, false = individual node tooltip
+    pinned: boolean;
+    cw: number; ch: number;
   } | null>(null);
   const [highlightedActivity, setHighlightedActivity] = useState<string | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -537,6 +542,8 @@ function ResourceGraph({
     if (e.button !== 0) return;
     const { x, y } = toUser(e.clientX, e.clientY);
     dragStart.current = { x, y };
+    // Dismiss any unpinned tooltip the moment a drag begins
+    setTooltip(t => (t?.pinned ? t : null));
     const el = rbRef.current;
     if (el) { el.setAttribute("x", String(x)); el.setAttribute("y", String(y)); el.setAttribute("width", "0"); el.setAttribute("height", "0"); el.setAttribute("display", "block"); }
   };
@@ -611,6 +618,23 @@ function ResourceGraph({
     return map;
   }, [groups, data.resources, data.cluster_labels]);
 
+  // Average profile + full resource list per cluster
+  const clusterData = useMemo(() => {
+    const nAct = data.activities.length;
+    const acc = new Map<number, { sum: number[]; resources: string[] }>();
+    groups.forEach(g => {
+      const label = groupClusterLabel.get(g.key) ?? 0;
+      if (!acc.has(label)) acc.set(label, { sum: new Array(nAct).fill(0), resources: [] });
+      const c = acc.get(label)!;
+      g.resources.forEach(() => g.profile.forEach((v, i) => { c.sum[i] += v; }));
+      c.resources.push(...g.resources);
+    });
+    return new Map([...acc.entries()].map(([label, { sum, resources }]) => [
+      label,
+      { avgProfile: sum.map(v => v / resources.length), resources },
+    ]));
+  }, [groups, groupClusterLabel, data.activities.length]);
+
   // Compute an expanded convex hull (in SVG pixel space) for each cluster
   const clusterHulls = useMemo(() => {
     const k = data.n_clusters;
@@ -659,23 +683,45 @@ function ResourceGraph({
           onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
-          {/* Cluster hulls — rendered behind all nodes */}
+          {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip */}
           {clusterHulls.map((hull, ci) => {
             if (!hull) return null;
             const color = clusterColors[ci % clusterColors.length];
+
+            const onHullClick = (e: React.MouseEvent) => {
+              e.stopPropagation();
+              const el = containerRef.current;
+              if (!el) return;
+              const rect = el.getBoundingClientRect();
+              setTooltip(prev => {
+                // Second click on same cluster → dismiss
+                if (prev?.pinned && prev.isCluster && prev.clusterLabel === ci) return null;
+                const cluster = clusterData.get(ci);
+                return {
+                  x: e.clientX - rect.left, y: e.clientY - rect.top,
+                  resources: cluster?.resources ?? [],
+                  profile: cluster?.avgProfile ?? [],
+                  clusterLabel: ci,
+                  isCluster: true,
+                  pinned: true,
+                  cw: el.offsetWidth, ch: el.offsetHeight,
+                };
+              });
+            };
+
+            const sharedProps = {
+              fill: `${color}18`, stroke: color,
+              strokeWidth: 1 / effectiveScale,
+              strokeDasharray: `${6 / effectiveScale} ${3 / effectiveScale}`,
+              style: { cursor: "pointer" } as React.CSSProperties,
+              onClick: onHullClick,
+            };
+
             if (hull.type === "circle") {
-              return (
-                <circle key={ci} cx={hull.cx} cy={hull.cy} r={hull.r / effectiveScale * effectiveScale}
-                  fill={`${color}18`} stroke={color} strokeWidth={1 / effectiveScale}
-                  strokeDasharray={`${6 / effectiveScale} ${3 / effectiveScale}`}
-                  style={{ pointerEvents: "none" }} />
-              );
+              return <circle key={ci} cx={hull.cx} cy={hull.cy} r={hull.r} {...sharedProps} />;
             }
             return (
-              <polygon key={ci} points={hull.pts.map(p => `${p.x},${p.y}`).join(" ")}
-                fill={`${color}18`} stroke={color} strokeWidth={1 / effectiveScale}
-                strokeDasharray={`${6 / effectiveScale} ${3 / effectiveScale}`}
-                style={{ pointerEvents: "none" }} />
+              <polygon key={ci} points={hull.pts.map(p => `${p.x},${p.y}`).join(" ")} {...sharedProps} />
             );
           })}
 
@@ -692,15 +738,20 @@ function ResourceGraph({
                 opacity={dimmed ? 0.15 : 1}
                 style={{ cursor: "pointer" }}
                 onMouseEnter={e => {
+                  if (dragStart.current) return;   // suppress during rubber-band drag
                   cancelHide();
                   const el = containerRef.current;
                   if (!el) return;
                   const rect = el.getBoundingClientRect();
                   setTooltip(prev => {
                     if (prev?.pinned) return prev;
+                    const label = groupClusterLabel.get(group.key) ?? 0;
                     return {
                       x: e.clientX - rect.left, y: e.clientY - rect.top,
-                      resources: group.resources, profile: group.profile,
+                      resources: group.resources,
+                      profile: group.profile,
+                      clusterLabel: label,
+                      isCluster: false,
                       pinned: false,
                       cw: el.offsetWidth, ch: el.offsetHeight,
                     };
@@ -761,6 +812,7 @@ function ResourceGraph({
             activities={data.activities}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
+            clusterColors={clusterColors}
             highlightedActivity={highlightedActivity}
             onActivityClick={act => setHighlightedActivity(prev => prev === act ? null : act)}
             onPin={() => setTooltip(t => t ? { ...t, pinned: true } : null)}
@@ -843,6 +895,7 @@ function TooltipBox({
   activities,
   activityColorMap,
   resourceColorMap,
+  clusterColors,
   highlightedActivity,
   onActivityClick,
   onPin,
@@ -850,10 +903,11 @@ function TooltipBox({
   onTooltipMouseLeave,
   onClose,
 }: {
-  tooltip: { x: number; y: number; resources: string[]; profile: number[]; pinned: boolean; cw: number; ch: number };
+  tooltip: { x: number; y: number; resources: string[]; profile: number[]; clusterLabel: number; isCluster: boolean; pinned: boolean; cw: number; ch: number };
   activities: string[];
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
+  clusterColors: string[];
   highlightedActivity: string | null;
   onActivityClick: (act: string) => void;
   onPin: () => void;
@@ -898,6 +952,19 @@ function TooltipBox({
       onMouseLeave={onTooltipMouseLeave}
       onClick={e => { e.stopPropagation(); if (!tooltip.pinned) onPin(); }}
     >
+      {/* Cluster header — only shown for hull tooltips */}
+      {tooltip.isCluster && (() => {
+        const color = clusterColors[tooltip.clusterLabel % clusterColors.length];
+        return (
+          <div style={{
+            fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase",
+            color, marginBottom: 6,
+          }}>
+            Cluster {tooltip.clusterLabel + 1} — avg. profile
+          </div>
+        );
+      })()}
+
       {/* Close button (pinned only) */}
       {tooltip.pinned && (
         <button
@@ -974,7 +1041,7 @@ function TooltipBox({
               }}
             >
               <span style={{ fontSize: 9 }}>{showResources ? "▾" : "▸"}</span>
-              {tooltip.resources.length} resources share this profile
+              {tooltip.resources.length} {tooltip.isCluster ? "resources in this cluster" : "resources share this profile"}
             </button>
             {showResources && (
               <div style={{
