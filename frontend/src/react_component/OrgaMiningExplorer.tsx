@@ -26,6 +26,13 @@ type ViewMode = "table" | "graph";
 
 const NODE_R = 8;
 
+const ACTIVITY_COLORS = [
+  "#6366f1", "#f59e0b", "#10b981", "#ef4444", "#3b82f6",
+  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#84cc16",
+  "#06b6d4", "#a855f7", "#d946ef", "#0ea5e9", "#22c55e",
+  "#fb923c", "#e879f9", "#34d399", "#60a5fa", "#facc15",
+];
+
 
 /* ── Main component ─────────────────────────────────────────── */
 export default function OrgaMiningExplorer({
@@ -375,8 +382,42 @@ function ResourceGraph({
   const svgRef = useRef<SVGSVGElement>(null);
   const rbRef = useRef<SVGRectElement>(null);
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; resources: string[] } | null>(null);
+  const [tooltip, setTooltip] = useState<{
+    x: number; y: number; resources: string[]; profile: number[]; pinned: boolean;
+    cw: number; ch: number;   // actual container div size at event time — used for clamping
+  } | null>(null);
+  const [highlightedActivity, setHighlightedActivity] = useState<string | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const activityColorMap = useMemo(() =>
+    Object.fromEntries(data.activities.map((act, i) => [act, ACTIVITY_COLORS[i % ACTIVITY_COLORS.length]])),
+  [data.activities]);
+
+  const resourceColorMap = useMemo(() =>
+    Object.fromEntries(
+      Object.entries(data.resource_object_types).map(([rid, typ]) => [rid, typeColorMap[typ] ?? "#94a3b8"])
+    ),
+  [data.resource_object_types, typeColorMap]);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+
+  const scheduleHide = () => {
+    hideTimerRef.current = setTimeout(
+      () => setTooltip(t => (t?.pinned ? t : null)),
+      150,
+    );
+  };
+  const cancelHide = () => {
+    if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; }
+  };
+
+  // Escape to close tooltip / clear highlight
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setTooltip(null); setHighlightedActivity(null); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
+  }, []);
 
   // Current viewBox — always normalized to the container aspect ratio so
   // preserveAspectRatio="meet" never letterboxes and toUser stays a simple linear map.
@@ -473,7 +514,7 @@ function ResourceGraph({
 
   return (
     <div className="space-y-3">
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative flex justify-center">
+      <div ref={containerRef} className="w-full border rounded-md bg-background relative flex justify-center">
         <svg
           ref={svgRef}
           width={size.width}
@@ -484,26 +525,45 @@ function ResourceGraph({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); }}
+          onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
           {groups.map((group, i) => {
             const pos = positions[i];
             if (!pos) return null;
             const count = group.resources.length;
+            const actIdx = highlightedActivity ? data.activities.indexOf(highlightedActivity) : -1;
+            const dimmed = actIdx >= 0 && (group.profile[actIdx] ?? 0) === 0;
             return (
               <g
                 key={group.key}
                 transform={`translate(${pos.x},${pos.y})`}
+                opacity={dimmed ? 0.15 : 1}
+                style={{ cursor: "pointer" }}
                 onMouseEnter={e => {
-                  const rect = containerRef.current?.getBoundingClientRect();
-                  if (!rect) return;
-                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, resources: group.resources });
+                  cancelHide();
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  setTooltip(prev => {
+                    if (prev?.pinned) return prev;
+                    return {
+                      x: e.clientX - rect.left, y: e.clientY - rect.top,
+                      resources: group.resources, profile: group.profile,
+                      pinned: false,
+                      cw: el.offsetWidth, ch: el.offsetHeight,
+                    };
+                  });
                 }}
                 onMouseMove={e => {
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect) return;
-                  setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                  setTooltip(t => t && !t.pinned ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : t);
                 }}
-                onMouseLeave={() => setTooltip(null)}
+                onMouseLeave={() => scheduleHide()}
+                onClick={e => {
+                  e.stopPropagation();
+                  setTooltip(t => t ? { ...t, pinned: !t.pinned } : null);
+                }}
               >
                 <PieNode r={nodeR} strokeWidth={0.5 / effectiveScale} typeCounts={group.typeCounts} colorMap={typeColorMap} />
                 {count > 1 && (
@@ -537,7 +597,20 @@ function ResourceGraph({
           </button>
         )}
 
-        {tooltip && <TooltipBox tooltip={tooltip} containerSize={size} />}
+        {tooltip && (
+          <TooltipBox
+            tooltip={tooltip}
+            activities={data.activities}
+            activityColorMap={activityColorMap}
+            resourceColorMap={resourceColorMap}
+            highlightedActivity={highlightedActivity}
+            onActivityClick={act => setHighlightedActivity(prev => prev === act ? null : act)}
+            onPin={() => setTooltip(t => t ? { ...t, pinned: true } : null)}
+            onTooltipMouseEnter={cancelHide}
+            onTooltipMouseLeave={scheduleHide}
+            onClose={() => { setTooltip(null); setHighlightedActivity(null); }}
+          />
+        )}
       </div>
 
       {/* Legend */}
@@ -596,22 +669,163 @@ function ResourceGraph({
 /* ── TooltipBox ─────────────────────────────────────────────── */
 function TooltipBox({
   tooltip,
-  containerSize,
+  activities,
+  activityColorMap,
+  resourceColorMap,
+  highlightedActivity,
+  onActivityClick,
+  onPin,
+  onTooltipMouseEnter,
+  onTooltipMouseLeave,
+  onClose,
 }: {
-  tooltip: { x: number; y: number; resources: string[] };
-  containerSize: { width: number; height: number };
+  tooltip: { x: number; y: number; resources: string[]; profile: number[]; pinned: boolean; cw: number; ch: number };
+  activities: string[];
+  activityColorMap: Record<string, string>;
+  resourceColorMap: Record<string, string>;
+  highlightedActivity: string | null;
+  onActivityClick: (act: string) => void;
+  onPin: () => void;
+  onTooltipMouseEnter: () => void;
+  onTooltipMouseLeave: () => void;
+  onClose: () => void;
 }) {
-  const estW = 120, estH = tooltip.resources.length * 20 + 12;
-  const left = Math.min(tooltip.x + 14, containerSize.width - estW - 4);
-  const top  = Math.min(tooltip.y - 4, containerSize.height - estH - 4);
+  const [showResources, setShowResources] = useState(false);
+  const PIE_R = 32;
+
+  // Build slices for non-zero activities
+  const slices: { act: string; frac: number; path: string }[] = [];
+  let angle = -Math.PI / 2;
+  activities.forEach((act, i) => {
+    const frac = tooltip.profile[i] ?? 0;
+    if (frac <= 0) return;
+    const sweep = frac * 2 * Math.PI;
+    slices.push({ act, frac, path: pieSlicePath(PIE_R, angle, angle + sweep) });
+    angle += sweep;
+  });
+
+  const hasMultiple = tooltip.resources.length > 1;
+  const estW = 220;
+  const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
+  // Footer is always shown: 28px for the toggle/id row + optional expanded list
+  const estH = PIE_R * 2 + 16 + slices.length * 20 + 28 + resourceListH;
+  // Use the actual container dims recorded at event time so clamping is always accurate,
+  // even when the SVG canvas is narrower than its containing div.
+  const left = Math.min(tooltip.x + 14, tooltip.cw - estW - 4);
+  const top  = Math.max(4, Math.min(tooltip.y - estH / 2, tooltip.ch - estH - 4));
+
   return (
-    <div style={{
-      position: "absolute", left, top,
-      background: "white", border: "1px solid #e2e8f0", borderRadius: 6,
-      padding: "6px 10px", fontSize: 12, pointerEvents: "none",
-      zIndex: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", whiteSpace: "nowrap",
-    }}>
-      {tooltip.resources.map(r => <div key={r}>{r}</div>)}
+    <div
+      style={{
+        position: "absolute", left, top,
+        background: "white", borderRadius: 8, zIndex: 10,
+        border: tooltip.pinned ? "1.5px solid #6366f1" : "1px solid #e2e8f0",
+        boxShadow: tooltip.pinned ? "0 4px 16px rgba(99,102,241,0.18)" : "0 4px 12px rgba(0,0,0,0.12)",
+        padding: "10px 12px", minWidth: estW, maxWidth: estW,
+      }}
+      onMouseEnter={onTooltipMouseEnter}
+      onMouseLeave={onTooltipMouseLeave}
+      onClick={e => { e.stopPropagation(); if (!tooltip.pinned) onPin(); }}
+    >
+      {/* Close button (pinned only) */}
+      {tooltip.pinned && (
+        <button
+          onClick={onClose}
+          style={{
+            position: "absolute", top: 6, right: 8,
+            background: "none", border: "none", cursor: "pointer",
+            fontSize: 14, color: "#94a3b8", lineHeight: 1, padding: 2,
+          }}
+          title="Close (Esc)"
+        >✕</button>
+      )}
+
+      {/* Pie chart — +1 px padding so anti-aliased edge isn't clipped */}
+      <svg
+        width={PIE_R * 2 + 2}
+        height={PIE_R * 2 + 2}
+        style={{ display: "block", margin: "0 auto 8px" }}
+      >
+        <g transform={`translate(${PIE_R + 1},${PIE_R + 1})`}>
+          {slices.length === 1 ? (
+            <circle r={PIE_R} fill={activityColorMap[slices[0].act] ?? "#94a3b8"} />
+          ) : (
+            slices.map(({ act, path }) => (
+              <path key={act} d={path} fill={activityColorMap[act] ?? "#94a3b8"} stroke="white" strokeWidth={1} />
+            ))
+          )}
+        </g>
+      </svg>
+
+      {/* Activity list */}
+      <div style={{ fontSize: 11, lineHeight: "20px" }}>
+        {slices.map(({ act, frac }) => {
+          const color = activityColorMap[act] ?? "#94a3b8";
+          const isHighlighted = highlightedActivity === act;
+          const isDimmed = highlightedActivity !== null && !isHighlighted;
+          return (
+            <div
+              key={act}
+              onClick={() => onActivityClick(act)}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                cursor: "pointer", borderRadius: 4, padding: "0 2px",
+                opacity: isDimmed ? 0.35 : 1,
+                background: isHighlighted ? `${color}22` : "transparent",
+              }}
+            >
+              <div style={{
+                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                background: color,
+                outline: isHighlighted ? `2px solid ${color}` : "none",
+                outlineOffset: 1,
+              }} />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {act}
+              </span>
+              <span style={{ marginLeft: 6, color: "#64748b", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                {(frac * 100).toFixed(1)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer: resource id(s) — always shown */}
+      <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+        {hasMultiple ? (
+          <>
+            <button
+              onClick={() => setShowResources(r => !r)}
+              style={{
+                background: "none", border: "none", cursor: "pointer", padding: 0,
+                fontSize: 10, color: "#64748b", display: "flex", alignItems: "center", gap: 4,
+              }}
+            >
+              <span style={{ fontSize: 9 }}>{showResources ? "▾" : "▸"}</span>
+              {tooltip.resources.length} resources share this profile
+            </button>
+            {showResources && (
+              <div style={{
+                marginTop: 4, maxHeight: 120, overflowY: "auto",
+                fontSize: 10, color: "#475569", lineHeight: "18px",
+              }}>
+                {tooltip.resources.map(r => (
+                  <div key={r} style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: resourceColorMap[r] ?? "#94a3b8" }} />
+                    <span style={{ fontFamily: "monospace" }}>{r}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 10, color: "#475569", display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: resourceColorMap[tooltip.resources[0]] ?? "#94a3b8" }} />
+            <span style={{ fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{tooltip.resources[0]}</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
