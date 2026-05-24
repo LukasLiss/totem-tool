@@ -1083,13 +1083,22 @@ def profile_matrix(request):
         return Response({"error": "Invalid width or height"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        n_clusters = max(1, int(request.query_params.get("n_clusters", 3)))
+    except ValueError:
+        n_clusters = 3
+
+    cluster_method = request.query_params.get("cluster_method", "kmeans")
+    if cluster_method not in ("kmeans", "agglomerative"):
+        cluster_method = "kmeans"
+
+    try:
         pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types)
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    return Response(pm.to_dict(width=width, height=height), status=status.HTTP_200_OK)
+    return Response(pm.to_dict(width=width, height=height, n_clusters=n_clusters, cluster_method=cluster_method), status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

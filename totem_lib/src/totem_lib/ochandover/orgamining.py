@@ -159,7 +159,7 @@ class ProfileMatrix:
     def cluster(
         self,
         n_clusters: int = 3,
-        method: Literal["kmeans", "agglomerative"] = "kmeans",
+        method: Literal["kmeans", "agglomerative"] = "agglomerative",
     ) -> list[int]:
         """
         Cluster resources by profile similarity.
@@ -258,11 +258,18 @@ class ProfileMatrix:
         ]
         return positions, stress, explained_variance
 
-    def to_dict(self, width: int | None = None, height: int | None = None) -> dict:
+    def to_dict(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        n_clusters: int = 3,
+        cluster_method: Literal["kmeans", "agglomerative"] = "kmeans",
+    ) -> dict:
         """
         Serialisable representation for the API response.
         When ``width`` and ``height`` are provided, MDS pixel positions and
         stress are included; otherwise only the matrix data is returned.
+        ``n_clusters`` controls k-means clustering; labels are always returned.
         """
         result: dict = {
             "resources": self.resources,
@@ -270,6 +277,18 @@ class ProfileMatrix:
             "values": self.to_numpy().tolist(),
             "resource_object_types": self.resource_object_types,
         }
+
+        # ── Clustering ────────────────────────────────────────────────────────
+        n = len(self.profiles)
+        if n >= 2:
+            k = min(n_clusters, n)
+            labels = self.cluster(n_clusters=k, method=cluster_method)
+        else:
+            k, labels = 1, [0] * n
+        result["cluster_labels"] = labels   # one int per resource, same order as "resources"
+        result["n_clusters"] = k
+
+        # ── MDS ───────────────────────────────────────────────────────────────
         if width is not None and height is not None:
             positions, stress, explained_variance = self.mds_2d(width, height)
             result["mds_positions"] = positions

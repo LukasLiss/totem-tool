@@ -15,6 +15,8 @@ type ProfileMatrixData = {
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
+  cluster_labels: number[];
+  n_clusters: number;
 };
 
 type OrgaMiningExplorerProps = {
@@ -25,6 +27,12 @@ type OrgaMiningExplorerProps = {
 type ViewMode = "table" | "graph";
 
 const NODE_R = 8;
+
+// Cluster colour palette — intentionally different hues from ACTIVITY_COLORS
+const CLUSTER_COLORS = [
+  "#f43f5e", "#f97316", "#eab308", "#22c55e",
+  "#06b6d4", "#8b5cf6", "#ec4899", "#14b8a6",
+];
 
 const ACTIVITY_COLORS = [
   "#6366f1", "#f59e0b", "#10b981", "#ef4444", "#3b82f6",
@@ -47,6 +55,9 @@ export default function OrgaMiningExplorer({
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [nClusters, setNClusters] = useState(3);
+  const [nClustersStr, setNClustersStr] = useState("3");
+  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative">("kmeans");
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
@@ -138,8 +149,10 @@ export default function OrgaMiningExplorer({
     const currentFileId = fileId;
     const params: Record<string, string> = { file_id: String(currentFileId) };
     if (resourceTypes.size > 0) params.resource_types = [...resourceTypes].join(",");
-    params.width  = String(graphSize.width);
-    params.height = String(graphSize.height);
+    params.width      = String(graphSize.width);
+    params.height     = String(graphSize.height);
+    params.n_clusters      = String(nClusters);
+    params.cluster_method  = clusterMethod;
 
     let cancelled = false;
 
@@ -225,6 +238,48 @@ export default function OrgaMiningExplorer({
               onToggle={toggleResourceType}
               colorMap={typeColorMap}
             />
+            {/* Cluster settings control */}
+            <div className="border rounded-md p-3 min-w-[160px] space-y-3">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters (k)</p>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                    onClick={() => { const v = Math.max(1, nClusters - 1); setNClusters(v); setNClustersStr(String(v)); }}
+                  >−</button>
+                  <input
+                    type="text" inputMode="numeric" pattern="[0-9]*"
+                    value={nClustersStr}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      setNClustersStr(raw);
+                      const n = parseInt(raw, 10);
+                      if (!isNaN(n) && n >= 1) setNClusters(n);
+                    }}
+                    onBlur={() => setNClustersStr(String(nClusters))}
+                    className="h-7 w-10 text-sm text-center border rounded"
+                  />
+                  <button
+                    className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                    onClick={() => { const v = nClusters + 1; setNClusters(v); setNClustersStr(String(v)); }}
+                  >+</button>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Method</p>
+                <div className="flex rounded border overflow-hidden text-xs">
+                  {(["kmeans", "agglomerative"] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setClusterMethod(m)}
+                      className={`flex-1 py-1 px-2 ${clusterMethod === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                    >
+                      {m === "kmeans" ? "K-Means" : "Agglom."}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -266,7 +321,7 @@ export default function OrgaMiningExplorer({
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
               {viewMode === "graph" && (
-                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} />
+                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} clusterColors={CLUSTER_COLORS} />
               )}
 
               {viewMode === "table" && (() => {
@@ -335,6 +390,44 @@ type NodeGroup = {
   typeCounts: { objType: string; count: number }[];
 };
 
+/* ── Convex hull helpers ────────────────────────────────────── */
+type Pt = { x: number; y: number };
+
+/** Gift-wrapping convex hull. Returns vertices in CCW order. */
+function convexHull(pts: Pt[]): Pt[] {
+  if (pts.length <= 2) return pts;
+  const cross = (o: Pt, a: Pt, b: Pt) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+  const lower: Pt[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
+      lower.pop();
+    lower.push(p);
+  }
+  const upper: Pt[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
+      upper.pop();
+    upper.push(p);
+  }
+  upper.pop(); lower.pop();
+  return lower.concat(upper);
+}
+
+/** Expand each hull vertex outward from the centroid by `pad` pixels. */
+function expandHull(hull: Pt[], pad: number): Pt[] {
+  if (hull.length === 0) return hull;
+  const cx = hull.reduce((s, p) => s + p.x, 0) / hull.length;
+  const cy = hull.reduce((s, p) => s + p.y, 0) / hull.length;
+  return hull.map(p => {
+    const dx = p.x - cx, dy = p.y - cy;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    return { x: p.x + (dx / len) * pad, y: p.y + (dy / len) * pad };
+  });
+}
+
 /* ── PieNode ────────────────────────────────────────────────── */
 function pieSlicePath(r: number, startAngle: number, endAngle: number): string {
   const x1 = r * Math.cos(startAngle), y1 = r * Math.sin(startAngle);
@@ -373,10 +466,12 @@ function ResourceGraph({
   data,
   typeColorMap,
   size,
+  clusterColors,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
   size: { width: number; height: number };
+  clusterColors: string[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -506,6 +601,43 @@ function ResourceGraph({
     }),
   [groups, data.resources, data.mds_positions, size]);
 
+  // Map each group key → cluster label (via first resource index)
+  const groupClusterLabel = useMemo(() => {
+    const map = new Map<string, number>();
+    groups.forEach(g => {
+      const idx = data.resources.indexOf(g.resources[0]);
+      if (idx >= 0) map.set(g.key, data.cluster_labels[idx] ?? 0);
+    });
+    return map;
+  }, [groups, data.resources, data.cluster_labels]);
+
+  // Compute an expanded convex hull (in SVG pixel space) for each cluster
+  const clusterHulls = useMemo(() => {
+    const k = data.n_clusters;
+    const buckets: Pt[][] = Array.from({ length: k }, () => []);
+    groups.forEach((g, i) => {
+      const label = groupClusterLabel.get(g.key) ?? 0;
+      const pos   = positions[i];
+      if (pos) buckets[label].push(pos);
+    });
+    return buckets.map(pts => {
+      if (pts.length === 0) return null;
+      const pad = NODE_R + 16;
+      if (pts.length === 1) return { type: "circle" as const, cx: pts[0].x, cy: pts[0].y, r: pad };
+      if (pts.length === 2) {
+        // Capsule: return expanded hull of the two points
+        const hull = expandHull(convexHull([
+          { x: pts[0].x - 1, y: pts[0].y },
+          { x: pts[0].x + 1, y: pts[0].y },
+          { x: pts[1].x - 1, y: pts[1].y },
+          { x: pts[1].x + 1, y: pts[1].y },
+        ]), pad);
+        return { type: "polygon" as const, pts: hull };
+      }
+      return { type: "polygon" as const, pts: expandHull(convexHull(pts), pad) };
+    });
+  }, [groups, positions, groupClusterLabel, data.n_clusters]);
+
   // Legend: unique resource object types present in this data
   const legendTypes = useMemo(() => {
     const types = new Set(Object.values(data.resource_object_types));
@@ -527,6 +659,26 @@ function ResourceGraph({
           onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
+          {/* Cluster hulls — rendered behind all nodes */}
+          {clusterHulls.map((hull, ci) => {
+            if (!hull) return null;
+            const color = clusterColors[ci % clusterColors.length];
+            if (hull.type === "circle") {
+              return (
+                <circle key={ci} cx={hull.cx} cy={hull.cy} r={hull.r / effectiveScale * effectiveScale}
+                  fill={`${color}18`} stroke={color} strokeWidth={1 / effectiveScale}
+                  strokeDasharray={`${6 / effectiveScale} ${3 / effectiveScale}`}
+                  style={{ pointerEvents: "none" }} />
+              );
+            }
+            return (
+              <polygon key={ci} points={hull.pts.map(p => `${p.x},${p.y}`).join(" ")}
+                fill={`${color}18`} stroke={color} strokeWidth={1 / effectiveScale}
+                strokeDasharray={`${6 / effectiveScale} ${3 / effectiveScale}`}
+                style={{ pointerEvents: "none" }} />
+            );
+          })}
+
           {groups.map((group, i) => {
             const pos = positions[i];
             if (!pos) return null;
@@ -565,6 +717,12 @@ function ResourceGraph({
                   setTooltip(t => t ? { ...t, pinned: !t.pinned } : null);
                 }}
               >
+                {/* Cluster ring */}
+                {(() => {
+                  const label = groupClusterLabel.get(group.key) ?? 0;
+                  const color = clusterColors[label % clusterColors.length];
+                  return <circle r={nodeR + 2.5 / effectiveScale} fill="none" stroke={color} strokeWidth={2 / effectiveScale} style={{ pointerEvents: "none" }} />;
+                })()}
                 <PieNode r={nodeR} strokeWidth={0.5 / effectiveScale} typeCounts={group.typeCounts} colorMap={typeColorMap} />
                 {count > 1 && (
                   <>
@@ -624,6 +782,19 @@ function ResourceGraph({
               <div key={t} className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
                 <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Clusters
+          </p>
+          <div className="space-y-1">
+            {Array.from({ length: data.n_clusters }, (_, ci) => (
+              <div key={ci} className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: clusterColors[ci % clusterColors.length] }} />
+                <span>Cluster {ci + 1}</span>
               </div>
             ))}
           </div>
