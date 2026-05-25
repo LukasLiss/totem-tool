@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CircleDashed, ScanIcon } from "lucide-react";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type ProfileMatrixData = {
@@ -15,8 +16,8 @@ type ProfileMatrixData = {
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
-  cluster_labels: number[];
-  n_clusters: number;
+  cluster_labels?: number[];
+  n_clusters?: number;
 };
 
 type OrgaMiningExplorerProps = {
@@ -55,6 +56,7 @@ export default function OrgaMiningExplorer({
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
   const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative">("kmeans");
@@ -151,8 +153,12 @@ export default function OrgaMiningExplorer({
     if (resourceTypes.size > 0) params.resource_types = [...resourceTypes].join(",");
     params.width      = String(graphSize.width);
     params.height     = String(graphSize.height);
-    params.n_clusters      = String(nClusters);
-    params.cluster_method  = clusterMethod;
+    if (clustersEnabled) {
+      params.n_clusters     = String(nClusters);
+      params.cluster_method = clusterMethod;
+    } else {
+      params.compute_clusters = "false";
+    }
 
     let cancelled = false;
 
@@ -240,7 +246,20 @@ export default function OrgaMiningExplorer({
             />
             {/* Cluster settings control */}
             <div className="border rounded-md p-3 min-w-[160px] space-y-3">
-              <div>
+              {/* Enable/disable toggle */}
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="pm-clusters-enabled"
+                  checked={clustersEnabled}
+                  onCheckedChange={setClustersEnabled}
+                />
+                <Label htmlFor="pm-clusters-enabled" className="text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer">
+                  Clustering
+                </Label>
+              </div>
+
+              {/* k and method — dimmed when clustering is off */}
+              <div className={clustersEnabled ? "" : "opacity-40 pointer-events-none"}>
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters (k)</p>
                 <div className="flex items-center gap-1">
                   <button
@@ -264,9 +283,7 @@ export default function OrgaMiningExplorer({
                     onClick={() => { const v = nClusters + 1; setNClusters(v); setNClustersStr(String(v)); }}
                   >+</button>
                 </div>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Method</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-3">Method</p>
                 <div className="flex rounded border overflow-hidden text-xs">
                   {(["kmeans", "agglomerative"] as const).map(m => (
                     <button
@@ -321,7 +338,7 @@ export default function OrgaMiningExplorer({
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
               {viewMode === "graph" && (
-                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} clusterColors={CLUSTER_COLORS} />
+                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} clusterColors={CLUSTER_COLORS} showClusters={data.cluster_labels !== undefined} />
               )}
 
               {viewMode === "table" && (() => {
@@ -467,16 +484,19 @@ function ResourceGraph({
   typeColorMap,
   size,
   clusterColors,
+  showClusters,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
   size: { width: number; height: number };
   clusterColors: string[];
+  showClusters: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const rbRef = useRef<SVGRectElement>(null);
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
+  const [showClusterOverlay, setShowClusterOverlay] = useState(true);
   const [tooltip, setTooltip] = useState<{
     x: number; y: number;
     resources: string[];
@@ -611,9 +631,11 @@ function ResourceGraph({
   // Map each group key → cluster label (via first resource index)
   const groupClusterLabel = useMemo(() => {
     const map = new Map<string, number>();
+    const labels = data.cluster_labels;
+    if (!labels) return map;
     groups.forEach(g => {
       const idx = data.resources.indexOf(g.resources[0]);
-      if (idx >= 0) map.set(g.key, data.cluster_labels[idx] ?? 0);
+      if (idx >= 0) map.set(g.key, labels[idx] ?? 0);
     });
     return map;
   }, [groups, data.resources, data.cluster_labels]);
@@ -638,6 +660,7 @@ function ResourceGraph({
   // Compute an expanded convex hull (in SVG pixel space) for each cluster
   const clusterHulls = useMemo(() => {
     const k = data.n_clusters;
+    if (!k) return [];
     const buckets: Pt[][] = Array.from({ length: k }, () => []);
     groups.forEach((g, i) => {
       const label = groupClusterLabel.get(g.key) ?? 0;
@@ -684,7 +707,7 @@ function ResourceGraph({
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
           {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip */}
-          {clusterHulls.map((hull, ci) => {
+          {showClusters && showClusterOverlay && clusterHulls.map((hull, ci) => {
             if (!hull) return null;
             const color = clusterColors[ci % clusterColors.length];
 
@@ -769,7 +792,7 @@ function ResourceGraph({
                 }}
               >
                 {/* Cluster ring */}
-                {(() => {
+                {showClusters && showClusterOverlay && (() => {
                   const label = groupClusterLabel.get(group.key) ?? 0;
                   const color = clusterColors[label % clusterColors.length];
                   return <circle r={nodeR + 2.5 / effectiveScale} fill="none" stroke={color} strokeWidth={2 / effectiveScale} style={{ pointerEvents: "none" }} />;
@@ -795,16 +818,34 @@ function ResourceGraph({
             style={{ pointerEvents: "none" }} />
         </svg>
 
-        {zoomed && (
-          <button onClick={() => setZoomed(null)} style={{
-            position: "absolute", bottom: 10, right: 10,
-            background: "white", border: "1px solid #e2e8f0",
-            borderRadius: 6, padding: "4px 10px", fontSize: 11,
-            cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.08)",
-          }}>
-            Reset zoom
-          </button>
-        )}
+        {/* Control pill — bottom-right of the graph canvas */}
+        <div style={{
+          position: "absolute", bottom: 12, right: 12,
+          display: "flex", gap: 8, alignItems: "center",
+          background: "#FFFFFF", border: "1px solid #E2E8F0",
+          borderRadius: 9999, padding: "6px 10px",
+          boxShadow: "0 10px 24px rgba(15,23,42,0.14)",
+        }}>
+          {zoomed && (
+            <Button type="button" variant="outline" size="icon" onClick={() => setZoomed(null)}
+              className="rounded-full h-9 w-9" title="Reset zoom">
+              {/* simple fit-to-view symbol using two crossing arrows */}
+              <ScanIcon className="h-4 w-4" />
+            </Button>
+          )}
+          {showClusters && (
+            <Button
+              type="button"
+              variant={showClusterOverlay ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => setShowClusterOverlay(v => !v)}
+              className="rounded-full h-9 w-9"
+              title={showClusterOverlay ? "Hide cluster overlay" : "Show cluster overlay"}
+            >
+              <CircleDashed className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
 
         {tooltip && (
           <TooltipBox
@@ -838,19 +879,21 @@ function ResourceGraph({
             ))}
           </div>
         </div>
-        <div>
-          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
-            Clusters
-          </p>
-          <div className="space-y-1">
-            {Array.from({ length: data.n_clusters }, (_, ci) => (
-              <div key={ci} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: clusterColors[ci % clusterColors.length] }} />
-                <span>Cluster {ci + 1}</span>
-              </div>
-            ))}
+        {showClusters && data.n_clusters && (
+          <div>
+            <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+              Clusters
+            </p>
+            <div className="space-y-1">
+              {Array.from({ length: data.n_clusters }, (_, ci) => (
+                <div key={ci} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: clusterColors[ci % clusterColors.length] }} />
+                  <span>Cluster {ci + 1}</span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
         <div>
           <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
             MDS Stress

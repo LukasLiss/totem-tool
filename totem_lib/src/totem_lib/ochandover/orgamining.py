@@ -264,12 +264,13 @@ class ProfileMatrix:
         height: int | None = None,
         n_clusters: int = 3,
         cluster_method: Literal["kmeans", "agglomerative"] = "kmeans",
+        compute_clusters: bool = True,
     ) -> dict:
         """
         Serialisable representation for the API response.
         When ``width`` and ``height`` are provided, MDS pixel positions and
         stress are included; otherwise only the matrix data is returned.
-        ``n_clusters`` controls k-means clustering; labels are always returned.
+        ``n_clusters`` controls clustering; ``compute_clusters=False`` skips it.
         """
         result: dict = {
             "resources": self.resources,
@@ -279,14 +280,15 @@ class ProfileMatrix:
         }
 
         # ── Clustering ────────────────────────────────────────────────────────
-        n = len(self.profiles)
-        if n >= 2:
-            k = min(n_clusters, n)
-            labels = self.cluster(n_clusters=k, method=cluster_method)
-        else:
-            k, labels = 1, [0] * n
-        result["cluster_labels"] = labels   # one int per resource, same order as "resources"
-        result["n_clusters"] = k
+        if compute_clusters:
+            n = len(self.profiles)
+            if n >= 2:
+                k = min(n_clusters, n)
+                labels = self.cluster(n_clusters=k, method=cluster_method)
+            else:
+                k, labels = 1, [0] * n
+            result["cluster_labels"] = labels   # one int per resource, same order as "resources"
+            result["n_clusters"] = k
 
         # ── MDS ───────────────────────────────────────────────────────────────
         if width is not None and height is not None:

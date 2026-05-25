@@ -1091,6 +1091,8 @@ def profile_matrix(request):
     if cluster_method not in ("kmeans", "agglomerative"):
         cluster_method = "kmeans"
 
+    compute_clusters = request.query_params.get("compute_clusters", "true").lower() != "false"
+
     try:
         pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types)
     except Exception as e:
@@ -1098,7 +1100,14 @@ def profile_matrix(request):
         traceback.print_exc()
         return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    return Response(pm.to_dict(width=width, height=height, n_clusters=n_clusters, cluster_method=cluster_method), status=status.HTTP_200_OK)
+    return Response(
+        pm.to_dict(
+            width=width, height=height,
+            n_clusters=n_clusters, cluster_method=cluster_method,
+            compute_clusters=compute_clusters,
+        ),
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['GET'])
