@@ -16,6 +16,7 @@ type ProfileMatrixData = {
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
+  mds_scale?: number;
   cluster_labels?: number[];
   n_clusters?: number;
 };
@@ -59,7 +60,9 @@ export default function OrgaMiningExplorer({
   const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
-  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative">("kmeans");
+  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative" | "hdbscan">("kmeans");
+  const [minClusterSize, setMinClusterSize] = useState(2);
+  const [minClusterSizeStr, setMinClusterSizeStr] = useState("2");
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
@@ -154,8 +157,12 @@ export default function OrgaMiningExplorer({
     params.width      = String(graphSize.width);
     params.height     = String(graphSize.height);
     if (clustersEnabled) {
-      params.n_clusters     = String(nClusters);
       params.cluster_method = clusterMethod;
+      if (clusterMethod === "hdbscan") {
+        params.min_cluster_size = String(minClusterSize);
+      } else {
+        params.n_clusters = String(nClusters);
+      }
     } else {
       params.compute_clusters = "false";
     }
@@ -258,40 +265,70 @@ export default function OrgaMiningExplorer({
                 </Label>
               </div>
 
-              {/* k and method — dimmed when clustering is off */}
+              {/* k / min-cluster-size and method — dimmed when clustering is off */}
               <div className={clustersEnabled ? "" : "opacity-40 pointer-events-none"}>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters (k)</p>
-                <div className="flex items-center gap-1">
-                  <button
-                    className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
-                    onClick={() => { const v = Math.max(1, nClusters - 1); setNClusters(v); setNClustersStr(String(v)); }}
-                  >−</button>
-                  <input
-                    type="text" inputMode="numeric" pattern="[0-9]*"
-                    value={nClustersStr}
-                    onChange={e => {
-                      const raw = e.target.value;
-                      setNClustersStr(raw);
-                      const n = parseInt(raw, 10);
-                      if (!isNaN(n) && n >= 1) setNClusters(n);
-                    }}
-                    onBlur={() => setNClustersStr(String(nClusters))}
-                    className="h-7 w-10 text-sm text-center border rounded"
-                  />
-                  <button
-                    className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
-                    onClick={() => { const v = nClusters + 1; setNClusters(v); setNClustersStr(String(v)); }}
-                  >+</button>
-                </div>
+                {clusterMethod !== "hdbscan" ? (
+                  <>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters (k)</p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                        onClick={() => { const v = Math.max(1, nClusters - 1); setNClusters(v); setNClustersStr(String(v)); }}
+                      >−</button>
+                      <input
+                        type="text" inputMode="numeric" pattern="[0-9]*"
+                        value={nClustersStr}
+                        onChange={e => {
+                          const raw = e.target.value;
+                          setNClustersStr(raw);
+                          const n = parseInt(raw, 10);
+                          if (!isNaN(n) && n >= 1) setNClusters(n);
+                        }}
+                        onBlur={() => setNClustersStr(String(nClusters))}
+                        className="h-7 w-10 text-sm text-center border rounded"
+                      />
+                      <button
+                        className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                        onClick={() => { const v = nClusters + 1; setNClusters(v); setNClustersStr(String(v)); }}
+                      >+</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Min. cluster size</p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                        onClick={() => { const v = Math.max(2, minClusterSize - 1); setMinClusterSize(v); setMinClusterSizeStr(String(v)); }}
+                      >−</button>
+                      <input
+                        type="text" inputMode="numeric" pattern="[0-9]*"
+                        value={minClusterSizeStr}
+                        onChange={e => {
+                          const raw = e.target.value;
+                          setMinClusterSizeStr(raw);
+                          const n = parseInt(raw, 10);
+                          if (!isNaN(n) && n >= 2) setMinClusterSize(n);
+                        }}
+                        onBlur={() => setMinClusterSizeStr(String(minClusterSize))}
+                        className="h-7 w-10 text-sm text-center border rounded"
+                      />
+                      <button
+                        className="h-7 w-7 rounded border text-sm flex items-center justify-center hover:bg-muted"
+                        onClick={() => { const v = minClusterSize + 1; setMinClusterSize(v); setMinClusterSizeStr(String(v)); }}
+                      >+</button>
+                    </div>
+                  </>
+                )}
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-3">Method</p>
                 <div className="flex rounded border overflow-hidden text-xs">
-                  {(["kmeans", "agglomerative"] as const).map(m => (
+                  {(["kmeans", "agglomerative", "hdbscan"] as const).map(m => (
                     <button
                       key={m}
                       onClick={() => setClusterMethod(m)}
                       className={`flex-1 py-1 px-2 ${clusterMethod === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                     >
-                      {m === "kmeans" ? "K-Means" : "Agglom."}
+                      {m === "kmeans" ? "K-Means" : m === "agglomerative" ? "Agglom." : "HDBSCAN"}
                     </button>
                   ))}
                 </div>
@@ -645,7 +682,8 @@ function ResourceGraph({
     const nAct = data.activities.length;
     const acc = new Map<number, { sum: number[]; resources: string[] }>();
     groups.forEach(g => {
-      const label = groupClusterLabel.get(g.key) ?? 0;
+      const label = groupClusterLabel.get(g.key) ?? -1;
+      if (label < 0) return;   // skip noise points
       if (!acc.has(label)) acc.set(label, { sum: new Array(nAct).fill(0), resources: [] });
       const c = acc.get(label)!;
       g.resources.forEach(() => g.profile.forEach((v, i) => { c.sum[i] += v; }));
@@ -663,9 +701,9 @@ function ResourceGraph({
     if (!k) return [];
     const buckets: Pt[][] = Array.from({ length: k }, () => []);
     groups.forEach((g, i) => {
-      const label = groupClusterLabel.get(g.key) ?? 0;
+      const label = groupClusterLabel.get(g.key) ?? -1;
       const pos   = positions[i];
-      if (pos) buckets[label].push(pos);
+      if (label >= 0 && pos) buckets[label].push(pos);   // skip noise (label -1)
     });
     return buckets.map(pts => {
       if (pts.length === 0) return null;
@@ -684,6 +722,25 @@ function ResourceGraph({
       return { type: "polygon" as const, pts: expandHull(convexHull(pts), pad) };
     });
   }, [groups, positions, groupClusterLabel, data.n_clusters]);
+
+  // Scale bar: pick the nicest round distance whose pixel length is closest to 80 px
+  const scaleBar = useMemo(() => {
+    const s = data.mds_scale;
+    if (!s || s <= 0) return null;
+    const niceSteps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0];
+    const target = 80; // desired length in pixels (SVG user space at zoom 1)
+    const best = niceSteps.reduce((b, v) =>
+      Math.abs(v * s - target) < Math.abs(b * s - target) ? v : b, niceSteps[0]);
+    const pixels = best * s;
+    const label = best < 0.1 ? best.toFixed(2) : best < 1 ? best.toFixed(1) : best.toFixed(0);
+    return { pixels, label };
+  }, [data.mds_scale]);
+
+  // Whether the current data contains any HDBSCAN noise points
+  const hasOutliers = useMemo(
+    () => data.cluster_labels?.includes(-1) ?? false,
+    [data.cluster_labels],
+  );
 
   // Legend: unique resource object types present in this data
   const legendTypes = useMemo(() => {
@@ -791,11 +848,20 @@ function ResourceGraph({
                   setTooltip(t => t ? { ...t, pinned: !t.pinned } : null);
                 }}
               >
-                {/* Cluster ring */}
+                {/* Cluster ring — solid+coloured for cluster members, dashed+grey for outliers */}
                 {showClusters && showClusterOverlay && (() => {
-                  const label = groupClusterLabel.get(group.key) ?? 0;
+                  const label = groupClusterLabel.get(group.key) ?? -1;
+                  const r = nodeR + 2.5 / effectiveScale;
+                  const sw = 2 / effectiveScale;
+                  if (label < 0) {
+                    return (
+                      <circle r={r} fill="none" stroke="#94a3b8" strokeWidth={sw}
+                        strokeDasharray={`${4 / effectiveScale} ${3 / effectiveScale}`}
+                        style={{ pointerEvents: "none" }} />
+                    );
+                  }
                   const color = clusterColors[label % clusterColors.length];
-                  return <circle r={nodeR + 2.5 / effectiveScale} fill="none" stroke={color} strokeWidth={2 / effectiveScale} style={{ pointerEvents: "none" }} />;
+                  return <circle r={r} fill="none" stroke={color} strokeWidth={sw} style={{ pointerEvents: "none" }} />;
                 })()}
                 <PieNode r={nodeR} strokeWidth={0.5 / effectiveScale} typeCounts={group.typeCounts} colorMap={typeColorMap} />
                 {count > 1 && (
@@ -811,6 +877,29 @@ function ResourceGraph({
               </g>
             );
           })}
+
+          {/* Scale bar — anchored to bottom-left of the visible viewBox */}
+          {scaleBar && (() => {
+            const margin = 20 / effectiveScale;
+            const bx = vb.x + margin;
+            const by = vb.y + vb.h - margin;
+            const len = scaleBar.pixels / effectiveScale;
+            const tick = 5 / effectiveScale;
+            const sw = 1 / effectiveScale;
+            const fs = 9 / effectiveScale;
+            return (
+              <g style={{ pointerEvents: "none" }}>
+                <line x1={bx} y1={by} x2={bx + len} y2={by} stroke="#94a3b8" strokeWidth={sw} />
+                <line x1={bx} y1={by - tick} x2={bx} y2={by + tick} stroke="#94a3b8" strokeWidth={sw} />
+                <line x1={bx + len} y1={by - tick} x2={bx + len} y2={by + tick} stroke="#94a3b8" strokeWidth={sw} />
+                <text x={bx + len / 2} y={by - tick - 3 / effectiveScale}
+                  textAnchor="middle" fontSize={fs} fill="#94a3b8"
+                  style={{ fontFamily: "sans-serif", userSelect: "none" }}>
+                  {scaleBar.label}
+                </text>
+              </g>
+            );
+          })()}
 
           {/* Rubber band — DOM-mutated directly, no React state */}
           <rect ref={rbRef} display="none" fill="rgba(99,102,241,0.08)"
@@ -879,18 +968,24 @@ function ResourceGraph({
             ))}
           </div>
         </div>
-        {showClusters && data.n_clusters && (
+        {showClusters && (data.n_clusters || hasOutliers) && (
           <div>
             <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
               Clusters
             </p>
             <div className="space-y-1">
-              {Array.from({ length: data.n_clusters }, (_, ci) => (
+              {Array.from({ length: data.n_clusters ?? 0 }, (_, ci) => (
                 <div key={ci} className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: clusterColors[ci % clusterColors.length] }} />
                   <span>Cluster {ci + 1}</span>
                 </div>
               ))}
+              {hasOutliers && (
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0 border-2 border-dashed" style={{ borderColor: "#94a3b8" }} />
+                  <span>Outlier</span>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -159,20 +159,27 @@ class ProfileMatrix:
     def cluster(
         self,
         n_clusters: int = 3,
-        method: Literal["kmeans", "agglomerative"] = "agglomerative",
+        method: Literal["kmeans", "agglomerative", "hdbscan"] = "agglomerative",
+        min_cluster_size: int = 2,
     ) -> list[int]:
         """
         Cluster resources by profile similarity.
         Returns a label per resource in the same order as self.profiles.
+        For HDBSCAN, noise points receive label -1.
         """
-        from sklearn.cluster import KMeans, AgglomerativeClustering
+        from sklearn.cluster import KMeans, AgglomerativeClustering, HDBSCAN
         X = self.to_numpy()
         if method == "kmeans":
             labels = KMeans(n_clusters=n_clusters, random_state=0, n_init="auto").fit_predict(X)
         elif method == "agglomerative":
             labels = AgglomerativeClustering(n_clusters=n_clusters).fit_predict(X)
+        elif method == "hdbscan":
+            labels = HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                metric="euclidean",
+            ).fit_predict(X)
         else:
-            raise ValueError(f"Unknown method: {method!r}. Use 'kmeans' or 'agglomerative'.")
+            raise ValueError(f"Unknown method: {method!r}.")
         return labels.tolist()
 
     def mds_2d(
@@ -197,6 +204,9 @@ class ProfileMatrix:
         positions         : list of {x, y} dicts, one per resource in self.profiles order.
         stress            : normalised stress-1 ∈ [0, 1] (0 = perfect embedding).
         explained_variance: fraction of total variance captured by the 2D projection ∈ [0, 1].
+        scale             : pixels per unit of Euclidean distance in the original feature space.
+                            Multiply any distance d by this value to get the corresponding
+                            pixel length on the canvas.
         """
         from sklearn.manifold import MDS
 
@@ -204,9 +214,9 @@ class ProfileMatrix:
         n = len(self.profiles)
 
         if n == 0:
-            return [], 0.0, 1.0
+            return [], 0.0, 1.0, 1.0
         if n == 1:
-            return [{"x": float(width / 2), "y": float(height / 2)}], 0.0, 1.0
+            return [{"x": float(width / 2), "y": float(height / 2)}], 0.0, 1.0, 1.0
 
         # Deduplicate: MDS only needs to run on unique profiles; resources that
         # share a profile are guaranteed to land on the same point anyway.
@@ -214,7 +224,7 @@ class ProfileMatrix:
         m = len(X_unique)
 
         if m == 1:
-            return [{"x": float(width / 2), "y": float(height / 2)}] * n, 0.0, 1.0
+            return [{"x": float(width / 2), "y": float(height / 2)}] * n, 0.0, 1.0, 1.0
 
         mds = MDS(
             n_components=2,
@@ -256,21 +266,24 @@ class ProfileMatrix:
             {"x": float(pixel_coords[inverse[i], 0]), "y": float(pixel_coords[inverse[i], 1])}
             for i in range(n)
         ]
-        return positions, stress, explained_variance
+        return positions, stress, explained_variance, float(scale)
 
     def to_dict(
         self,
         width: int | None = None,
         height: int | None = None,
         n_clusters: int = 3,
-        cluster_method: Literal["kmeans", "agglomerative"] = "kmeans",
+        cluster_method: Literal["kmeans", "agglomerative", "hdbscan"] = "kmeans",
         compute_clusters: bool = True,
+        min_cluster_size: int = 2,
     ) -> dict:
         """
         Serialisable representation for the API response.
         When ``width`` and ``height`` are provided, MDS pixel positions and
         stress are included; otherwise only the matrix data is returned.
-        ``n_clusters`` controls clustering; ``compute_clusters=False`` skips it.
+        ``n_clusters`` controls k-based clustering; ``compute_clusters=False`` skips it.
+        For HDBSCAN the number of clusters is determined automatically; noise
+        points receive label -1 and are excluded from ``n_clusters``.
         """
         result: dict = {
             "resources": self.resources,
@@ -282,18 +295,27 @@ class ProfileMatrix:
         # ── Clustering ────────────────────────────────────────────────────────
         if compute_clusters:
             n = len(self.profiles)
-            if n >= 2:
-                k = min(n_clusters, n)
-                labels = self.cluster(n_clusters=k, method=cluster_method)
+            if n < 2:
+                # Trivial cases: single resource is noise for HDBSCAN, cluster-0 otherwise
+                labels = [-1] * n if cluster_method == "hdbscan" else [0] * n
+                k = 0 if cluster_method == "hdbscan" else 1
             else:
-                k, labels = 1, [0] * n
-            result["cluster_labels"] = labels   # one int per resource, same order as "resources"
+                eff_k = min(n_clusters, n)
+                labels = self.cluster(
+                    n_clusters=eff_k,
+                    method=cluster_method,
+                    min_cluster_size=min_cluster_size,
+                )
+                # For HDBSCAN, n_clusters = distinct real cluster labels (excluding -1)
+                k = len(set(labels) - {-1}) if cluster_method == "hdbscan" else eff_k
+            result["cluster_labels"] = labels   # one int per resource; -1 = noise (HDBSCAN only)
             result["n_clusters"] = k
 
         # ── MDS ───────────────────────────────────────────────────────────────
         if width is not None and height is not None:
-            positions, stress, explained_variance = self.mds_2d(width, height)
+            positions, stress, explained_variance, mds_scale = self.mds_2d(width, height)
             result["mds_positions"] = positions
             result["mds_stress"] = stress
             result["mds_explained_variance"] = explained_variance
+            result["mds_scale"] = mds_scale   # pixels per Euclidean distance unit
         return result

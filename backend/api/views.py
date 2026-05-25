@@ -1088,8 +1088,13 @@ def profile_matrix(request):
         n_clusters = 3
 
     cluster_method = request.query_params.get("cluster_method", "kmeans")
-    if cluster_method not in ("kmeans", "agglomerative"):
+    if cluster_method not in ("kmeans", "agglomerative", "hdbscan"):
         cluster_method = "kmeans"
+
+    try:
+        min_cluster_size = max(2, int(request.query_params.get("min_cluster_size", 2)))
+    except ValueError:
+        min_cluster_size = 2
 
     compute_clusters = request.query_params.get("compute_clusters", "true").lower() != "false"
 
@@ -1105,6 +1110,7 @@ def profile_matrix(request):
             width=width, height=height,
             n_clusters=n_clusters, cluster_method=cluster_method,
             compute_clusters=compute_clusters,
+            min_cluster_size=min_cluster_size,
         ),
         status=status.HTTP_200_OK,
     )
