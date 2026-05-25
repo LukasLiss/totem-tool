@@ -314,9 +314,19 @@ class ProfileMatrix:
         """
         Weighted sum of per-group distance matrices.
 
-        Each group's distance matrix is normalised to [0, 1] (divided by its
-        maximum value) before weighting, so groups on different scales contribute
-        proportionally to their weight rather than to their raw magnitude.
+        Each group's distance matrix is normalised by the **theoretical maximum**
+        L2 distance for that group's feature space before weighting:
+
+        - activity_fractions            → sqrt(2)          (two simplex vectors
+                                                             with disjoint support)
+        - cooccurrence_fractions        → sqrt(n_resources) (independent [0,1] dims)
+        - object_collaboration_fractions → sqrt(n_resources)
+
+        Using the theoretical maximum (rather than the observed maximum) equalises
+        the scale across groups without erasing how much each group actually varies
+        in this dataset.  It also keeps distances on an absolute, cross-plot-
+        comparable scale: a combined distance of 0.5 with equal weights means
+        "halfway to the most-different-possible pair" in each group.
 
         Parameters
         ----------
@@ -337,17 +347,20 @@ class ProfileMatrix:
         weights = weights or {}
         D = np.zeros((n, n))
 
-        def _norm_dist(X: np.ndarray) -> np.ndarray:
-            """Euclidean distance matrix normalised to [0, 1]."""
+        def _norm_dist(X: np.ndarray, theoretical_max: float) -> np.ndarray:
+            """Euclidean distance matrix normalised by the theoretical maximum."""
             d = cdist(X, X, metric="euclidean")
-            mx = d.max()
-            return d / mx if mx > 0 else d
+            return d / theoretical_max if theoretical_max > 0 else d
+
+        total_weight = 0.0
 
         if self.activities:
             w = weights.get("activity_fractions", 1.0)
             if w > 0:
                 X = np.array([p.feature_vector(self.activities) for p in self.profiles])
-                D += w * _norm_dist(X)
+                # Max L2 between two probability vectors: sqrt(2)
+                D += w * _norm_dist(X, np.sqrt(2))
+                total_weight += w
 
         if self.cooccurring_resources:
             w = weights.get("cooccurrence_fractions", 1.0)
@@ -356,7 +369,9 @@ class ProfileMatrix:
                     [p.cooccurrence_fractions.get(r, 0.0) for r in self.cooccurring_resources]
                     for p in self.profiles
                 ])
-                D += w * _norm_dist(X)
+                # Max L2 between two [0,1]^k vectors: sqrt(k)
+                D += w * _norm_dist(X, np.sqrt(len(self.cooccurring_resources)))
+                total_weight += w
 
         if self.collaborating_resources:
             w = weights.get("object_collaboration_fractions", 1.0)
@@ -365,7 +380,14 @@ class ProfileMatrix:
                     [p.object_collaboration_fractions.get(r, 0.0) for r in self.collaborating_resources]
                     for p in self.profiles
                 ])
-                D += w * _norm_dist(X)
+                D += w * _norm_dist(X, np.sqrt(len(self.collaborating_resources)))
+                total_weight += w
+
+        # Divide by total weight → D ∈ [0, 1] regardless of how many groups
+        # are active or what weights are used.  0 = identical profiles,
+        # 1 = maximally different in every active group simultaneously.
+        if total_weight > 0:
+            D /= total_weight
 
         return D
 
@@ -547,10 +569,10 @@ class ProfileMatrix:
         if self.collaborating_resources:
             result["collaborating_resources"] = self.collaborating_resources
 
-        # Use precomputed distances when multiple groups are present or weights
-        # deviate from the default — otherwise fall back to raw feature vectors.
-        use_precomputed = len(self.feature_groups) > 1 or bool(group_weights)
-        precomputed_D = self.combined_distance_matrix(group_weights) if use_precomputed else None
+        # Always use the precomputed distance matrix so the scale is consistent
+        # across all configurations (single group, multi-group, any weights).
+        # D ∈ [0, 1]: 0 = identical profiles, 1 = maximally different in all groups.
+        precomputed_D = self.combined_distance_matrix(group_weights)
 
         # ── Clustering ────────────────────────────────────────────────────────
         if compute_clusters:
@@ -564,7 +586,7 @@ class ProfileMatrix:
                     n_clusters=eff_k,
                     method=cluster_method,
                     min_cluster_size=min_cluster_size,
-                    precomputed_D=precomputed_D,
+                    precomputed_D=precomputed_D.copy(),
                 )
                 k = len(set(labels) - {-1}) if cluster_method == "hdbscan" else eff_k
             result["cluster_labels"] = labels
