@@ -1073,6 +1073,10 @@ def profile_matrix(request):
     resource_types_raw = request.query_params.get("resource_types", "")
     resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()] or None
 
+    VALID_FEATURE_GROUPS = {"activity_fractions", "cooccurrence_fractions", "object_collaboration_fractions"}
+    feature_groups_raw = request.query_params.get("feature_groups", "activity_fractions")
+    feature_groups = [g.strip() for g in feature_groups_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS] or ["activity_fractions"]
+
     width = height = None
     try:
         w_raw = request.query_params.get("width")
@@ -1099,7 +1103,7 @@ def profile_matrix(request):
     compute_clusters = request.query_params.get("compute_clusters", "true").lower() != "false"
 
     try:
-        pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types)
+        pm = ProfileMatrix.from_ocel(ocel, resource_types=resource_types, feature_groups=feature_groups)
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -13,6 +13,9 @@ type ProfileMatrixData = {
   activities: string[];
   values: number[][];
   resource_object_types: Record<string, string>;
+  feature_groups: string[];
+  cooccurring_resources?: string[];
+  collaborating_resources?: string[];
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
@@ -57,6 +60,7 @@ export default function OrgaMiningExplorer({
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
+  const [featureGroups, setFeatureGroups] = useState<Set<string>>(new Set(["activity_fractions"]));
   const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
@@ -156,6 +160,8 @@ export default function OrgaMiningExplorer({
     if (resourceTypes.size > 0) params.resource_types = [...resourceTypes].join(",");
     params.width      = String(graphSize.width);
     params.height     = String(graphSize.height);
+    params.feature_groups = [...featureGroups].join(",");
+
     if (clustersEnabled) {
       params.cluster_method = clusterMethod;
       if (clusterMethod === "hdbscan") {
@@ -251,6 +257,33 @@ export default function OrgaMiningExplorer({
               onToggle={toggleResourceType}
               colorMap={typeColorMap}
             />
+            {/* Feature group selector */}
+            <div className="border rounded-md p-3 min-w-[180px]">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Features</p>
+              <div className="space-y-1.5">
+                {([
+                  { key: "activity_fractions",          label: "Activity fractions" },
+                  { key: "cooccurrence_fractions",      label: "Co-occurrence" },
+                  { key: "object_collaboration_fractions", label: "Object collaboration" },
+                ] as const).map(({ key, label }) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <Switch
+                      id={`pm-fg-${key}`}
+                      checked={featureGroups.has(key)}
+                      onCheckedChange={() =>
+                        setFeatureGroups(prev => {
+                          const n = new Set(prev);
+                          n.has(key) ? n.delete(key) : n.add(key);
+                          return n;
+                        })
+                      }
+                    />
+                    <Label htmlFor={`pm-fg-${key}`} className="text-sm cursor-pointer">{label}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* Cluster settings control */}
             <div className="border rounded-md p-3 min-w-[160px] space-y-3">
               {/* Enable/disable toggle */}
@@ -395,6 +428,30 @@ export default function OrgaMiningExplorer({
                     >
                       <table className="w-full text-sm border-collapse">
                         <thead>
+                          {/* Group header row — only shown when multiple feature groups exist */}
+                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0) && (
+                            <tr className="bg-muted/60 border-b">
+                              <th className="sticky top-0 left-0 bg-muted/60 z-30 border-r" />
+                              {data.activities.length > 0 && (
+                                <th colSpan={data.activities.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
+                                  Activity fractions
+                                </th>
+                              )}
+                              {(data.cooccurring_resources?.length ?? 0) > 0 && (
+                                <th colSpan={data.cooccurring_resources!.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
+                                  Co-occurrence
+                                </th>
+                              )}
+                              {(data.collaborating_resources?.length ?? 0) > 0 && (
+                                <th colSpan={data.collaborating_resources!.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
+                                  Object collaboration
+                                </th>
+                              )}
+                            </tr>
+                          )}
                           <tr className="border-b bg-muted">
                             <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">
                               Resource
@@ -402,6 +459,16 @@ export default function OrgaMiningExplorer({
                             {data.activities.map(act => (
                               <th key={act} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
                                 {act}
+                              </th>
+                            ))}
+                            {(data.cooccurring_resources ?? []).map(r => (
+                              <th key={`cooc-${r}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
+                                {r}
+                              </th>
+                            ))}
+                            {(data.collaborating_resources ?? []).map(r => (
+                              <th key={`collab-${r}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
+                                {r}
                               </th>
                             ))}
                           </tr>
