@@ -197,10 +197,13 @@ class ProfileMatrix:
         if "cooccurrence_fractions" in feature_groups:
             er = event_resource.select(["_eventId", "_objId"])
 
+            # Self-join: for each (R1, R2) pair count the events they share.
+            # Self-pairs are included — R1 always co-occurs with itself in every
+            # one of its events, so fraction(R1, R1) = 1.0 (the natural maximum).
+            # Normalise by R1's total event count so all values are in [0, 1].
             cooc_counts = (
                 er
                 .join(er, on="_eventId", suffix="_other")
-                .filter(pl.col("_objId") != pl.col("_objId_other"))
                 .group_by(["_objId", "_objId_other"])
                 .agg(pl.len().alias("cooc_count"))
             )
