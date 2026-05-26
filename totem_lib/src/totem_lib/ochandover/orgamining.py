@@ -249,11 +249,14 @@ class ProfileMatrix:
                 .agg(pl.len().alias("total_bizobj"))
             )
 
-            # Resource pairs that share at least one business object
+            # Resource pairs (including self) that share at least one business object.
+            # Self-join produces (R1, R1) rows where shared_count == total_bizobj(R1),
+            # so dividing by total gives fraction(R1, R1) = 1.0 — the natural maximum
+            # and baseline for the row.  Other entries express what fraction of R1's
+            # objects R2 also touched, relative to R1's full scope.
             shared_bizobj = (
                 resource_bizobj.rename({"_resourceId": "_r1"})
                 .join(resource_bizobj.rename({"_resourceId": "_r2"}), on="_bizObjId")
-                .filter(pl.col("_r1") != pl.col("_r2"))
                 .group_by(["_r1", "_r2"])
                 .agg(pl.len().alias("shared_count"))
             )
