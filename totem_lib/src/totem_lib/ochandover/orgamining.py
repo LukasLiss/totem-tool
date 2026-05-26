@@ -112,6 +112,7 @@ class ProfileMatrix:
         ocel: OCEL,
         resource_types: List[str] | None = None,
         feature_groups: List[str] | None = None,
+        business_object_types: List[str] | None = None,
     ) -> "ProfileMatrix":
         """
         Build a ProfileMatrix from an OCEL.
@@ -125,6 +126,10 @@ class ProfileMatrix:
             Which feature groups to compute. Defaults to ["activity_fractions"].
             Supported values: "activity_fractions", "cooccurrence_fractions",
             "object_collaboration_fractions".
+        business_object_types : list[str] | None
+            Object types considered as business objects for the
+            ``object_collaboration_fractions`` feature group.  Defaults to all
+            non-resource object types when ``None``.
         """
         if feature_groups is None:
             feature_groups = ["activity_fractions"]
@@ -232,6 +237,15 @@ class ProfileMatrix:
             event_bizobj = event_all_obj.filter(
                 ~pl.col("_objId").is_in(resource_ids)
             )
+            # Optionally restrict to a specific subset of business object types.
+            if business_object_types is not None:
+                allowed_biz_ids: set[str] = set()
+                for biz_type in business_object_types:
+                    for obj_id in ocel.get_object_ids_by_type(biz_type):
+                        allowed_biz_ids.add(obj_id)
+                event_bizobj = event_bizobj.filter(
+                    pl.col("_objId").is_in(allowed_biz_ids)
+                )
 
             # (resource, business_object) pairs — one per pair regardless of event count
             resource_bizobj = (

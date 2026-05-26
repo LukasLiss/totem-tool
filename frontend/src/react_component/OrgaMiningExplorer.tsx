@@ -61,6 +61,7 @@ export default function OrgaMiningExplorer({
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [featureGroups, setFeatureGroups] = useState<Set<string>>(new Set(["activity_fractions"]));
+  const [businessObjectTypes, setBusinessObjectTypes] = useState<Set<string>>(new Set());
   const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
@@ -141,6 +142,9 @@ export default function OrgaMiningExplorer({
         const types: string[] = await res.json();
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setObjectTypes(types);
+        // Default: all types are potential business objects; the selector will
+        // show only the non-resource subset, all pre-selected.
+        setBusinessObjectTypes(new Set(types));
       } catch (e: any) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
@@ -161,6 +165,13 @@ export default function OrgaMiningExplorer({
     params.width      = String(graphSize.width);
     params.height     = String(graphSize.height);
     params.feature_groups = [...featureGroups].join(",");
+
+    if (featureGroups.has("object_collaboration_fractions")) {
+      // Send only business object types that are not currently resource types.
+      const activeBizTypes = [...businessObjectTypes].filter(t => !resourceTypes.has(t));
+      if (activeBizTypes.length > 0)
+        params.business_object_types = activeBizTypes.join(",");
+    }
 
     if (clustersEnabled) {
       params.cluster_method = clusterMethod;
@@ -283,6 +294,25 @@ export default function OrgaMiningExplorer({
                 ))}
               </div>
             </div>
+
+            {/* Business object type selector — only when object collaboration is active */}
+            {featureGroups.has("object_collaboration_fractions") && (() => {
+              const nonResourceTypes = objectTypes.filter(t => !resourceTypes.has(t));
+              if (nonResourceTypes.length === 0) return null;
+              return (
+                <TypeSelector
+                  title="Case object types"
+                  types={nonResourceTypes}
+                  selected={businessObjectTypes}
+                  onToggle={t => setBusinessObjectTypes(prev => {
+                    const n = new Set(prev);
+                    n.has(t) ? n.delete(t) : n.add(t);
+                    return n;
+                  })}
+                  colorMap={typeColorMap}
+                />
+              );
+            })()}
 
             {/* Cluster settings control */}
             <div className="border rounded-md p-3 min-w-[160px] space-y-3">
