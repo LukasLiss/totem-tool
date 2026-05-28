@@ -5,7 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { CircleDashed, ScanIcon } from "lucide-react";
+import { CircleDashed, ScanIcon, Share2 } from "lucide-react";
 
 /* ── Types ─────────────────────────────────────────────────── */
 type ProfileMatrixData = {
@@ -631,6 +631,8 @@ function ResourceGraph({
   const rbRef = useRef<SVGRectElement>(null);
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
   const [showClusterOverlay, setShowClusterOverlay] = useState(true);
+  // null = off; "cooccurrence" | "collaboration" = edge overlay mode
+  const [edgeMode, setEdgeMode] = useState<null | "cooccurrence" | "collaboration">(null);
   const [tooltip, setTooltip] = useState<{
     x: number; y: number;
     resources: string[];
@@ -820,6 +822,49 @@ function ResourceGraph({
     });
   }, [groups, positions, groupClusterLabel, data.n_clusters]);
 
+  // Whether co-occurrence / collaboration edge data is available
+  const hasCoocEdges   = (data.cooccurring_resources?.length  ?? 0) > 0;
+  const hasCollabEdges = (data.collaborating_resources?.length ?? 0) > 0;
+
+  // Pairwise edges: average(fraction A→B, fraction B→A) for the active overlay mode.
+  // Self-pairs are skipped. Only pairs whose average fraction ≥ MIN_WEIGHT are kept,
+  // and results are capped at 300 to avoid rendering thousands of lines.
+  const edges = useMemo(() => {
+    if (!edgeMode) return [];
+    const nAct  = data.activities.length;
+    const nCooc = (data.cooccurring_resources ?? []).length;
+
+    const isCooc      = edgeMode === "cooccurrence";
+    const resourceList = isCooc
+      ? (data.cooccurring_resources ?? [])
+      : (data.collaborating_resources ?? []);
+    const offset = isCooc ? nAct : nAct + nCooc;
+
+    if (resourceList.length === 0) return [];
+
+    // Column index within this feature block for each resource name
+    const listIdx = new Map(resourceList.map((r, i) => [r, i]));
+    const MIN_WEIGHT = 0.02;
+
+    const result: { ai: number; bi: number; weight: number }[] = [];
+    const n = data.resources.length;
+    for (let i = 0; i < n; i++) {
+      const ci = listIdx.get(data.resources[i]);
+      if (ci === undefined) continue;
+      for (let j = i + 1; j < n; j++) {
+        const cj = listIdx.get(data.resources[j]);
+        if (cj === undefined) continue;
+        const wij = (data.values[i]?.[offset + cj]) ?? 0; // fraction i→j
+        const wji = (data.values[j]?.[offset + ci]) ?? 0; // fraction j→i
+        const avg = (wij + wji) / 2;
+        if (avg >= MIN_WEIGHT) result.push({ ai: i, bi: j, weight: avg });
+      }
+    }
+
+    result.sort((a, b) => b.weight - a.weight);
+    return result.slice(0, 300);
+  }, [edgeMode, data]);
+
   // Scale bar: pick the nicest round distance whose pixel length is closest to 80 px
   const scaleBar = useMemo(() => {
     const s = data.mds_scale;
@@ -899,6 +944,29 @@ function ResourceGraph({
             }
             return (
               <polygon key={ci} points={hull.pts.map(p => `${p.x},${p.y}`).join(" ")} {...sharedProps} />
+            );
+          })}
+
+          {/* Edge overlay — drawn behind nodes, above cluster hulls */}
+          {edgeMode && edges.map((edge, ei) => {
+            const pa = data.mds_positions[edge.ai];
+            const pb = data.mds_positions[edge.bi];
+            if (!pa || !pb) return null;
+            // Stroke width: scales from 0.5 px (thin) to 7 px (heavy) at max weight
+            const maxSW = 7 / effectiveScale;
+            const sw    = Math.max(0.5 / effectiveScale, edge.weight * maxSW);
+            // Opacity: 20–70%, proportional to weight
+            const opacity = Math.max(0.2, Math.min(0.7, edge.weight * 1.5));
+            return (
+              <line
+                key={ei}
+                x1={pa.x} y1={pa.y}
+                x2={pb.x} y2={pb.y}
+                stroke="#94a3b8"
+                strokeWidth={sw}
+                strokeOpacity={opacity}
+                style={{ pointerEvents: "none" }}
+              />
             );
           })}
 
@@ -1011,11 +1079,11 @@ function ResourceGraph({
           background: "#FFFFFF", border: "1px solid #E2E8F0",
           borderRadius: 9999, padding: "6px 10px",
           boxShadow: "0 10px 24px rgba(15,23,42,0.14)",
+          flexWrap: "wrap", maxWidth: "calc(100% - 24px)",
         }}>
           {zoomed && (
             <Button type="button" variant="outline" size="icon" onClick={() => setZoomed(null)}
               className="rounded-full h-9 w-9" title="Reset zoom">
-              {/* simple fit-to-view symbol using two crossing arrows */}
               <ScanIcon className="h-4 w-4" />
             </Button>
           )}
@@ -1031,14 +1099,69 @@ function ResourceGraph({
               <CircleDashed className="h-4 w-4" />
             </Button>
           )}
+          {/* Edge overlay toggle — only shown when co-occurrence or collaboration data is present */}
+          {(hasCoocEdges || hasCollabEdges) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <Button
+                type="button"
+                variant={edgeMode !== null ? "secondary" : "outline"}
+                size="icon"
+                onClick={() => {
+                  if (edgeMode !== null) {
+                    setEdgeMode(null);
+                  } else {
+                    setEdgeMode(hasCoocEdges ? "cooccurrence" : "collaboration");
+                  }
+                }}
+                className="rounded-full h-9 w-9"
+                title={edgeMode !== null ? "Hide relationship edges" : "Show relationship edges"}
+              >
+                <Share2 className="h-4 w-4" />
+              </Button>
+              {edgeMode !== null && (
+                <div style={{ display: "flex", gap: 3 }}>
+                  {hasCoocEdges && (
+                    <button
+                      onClick={() => setEdgeMode("cooccurrence")}
+                      style={{
+                        padding: "2px 8px", fontSize: 10, borderRadius: 9999,
+                        border: "1px solid #6366f1", cursor: "pointer", lineHeight: "16px",
+                        background: edgeMode === "cooccurrence" ? "#6366f1" : "transparent",
+                        color:      edgeMode === "cooccurrence" ? "white"   : "#6366f1",
+                      }}
+                    >
+                      Co-occ
+                    </button>
+                  )}
+                  {hasCollabEdges && (
+                    <button
+                      onClick={() => setEdgeMode("collaboration")}
+                      style={{
+                        padding: "2px 8px", fontSize: 10, borderRadius: 9999,
+                        border: "1px solid #6366f1", cursor: "pointer", lineHeight: "16px",
+                        background: edgeMode === "collaboration" ? "#6366f1" : "transparent",
+                        color:      edgeMode === "collaboration" ? "white"   : "#6366f1",
+                      }}
+                    >
+                      Collab
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {tooltip && (
           <TooltipBox
             tooltip={tooltip}
             activities={data.activities}
+            cooccurringResources={data.cooccurring_resources ?? []}
+            collaboratingResources={data.collaborating_resources ?? []}
+            resourceObjectTypes={data.resource_object_types}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
+            typeColorMap={typeColorMap}
             clusterColors={clusterColors}
             highlightedActivity={highlightedActivity}
             onActivityClick={act => setHighlightedActivity(prev => prev === act ? null : act)}
@@ -1128,8 +1251,12 @@ function ResourceGraph({
 function TooltipBox({
   tooltip,
   activities,
+  cooccurringResources,
+  collaboratingResources,
+  resourceObjectTypes,
   activityColorMap,
   resourceColorMap,
+  typeColorMap,
   clusterColors,
   highlightedActivity,
   onActivityClick,
@@ -1140,8 +1267,12 @@ function TooltipBox({
 }: {
   tooltip: { x: number; y: number; resources: string[]; profile: number[]; clusterLabel: number; isCluster: boolean; pinned: boolean; cw: number; ch: number };
   activities: string[];
+  cooccurringResources: string[];
+  collaboratingResources: string[];
+  resourceObjectTypes: Record<string, string>;
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
+  typeColorMap: Record<string, string>;
   clusterColors: string[];
   highlightedActivity: string | null;
   onActivityClick: (act: string) => void;
@@ -1164,11 +1295,39 @@ function TooltipBox({
     angle += sweep;
   });
 
+  // Aggregate co-occurrence and collaboration fractions by object type,
+  // averaging across all resources of each type, excluding the hovered resource(s).
+  const selfSet = new Set(tooltip.resources);
+  function typeAveragedBars(resourceList: string[], offset: number) {
+    const accum: Record<string, { sum: number; count: number }> = {};
+    resourceList.forEach((r, i) => {
+      if (selfSet.has(r)) return;
+      const type = resourceObjectTypes[r] ?? r;
+      const val = tooltip.profile[offset + i] ?? 0;
+      if (!accum[type]) accum[type] = { sum: 0, count: 0 };
+      accum[type].sum += val;
+      accum[type].count += 1;
+    });
+    return Object.entries(accum)
+      .map(([type, { sum, count }]) => ({ type, avg: sum / count }))
+      .sort((a, b) => b.avg - a.avg);
+  }
+
+  const coocBars  = cooccurringResources.length  > 0
+    ? typeAveragedBars(cooccurringResources,  activities.length)
+    : [];
+  const collabBars = collaboratingResources.length > 0
+    ? typeAveragedBars(collaboratingResources, activities.length + cooccurringResources.length)
+    : [];
+
   const hasMultiple = tooltip.resources.length > 1;
   const estW = 220;
   const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
+  const barSectionH = (bars: typeof coocBars) => bars.length > 0 ? 24 + bars.length * 22 : 0;
   // Footer is always shown: 28px for the toggle/id row + optional expanded list
-  const estH = PIE_R * 2 + 16 + slices.length * 20 + 28 + resourceListH;
+  const estH = PIE_R * 2 + 16 + slices.length * 20
+    + barSectionH(coocBars) + barSectionH(collabBars)
+    + 28 + resourceListH;
   // Use the actual container dims recorded at event time so clamping is always accurate,
   // even when the SVG canvas is narrower than its containing div.
   const left = Math.min(tooltip.x + 14, tooltip.cw - estW - 4);
@@ -1263,6 +1422,36 @@ function TooltipBox({
           );
         })}
       </div>
+
+      {/* Co-occurrence / collaboration bar charts — grouped by object type */}
+      {[
+        { bars: coocBars,   label: "Co-occurrence" },
+        { bars: collabBars, label: "Object collaboration" },
+      ].map(({ bars, label }) => bars.length === 0 ? null : (
+        <div key={label} style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+          <div style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+            color: "#94a3b8", marginBottom: 5,
+          }}>{label}</div>
+          {bars.map(({ type, avg }) => {
+            const color = typeColorMap[type] ?? "#94a3b8";
+            return (
+              <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                <span style={{ width: 70, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#475569" }}>
+                  {type}
+                </span>
+                <div style={{ flex: 1, height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ width: `${avg * 100}%`, height: "100%", background: color, borderRadius: 3 }} />
+                </div>
+                <span style={{ fontSize: 10, color: "#64748b", width: 30, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {(avg * 100).toFixed(0)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
 
       {/* Footer: resource id(s) — always shown */}
       <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
