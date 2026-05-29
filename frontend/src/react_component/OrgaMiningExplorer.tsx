@@ -1438,14 +1438,15 @@ function TooltipBox({
     }
 
     // Single-node path: build items list for the expandable dropdown.
+    // total counts all resources of that type (including self) so m is stable.
+    // items only includes non-self entries (self is trivially always 1.0).
     const accum: Record<string, { items: { resource: string; val: number }[]; total: number }> = {};
     resourceList.forEach((r, i) => {
-      if (selfSet.has(r)) return;
       const type = resourceObjectTypes[r] ?? r;
       const val = tooltip.profile[offset + i] ?? 0;
       if (!accum[type]) accum[type] = { items: [], total: 0 };
       accum[type].total += 1;
-      if (val > 0) accum[type].items.push({ resource: r, val });
+      if (!selfSet.has(r) && val > 0) accum[type].items.push({ resource: r, val });
     });
     return Object.entries(accum)
       .filter(([, { items }]) => items.length > 0)
