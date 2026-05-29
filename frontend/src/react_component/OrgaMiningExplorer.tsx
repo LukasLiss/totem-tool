@@ -610,6 +610,14 @@ function PieNode({ r, strokeWidth, typeCounts, colorMap }: {
   );
 }
 
+/** Perpendicular distance from point P to line segment AB (in the same coordinate space). */
+function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax, dy = by - ay;
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+}
+
 /* ── ResourceGraph ──────────────────────────────────────────── */
 type ZoomedView = { x: number; y: number; w: number; h: number };
 
@@ -643,6 +651,11 @@ function ResourceGraph({
     cw: number; ch: number;
   } | null>(null);
   const [highlightedActivity, setHighlightedActivity] = useState<string | null>(null);
+  const [edgeTooltip, setEdgeTooltip] = useState<{
+    x: number; y: number;
+    nearby: { ai: number; bi: number; wij: number; wji: number; weight: number }[];
+    cw: number; ch: number;
+  } | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activityColorMap = useMemo(() =>
@@ -654,6 +667,12 @@ function ResourceGraph({
       Object.entries(data.resource_object_types).map(([rid, typ]) => [rid, typeColorMap[typ] ?? "#94a3b8"])
     ),
   [data.resource_object_types, typeColorMap]);
+
+  // Individual profile vector per resource — needed by the cluster tooltip
+  // to compute avg-n (average count of collaborators per type across cluster members).
+  const allProfiles = useMemo(() =>
+    Object.fromEntries(data.resources.map((r, i) => [r, data.values[i]])),
+  [data.resources, data.values]);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
 
   const scheduleHide = () => {
@@ -705,12 +724,39 @@ function ResourceGraph({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!dragStart.current) return;
-    const { x, y } = toUser(e.clientX, e.clientY);
-    const rx = Math.min(dragStart.current.x, x), ry = Math.min(dragStart.current.y, y);
-    const rw = Math.abs(x - dragStart.current.x), rh = Math.abs(y - dragStart.current.y);
-    const el = rbRef.current;
-    if (el) { el.setAttribute("x", String(rx)); el.setAttribute("y", String(ry)); el.setAttribute("width", String(rw)); el.setAttribute("height", String(rh)); }
+    if (dragStart.current) {
+      const { x, y } = toUser(e.clientX, e.clientY);
+      const rx = Math.min(dragStart.current.x, x), ry = Math.min(dragStart.current.y, y);
+      const rw = Math.abs(x - dragStart.current.x), rh = Math.abs(y - dragStart.current.y);
+      const el = rbRef.current;
+      if (el) { el.setAttribute("x", String(rx)); el.setAttribute("y", String(ry)); el.setAttribute("width", String(rw)); el.setAttribute("height", String(rh)); }
+      setEdgeTooltip(null);
+      return;
+    }
+    // Edge proximity: collect all edges within 8 screen-px of the cursor.
+    if (edgeMode && edges.length > 0) {
+      const { x, y } = toUser(e.clientX, e.clientY);
+      // Suppress edge tooltip while hovering any node — nodeR is already in user-space.
+      const onNode = data.mds_positions.some(
+        pos => Math.hypot(x - pos.x, y - pos.y) <= nodeR + 4 / effectiveScale,
+      );
+      if (onNode) { setEdgeTooltip(null); return; }
+      const threshold = 8 / effectiveScale;
+      const nearby = edges.filter(edge => {
+        const pa = data.mds_positions[edge.ai];
+        const pb = data.mds_positions[edge.bi];
+        return pa && pb && distToSegment(x, y, pa.x, pa.y, pb.x, pb.y) <= threshold;
+      });
+      const el = containerRef.current;
+      if (!el) { setEdgeTooltip(null); return; }
+      const rect = el.getBoundingClientRect();
+      setEdgeTooltip(nearby.length > 0 ? {
+        x: e.clientX - rect.left, y: e.clientY - rect.top,
+        nearby, cw: el.offsetWidth, ch: el.offsetHeight,
+      } : null);
+    } else {
+      setEdgeTooltip(null);
+    }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -778,12 +824,13 @@ function ResourceGraph({
 
   // Average profile + full resource list per cluster
   const clusterData = useMemo(() => {
-    const nAct = data.activities.length;
+    // Use the full profile length (activities + cooccurrence + collaboration columns).
+    const nFeatures = data.values[0]?.length ?? data.activities.length;
     const acc = new Map<number, { sum: number[]; resources: string[] }>();
     groups.forEach(g => {
       const label = groupClusterLabel.get(g.key) ?? -1;
       if (label < 0) return;   // skip noise points
-      if (!acc.has(label)) acc.set(label, { sum: new Array(nAct).fill(0), resources: [] });
+      if (!acc.has(label)) acc.set(label, { sum: new Array(nFeatures).fill(0), resources: [] });
       const c = acc.get(label)!;
       g.resources.forEach(() => g.profile.forEach((v, i) => { c.sum[i] += v; }));
       c.resources.push(...g.resources);
@@ -792,7 +839,7 @@ function ResourceGraph({
       label,
       { avgProfile: sum.map(v => v / resources.length), resources },
     ]));
-  }, [groups, groupClusterLabel, data.activities.length]);
+  }, [groups, groupClusterLabel, data.values, data.activities.length]);
 
   // Compute an expanded convex hull (in SVG pixel space) for each cluster
   const clusterHulls = useMemo(() => {
@@ -846,7 +893,7 @@ function ResourceGraph({
     const listIdx = new Map(resourceList.map((r, i) => [r, i]));
     const MIN_WEIGHT = 0.02;
 
-    const result: { ai: number; bi: number; weight: number }[] = [];
+    const result: { ai: number; bi: number; weight: number; wij: number; wji: number }[] = [];
     const n = data.resources.length;
     for (let i = 0; i < n; i++) {
       const ci = listIdx.get(data.resources[i]);
@@ -857,7 +904,7 @@ function ResourceGraph({
         const wij = (data.values[i]?.[offset + cj]) ?? 0; // fraction i→j
         const wji = (data.values[j]?.[offset + ci]) ?? 0; // fraction j→i
         const avg = (wij + wji) / 2;
-        if (avg >= MIN_WEIGHT) result.push({ ai: i, bi: j, weight: avg });
+        if (avg >= MIN_WEIGHT) result.push({ ai: i, bi: j, weight: avg, wij, wji });
       }
     }
 
@@ -902,7 +949,7 @@ function ResourceGraph({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); }}
+          onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); setEdgeTooltip(null); }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
           {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip */}
@@ -947,24 +994,21 @@ function ResourceGraph({
             );
           })}
 
-          {/* Edge overlay — drawn behind nodes, above cluster hulls */}
+          {/* Edge overlay — drawn behind nodes, above cluster hulls.
+              Hover detection is handled by the SVG's onMouseMove (distToSegment),
+              so these lines are purely visual (pointerEvents: none). */}
           {edgeMode && edges.map((edge, ei) => {
             const pa = data.mds_positions[edge.ai];
             const pb = data.mds_positions[edge.bi];
             if (!pa || !pb) return null;
-            // Stroke width: scales from 0.5 px (thin) to 7 px (heavy) at max weight
             const maxSW = 7 / effectiveScale;
             const sw    = Math.max(0.5 / effectiveScale, edge.weight * maxSW);
-            // Opacity: 20–70%, proportional to weight
             const opacity = Math.max(0.2, Math.min(0.7, edge.weight * 1.5));
             return (
               <line
                 key={ei}
-                x1={pa.x} y1={pa.y}
-                x2={pb.x} y2={pb.y}
-                stroke="#94a3b8"
-                strokeWidth={sw}
-                strokeOpacity={opacity}
+                x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
+                stroke="#94a3b8" strokeWidth={sw} strokeOpacity={opacity}
                 style={{ pointerEvents: "none" }}
               />
             );
@@ -984,6 +1028,7 @@ function ResourceGraph({
                 style={{ cursor: "pointer" }}
                 onMouseEnter={e => {
                   if (dragStart.current) return;   // suppress during rubber-band drag
+                  setEdgeTooltip(null);
                   cancelHide();
                   const el = containerRef.current;
                   if (!el) return;
@@ -1152,6 +1197,61 @@ function ResourceGraph({
           )}
         </div>
 
+        {edgeTooltip && (() => {
+          const isCooc = edgeMode === "cooccurrence";
+          const label  = isCooc ? "Co-occurrence" : "Object collaboration";
+          const n      = edgeTooltip.nearby.length;
+          // Each edge: ~52px (2 resource rows + avg row); header: 26px
+          const estW = 230, estH = 26 + n * 58;
+          const left = Math.min(edgeTooltip.x + 14, edgeTooltip.cw - estW - 4);
+          const top  = Math.max(4, Math.min(edgeTooltip.y - estH / 2, edgeTooltip.ch - estH - 4));
+          return (
+            <div style={{
+              position: "absolute", left, top, pointerEvents: "none",
+              background: "white", borderRadius: 8, zIndex: 10,
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+              padding: "8px 10px", minWidth: estW, maxWidth: estW,
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#94a3b8", marginBottom: 6 }}>
+                {label}{n > 1 ? ` — ${n} pairs` : ""}
+              </div>
+              {edgeTooltip.nearby.map((edge, idx) => {
+                const rA = data.resources[edge.ai];
+                const rB = data.resources[edge.bi];
+                const colorA = resourceColorMap[rA] ?? "#94a3b8";
+                const colorB = resourceColorMap[rB] ?? "#94a3b8";
+                return (
+                  <div key={idx} style={{
+                    borderTop: idx > 0 ? "1px solid #f1f5f9" : "none",
+                    paddingTop: idx > 0 ? 6 : 0,
+                    marginTop: idx > 0 ? 4 : 0,
+                  }}>
+                    {([
+                      { color: colorA, from: rA, to: rB, val: edge.wij },
+                      { color: colorB, from: rB, to: rA, val: edge.wji },
+                    ] as const).map(({ color, from, to, val }) => (
+                      <div key={from} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3, fontSize: 11 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                        <span style={{ fontFamily: "monospace", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={from}>
+                          {from}
+                        </span>
+                        <span style={{ color: "#cbd5e1", fontSize: 11, flexShrink: 0, lineHeight: 1 }}>│</span>
+                        <span style={{ fontFamily: "monospace", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: 55 }} title={to}>
+                          {to}
+                        </span>
+                        <span style={{ marginLeft: 4, fontVariantNumeric: "tabular-nums", color: "#334155", flexShrink: 0, fontSize: 11 }}>
+                          {(val * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
         {tooltip && (
           <TooltipBox
             tooltip={tooltip}
@@ -1163,6 +1263,7 @@ function ResourceGraph({
             resourceColorMap={resourceColorMap}
             typeColorMap={typeColorMap}
             clusterColors={clusterColors}
+            allProfiles={allProfiles}
             highlightedActivity={highlightedActivity}
             onActivityClick={act => setHighlightedActivity(prev => prev === act ? null : act)}
             onPin={() => setTooltip(t => t ? { ...t, pinned: true } : null)}
@@ -1258,6 +1359,7 @@ function TooltipBox({
   resourceColorMap,
   typeColorMap,
   clusterColors,
+  allProfiles,
   highlightedActivity,
   onActivityClick,
   onPin,
@@ -1274,6 +1376,7 @@ function TooltipBox({
   resourceColorMap: Record<string, string>;
   typeColorMap: Record<string, string>;
   clusterColors: string[];
+  allProfiles: Record<string, number[]>;
   highlightedActivity: string | null;
   onActivityClick: (act: string) => void;
   onPin: () => void;
@@ -1282,6 +1385,9 @@ function TooltipBox({
   onClose: () => void;
 }) {
   const [showResources, setShowResources] = useState(false);
+  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  const toggleType = (key: string) =>
+    setExpandedTypes(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const PIE_R = 32;
 
   // Build slices for non-zero activities
@@ -1295,38 +1401,76 @@ function TooltipBox({
     angle += sweep;
   });
 
-  // Aggregate co-occurrence and collaboration fractions by object type,
-  // averaging across all resources of each type, excluding the hovered resource(s).
+  // Aggregate co-occurrence / collaboration fractions by object type.
+  // Returns per-type rows with individual resource entries (non-zero only),
+  // sorted by descending peak value within the type.
   const selfSet = new Set(tooltip.resources);
-  function typeAveragedBars(resourceList: string[], offset: number) {
-    const accum: Record<string, { sum: number; count: number }> = {};
+  function typeGroupedRows(resourceList: string[], offset: number) {
+    if (tooltip.isCluster) {
+      // Cluster path: for each cluster member compute their individual n (same as
+      // single-node, excluding only their own self-entry), then average across members.
+      // m = total resources of that type across the whole resourceList — unchanged.
+      const typeTotal: Record<string, number> = {};
+      resourceList.forEach(r => {
+        const type = resourceObjectTypes[r] ?? r;
+        typeTotal[type] = (typeTotal[type] ?? 0) + 1;
+      });
+      const typeSumCounts: Record<string, number> = {};
+      tooltip.resources.forEach(memberId => {
+        const profile = allProfiles[memberId];
+        if (!profile) return;
+        resourceList.forEach((r, i) => {
+          if (r === memberId) return; // exclude only self
+          const type = resourceObjectTypes[r] ?? r;
+          if ((profile[offset + i] ?? 0) > 0)
+            typeSumCounts[type] = (typeSumCounts[type] ?? 0) + 1;
+        });
+      });
+      const nMembers = tooltip.resources.length;
+      return Object.entries(typeTotal)
+        .map(([type, total]) => ({
+          type, total,
+          nonZero: (typeSumCounts[type] ?? 0) / nMembers,
+          items: [] as { resource: string; val: number }[],
+        }))
+        .filter(({ nonZero }) => nonZero > 0)
+        .sort((a, b) => b.nonZero - a.nonZero);
+    }
+
+    // Single-node path: build items list for the expandable dropdown.
+    const accum: Record<string, { items: { resource: string; val: number }[]; total: number }> = {};
     resourceList.forEach((r, i) => {
       if (selfSet.has(r)) return;
       const type = resourceObjectTypes[r] ?? r;
       const val = tooltip.profile[offset + i] ?? 0;
-      if (!accum[type]) accum[type] = { sum: 0, count: 0 };
-      accum[type].sum += val;
-      accum[type].count += 1;
+      if (!accum[type]) accum[type] = { items: [], total: 0 };
+      accum[type].total += 1;
+      if (val > 0) accum[type].items.push({ resource: r, val });
     });
     return Object.entries(accum)
-      .map(([type, { sum, count }]) => ({ type, avg: sum / count }))
-      .sort((a, b) => b.avg - a.avg);
+      .filter(([, { items }]) => items.length > 0)
+      .map(([type, { items, total }]) => ({
+        type, total,
+        nonZero: items.length,
+        items: items.sort((a, b) => b.val - a.val),
+      }))
+      .sort((a, b) => b.items[0].val - a.items[0].val);
   }
 
-  const coocBars  = cooccurringResources.length  > 0
-    ? typeAveragedBars(cooccurringResources,  activities.length)
+  const coocRows  = cooccurringResources.length  > 0
+    ? typeGroupedRows(cooccurringResources,  activities.length)
     : [];
-  const collabBars = collaboratingResources.length > 0
-    ? typeAveragedBars(collaboratingResources, activities.length + cooccurringResources.length)
+  const collabRows = collaboratingResources.length > 0
+    ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length)
     : [];
 
   const hasMultiple = tooltip.resources.length > 1;
   const estW = 220;
   const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
-  const barSectionH = (bars: typeof coocBars) => bars.length > 0 ? 24 + bars.length * 22 : 0;
+  const rowSectionH = (rows: typeof coocRows) => rows.length > 0 ? 24 + rows.length * 20 : 0;
   // Footer is always shown: 28px for the toggle/id row + optional expanded list
   const estH = PIE_R * 2 + 16 + slices.length * 20
-    + barSectionH(coocBars) + barSectionH(collabBars)
+    + rowSectionH(coocRows) + rowSectionH(collabRows)
     + 28 + resourceListH;
   // Use the actual container dims recorded at event time so clamping is always accurate,
   // even when the SVG canvas is narrower than its containing div.
@@ -1423,30 +1567,58 @@ function TooltipBox({
         })}
       </div>
 
-      {/* Co-occurrence / collaboration bar charts — grouped by object type */}
+      {/* Co-occurrence / collaboration — grouped by object type, expandable */}
       {[
-        { bars: coocBars,   label: "Co-occurrence" },
-        { bars: collabBars, label: "Object collaboration" },
-      ].map(({ bars, label }) => bars.length === 0 ? null : (
+        { rows: coocRows,   label: "Co-occurrence",        hasFeature: cooccurringResources.length > 0 },
+        { rows: collabRows, label: "Object collaboration",  hasFeature: collaboratingResources.length > 0 },
+      ].map(({ rows, label, hasFeature }) => !hasFeature ? null : (
         <div key={label} style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
           <div style={{
             fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-            color: "#94a3b8", marginBottom: 5,
+            color: "#94a3b8", marginBottom: 4,
           }}>{label}</div>
-          {bars.map(({ type, avg }) => {
-            const color = typeColorMap[type] ?? "#94a3b8";
+          {rows.length === 0 ? (
+            <div style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic" }}>none</div>
+          ) : rows.map(({ type, items, nonZero, total }) => {
+            const color      = typeColorMap[type] ?? "#94a3b8";
+            const typeKey    = `${label}:${type}`;
+            const open       = expandedTypes.has(typeKey);
+            const expandable = items.length > 0;
+            const nLabel     = Number.isInteger(nonZero) ? String(nonZero) : nonZero.toFixed(1);
             return (
-              <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                <span style={{ width: 70, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#475569" }}>
-                  {type}
-                </span>
-                <div style={{ flex: 1, height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ width: `${avg * 100}%`, height: "100%", background: color, borderRadius: 3 }} />
+              <div key={type} style={{ marginBottom: 2 }}>
+                <div
+                  onClick={expandable ? (e => { e.stopPropagation(); toggleType(typeKey); }) : undefined}
+                  style={{ display: "flex", alignItems: "center", gap: 6,
+                    cursor: expandable ? "pointer" : "default",
+                    borderRadius: 4, padding: "1px 2px", userSelect: "none" }}
+                >
+                  <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: 10, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {type}
+                  </span>
+                  <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0 }}>{nLabel}/{total}</span>
+                  {expandable && (
+                    <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, width: 8 }}>{open ? "▾" : "▸"}</span>
+                  )}
                 </div>
-                <span style={{ fontSize: 10, color: "#64748b", width: 30, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                  {(avg * 100).toFixed(0)}%
-                </span>
+                {expandable && open && (
+                  <div style={{ maxHeight: 90, overflowY: "auto", marginTop: 2, marginLeft: 13,
+                    borderLeft: `2px solid ${color}20`, paddingLeft: 6 }}>
+                    {items.map(({ resource, val }) => (
+                      <div key={resource} style={{ display: "flex", justifyContent: "space-between",
+                        alignItems: "baseline", fontSize: 10, lineHeight: "18px", gap: 6 }}>
+                        <span style={{ fontFamily: "monospace", color: "#475569", overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                          {resource}
+                        </span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", color: "#64748b", flexShrink: 0 }}>
+                          {(val * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
