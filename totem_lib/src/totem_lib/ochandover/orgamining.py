@@ -11,6 +11,7 @@ FEATURE_GROUPS = Literal[
     "activity_fractions",
     "cooccurrence_fractions",
     "object_collaboration_fractions",
+    "time_fractions",
 ]
 
 
@@ -25,6 +26,9 @@ class ResourceProfile:
     ``object_collaboration_fractions`` — fraction of this resource's distinct business
                                         objects that each other resource also worked on
                                         at any point (same object, any event).
+    ``time_fractions``                — fraction of this resource's events falling in each
+                                        hourly bin (0–23). Normalised per resource so all
+                                        values sum to 1.0.
     Additional feature groups are added as new fields without changing the rest
     of the system.
     """
@@ -34,12 +38,14 @@ class ResourceProfile:
     activity_fractions: dict[str, float] = field(default_factory=dict)
     cooccurrence_fractions: dict[str, float] = field(default_factory=dict)
     object_collaboration_fractions: dict[str, float] = field(default_factory=dict)
+    time_fractions: dict[int, float] = field(default_factory=dict)
 
     def feature_vector(
         self,
         activities: list[str],
         cooccurring_resources: list[str] | None = None,
         collaborating_resources: list[str] | None = None,
+        time_bins: list[int] | None = None,
     ) -> list[float]:
         """
         Ordered numeric vector used for distance computation, MDS, and clustering.
@@ -52,12 +58,16 @@ class ResourceProfile:
             Ordered resource feature space for co-occurrence fractions.
         collaborating_resources : list[str] | None
             Ordered resource feature space for object collaboration fractions.
+        time_bins : list[int] | None
+            Hour bins (0–23) to include as time-fraction features.
         """
         vec = [self.activity_fractions.get(a, 0.0) for a in activities]
         if cooccurring_resources:
             vec += [self.cooccurrence_fractions.get(r, 0.0) for r in cooccurring_resources]
         if collaborating_resources:
             vec += [self.object_collaboration_fractions.get(r, 0.0) for r in collaborating_resources]
+        if time_bins:
+            vec += [self.time_fractions.get(h, 0.0) for h in time_bins]
         return vec
 
 
@@ -76,11 +86,13 @@ class ProfileMatrix:
         activities: list[str],
         cooccurring_resources: list[str] | None = None,
         collaborating_resources: list[str] | None = None,
+        time_bins: list[int] | None = None,
     ) -> None:
         self.profiles = profiles
         self.activities = activities
         self.cooccurring_resources: list[str] = cooccurring_resources or []
         self.collaborating_resources: list[str] = collaborating_resources or []
+        self.time_bins: list[int] = time_bins or []
 
     # ── convenience accessors ──────────────────────────────────────────────────
 
@@ -102,6 +114,8 @@ class ProfileMatrix:
             groups.append("cooccurrence_fractions")
         if self.collaborating_resources:
             groups.append("object_collaboration_fractions")
+        if self.time_bins:
+            groups.append("time_fractions")
         return groups
 
     # ── construction ──────────────────────────────────────────────────────────
@@ -125,7 +139,7 @@ class ProfileMatrix:
         feature_groups : list[str] | None
             Which feature groups to compute. Defaults to ["activity_fractions"].
             Supported values: "activity_fractions", "cooccurrence_fractions",
-            "object_collaboration_fractions".
+            "object_collaboration_fractions", "time_fractions".
         business_object_types : list[str] | None
             Object types considered as business objects for the
             ``object_collaboration_fractions`` feature group.  Defaults to all
@@ -147,7 +161,7 @@ class ProfileMatrix:
         # ── Base join: one row per (event, resource) ───────────────────────────
         event_resource = (
             ocel.events
-            .select(["_eventId", "_activity", "_objects"])
+            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
             .explode("_objects")
             .rename({"_objects": "_objId"})
             .filter(pl.col("_objId").is_in(resource_ids))
@@ -295,6 +309,47 @@ class ProfileMatrix:
 
             collaborating_resources_list = sorted(resource_ids)
 
+        # ── Time fractions ─────────────────────────────────────────────────────
+        # Divide the day into 24 hourly bins.  For each resource, count how many
+        # of its events fall into each hour, then normalise by the resource's
+        # total event count so each row sums to 1.0.
+        time_fractions_by_resource: dict[str, dict[int, float]] = {
+            rid: {} for rid in resource_ids
+        }
+        time_bins_list: list[int] = []
+
+        if "time_fractions" in feature_groups:
+            # Derive hour from the Unix timestamp (seconds since epoch).
+            event_resource_with_hour = (
+                event_resource
+                .with_columns(
+                    pl.from_epoch(pl.col("_timestampUnix"), time_unit="s")
+                    .dt.hour()
+                    .alias("_hour")
+                )
+                .select(["_objId", "_hour"])
+            )
+
+            hour_counts = (
+                event_resource_with_hour
+                .group_by(["_objId", "_hour"])
+                .agg(pl.len().alias("count"))
+            )
+
+            time_fractions_df = (
+                hour_counts
+                .join(totals, on="_objId", how="left")
+                .with_columns(
+                    (pl.col("count") / pl.col("total")).alias("fraction")
+                )
+                .select(["_objId", "_hour", "fraction"])
+            )
+
+            for row in time_fractions_df.iter_rows(named=True):
+                time_fractions_by_resource[row["_objId"]][int(row["_hour"])] = row["fraction"]
+
+            time_bins_list = list(range(24))
+
         # ── Assemble profiles ──────────────────────────────────────────────────
         profiles = [
             ResourceProfile(
@@ -303,6 +358,7 @@ class ProfileMatrix:
                 activity_fractions=activity_fractions_by_resource[rid],
                 cooccurrence_fractions=cooccurrence_by_resource[rid],
                 object_collaboration_fractions=object_collaboration_by_resource[rid],
+                time_fractions=time_fractions_by_resource[rid],
             )
             for rid in sorted(resource_ids)
         ]
@@ -312,6 +368,7 @@ class ProfileMatrix:
             all_activities,
             cooccurring_resources=cooccurring_resources_list or None,
             collaborating_resources=collaborating_resources_list or None,
+            time_bins=time_bins_list or None,
         )
 
     # ── matrix operations ─────────────────────────────────────────────────────
@@ -323,6 +380,7 @@ class ProfileMatrix:
                 self.activities,
                 self.cooccurring_resources if self.cooccurring_resources else None,
                 self.collaborating_resources if self.collaborating_resources else None,
+                self.time_bins if self.time_bins else None,
             )
             for p in self.profiles
         ])
@@ -341,6 +399,7 @@ class ProfileMatrix:
                                                              with disjoint support)
         - cooccurrence_fractions        → sqrt(n_resources) (independent [0,1] dims)
         - object_collaboration_fractions → sqrt(n_resources)
+        - time_fractions               → sqrt(2)          (simplex — fractions sum to 1)
 
         Using the theoretical maximum (rather than the observed maximum) equalises
         the scale across groups without erasing how much each group actually varies
@@ -401,6 +460,18 @@ class ProfileMatrix:
                     for p in self.profiles
                 ])
                 D += w * _norm_dist(X, np.sqrt(len(self.collaborating_resources)))
+                total_weight += w
+
+        if self.time_bins:
+            w = weights.get("time_fractions", 1.0)
+            if w > 0:
+                X = np.array([
+                    [p.time_fractions.get(h, 0.0) for h in self.time_bins]
+                    for p in self.profiles
+                ])
+                # time_fractions sum to 1.0 per resource → same simplex bound as
+                # activity_fractions: max L2 = sqrt(2).
+                D += w * _norm_dist(X, np.sqrt(2))
                 total_weight += w
 
         # Divide by total weight → D ∈ [0, 1] regardless of how many groups
@@ -588,6 +659,8 @@ class ProfileMatrix:
             result["cooccurring_resources"] = self.cooccurring_resources
         if self.collaborating_resources:
             result["collaborating_resources"] = self.collaborating_resources
+        if self.time_bins:
+            result["time_bins"] = self.time_bins
 
         # Always use the precomputed distance matrix so the scale is consistent
         # across all configurations (single group, multi-group, any weights).

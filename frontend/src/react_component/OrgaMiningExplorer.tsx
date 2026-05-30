@@ -16,6 +16,7 @@ type ProfileMatrixData = {
   feature_groups: string[];
   cooccurring_resources?: string[];
   collaborating_resources?: string[];
+  time_bins?: number[];
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
@@ -276,6 +277,7 @@ export default function OrgaMiningExplorer({
                   { key: "activity_fractions",          label: "Activity fractions" },
                   { key: "cooccurrence_fractions",      label: "Co-occurrence" },
                   { key: "object_collaboration_fractions", label: "Object collaboration" },
+                  { key: "time_fractions",              label: "Time binning" },
                 ] as const).map(({ key, label }) => (
                   <div key={key} className="flex items-center gap-2">
                     <Switch
@@ -459,7 +461,7 @@ export default function OrgaMiningExplorer({
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           {/* Group header row — only shown when multiple feature groups exist */}
-                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0) && (
+                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0 || (data.time_bins?.length ?? 0) > 0) && (
                             <tr className="bg-muted/60 border-b">
                               <th className="sticky top-0 left-0 bg-muted/60 z-30 border-r" />
                               {data.activities.length > 0 && (
@@ -476,8 +478,14 @@ export default function OrgaMiningExplorer({
                               )}
                               {(data.collaborating_resources?.length ?? 0) > 0 && (
                                 <th colSpan={data.collaborating_resources!.length}
-                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
                                   Object collaboration
+                                </th>
+                              )}
+                              {(data.time_bins?.length ?? 0) > 0 && (
+                                <th colSpan={data.time_bins!.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
+                                  Time binning
                                 </th>
                               )}
                             </tr>
@@ -499,6 +507,11 @@ export default function OrgaMiningExplorer({
                             {(data.collaborating_resources ?? []).map(r => (
                               <th key={`collab-${r}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
                                 {r}
+                              </th>
+                            ))}
+                            {(data.time_bins ?? []).map(h => (
+                              <th key={`time-${h}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
+                                {String(h).padStart(2, "0")}h
                               </th>
                             ))}
                           </tr>
