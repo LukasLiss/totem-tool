@@ -1271,6 +1271,7 @@ function ResourceGraph({
             activities={data.activities}
             cooccurringResources={data.cooccurring_resources ?? []}
             collaboratingResources={data.collaborating_resources ?? []}
+            timeBins={data.time_bins ?? []}
             resourceObjectTypes={data.resource_object_types}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
@@ -1367,6 +1368,7 @@ function TooltipBox({
   activities,
   cooccurringResources,
   collaboratingResources,
+  timeBins,
   resourceObjectTypes,
   activityColorMap,
   resourceColorMap,
@@ -1384,6 +1386,7 @@ function TooltipBox({
   activities: string[];
   cooccurringResources: string[];
   collaboratingResources: string[];
+  timeBins: number[];
   resourceObjectTypes: Record<string, string>;
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
@@ -1478,13 +1481,32 @@ function TooltipBox({
     ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length)
     : [];
 
+  // Time bin bar values — one value per hour bin (0–23), averaged for clusters.
+  const timeOffset = activities.length + cooccurringResources.length + collaboratingResources.length;
+  const timeBinValues: number[] = timeBins.length > 0
+    ? (() => {
+        if (tooltip.isCluster) {
+          // Average each bin's fraction across all cluster members
+          const members = tooltip.resources.map(r => allProfiles[r]).filter(Boolean);
+          if (members.length === 0) return timeBins.map(() => 0);
+          return timeBins.map((_, i) => {
+            const sum = members.reduce((acc, p) => acc + (p[timeOffset + i] ?? 0), 0);
+            return sum / members.length;
+          });
+        }
+        return timeBins.map((_, i) => tooltip.profile[timeOffset + i] ?? 0);
+      })()
+    : [];
+
   const hasMultiple = tooltip.resources.length > 1;
   const estW = 220;
   const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
   const rowSectionH = (rows: typeof coocRows) => rows.length > 0 ? 24 + rows.length * 20 : 0;
+  const timeBinSectionH = timeBins.length > 0 ? 72 : 0; // label + bar chart + hour axis
   // Footer is always shown: 28px for the toggle/id row + optional expanded list
   const estH = PIE_R * 2 + 16 + slices.length * 20
     + rowSectionH(coocRows) + rowSectionH(collabRows)
+    + timeBinSectionH
     + 28 + resourceListH;
   // Use the actual container dims recorded at event time so clamping is always accurate,
   // even when the SVG canvas is narrower than its containing div.
@@ -1638,6 +1660,56 @@ function TooltipBox({
           })}
         </div>
       ))}
+
+      {/* Time binning bar chart */}
+      {timeBins.length > 0 && (() => {
+        const BAR_AREA_W = 196;
+        const BAR_H = 40;
+        const AXIS_H = 12;
+        const totalW = BAR_AREA_W;
+        const barW = totalW / 24;
+        const gap = barW * 0.25;
+        const bw = barW - gap;
+        const tickHours = [0, 6, 12, 18, 23];
+        return (
+          <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+            <div style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+              color: "#94a3b8", marginBottom: 4,
+            }}>Time binning</div>
+            <svg width={totalW} height={BAR_H + AXIS_H} style={{ display: "block", overflow: "visible" }}>
+              {timeBinValues.map((val, i) => {
+                const bh = Math.max(val * BAR_H, val > 0 ? 1 : 0);
+                const x = i * barW + gap / 2;
+                return (
+                  <rect
+                    key={i}
+                    x={x} y={BAR_H - bh}
+                    width={bw} height={bh}
+                    fill="#6366f1" opacity={0.75} rx={1}
+                  />
+                );
+              })}
+              {/* Baseline */}
+              <line x1={0} y1={BAR_H} x2={totalW} y2={BAR_H} stroke="#e2e8f0" strokeWidth={1} />
+              {/* Hour axis labels */}
+              {tickHours.map(h => (
+                <text
+                  key={h}
+                  x={h * barW + barW / 2}
+                  y={BAR_H + AXIS_H - 1}
+                  textAnchor="middle"
+                  fontSize={8}
+                  fill="#94a3b8"
+                  fontFamily="sans-serif"
+                >
+                  {String(h).padStart(2, "0")}
+                </text>
+              ))}
+            </svg>
+          </div>
+        );
+      })()}
 
       {/* Footer: resource id(s) — always shown */}
       <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
