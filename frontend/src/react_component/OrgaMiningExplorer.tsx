@@ -17,6 +17,7 @@ type ProfileMatrixData = {
   cooccurring_resources?: string[];
   collaborating_resources?: string[];
   time_bins?: number[];
+  weekday_bins?: number[];
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
@@ -277,7 +278,8 @@ export default function OrgaMiningExplorer({
                   { key: "activity_fractions",          label: "Activity fractions" },
                   { key: "cooccurrence_fractions",      label: "Co-occurrence" },
                   { key: "object_collaboration_fractions", label: "Object collaboration" },
-                  { key: "time_fractions",              label: "Time binning" },
+                  { key: "time_fractions",              label: "Time binning (hourly)" },
+                  { key: "weekday_fractions",           label: "Time binning (weekly)" },
                 ] as const).map(({ key, label }) => (
                   <div key={key} className="flex items-center gap-2">
                     <Switch
@@ -461,7 +463,7 @@ export default function OrgaMiningExplorer({
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           {/* Group header row — only shown when multiple feature groups exist */}
-                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0 || (data.time_bins?.length ?? 0) > 0) && (
+                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0 || (data.time_bins?.length ?? 0) > 0 || (data.weekday_bins?.length ?? 0) > 0) && (
                             <tr className="bg-muted/60 border-b">
                               <th className="sticky top-0 left-0 bg-muted/60 z-30 border-r" />
                               {data.activities.length > 0 && (
@@ -484,8 +486,14 @@ export default function OrgaMiningExplorer({
                               )}
                               {(data.time_bins?.length ?? 0) > 0 && (
                                 <th colSpan={data.time_bins!.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
+                                  Time (hourly)
+                                </th>
+                              )}
+                              {(data.weekday_bins?.length ?? 0) > 0 && (
+                                <th colSpan={data.weekday_bins!.length}
                                   className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
-                                  Time binning
+                                  Time (weekly)
                                 </th>
                               )}
                             </tr>
@@ -512,6 +520,11 @@ export default function OrgaMiningExplorer({
                             {(data.time_bins ?? []).map(h => (
                               <th key={`time-${h}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
                                 {String(h).padStart(2, "0")}h
+                              </th>
+                            ))}
+                            {(data.weekday_bins ?? []).map(d => (
+                              <th key={`wd-${d}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
+                                {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][d]}
                               </th>
                             ))}
                           </tr>
@@ -1272,6 +1285,7 @@ function ResourceGraph({
             cooccurringResources={data.cooccurring_resources ?? []}
             collaboratingResources={data.collaborating_resources ?? []}
             timeBins={data.time_bins ?? []}
+            weekdayBins={data.weekday_bins ?? []}
             resourceObjectTypes={data.resource_object_types}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
@@ -1369,6 +1383,7 @@ function TooltipBox({
   cooccurringResources,
   collaboratingResources,
   timeBins,
+  weekdayBins,
   resourceObjectTypes,
   activityColorMap,
   resourceColorMap,
@@ -1387,6 +1402,7 @@ function TooltipBox({
   cooccurringResources: string[];
   collaboratingResources: string[];
   timeBins: number[];
+  weekdayBins: number[];
   resourceObjectTypes: Record<string, string>;
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
@@ -1455,23 +1471,27 @@ function TooltipBox({
 
     // Single-node path: build items list for the expandable dropdown.
     // total counts all resources of that type (including self) so m is stable.
-    // items only includes non-self entries (self is trivially always 1.0).
-    const accum: Record<string, { items: { resource: string; val: number }[]; total: number }> = {};
+    // Self is counted in n (diagonal = 1.0 always) but not shown in the dropdown list.
+    const accum: Record<string, { items: { resource: string; val: number }[]; total: number; hasSelf: boolean }> = {};
     resourceList.forEach((r, i) => {
       const type = resourceObjectTypes[r] ?? r;
       const val = tooltip.profile[offset + i] ?? 0;
-      if (!accum[type]) accum[type] = { items: [], total: 0 };
+      if (!accum[type]) accum[type] = { items: [], total: 0, hasSelf: false };
       accum[type].total += 1;
-      if (!selfSet.has(r) && val > 0) accum[type].items.push({ resource: r, val });
+      if (selfSet.has(r)) {
+        accum[type].hasSelf = true; // diagonal is always 1.0, counts toward n
+      } else if (val > 0) {
+        accum[type].items.push({ resource: r, val });
+      }
     });
     return Object.entries(accum)
-      .filter(([, { items }]) => items.length > 0)
-      .map(([type, { items, total }]) => ({
+      .filter(([, { items, hasSelf }]) => items.length > 0 || hasSelf)
+      .map(([type, { items, total, hasSelf }]) => ({
         type, total,
-        nonZero: items.length,
+        nonZero: items.length + (hasSelf ? 1 : 0),
         items: items.sort((a, b) => b.val - a.val),
       }))
-      .sort((a, b) => b.items[0].val - a.items[0].val);
+      .sort((a, b) => b.nonZero - a.nonZero);
   }
 
   const coocRows  = cooccurringResources.length  > 0
@@ -1481,37 +1501,64 @@ function TooltipBox({
     ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length)
     : [];
 
-  // Time bin bar values — one value per hour bin (0–23), averaged for clusters.
+  // Time bin bar values — one value per bin, averaged for clusters.
   const timeOffset = activities.length + cooccurringResources.length + collaboratingResources.length;
-  const timeBinValues: number[] = timeBins.length > 0
-    ? (() => {
-        if (tooltip.isCluster) {
-          // Average each bin's fraction across all cluster members
-          const members = tooltip.resources.map(r => allProfiles[r]).filter(Boolean);
-          if (members.length === 0) return timeBins.map(() => 0);
-          return timeBins.map((_, i) => {
-            const sum = members.reduce((acc, p) => acc + (p[timeOffset + i] ?? 0), 0);
-            return sum / members.length;
-          });
-        }
-        return timeBins.map((_, i) => tooltip.profile[timeOffset + i] ?? 0);
-      })()
-    : [];
+  const weekdayOffset = timeOffset + timeBins.length;
+
+  function binValues(bins: number[], offset: number): number[] {
+    if (bins.length === 0) return [];
+    if (tooltip.isCluster) {
+      const members = tooltip.resources.map(r => allProfiles[r]).filter(Boolean);
+      if (members.length === 0) return bins.map(() => 0);
+      return bins.map((_, i) => {
+        const sum = members.reduce((acc, p) => acc + (p[offset + i] ?? 0), 0);
+        return sum / members.length;
+      });
+    }
+    return bins.map((_, i) => tooltip.profile[offset + i] ?? 0);
+  }
+
+  const timeBinValues   = binValues(timeBins,   timeOffset);
+  const weekdayValues   = binValues(weekdayBins, weekdayOffset);
 
   const hasMultiple = tooltip.resources.length > 1;
   const estW = 220;
   const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
   const rowSectionH = (rows: typeof coocRows) => rows.length > 0 ? 24 + rows.length * 20 : 0;
-  const timeBinSectionH = timeBins.length > 0 ? 72 : 0; // label + bar chart + hour axis
+  const timeBinSectionH  = timeBins.length    > 0 ? 83 : 0; // label(17) + chart(52) + margin+padding(14)
+  const weekdaySectionH  = weekdayBins.length > 0 ? 83 : 0;
+  const activitySectionH = slices.length > 0
+    ? 15 + PIE_R * 2 + 8 + slices.length * 20   // caption(15) + pie(66) + gap(8) + items
+    : 0;
+  const clusterHeaderH = tooltip.isCluster ? 20 : 0;
+  const tooltipPadding = 20; // 10px top + 10px bottom
   // Footer is always shown: 28px for the toggle/id row + optional expanded list
-  const estH = PIE_R * 2 + 16 + slices.length * 20
+  const estH = tooltipPadding + clusterHeaderH + activitySectionH
     + rowSectionH(coocRows) + rowSectionH(collabRows)
-    + timeBinSectionH
-    + 28 + resourceListH;
+    + timeBinSectionH + weekdaySectionH
+    + 34 + resourceListH;
+  // Pre-compute which section is rendered first so it can suppress its top border
+  // when nothing (activity) is shown above it.
+  const sectionOrder = [
+    cooccurringResources.length > 0  && "cooc",
+    collaboratingResources.length > 0 && "collab",
+    timeBins.length   > 0 && "time",
+    weekdayBins.length > 0 && "weekday",
+  ].filter(Boolean) as string[];
+  const firstSection = slices.length === 0 ? (sectionOrder[0] ?? null) : null;
+  const sectionStyle = (id: string) =>
+    id === firstSection
+      ? { marginTop: 0, paddingTop: 2, borderTop: "none" as const }
+      : { marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" as const };
+
   // Use the actual container dims recorded at event time so clamping is always accurate,
   // even when the SVG canvas is narrower than its containing div.
+  // Cap estH to the container so centering and bottom-clamp are never based on a
+  // height larger than what can fit, then derive maxH from the final top position.
+  const fittedH = Math.min(estH, tooltip.ch - 8);
   const left = Math.min(tooltip.x + 14, tooltip.cw - estW - 4);
-  const top  = Math.max(4, Math.min(tooltip.y - estH / 2, tooltip.ch - estH - 4));
+  const top  = Math.max(4, Math.min(tooltip.y - fittedH / 2, tooltip.ch - fittedH - 4));
+  const maxH = tooltip.ch - top - 4;
 
   return (
     <div
@@ -1521,6 +1568,7 @@ function TooltipBox({
         border: tooltip.pinned ? "1.5px solid #6366f1" : "1px solid #e2e8f0",
         boxShadow: tooltip.pinned ? "0 4px 16px rgba(99,102,241,0.18)" : "0 4px 12px rgba(0,0,0,0.12)",
         padding: "10px 12px", minWidth: estW, maxWidth: estW,
+        maxHeight: maxH, overflowY: "auto",
       }}
       onMouseEnter={onTooltipMouseEnter}
       onMouseLeave={onTooltipMouseLeave}
@@ -1552,63 +1600,70 @@ function TooltipBox({
         >✕</button>
       )}
 
-      {/* Pie chart — +1 px padding so anti-aliased edge isn't clipped */}
-      <svg
-        width={PIE_R * 2 + 2}
-        height={PIE_R * 2 + 2}
-        style={{ display: "block", margin: "0 auto 8px" }}
-      >
-        <g transform={`translate(${PIE_R + 1},${PIE_R + 1})`}>
-          {slices.length === 1 ? (
-            <circle r={PIE_R} fill={activityColorMap[slices[0].act] ?? "#94a3b8"} />
-          ) : (
-            slices.map(({ act, path }) => (
-              <path key={act} d={path} fill={activityColorMap[act] ?? "#94a3b8"} stroke="white" strokeWidth={1} />
-            ))
-          )}
-        </g>
-      </svg>
+      {/* Pie chart + activity list — only rendered when activity fractions are active */}
+      {slices.length > 0 && (
+        <>
+          <div style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+            color: "#94a3b8", marginBottom: 4,
+          }}>Activities</div>
+          <svg
+            width={PIE_R * 2 + 2}
+            height={PIE_R * 2 + 2}
+            style={{ display: "block", margin: "0 auto 8px" }}
+          >
+            <g transform={`translate(${PIE_R + 1},${PIE_R + 1})`}>
+              {slices.length === 1 ? (
+                <circle r={PIE_R} fill={activityColorMap[slices[0].act] ?? "#94a3b8"} />
+              ) : (
+                slices.map(({ act, path }) => (
+                  <path key={act} d={path} fill={activityColorMap[act] ?? "#94a3b8"} stroke="white" strokeWidth={1} />
+                ))
+              )}
+            </g>
+          </svg>
 
-      {/* Activity list */}
-      <div style={{ fontSize: 11, lineHeight: "20px" }}>
-        {slices.map(({ act, frac }) => {
-          const color = activityColorMap[act] ?? "#94a3b8";
-          const isHighlighted = highlightedActivity === act;
-          const isDimmed = highlightedActivity !== null && !isHighlighted;
-          return (
-            <div
-              key={act}
-              onClick={() => onActivityClick(act)}
-              style={{
-                display: "flex", alignItems: "center", gap: 5,
-                cursor: "pointer", borderRadius: 4, padding: "0 2px",
-                opacity: isDimmed ? 0.35 : 1,
-                background: isHighlighted ? `${color}22` : "transparent",
-              }}
-            >
-              <div style={{
-                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
-                background: color,
-                outline: isHighlighted ? `2px solid ${color}` : "none",
-                outlineOffset: 1,
-              }} />
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {act}
-              </span>
-              <span style={{ marginLeft: 6, color: "#64748b", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
-                {(frac * 100).toFixed(1)}%
-              </span>
-            </div>
-          );
-        })}
-      </div>
+          <div style={{ fontSize: 11, lineHeight: "20px" }}>
+            {slices.map(({ act, frac }) => {
+              const color = activityColorMap[act] ?? "#94a3b8";
+              const isHighlighted = highlightedActivity === act;
+              const isDimmed = highlightedActivity !== null && !isHighlighted;
+              return (
+                <div
+                  key={act}
+                  onClick={() => onActivityClick(act)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    cursor: "pointer", borderRadius: 4, padding: "0 2px",
+                    opacity: isDimmed ? 0.35 : 1,
+                    background: isHighlighted ? `${color}22` : "transparent",
+                  }}
+                >
+                  <div style={{
+                    width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                    background: color,
+                    outline: isHighlighted ? `2px solid ${color}` : "none",
+                    outlineOffset: 1,
+                  }} />
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {act}
+                  </span>
+                  <span style={{ marginLeft: 6, color: "#64748b", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                    {(frac * 100).toFixed(1)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Co-occurrence / collaboration — grouped by object type, expandable */}
       {[
-        { rows: coocRows,   label: "Co-occurrence",        hasFeature: cooccurringResources.length > 0 },
-        { rows: collabRows, label: "Object collaboration",  hasFeature: collaboratingResources.length > 0 },
-      ].map(({ rows, label, hasFeature }) => !hasFeature ? null : (
-        <div key={label} style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+        { rows: coocRows,   label: "Co-occurrence",        hasFeature: cooccurringResources.length > 0, id: "cooc" },
+        { rows: collabRows, label: "Object collaboration",  hasFeature: collaboratingResources.length > 0, id: "collab" },
+      ].map(({ rows, label, hasFeature, id }) => !hasFeature ? null : (
+        <div key={label} style={sectionStyle(id)}>
           <div style={{
             fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
             color: "#94a3b8", marginBottom: 4,
@@ -1634,9 +1689,9 @@ function TooltipBox({
                     {type}
                   </span>
                   <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0 }}>{nLabel}/{total}</span>
-                  {expandable && (
-                    <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, width: 8 }}>{open ? "▾" : "▸"}</span>
-                  )}
+                  <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, width: 8, textAlign: "right" }}>
+                    {expandable ? (open ? "▾" : "▸") : ""}
+                  </span>
                 </div>
                 {expandable && open && (
                   <div style={{ maxHeight: 90, overflowY: "auto", marginTop: 2, marginLeft: 13,
@@ -1672,11 +1727,11 @@ function TooltipBox({
         const bw = barW - gap;
         const tickHours = [0, 6, 12, 18, 23];
         return (
-          <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+          <div style={sectionStyle("time")}>
             <div style={{
               fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
               color: "#94a3b8", marginBottom: 4,
-            }}>Time binning</div>
+            }}>Time binning (hourly)</div>
             <svg width={totalW} height={BAR_H + AXIS_H} style={{ display: "block", overflow: "visible" }}>
               {timeBinValues.map((val, i) => {
                 const bh = Math.max(val * BAR_H, val > 0 ? 1 : 0);
@@ -1704,6 +1759,42 @@ function TooltipBox({
                   fontFamily="sans-serif"
                 >
                   {String(h).padStart(2, "0")}
+                </text>
+              ))}
+            </svg>
+          </div>
+        );
+      })()}
+
+      {/* Weekday binning bar chart */}
+      {weekdayBins.length > 0 && (() => {
+        const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        const BAR_AREA_W = 196;
+        const BAR_H = 40;
+        const AXIS_H = 12;
+        const barW = BAR_AREA_W / 7;
+        const gap = barW * 0.2;
+        const bw = barW - gap;
+        return (
+          <div style={sectionStyle("weekday")}>
+            <div style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+              color: "#94a3b8", marginBottom: 4,
+            }}>Time binning (weekly)</div>
+            <svg width={BAR_AREA_W} height={BAR_H + AXIS_H} style={{ display: "block", overflow: "visible" }}>
+              {weekdayValues.map((val, i) => {
+                const bh = Math.max(val * BAR_H, val > 0 ? 1 : 0);
+                const x = i * barW + gap / 2;
+                return (
+                  <rect key={i} x={x} y={BAR_H - bh} width={bw} height={bh}
+                    fill="#10b981" opacity={0.75} rx={1} />
+                );
+              })}
+              <line x1={0} y1={BAR_H} x2={BAR_AREA_W} y2={BAR_H} stroke="#e2e8f0" strokeWidth={1} />
+              {DAY_LABELS.map((label, i) => (
+                <text key={i} x={i * barW + barW / 2} y={BAR_H + AXIS_H - 1}
+                  textAnchor="middle" fontSize={8} fill="#94a3b8" fontFamily="sans-serif">
+                  {label}
                 </text>
               ))}
             </svg>

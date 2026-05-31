@@ -12,6 +12,7 @@ FEATURE_GROUPS = Literal[
     "cooccurrence_fractions",
     "object_collaboration_fractions",
     "time_fractions",
+    "weekday_fractions",
 ]
 
 
@@ -29,6 +30,9 @@ class ResourceProfile:
     ``time_fractions``                — fraction of this resource's events falling in each
                                         hourly bin (0–23). Normalised per resource so all
                                         values sum to 1.0.
+    ``weekday_fractions``             — fraction of this resource's events falling on each
+                                        day of the week (0=Mon … 6=Sun). Normalised per
+                                        resource so all values sum to 1.0.
     Additional feature groups are added as new fields without changing the rest
     of the system.
     """
@@ -39,6 +43,7 @@ class ResourceProfile:
     cooccurrence_fractions: dict[str, float] = field(default_factory=dict)
     object_collaboration_fractions: dict[str, float] = field(default_factory=dict)
     time_fractions: dict[int, float] = field(default_factory=dict)
+    weekday_fractions: dict[int, float] = field(default_factory=dict)
 
     def feature_vector(
         self,
@@ -46,6 +51,7 @@ class ResourceProfile:
         cooccurring_resources: list[str] | None = None,
         collaborating_resources: list[str] | None = None,
         time_bins: list[int] | None = None,
+        weekday_bins: list[int] | None = None,
     ) -> list[float]:
         """
         Ordered numeric vector used for distance computation, MDS, and clustering.
@@ -60,6 +66,8 @@ class ResourceProfile:
             Ordered resource feature space for object collaboration fractions.
         time_bins : list[int] | None
             Hour bins (0–23) to include as time-fraction features.
+        weekday_bins : list[int] | None
+            Weekday bins (0=Mon … 6=Sun) to include as weekday-fraction features.
         """
         vec = [self.activity_fractions.get(a, 0.0) for a in activities]
         if cooccurring_resources:
@@ -68,6 +76,8 @@ class ResourceProfile:
             vec += [self.object_collaboration_fractions.get(r, 0.0) for r in collaborating_resources]
         if time_bins:
             vec += [self.time_fractions.get(h, 0.0) for h in time_bins]
+        if weekday_bins:
+            vec += [self.weekday_fractions.get(d, 0.0) for d in weekday_bins]
         return vec
 
 
@@ -87,12 +97,14 @@ class ProfileMatrix:
         cooccurring_resources: list[str] | None = None,
         collaborating_resources: list[str] | None = None,
         time_bins: list[int] | None = None,
+        weekday_bins: list[int] | None = None,
     ) -> None:
         self.profiles = profiles
         self.activities = activities
         self.cooccurring_resources: list[str] = cooccurring_resources or []
         self.collaborating_resources: list[str] = collaborating_resources or []
         self.time_bins: list[int] = time_bins or []
+        self.weekday_bins: list[int] = weekday_bins or []
 
     # ── convenience accessors ──────────────────────────────────────────────────
 
@@ -116,6 +128,8 @@ class ProfileMatrix:
             groups.append("object_collaboration_fractions")
         if self.time_bins:
             groups.append("time_fractions")
+        if self.weekday_bins:
+            groups.append("weekday_fractions")
         return groups
 
     # ── construction ──────────────────────────────────────────────────────────
@@ -350,6 +364,45 @@ class ProfileMatrix:
 
             time_bins_list = list(range(24))
 
+        # ── Weekday fractions ──────────────────────────────────────────────────
+        # 7 bins: 0=Monday … 6=Sunday (ISO weekday - 1).
+        # For each resource count events per weekday, normalise by total events.
+        weekday_fractions_by_resource: dict[str, dict[int, float]] = {
+            rid: {} for rid in resource_ids
+        }
+        weekday_bins_list: list[int] = []
+
+        if "weekday_fractions" in feature_groups:
+            event_resource_with_weekday = (
+                event_resource
+                .with_columns(
+                    (pl.from_epoch(pl.col("_timestampUnix"), time_unit="s")
+                     .dt.weekday() - 1)
+                    .alias("_weekday")   # 0=Mon … 6=Sun
+                )
+                .select(["_objId", "_weekday"])
+            )
+
+            weekday_counts = (
+                event_resource_with_weekday
+                .group_by(["_objId", "_weekday"])
+                .agg(pl.len().alias("count"))
+            )
+
+            weekday_fractions_df = (
+                weekday_counts
+                .join(totals, on="_objId", how="left")
+                .with_columns(
+                    (pl.col("count") / pl.col("total")).alias("fraction")
+                )
+                .select(["_objId", "_weekday", "fraction"])
+            )
+
+            for row in weekday_fractions_df.iter_rows(named=True):
+                weekday_fractions_by_resource[row["_objId"]][int(row["_weekday"])] = row["fraction"]
+
+            weekday_bins_list = list(range(7))
+
         # ── Assemble profiles ──────────────────────────────────────────────────
         profiles = [
             ResourceProfile(
@@ -359,6 +412,7 @@ class ProfileMatrix:
                 cooccurrence_fractions=cooccurrence_by_resource[rid],
                 object_collaboration_fractions=object_collaboration_by_resource[rid],
                 time_fractions=time_fractions_by_resource[rid],
+                weekday_fractions=weekday_fractions_by_resource[rid],
             )
             for rid in sorted(resource_ids)
         ]
@@ -369,6 +423,7 @@ class ProfileMatrix:
             cooccurring_resources=cooccurring_resources_list or None,
             collaborating_resources=collaborating_resources_list or None,
             time_bins=time_bins_list or None,
+            weekday_bins=weekday_bins_list or None,
         )
 
     # ── matrix operations ─────────────────────────────────────────────────────
@@ -381,6 +436,7 @@ class ProfileMatrix:
                 self.cooccurring_resources if self.cooccurring_resources else None,
                 self.collaborating_resources if self.collaborating_resources else None,
                 self.time_bins if self.time_bins else None,
+                self.weekday_bins if self.weekday_bins else None,
             )
             for p in self.profiles
         ])
@@ -471,6 +527,17 @@ class ProfileMatrix:
                 ])
                 # time_fractions sum to 1.0 per resource → same simplex bound as
                 # activity_fractions: max L2 = sqrt(2).
+                D += w * _norm_dist(X, np.sqrt(2))
+                total_weight += w
+
+        if self.weekday_bins:
+            w = weights.get("weekday_fractions", 1.0)
+            if w > 0:
+                X = np.array([
+                    [p.weekday_fractions.get(d, 0.0) for d in self.weekday_bins]
+                    for p in self.profiles
+                ])
+                # weekday_fractions sum to 1.0 → max L2 = sqrt(2).
                 D += w * _norm_dist(X, np.sqrt(2))
                 total_weight += w
 
@@ -661,6 +728,8 @@ class ProfileMatrix:
             result["collaborating_resources"] = self.collaborating_resources
         if self.time_bins:
             result["time_bins"] = self.time_bins
+        if self.weekday_bins:
+            result["weekday_bins"] = self.weekday_bins
 
         # Always use the precomputed distance matrix so the scale is consistent
         # across all configurations (single group, multi-group, any weights).
