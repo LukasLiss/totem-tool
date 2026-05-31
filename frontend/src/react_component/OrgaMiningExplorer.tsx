@@ -1726,6 +1726,13 @@ function TooltipBox({
         const gap = barW * 0.25;
         const bw = barW - gap;
         const tickHours = [0, 6, 12, 18, 23];
+        // Dynamic ceiling: snap the max value up to the nearest nice percentage
+        const NICE = [0.05, 0.10, 0.15, 0.20, 0.25, 0.33, 0.50, 0.75, 1.0];
+        const maxVal = Math.max(...timeBinValues, 0);
+        const ceiling = NICE.find(c => c >= maxVal) ?? 1.0;
+        const ceilLabel = (ceiling * 100) % 1 === 0
+          ? `${(ceiling * 100).toFixed(0)}%`
+          : `${(ceiling * 100).toFixed(0)}%`;
         return (
           <div style={sectionStyle("time")}>
             <div style={{
@@ -1734,30 +1741,18 @@ function TooltipBox({
             }}>Time binning (hourly)</div>
             <svg width={totalW} height={BAR_H + AXIS_H} style={{ display: "block", overflow: "visible" }}>
               {timeBinValues.map((val, i) => {
-                const bh = Math.max(val * BAR_H, val > 0 ? 1 : 0);
+                const bh = Math.max((val / ceiling) * BAR_H, val > 0 ? 1 : 0);
                 const x = i * barW + gap / 2;
-                return (
-                  <rect
-                    key={i}
-                    x={x} y={BAR_H - bh}
-                    width={bw} height={bh}
-                    fill="#6366f1" opacity={0.75} rx={1}
-                  />
-                );
+                return <rect key={i} x={x} y={BAR_H - bh} width={bw} height={bh} fill="#6366f1" opacity={0.75} rx={1} />;
               })}
+              {/* Scale reference line at ceiling */}
+              <line x1={0} y1={0} x2={totalW} y2={0} stroke="#cbd5e1" strokeWidth={1} strokeDasharray="3,2" />
+              <text x={totalW} y={-2} textAnchor="end" fontSize={7} fill="#94a3b8" fontFamily="sans-serif">{ceilLabel}</text>
               {/* Baseline */}
               <line x1={0} y1={BAR_H} x2={totalW} y2={BAR_H} stroke="#e2e8f0" strokeWidth={1} />
-              {/* Hour axis labels */}
               {tickHours.map(h => (
-                <text
-                  key={h}
-                  x={h * barW + barW / 2}
-                  y={BAR_H + AXIS_H - 1}
-                  textAnchor="middle"
-                  fontSize={8}
-                  fill="#94a3b8"
-                  fontFamily="sans-serif"
-                >
+                <text key={h} x={h * barW + barW / 2} y={BAR_H + AXIS_H - 1}
+                  textAnchor="middle" fontSize={8} fill="#94a3b8" fontFamily="sans-serif">
                   {String(h).padStart(2, "0")}
                 </text>
               ))}
@@ -1775,6 +1770,10 @@ function TooltipBox({
         const barW = BAR_AREA_W / 7;
         const gap = barW * 0.2;
         const bw = barW - gap;
+        const NICE = [0.05, 0.10, 0.15, 0.20, 0.25, 0.33, 0.50, 0.75, 1.0];
+        const maxVal = Math.max(...weekdayValues, 0);
+        const ceiling = NICE.find(c => c >= maxVal) ?? 1.0;
+        const ceilLabel = `${Math.round(ceiling * 100)}%`;
         return (
           <div style={sectionStyle("weekday")}>
             <div style={{
@@ -1783,13 +1782,14 @@ function TooltipBox({
             }}>Time binning (weekly)</div>
             <svg width={BAR_AREA_W} height={BAR_H + AXIS_H} style={{ display: "block", overflow: "visible" }}>
               {weekdayValues.map((val, i) => {
-                const bh = Math.max(val * BAR_H, val > 0 ? 1 : 0);
+                const bh = Math.max((val / ceiling) * BAR_H, val > 0 ? 1 : 0);
                 const x = i * barW + gap / 2;
-                return (
-                  <rect key={i} x={x} y={BAR_H - bh} width={bw} height={bh}
-                    fill="#10b981" opacity={0.75} rx={1} />
-                );
+                return <rect key={i} x={x} y={BAR_H - bh} width={bw} height={bh} fill="#10b981" opacity={0.75} rx={1} />;
               })}
+              {/* Scale reference line at ceiling */}
+              <line x1={0} y1={0} x2={BAR_AREA_W} y2={0} stroke="#cbd5e1" strokeWidth={1} strokeDasharray="3,2" />
+              <text x={BAR_AREA_W} y={-2} textAnchor="end" fontSize={7} fill="#94a3b8" fontFamily="sans-serif">{ceilLabel}</text>
+              {/* Baseline */}
               <line x1={0} y1={BAR_H} x2={BAR_AREA_W} y2={BAR_H} stroke="#e2e8f0" strokeWidth={1} />
               {DAY_LABELS.map((label, i) => (
                 <text key={i} x={i * barW + barW / 2} y={BAR_H + AXIS_H - 1}
