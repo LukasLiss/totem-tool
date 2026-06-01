@@ -1689,9 +1689,11 @@ function TooltipBox({
                     {type}
                   </span>
                   <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0 }}>{nLabel}/{total}</span>
-                  <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, width: 8, textAlign: "right" }}>
-                    {expandable ? (open ? "▾" : "▸") : ""}
-                  </span>
+                  {!tooltip.isCluster && (
+                    <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, width: 8, textAlign: "right" }}>
+                      {expandable ? (open ? "▾" : "▸") : ""}
+                    </span>
+                  )}
                 </div>
                 {expandable && open && (
                   <div style={{ maxHeight: 90, overflowY: "auto", marginTop: 2, marginLeft: 13,
