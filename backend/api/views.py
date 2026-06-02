@@ -350,12 +350,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            case_min = _optional_int(request.query_params.get("case_min"))
-            case_max = _optional_int(request.query_params.get("case_max"))
+            row_min = _optional_int(request.query_params.get("row_min"))
+            row_max = _optional_int(request.query_params.get("row_max"))
             max_points = int(request.query_params.get("max_points", 3000))
         except ValueError:
             return Response(
-                {"error": "case_min, case_max, and max_points must be integers"},
+                {"error": "row_min, row_max, and max_points must be integers"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -365,10 +365,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     db,
                     t_min=request.query_params.get("t_min"),
                     t_max=request.query_params.get("t_max"),
-                    case_min=case_min,
-                    case_max=case_max,
+                    row_min=row_min,
+                    row_max=row_max,
+                    object_type=request.query_params.get("object_type"),
                     x_axis=request.query_params.get("x_axis", "time"),
-                    y_axis=request.query_params.get("y_axis", "case_index"),
+                    y_axis=request.query_params.get("y_axis", "row_index"),
                     color_by=request.query_params.get("color_by", "activity"),
                     shape_by=request.query_params.get("shape_by", "none"),
                     sort_by=request.query_params.get("sort_by", "time"),

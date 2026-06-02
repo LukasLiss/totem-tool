@@ -15,10 +15,11 @@ def get_oc_dotted_chart_data(
     *,
     t_min: str | int | float | None = None,
     t_max: str | int | float | None = None,
-    case_min: int | None = None,
-    case_max: int | None = None,
+    row_min: int | None = None,
+    row_max: int | None = None,
+    object_type: str | None = None,
     x_axis: str = "time",
-    y_axis: str = "case_index",
+    y_axis: str = "row_index",
     color_by: str = "activity",
     shape_by: str = "none",
     sort_by: str = "time",
@@ -27,17 +28,30 @@ def get_oc_dotted_chart_data(
     """
     Return sampled event data for the object-centric dotted chart.
 
-    The default point budget is intentionally conservative. It should be
-    increased only after benchmarking representative logs for query time,
-    response size, and frontend rendering cost.
+    Rows are object ids of one selected object type, sorted by each object's
+    first event timestamp. The default point budget is intentionally
+    conservative and should be raised only after benchmarking representative
+    logs for query time, response size, and frontend rendering cost.
     """
     point_limit = _clamp_max_points(max_points)
-    filters, params = _filters(t_min=t_min, t_max=t_max, case_min=case_min, case_max=case_max)
+    selected_object_type = object_type or _default_object_type(db)
+    if selected_object_type is None:
+        return {
+            "events": [],
+            "total_count": 0,
+            "sampled": False,
+            "outlier_count": 0,
+            "object_type": None,
+        }
+
+    filters, params = _filters(t_min=t_min, t_max=t_max, row_min=row_min, row_max=row_max)
+    base_params = [selected_object_type]
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+    base_sql = _base_events_sql()
 
     total_count = db.conn.execute(
-        f"SELECT COUNT(*) FROM ({_base_events_sql()}) base {where_sql}",
-        params,
+        f"SELECT COUNT(*) FROM ({base_sql}) base {where_sql}",
+        [*base_params, *params],
     ).fetchone()[0]
 
     if total_count == 0:
@@ -46,6 +60,7 @@ def get_oc_dotted_chart_data(
             "total_count": 0,
             "sampled": False,
             "outlier_count": 0,
+            "object_type": selected_object_type,
         }
 
     x_expr = _axis_expr(x_axis)
@@ -56,7 +71,7 @@ def get_oc_dotted_chart_data(
 
     bucket_count = max(1, min(1_000, point_limit // 10))
     query = f"""
-        WITH base AS ({_base_events_sql()}),
+        WITH base AS ({base_sql}),
         filtered AS (
             SELECT * FROM base
             {where_sql}
@@ -65,8 +80,8 @@ def get_oc_dotted_chart_data(
             SELECT
                 *,
                 CASE
-                    WHEN std_case_ts IS NULL OR std_case_ts = 0 THEN 0
-                    ELSE ABS((timestamp_unix - avg_case_ts) / std_case_ts)
+                    WHEN std_row_ts IS NULL OR std_row_ts = 0 THEN 0
+                    ELSE ABS((timestamp_unix - avg_row_ts) / std_row_ts)
                 END AS outlier_score,
                 CASE
                     WHEN ? <= 1 OR max_ts = min_ts THEN 0
@@ -85,11 +100,11 @@ def get_oc_dotted_chart_data(
             SELECT
                 *,
                 ROW_NUMBER() OVER (
-                    ORDER BY outlier_score DESC, timestamp_unix ASC, event_id ASC
+                    ORDER BY outlier_score DESC, timestamp_unix ASC, event_id ASC, row_id ASC
                 ) AS outlier_rank,
                 ROW_NUMBER() OVER (
                     PARTITION BY sample_bucket
-                    ORDER BY outlier_score DESC, hash(event_id) ASC
+                    ORDER BY outlier_score DESC, hash(event_id, row_id) ASC
                 ) AS bucket_rank
             FROM scored
         ),
@@ -98,7 +113,7 @@ def get_oc_dotted_chart_data(
             FROM ranked
             WHERE outlier_rank <= CEIL(?::DOUBLE * 0.15)
                OR bucket_rank <= CEIL(?::DOUBLE / ?)
-            ORDER BY {sort_expr} NULLS LAST, timestamp_unix ASC, event_id ASC
+            ORDER BY {sort_expr} NULLS LAST, timestamp_unix ASC, event_id ASC, row_id ASC
             LIMIT ?
         )
         SELECT
@@ -109,15 +124,26 @@ def get_oc_dotted_chart_data(
             {shape_expr} AS shape_value,
             activity,
             timestamp_unix,
-            case_id,
-            case_index,
-            event_index_in_case,
+            row_object_type,
+            row_id,
+            row_index,
+            event_index_in_row,
             outlier_score
         FROM sampled
     """
     rows = db.conn.execute(
         query,
-        [*params, bucket_count, bucket_count, bucket_count, point_limit, point_limit, bucket_count, point_limit],
+        [
+            *base_params,
+            *params,
+            bucket_count,
+            bucket_count,
+            bucket_count,
+            point_limit,
+            point_limit,
+            bucket_count,
+            point_limit,
+        ],
     ).fetchall()
     objects_by_event = _objects_for_events(db, [row[0] for row in rows])
 
@@ -131,9 +157,10 @@ def get_oc_dotted_chart_data(
             "activity": row[5],
             "timestamp": _to_iso(row[6]),
             "timestamp_unix": int(row[6]),
-            "case_id": row[7],
-            "case_index": int(row[8]) if row[8] is not None else None,
-            "event_index_in_case": int(row[9]) if row[9] is not None else None,
+            "row_object_type": row[7],
+            "row_id": row[8],
+            "row_index": int(row[9]) if row[9] is not None else None,
+            "event_index_in_row": int(row[10]) if row[10] is not None else None,
             "objects": objects_by_event.get(row[0], {}),
         }
         for row in rows
@@ -143,37 +170,46 @@ def get_oc_dotted_chart_data(
         "events": events,
         "total_count": int(total_count),
         "sampled": int(total_count) > len(events),
-        "outlier_count": sum(1 for row in rows if float(row[10] or 0) >= 2.0),
+        "outlier_count": sum(1 for row in rows if float(row[11] or 0) >= 2.0),
+        "object_type": selected_object_type,
     }
 
 
 def _base_events_sql() -> str:
     return """
-        WITH event_cases AS (
-            SELECT event_id, MIN(obj_id) AS case_id
-            FROM event_object
-            GROUP BY event_id
+        WITH selected AS (
+            SELECT
+                e.event_id,
+                e.activity,
+                e.timestamp_unix,
+                o.obj_type AS row_object_type,
+                eo.obj_id AS row_id,
+                MIN(e.timestamp_unix) OVER (PARTITION BY eo.obj_id) AS row_first_timestamp
+            FROM events e
+            JOIN event_object eo ON eo.event_id = e.event_id
+            JOIN objects o ON o.obj_id = eo.obj_id
+            WHERE o.obj_type = ?
         )
         SELECT
-            e.event_id,
-            e.activity,
-            e.timestamp_unix,
-            COALESCE(ec.case_id, e.event_id) AS case_id,
-            DENSE_RANK() OVER (ORDER BY COALESCE(ec.case_id, e.event_id)) AS case_index,
+            event_id,
+            activity,
+            timestamp_unix,
+            row_object_type,
+            row_id,
+            DENSE_RANK() OVER (ORDER BY row_first_timestamp, row_id) AS row_index,
             ROW_NUMBER() OVER (
-                PARTITION BY COALESCE(ec.case_id, e.event_id)
-                ORDER BY e.timestamp_unix, e.event_id
-            ) AS event_index_in_case,
-            AVG(e.timestamp_unix) OVER (
-                PARTITION BY COALESCE(ec.case_id, e.event_id)
-            ) AS avg_case_ts,
-            STDDEV_POP(e.timestamp_unix) OVER (
-                PARTITION BY COALESCE(ec.case_id, e.event_id)
-            ) AS std_case_ts,
-            MIN(e.timestamp_unix) OVER () AS min_ts,
-            MAX(e.timestamp_unix) OVER () AS max_ts
-        FROM events e
-        LEFT JOIN event_cases ec ON ec.event_id = e.event_id
+                PARTITION BY row_id
+                ORDER BY timestamp_unix, event_id
+            ) AS event_index_in_row,
+            AVG(timestamp_unix) OVER (
+                PARTITION BY row_id
+            ) AS avg_row_ts,
+            STDDEV_POP(timestamp_unix) OVER (
+                PARTITION BY row_id
+            ) AS std_row_ts,
+            MIN(timestamp_unix) OVER () AS min_ts,
+            MAX(timestamp_unix) OVER () AS max_ts
+        FROM selected
     """
 
 
@@ -181,8 +217,8 @@ def _filters(
     *,
     t_min: str | int | float | None,
     t_max: str | int | float | None,
-    case_min: int | None,
-    case_max: int | None,
+    row_min: int | None,
+    row_max: int | None,
 ) -> tuple[list[str], list[Any]]:
     filters: list[str] = []
     params: list[Any] = []
@@ -194,12 +230,12 @@ def _filters(
     if t_max_unix is not None:
         filters.append("timestamp_unix <= ?")
         params.append(t_max_unix)
-    if case_min is not None:
-        filters.append("case_index >= ?")
-        params.append(int(case_min))
-    if case_max is not None:
-        filters.append("case_index <= ?")
-        params.append(int(case_max))
+    if row_min is not None:
+        filters.append("row_index >= ?")
+        params.append(int(row_min))
+    if row_max is not None:
+        filters.append("row_index <= ?")
+        params.append(int(row_max))
     return filters, params
 
 
@@ -208,12 +244,14 @@ def _axis_expr(axis: str | None) -> str:
         return "timestamp_unix"
     if axis == "activity":
         return "activity"
-    if axis == "case_index":
-        return "case_index"
-    if axis == "event_index_in_case":
-        return "event_index_in_case"
-    if axis == "case_id":
-        return "case_id"
+    if axis == "object_type":
+        return "row_object_type"
+    if axis in ("object_id", "row_id"):
+        return "row_id"
+    if axis == "row_index":
+        return "row_index"
+    if axis == "event_index_in_row":
+        return "event_index_in_row"
     if axis and axis.startswith("object_type:"):
         object_type = axis.split(":", 1)[1].replace("'", "''")
         return (
@@ -223,6 +261,20 @@ def _axis_expr(axis: str | None) -> str:
             f"WHERE eo_axis.event_id = event_id AND o_axis.obj_type = '{object_type}')"
         )
     return "NULL"
+
+
+def _default_object_type(db: OcelDuckDB) -> str | None:
+    row = db.conn.execute(
+        """
+        SELECT o.obj_type
+        FROM event_object eo
+        JOIN objects o ON o.obj_id = eo.obj_id
+        GROUP BY o.obj_type
+        ORDER BY COUNT(*) DESC, o.obj_type ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    return row[0] if row else None
 
 
 def _objects_for_events(db: OcelDuckDB, event_ids: list[str]) -> dict[str, dict[str, list[str]]]:
