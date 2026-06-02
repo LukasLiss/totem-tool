@@ -284,14 +284,6 @@ def _axis_expr(axis: str | None, event_attr_columns: list[str]) -> str:
         return "activity"
     if axis in event_attr_columns:
         return _quote_identifier(axis)
-    if axis and axis.startswith("object_type:"):
-        object_type = axis.split(":", 1)[1].replace("'", "''")
-        return (
-            "(SELECT MIN(eo_axis.obj_id) "
-            "FROM event_object eo_axis "
-            "JOIN objects o_axis ON o_axis.obj_id = eo_axis.obj_id "
-            f"WHERE eo_axis.event_id = event_id AND o_axis.obj_type = '{object_type}')"
-        )
     return "NULL"
 
 

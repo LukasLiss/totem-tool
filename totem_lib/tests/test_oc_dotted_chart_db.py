@@ -42,15 +42,15 @@ def test_oc_dotted_chart_supports_row_viewport_filter():
     assert all(1 <= event["row_index"] <= 5 for event in result["events"])
 
 
-def test_oc_dotted_chart_can_use_object_type_expression_as_y_axis():
+def test_oc_dotted_chart_ignores_unknown_y_axis_values():
     db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
 
     result = get_oc_dotted_chart_data(
         db,
-        y_axis="object_type:Container",
+        y_axis="not_a_dimension",
         max_points=250,
     )
 
-    assert result["total_count"] >= len(result["events"])
-    assert all(event["y"] for event in result["events"])
-    assert all(event["row_id"] == event["y"] for event in result["events"])
+    assert result["events"] == []
+    assert result["total_count"] == 0
+    assert result["sampled"] is False
