@@ -49,12 +49,19 @@ def test_oc_dotted_chart_supports_object_row_viewport_filter():
 def test_oc_dotted_chart_uses_object_rows_when_object_type_is_selected():
     db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
 
-    result = get_oc_dotted_chart_data(
+    default_result = get_oc_dotted_chart_data(
         db,
         object_type="Container",
         max_points=250,
     )
+    row_result = get_oc_dotted_chart_data(
+        db,
+        object_type="Container",
+        y_axis="row_index",
+        max_points=250,
+    )
 
-    assert result["object_type"] == "Container"
-    assert all(event["row_object_type"] == "Container" for event in result["events"])
-    assert all(event["y"] == event["row_index"] for event in result["events"])
+    assert default_result["object_type"] == "Container"
+    assert all(event["row_object_type"] == "Container" for event in default_result["events"])
+    assert all(event["y"] == event["activity"] for event in default_result["events"])
+    assert all(event["y"] == event["row_index"] for event in row_result["events"])
