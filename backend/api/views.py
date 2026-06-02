@@ -369,7 +369,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     row_max=row_max,
                     object_type=request.query_params.get("object_type"),
                     x_axis=request.query_params.get("x_axis", "time"),
-                    y_axis=request.query_params.get("y_axis", "row_index"),
+                    y_axis=request.query_params.get("y_axis"),
                     color_by=request.query_params.get("color_by", "activity"),
                     shape_by=request.query_params.get("shape_by", "none"),
                     sort_by=request.query_params.get("sort_by", "time"),

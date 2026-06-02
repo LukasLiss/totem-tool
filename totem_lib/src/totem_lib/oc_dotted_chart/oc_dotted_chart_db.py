@@ -19,7 +19,7 @@ def get_oc_dotted_chart_data(
     row_max: int | None = None,
     object_type: str | None = None,
     x_axis: str = "time",
-    y_axis: str = "row_index",
+    y_axis: str | None = None,
     color_by: str = "activity",
     shape_by: str = "none",
     sort_by: str = "time",
@@ -28,26 +28,20 @@ def get_oc_dotted_chart_data(
     """
     Return sampled event data for the object-centric dotted chart.
 
-    Rows are object ids of one selected object type, sorted by each object's
-    first event timestamp. The default point budget is intentionally
-    conservative and should be raised only after benchmarking representative
-    logs for query time, response size, and frontend rendering cost.
+    If an object type is selected, rows are object ids of that type, sorted by
+    each object's first event timestamp. Without an object type, rows default
+    to activities. The default point budget is intentionally conservative and
+    should be raised only after benchmarking representative logs for query
+    time, response size, and frontend rendering cost.
     """
     point_limit = _clamp_max_points(max_points)
-    selected_object_type = object_type or _default_object_type(db)
-    if selected_object_type is None:
-        return {
-            "events": [],
-            "total_count": 0,
-            "sampled": False,
-            "outlier_count": 0,
-            "object_type": None,
-        }
+    selected_object_type = object_type.strip() if object_type else None
+    effective_y_axis = y_axis or ("row_index" if selected_object_type else "activity")
 
     filters, params = _filters(t_min=t_min, t_max=t_max, row_min=row_min, row_max=row_max)
-    base_params = [selected_object_type]
+    base_params = [selected_object_type] if selected_object_type else []
     where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-    base_sql = _base_events_sql()
+    base_sql = _base_events_sql(use_object_rows=selected_object_type is not None)
 
     total_count = db.conn.execute(
         f"SELECT COUNT(*) FROM ({base_sql}) base {where_sql}",
@@ -64,7 +58,7 @@ def get_oc_dotted_chart_data(
         }
 
     x_expr = _axis_expr(x_axis)
-    y_expr = _axis_expr(y_axis)
+    y_expr = _axis_expr(effective_y_axis)
     color_expr = _axis_expr(color_by)
     shape_expr = _axis_expr(shape_by)
     sort_expr = _axis_expr(sort_by)
@@ -175,7 +169,41 @@ def get_oc_dotted_chart_data(
     }
 
 
-def _base_events_sql() -> str:
+def _base_events_sql(*, use_object_rows: bool) -> str:
+    if not use_object_rows:
+        return """
+            WITH selected AS (
+                SELECT
+                    event_id,
+                    activity,
+                    timestamp_unix,
+                    NULL AS row_object_type,
+                    activity AS row_id,
+                    MIN(timestamp_unix) OVER (PARTITION BY activity) AS row_first_timestamp
+                FROM events
+            )
+            SELECT
+                event_id,
+                activity,
+                timestamp_unix,
+                row_object_type,
+                row_id,
+                DENSE_RANK() OVER (ORDER BY row_first_timestamp, row_id) AS row_index,
+                ROW_NUMBER() OVER (
+                    PARTITION BY row_id
+                    ORDER BY timestamp_unix, event_id
+                ) AS event_index_in_row,
+                AVG(timestamp_unix) OVER (
+                    PARTITION BY row_id
+                ) AS avg_row_ts,
+                STDDEV_POP(timestamp_unix) OVER (
+                    PARTITION BY row_id
+                ) AS std_row_ts,
+                MIN(timestamp_unix) OVER () AS min_ts,
+                MAX(timestamp_unix) OVER () AS max_ts
+            FROM selected
+        """
+
     return """
         WITH selected AS (
             SELECT
@@ -261,20 +289,6 @@ def _axis_expr(axis: str | None) -> str:
             f"WHERE eo_axis.event_id = event_id AND o_axis.obj_type = '{object_type}')"
         )
     return "NULL"
-
-
-def _default_object_type(db: OcelDuckDB) -> str | None:
-    row = db.conn.execute(
-        """
-        SELECT o.obj_type
-        FROM event_object eo
-        JOIN objects o ON o.obj_id = eo.obj_id
-        GROUP BY o.obj_type
-        ORDER BY COUNT(*) DESC, o.obj_type ASC
-        LIMIT 1
-        """
-    ).fetchone()
-    return row[0] if row else None
 
 
 def _objects_for_events(db: OcelDuckDB, event_ids: list[str]) -> dict[str, dict[str, list[str]]]:
