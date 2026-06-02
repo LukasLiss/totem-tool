@@ -19,49 +19,38 @@ def test_oc_dotted_chart_caps_rows_and_returns_contract():
         "shape_value",
         "activity",
         "timestamp",
-        "row_object_type",
         "row_id",
         "row_index",
+        "event_index_in_row",
         "objects",
     } <= set(result["events"][0])
-    assert result["object_type"] is None
-    assert all(event["row_object_type"] is None for event in result["events"])
     assert all(event["y"] == event["activity"] for event in result["events"])
+    assert all(event["color_value"] == event["activity"] for event in result["events"])
 
 
-def test_oc_dotted_chart_supports_object_row_viewport_filter():
+def test_oc_dotted_chart_supports_row_viewport_filter():
     db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
 
     result = get_oc_dotted_chart_data(
         db,
-        object_type="Container",
         row_min=1,
-        row_max=25,
+        row_max=5,
         max_points=500,
     )
 
     assert result["total_count"] >= len(result["events"])
-    assert result["object_type"] == "Container"
-    assert all(event["row_object_type"] == "Container" for event in result["events"])
-    assert all(event["row_index"] <= 25 for event in result["events"])
+    assert all(1 <= event["row_index"] <= 5 for event in result["events"])
 
 
-def test_oc_dotted_chart_uses_object_rows_when_object_type_is_selected():
+def test_oc_dotted_chart_can_use_object_type_expression_as_y_axis():
     db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
 
-    default_result = get_oc_dotted_chart_data(
+    result = get_oc_dotted_chart_data(
         db,
-        object_type="Container",
-        max_points=250,
-    )
-    row_result = get_oc_dotted_chart_data(
-        db,
-        object_type="Container",
-        y_axis="row_index",
+        y_axis="object_type:Container",
         max_points=250,
     )
 
-    assert default_result["object_type"] == "Container"
-    assert all(event["row_object_type"] == "Container" for event in default_result["events"])
-    assert all(event["y"] == event["activity"] for event in default_result["events"])
-    assert all(event["y"] == event["row_index"] for event in row_result["events"])
+    assert result["total_count"] >= len(result["events"])
+    assert all(event["y"] for event in result["events"])
+    assert all(event["row_id"] == event["y"] for event in result["events"])

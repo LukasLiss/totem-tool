@@ -367,7 +367,6 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     t_max=request.query_params.get("t_max"),
                     row_min=row_min,
                     row_max=row_max,
-                    object_type=request.query_params.get("object_type"),
                     x_axis=request.query_params.get("x_axis", "time"),
                     y_axis=request.query_params.get("y_axis"),
                     color_by=request.query_params.get("color_by", "activity"),

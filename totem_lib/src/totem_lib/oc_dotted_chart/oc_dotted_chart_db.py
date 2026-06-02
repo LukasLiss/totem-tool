@@ -17,7 +17,6 @@ def get_oc_dotted_chart_data(
     t_max: str | int | float | None = None,
     row_min: int | None = None,
     row_max: int | None = None,
-    object_type: str | None = None,
     x_axis: str = "time",
     y_axis: str | None = None,
     color_by: str = "activity",
@@ -29,28 +28,40 @@ def get_oc_dotted_chart_data(
     Return sampled event data for the object-centric dotted chart.
 
     Defaults follow the generic dotted chart view: timestamp on the x-axis,
-    activity on the y-axis, and activity for coloring. If an object type is
-    selected, object-row fields are also available for dimensions. The default
-    point budget is intentionally conservative and should be raised only after
-    benchmarking representative logs for query time, response size, and
-    frontend rendering cost.
+    activity on the y-axis, and activity for coloring. Event attributes can be
+    selected as dimensions once they are present as event columns in DuckDB.
+    The default point budget is intentionally conservative and should be raised
+    only after benchmarking representative logs for query time, response size,
+    and frontend rendering cost.
     """
     point_limit = _clamp_max_points(max_points)
-    selected_object_type = object_type.strip() if object_type else None
     effective_y_axis = y_axis or "activity"
     event_attr_columns = _event_attr_columns(db)
 
-    filters, params = _filters(t_min=t_min, t_max=t_max, row_min=row_min, row_max=row_max)
-    base_params = [selected_object_type] if selected_object_type else []
-    where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-    base_sql = _base_events_sql(
-        event_attr_columns=event_attr_columns,
-        use_object_rows=selected_object_type is not None,
+    time_filters, time_params = _time_filters(t_min=t_min, t_max=t_max)
+    row_filters, row_params = _row_filters(row_min=row_min, row_max=row_max)
+    base_where_sql = f"WHERE {' AND '.join(time_filters)}" if time_filters else ""
+    dimensioned_where = ["x IS NOT NULL", "y IS NOT NULL", *row_filters]
+    dimensioned_where_sql = f"WHERE {' AND '.join(dimensioned_where)}"
+
+    base_sql = _base_events_sql(event_attr_columns=event_attr_columns)
+    x_expr = _axis_expr(x_axis, event_attr_columns)
+    y_expr = _axis_expr(effective_y_axis, event_attr_columns)
+    color_expr = _axis_expr(color_by, event_attr_columns)
+    shape_expr = _axis_expr(shape_by, event_attr_columns)
+    sort_expr = _axis_expr(sort_by, event_attr_columns)
+    dimensioned_sql = _dimensioned_events_sql(
+        base_sql=base_sql,
+        base_where_sql=base_where_sql,
+        x_expr=x_expr,
+        y_expr=y_expr,
+        color_expr=color_expr,
+        shape_expr=shape_expr,
     )
 
     total_count = db.conn.execute(
-        f"SELECT COUNT(*) FROM ({base_sql}) base {where_sql}",
-        [*base_params, *params],
+        f"SELECT COUNT(*) FROM ({dimensioned_sql}) dimensioned {dimensioned_where_sql}",
+        [*time_params, *row_params],
     ).fetchone()[0]
 
     if total_count == 0:
@@ -59,21 +70,14 @@ def get_oc_dotted_chart_data(
             "total_count": 0,
             "sampled": False,
             "outlier_count": 0,
-            "object_type": selected_object_type,
         }
-
-    x_expr = _axis_expr(x_axis, event_attr_columns)
-    y_expr = _axis_expr(effective_y_axis, event_attr_columns)
-    color_expr = _axis_expr(color_by, event_attr_columns)
-    shape_expr = _axis_expr(shape_by, event_attr_columns)
-    sort_expr = _axis_expr(sort_by, event_attr_columns)
 
     bucket_count = max(1, min(1_000, point_limit // 10))
     query = f"""
-        WITH base AS ({base_sql}),
+        WITH dimensioned AS ({dimensioned_sql}),
         filtered AS (
-            SELECT * FROM base
-            {where_sql}
+            SELECT * FROM dimensioned
+            {dimensioned_where_sql}
         ),
         scored AS (
             SELECT
@@ -117,13 +121,12 @@ def get_oc_dotted_chart_data(
         )
         SELECT
             event_id,
-            {x_expr} AS x,
-            {y_expr} AS y,
-            {color_expr} AS color_value,
-            {shape_expr} AS shape_value,
+            x,
+            y,
+            color_value,
+            shape_value,
             activity,
             timestamp_unix,
-            row_object_type,
             row_id,
             row_index,
             event_index_in_row,
@@ -133,8 +136,8 @@ def get_oc_dotted_chart_data(
     rows = db.conn.execute(
         query,
         [
-            *base_params,
-            *params,
+            *time_params,
+            *row_params,
             bucket_count,
             bucket_count,
             bucket_count,
@@ -156,10 +159,9 @@ def get_oc_dotted_chart_data(
             "activity": row[5],
             "timestamp": _to_iso(row[6]),
             "timestamp_unix": int(row[6]),
-            "row_object_type": row[7],
-            "row_id": row[8],
-            "row_index": int(row[9]) if row[9] is not None else None,
-            "event_index_in_row": int(row[10]) if row[10] is not None else None,
+            "row_id": row[7],
+            "row_index": int(row[8]) if row[8] is not None else None,
+            "event_index_in_row": int(row[9]) if row[9] is not None else None,
             "objects": objects_by_event.get(row[0], {}),
         }
         for row in rows
@@ -169,73 +171,62 @@ def get_oc_dotted_chart_data(
         "events": events,
         "total_count": int(total_count),
         "sampled": int(total_count) > len(events),
-        "outlier_count": sum(1 for row in rows if float(row[11] or 0) >= 2.0),
-        "object_type": selected_object_type,
+        "outlier_count": sum(1 for row in rows if float(row[10] or 0) >= 2.0),
     }
 
 
-def _base_events_sql(*, event_attr_columns: list[str], use_object_rows: bool) -> str:
+def _base_events_sql(*, event_attr_columns: list[str]) -> str:
     event_attr_selects = _event_attr_selects(event_attr_columns, table_alias=None)
-    object_event_attr_selects = _event_attr_selects(event_attr_columns, table_alias="e")
-
-    if not use_object_rows:
-        return """
-            WITH selected AS (
-                SELECT
-                    event_id,
-                    activity,
-                    timestamp_unix,
-                    NULL AS row_object_type,
-                    activity AS row_id,
-                    MIN(timestamp_unix) OVER (PARTITION BY activity) AS row_first_timestamp
-                    {event_attr_selects}
-                FROM events
-            )
-            SELECT
-                event_id,
-                activity,
-                timestamp_unix,
-                row_object_type,
-                row_id,
-                DENSE_RANK() OVER (ORDER BY row_first_timestamp, row_id) AS row_index,
-                ROW_NUMBER() OVER (
-                    PARTITION BY row_id
-                    ORDER BY timestamp_unix, event_id
-                ) AS event_index_in_row,
-                AVG(timestamp_unix) OVER (
-                    PARTITION BY row_id
-                ) AS avg_row_ts,
-                STDDEV_POP(timestamp_unix) OVER (
-                    PARTITION BY row_id
-                ) AS std_row_ts,
-                MIN(timestamp_unix) OVER () AS min_ts,
-                MAX(timestamp_unix) OVER () AS max_ts
-                {event_attr_selects}
-            FROM selected
-        """.format(event_attr_selects=event_attr_selects)
-
     return """
-        WITH selected AS (
-            SELECT
-                e.event_id,
-                e.activity,
-                e.timestamp_unix,
-                o.obj_type AS row_object_type,
-                eo.obj_id AS row_id,
-                MIN(e.timestamp_unix) OVER (PARTITION BY eo.obj_id) AS row_first_timestamp
-                {object_event_attr_selects}
-            FROM events e
-            JOIN event_object eo ON eo.event_id = e.event_id
-            JOIN objects o ON o.obj_id = eo.obj_id
-            WHERE o.obj_type = ?
-        )
         SELECT
             event_id,
             activity,
+            timestamp_unix
+            {event_attr_selects}
+        FROM events
+        {base_where_sql}
+    """.format(event_attr_selects=event_attr_selects, base_where_sql="{base_where_sql}")
+
+
+def _dimensioned_events_sql(
+    *,
+    base_sql: str,
+    base_where_sql: str,
+    x_expr: str,
+    y_expr: str,
+    color_expr: str,
+    shape_expr: str,
+) -> str:
+    return f"""
+        WITH base AS ({base_sql.format(base_where_sql=base_where_sql)}),
+        selected AS (
+            SELECT
+                *,
+                {x_expr} AS x,
+                {y_expr} AS y,
+                {color_expr} AS color_value,
+                {shape_expr} AS shape_value
+            FROM base
+        ),
+        rowed AS (
+            SELECT
+                *,
+                CAST(y AS VARCHAR) AS row_id,
+                MIN(timestamp_unix) OVER (PARTITION BY y) AS row_first_timestamp
+            FROM selected
+        )
+        SELECT
+            event_id,
+            x,
+            y,
+            color_value,
+            shape_value,
+            activity,
             timestamp_unix,
-            row_object_type,
             row_id,
-            DENSE_RANK() OVER (ORDER BY row_first_timestamp, row_id) AS row_index,
+            DENSE_RANK() OVER (
+                ORDER BY row_first_timestamp, row_id
+            ) AS row_index,
             ROW_NUMBER() OVER (
                 PARTITION BY row_id
                 ORDER BY timestamp_unix, event_id
@@ -248,20 +239,14 @@ def _base_events_sql(*, event_attr_columns: list[str], use_object_rows: bool) ->
             ) AS std_row_ts,
             MIN(timestamp_unix) OVER () AS min_ts,
             MAX(timestamp_unix) OVER () AS max_ts
-            {event_attr_selects}
-        FROM selected
-    """.format(
-        event_attr_selects=event_attr_selects,
-        object_event_attr_selects=object_event_attr_selects,
-    )
+        FROM rowed
+    """
 
 
-def _filters(
+def _time_filters(
     *,
     t_min: str | int | float | None,
     t_max: str | int | float | None,
-    row_min: int | None,
-    row_max: int | None,
 ) -> tuple[list[str], list[Any]]:
     filters: list[str] = []
     params: list[Any] = []
@@ -273,6 +258,16 @@ def _filters(
     if t_max_unix is not None:
         filters.append("timestamp_unix <= ?")
         params.append(t_max_unix)
+    return filters, params
+
+
+def _row_filters(
+    *,
+    row_min: int | None,
+    row_max: int | None,
+) -> tuple[list[str], list[Any]]:
+    filters: list[str] = []
+    params: list[Any] = []
     if row_min is not None:
         filters.append("row_index >= ?")
         params.append(int(row_min))
@@ -287,14 +282,6 @@ def _axis_expr(axis: str | None, event_attr_columns: list[str]) -> str:
         return "timestamp_unix"
     if axis == "activity":
         return "activity"
-    if axis == "object_type":
-        return "row_object_type"
-    if axis in ("object_id", "row_id"):
-        return "row_id"
-    if axis == "row_index":
-        return "row_index"
-    if axis == "event_index_in_row":
-        return "event_index_in_row"
     if axis in event_attr_columns:
         return _quote_identifier(axis)
     if axis and axis.startswith("object_type:"):
@@ -317,7 +304,7 @@ def _event_attr_columns(db: OcelDuckDB) -> list[str]:
 def _event_attr_selects(event_attr_columns: list[str], table_alias: str | None) -> str:
     prefix = f"{table_alias}." if table_alias else ""
     return "".join(
-        f",\n                    {prefix}{_quote_identifier(column)} AS {_quote_identifier(column)}"
+        f",\n            {prefix}{_quote_identifier(column)} AS {_quote_identifier(column)}"
         for column in event_attr_columns
     )
 
