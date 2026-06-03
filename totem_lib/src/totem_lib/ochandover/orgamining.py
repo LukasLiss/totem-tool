@@ -11,6 +11,7 @@ FEATURE_GROUPS = Literal[
     "activity_fractions",
     "cooccurrence_fractions",
     "object_collaboration_fractions",
+    "object_portfolio_fractions",
     "time_fractions",
     "weekday_fractions",
 ]
@@ -33,6 +34,10 @@ class ResourceProfile:
     ``weekday_fractions``             — fraction of this resource's events falling on each
                                         day of the week (0=Mon … 6=Sun). Normalised per
                                         resource so all values sum to 1.0.
+    ``object_portfolio_fractions``    — fraction of this resource's distinct business
+                                        objects belonging to each object type. Normalised
+                                        per resource so all values sum to 1.0 (simplex
+                                        over business object types rather than resources).
     Additional feature groups are added as new fields without changing the rest
     of the system.
     """
@@ -44,6 +49,7 @@ class ResourceProfile:
     object_collaboration_fractions: dict[str, float] = field(default_factory=dict)
     time_fractions: dict[int, float] = field(default_factory=dict)
     weekday_fractions: dict[int, float] = field(default_factory=dict)
+    object_portfolio_fractions: dict[str, float] = field(default_factory=dict)
 
     def feature_vector(
         self,
@@ -52,6 +58,7 @@ class ResourceProfile:
         collaborating_resources: list[str] | None = None,
         time_bins: list[int] | None = None,
         weekday_bins: list[int] | None = None,
+        portfolio_object_types: list[str] | None = None,
     ) -> list[float]:
         """
         Ordered numeric vector used for distance computation, MDS, and clustering.
@@ -68,6 +75,8 @@ class ResourceProfile:
             Hour bins (0–23) to include as time-fraction features.
         weekday_bins : list[int] | None
             Weekday bins (0=Mon … 6=Sun) to include as weekday-fraction features.
+        portfolio_object_types : list[str] | None
+            Ordered business object type names for the portfolio fractions.
         """
         vec = [self.activity_fractions.get(a, 0.0) for a in activities]
         if cooccurring_resources:
@@ -78,6 +87,8 @@ class ResourceProfile:
             vec += [self.time_fractions.get(h, 0.0) for h in time_bins]
         if weekday_bins:
             vec += [self.weekday_fractions.get(d, 0.0) for d in weekday_bins]
+        if portfolio_object_types:
+            vec += [self.object_portfolio_fractions.get(t, 0.0) for t in portfolio_object_types]
         return vec
 
 
@@ -98,6 +109,7 @@ class ProfileMatrix:
         collaborating_resources: list[str] | None = None,
         time_bins: list[int] | None = None,
         weekday_bins: list[int] | None = None,
+        portfolio_object_types: list[str] | None = None,
     ) -> None:
         self.profiles = profiles
         self.activities = activities
@@ -105,6 +117,7 @@ class ProfileMatrix:
         self.collaborating_resources: list[str] = collaborating_resources or []
         self.time_bins: list[int] = time_bins or []
         self.weekday_bins: list[int] = weekday_bins or []
+        self.portfolio_object_types: list[str] = portfolio_object_types or []
 
     # ── convenience accessors ──────────────────────────────────────────────────
 
@@ -130,6 +143,8 @@ class ProfileMatrix:
             groups.append("time_fractions")
         if self.weekday_bins:
             groups.append("weekday_fractions")
+        if self.portfolio_object_types:
+            groups.append("object_portfolio_fractions")
         return groups
 
     # ── construction ──────────────────────────────────────────────────────────
@@ -256,29 +271,38 @@ class ProfileMatrix:
         }
         collaborating_resources_list: list[str] = []
 
-        if "object_collaboration_fractions" in feature_groups:
-            # All (event, object) pairs — including non-resource objects
+        # ── Shared business-object data (used by collab + portfolio) ──────────────
+        need_bizobj = any(g in feature_groups for g in [
+            "object_collaboration_fractions", "object_portfolio_fractions"
+        ])
+        resource_bizobj = None
+        bizobj_type_map: dict[str, str] = {}  # bizobj_id → object type name
+
+        if need_bizobj:
             event_all_obj = (
                 ocel.events
                 .select(["_eventId", "_objects"])
                 .explode("_objects")
                 .rename({"_objects": "_objId"})
             )
-            # Business objects only (exclude resources)
             event_bizobj = event_all_obj.filter(
                 ~pl.col("_objId").is_in(resource_ids)
             )
-            # Optionally restrict to a specific subset of business object types.
             if business_object_types is not None:
                 allowed_biz_ids: set[str] = set()
                 for biz_type in business_object_types:
                     for obj_id in ocel.get_object_ids_by_type(biz_type):
                         allowed_biz_ids.add(obj_id)
+                        bizobj_type_map[obj_id] = biz_type
                 event_bizobj = event_bizobj.filter(
                     pl.col("_objId").is_in(allowed_biz_ids)
                 )
+            else:
+                for obj_type in ocel.object_types:
+                    if obj_type not in set(resource_types or []):
+                        for obj_id in ocel.get_object_ids_by_type(obj_type):
+                            bizobj_type_map[obj_id] = obj_type
 
-            # (resource, business_object) pairs — one per pair regardless of event count
             resource_bizobj = (
                 event_resource.select(["_eventId", "_objId"])
                 .rename({"_objId": "_resourceId"})
@@ -287,18 +311,13 @@ class ProfileMatrix:
                 .unique()
             )
 
-            # Total distinct business objects per resource (denominator)
+        if "object_collaboration_fractions" in feature_groups and resource_bizobj is not None:
             totals_bizobj = (
                 resource_bizobj
                 .group_by("_resourceId")
                 .agg(pl.len().alias("total_bizobj"))
             )
 
-            # Resource pairs (including self) that share at least one business object.
-            # Self-join produces (R1, R1) rows where shared_count == total_bizobj(R1),
-            # so dividing by total gives fraction(R1, R1) = 1.0 — the natural maximum
-            # and baseline for the row.  Other entries express what fraction of R1's
-            # objects R2 also touched, relative to R1's full scope.
             shared_bizobj = (
                 resource_bizobj.rename({"_resourceId": "_r1"})
                 .join(resource_bizobj.rename({"_resourceId": "_r2"}), on="_bizObjId")
@@ -403,6 +422,51 @@ class ProfileMatrix:
 
             weekday_bins_list = list(range(7))
 
+        # ── Object portfolio fractions ─────────────────────────────────────────
+        # Resource × ObjectType matrix: for each resource, what fraction of its
+        # distinct business objects belong to each object type?  Row sums to 1.0
+        # (simplex over types), so Hellinger distance applies directly.
+        object_portfolio_by_resource: dict[str, dict[str, float]] = {
+            rid: {} for rid in resource_ids
+        }
+        portfolio_object_types_list: list[str] = []
+
+        if "object_portfolio_fractions" in feature_groups and resource_bizobj is not None and bizobj_type_map:
+            biz_type_df = pl.DataFrame({
+                "_bizObjId": list(bizobj_type_map.keys()),
+                "_bizType":  list(bizobj_type_map.values()),
+            })
+
+            # (resource, type) counts of distinct business objects
+            type_counts = (
+                resource_bizobj
+                .join(biz_type_df, on="_bizObjId", how="left")
+                .filter(pl.col("_bizType").is_not_null())
+                .group_by(["_resourceId", "_bizType"])
+                .agg(pl.len().alias("count"))
+            )
+
+            # total distinct business objects per resource (denominator)
+            resource_biz_totals = (
+                resource_bizobj
+                .join(biz_type_df, on="_bizObjId", how="left")
+                .filter(pl.col("_bizType").is_not_null())
+                .group_by("_resourceId")
+                .agg(pl.len().alias("total"))
+            )
+
+            portfolio_fractions_df = (
+                type_counts
+                .join(resource_biz_totals, on="_resourceId", how="left")
+                .with_columns((pl.col("count") / pl.col("total")).alias("fraction"))
+                .select(["_resourceId", "_bizType", "fraction"])
+            )
+
+            for row in portfolio_fractions_df.iter_rows(named=True):
+                object_portfolio_by_resource[row["_resourceId"]][row["_bizType"]] = row["fraction"]
+
+            portfolio_object_types_list = sorted(set(bizobj_type_map.values()))
+
         # ── Assemble profiles ──────────────────────────────────────────────────
         profiles = [
             ResourceProfile(
@@ -413,6 +477,7 @@ class ProfileMatrix:
                 object_collaboration_fractions=object_collaboration_by_resource[rid],
                 time_fractions=time_fractions_by_resource[rid],
                 weekday_fractions=weekday_fractions_by_resource[rid],
+                object_portfolio_fractions=object_portfolio_by_resource[rid],
             )
             for rid in sorted(resource_ids)
         ]
@@ -424,6 +489,7 @@ class ProfileMatrix:
             collaborating_resources=collaborating_resources_list or None,
             time_bins=time_bins_list or None,
             weekday_bins=weekday_bins_list or None,
+            portfolio_object_types=portfolio_object_types_list or None,
         )
 
     # ── matrix operations ─────────────────────────────────────────────────────
@@ -437,6 +503,7 @@ class ProfileMatrix:
                 self.collaborating_resources if self.collaborating_resources else None,
                 self.time_bins if self.time_bins else None,
                 self.weekday_bins if self.weekday_bins else None,
+                self.portfolio_object_types if self.portfolio_object_types else None,
             )
             for p in self.profiles
         ])
@@ -538,6 +605,17 @@ class ProfileMatrix:
                     for p in self.profiles
                 ])
                 # weekday_fractions sum to 1.0 → max L2 = sqrt(2).
+                D += w * _norm_dist(X, np.sqrt(2))
+                total_weight += w
+
+        if self.portfolio_object_types:
+            w = weights.get("object_portfolio_fractions", 1.0)
+            if w > 0:
+                X = np.array([
+                    [p.object_portfolio_fractions.get(t, 0.0) for t in self.portfolio_object_types]
+                    for p in self.profiles
+                ])
+                # portfolio sums to 1.0 per resource → same simplex bound: max L2 = sqrt(2).
                 D += w * _norm_dist(X, np.sqrt(2))
                 total_weight += w
 
@@ -730,6 +808,8 @@ class ProfileMatrix:
             result["time_bins"] = self.time_bins
         if self.weekday_bins:
             result["weekday_bins"] = self.weekday_bins
+        if self.portfolio_object_types:
+            result["portfolio_object_types"] = self.portfolio_object_types
 
         # Always use the precomputed distance matrix so the scale is consistent
         # across all configurations (single group, multi-group, any weights).

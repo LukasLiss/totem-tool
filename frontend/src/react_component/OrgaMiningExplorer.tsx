@@ -18,6 +18,7 @@ type ProfileMatrixData = {
   collaborating_resources?: string[];
   time_bins?: number[];
   weekday_bins?: number[];
+  portfolio_object_types?: string[];
   mds_positions: { x: number; y: number }[];
   mds_stress: number;
   mds_explained_variance: number;
@@ -278,6 +279,7 @@ export default function OrgaMiningExplorer({
                   { key: "activity_fractions",          label: "Activity fractions" },
                   { key: "cooccurrence_fractions",      label: "Co-occurrence" },
                   { key: "object_collaboration_fractions", label: "Object collaboration" },
+                  { key: "object_portfolio_fractions",   label: "Object collaboration (type)" },
                   { key: "time_fractions",              label: "Time binning (hourly)" },
                   { key: "weekday_fractions",           label: "Time binning (weekly)" },
                 ] as const).map(({ key, label }) => (
@@ -463,7 +465,7 @@ export default function OrgaMiningExplorer({
                       <table className="w-full text-sm border-collapse">
                         <thead>
                           {/* Group header row — only shown when multiple feature groups exist */}
-                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0 || (data.time_bins?.length ?? 0) > 0 || (data.weekday_bins?.length ?? 0) > 0) && (
+                          {((data.cooccurring_resources?.length ?? 0) > 0 || (data.collaborating_resources?.length ?? 0) > 0 || (data.time_bins?.length ?? 0) > 0 || (data.weekday_bins?.length ?? 0) > 0 || (data.portfolio_object_types?.length ?? 0) > 0) && (
                             <tr className="bg-muted/60 border-b">
                               <th className="sticky top-0 left-0 bg-muted/60 z-30 border-r" />
                               {data.activities.length > 0 && (
@@ -492,8 +494,14 @@ export default function OrgaMiningExplorer({
                               )}
                               {(data.weekday_bins?.length ?? 0) > 0 && (
                                 <th colSpan={data.weekday_bins!.length}
-                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
                                   Time (weekly)
+                                </th>
+                              )}
+                              {(data.portfolio_object_types?.length ?? 0) > 0 && (
+                                <th colSpan={data.portfolio_object_types!.length}
+                                  className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 whitespace-nowrap">
+                                  Object collab. (type)
                                 </th>
                               )}
                             </tr>
@@ -525,6 +533,11 @@ export default function OrgaMiningExplorer({
                             {(data.weekday_bins ?? []).map(d => (
                               <th key={`wd-${d}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
                                 {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][d]}
+                              </th>
+                            ))}
+                            {(data.portfolio_object_types ?? []).map(t => (
+                              <th key={`po-${t}`} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap border-l font-mono text-xs">
+                                {t}
                               </th>
                             ))}
                           </tr>
@@ -1286,6 +1299,7 @@ function ResourceGraph({
             collaboratingResources={data.collaborating_resources ?? []}
             timeBins={data.time_bins ?? []}
             weekdayBins={data.weekday_bins ?? []}
+            portfolioObjectTypes={data.portfolio_object_types ?? []}
             resourceObjectTypes={data.resource_object_types}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
@@ -1384,6 +1398,7 @@ function TooltipBox({
   collaboratingResources,
   timeBins,
   weekdayBins,
+  portfolioObjectTypes,
   resourceObjectTypes,
   activityColorMap,
   resourceColorMap,
@@ -1403,6 +1418,7 @@ function TooltipBox({
   collaboratingResources: string[];
   timeBins: number[];
   weekdayBins: number[];
+  portfolioObjectTypes: string[];
   resourceObjectTypes: Record<string, string>;
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
@@ -1501,11 +1517,12 @@ function TooltipBox({
     ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length)
     : [];
 
-  // Time bin bar values — one value per bin, averaged for clusters.
-  const timeOffset = activities.length + cooccurringResources.length + collaboratingResources.length;
-  const weekdayOffset = timeOffset + timeBins.length;
+  // Time bin / portfolio bar values — one value per bin, averaged for clusters.
+  const timeOffset      = activities.length + cooccurringResources.length + collaboratingResources.length;
+  const weekdayOffset   = timeOffset + timeBins.length;
+  const portfolioOffset = weekdayOffset + weekdayBins.length;
 
-  function binValues(bins: number[], offset: number): number[] {
+  function binValues(bins: (number | string)[], offset: number): number[] {
     if (bins.length === 0) return [];
     if (tooltip.isCluster) {
       const members = tooltip.resources.map(r => allProfiles[r]).filter(Boolean);
@@ -1518,15 +1535,17 @@ function TooltipBox({
     return bins.map((_, i) => tooltip.profile[offset + i] ?? 0);
   }
 
-  const timeBinValues   = binValues(timeBins,   timeOffset);
-  const weekdayValues   = binValues(weekdayBins, weekdayOffset);
+  const timeBinValues    = binValues(timeBins,            timeOffset);
+  const weekdayValues    = binValues(weekdayBins,         weekdayOffset);
+  const portfolioValues  = binValues(portfolioObjectTypes, portfolioOffset);
 
   const hasMultiple = tooltip.resources.length > 1;
   const estW = 220;
   const resourceListH = showResources ? tooltip.resources.length * 18 + 8 : 0;
   const rowSectionH = (rows: typeof coocRows) => rows.length > 0 ? 24 + rows.length * 20 : 0;
-  const timeBinSectionH  = timeBins.length    > 0 ? 83 : 0; // label(17) + chart(52) + margin+padding(14)
-  const weekdaySectionH  = weekdayBins.length > 0 ? 83 : 0;
+  const timeBinSectionH   = timeBins.length            > 0 ? 83 : 0;
+  const weekdaySectionH   = weekdayBins.length          > 0 ? 83 : 0;
+  const portfolioSectionH = portfolioObjectTypes.length > 0 ? 20 + portfolioObjectTypes.length * 18 : 0;
   const activitySectionH = slices.length > 0
     ? 15 + PIE_R * 2 + 8 + slices.length * 20   // caption(15) + pie(66) + gap(8) + items
     : 0;
@@ -1535,15 +1554,16 @@ function TooltipBox({
   // Footer is always shown: 28px for the toggle/id row + optional expanded list
   const estH = tooltipPadding + clusterHeaderH + activitySectionH
     + rowSectionH(coocRows) + rowSectionH(collabRows)
-    + timeBinSectionH + weekdaySectionH
+    + timeBinSectionH + weekdaySectionH + portfolioSectionH
     + 34 + resourceListH;
   // Pre-compute which section is rendered first so it can suppress its top border
   // when nothing (activity) is shown above it.
   const sectionOrder = [
-    cooccurringResources.length > 0  && "cooc",
-    collaboratingResources.length > 0 && "collab",
-    timeBins.length   > 0 && "time",
-    weekdayBins.length > 0 && "weekday",
+    cooccurringResources.length > 0   && "cooc",
+    collaboratingResources.length > 0  && "collab",
+    timeBins.length   > 0             && "time",
+    weekdayBins.length > 0            && "weekday",
+    portfolioObjectTypes.length > 0   && "portfolio",
   ].filter(Boolean) as string[];
   const firstSection = slices.length === 0 ? (sectionOrder[0] ?? null) : null;
   const sectionStyle = (id: string) =>
@@ -1803,6 +1823,31 @@ function TooltipBox({
           </div>
         );
       })()}
+
+      {/* Object collaboration (type) — fraction of objects per type */}
+      {portfolioObjectTypes.length > 0 && (
+        <div style={sectionStyle("portfolio")}>
+          <div style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
+            color: "#94a3b8", marginBottom: 4,
+          }}>Object collaboration (type)</div>
+          {portfolioObjectTypes.map((type, i) => {
+            const val = portfolioValues[i] ?? 0;
+            const color = typeColorMap[type] ?? "#94a3b8";
+            return (
+              <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, lineHeight: "18px" }}>
+                <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 10, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {type}
+                </span>
+                <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {(val * 100).toFixed(1)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Footer: resource id(s) — always shown */}
       <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
