@@ -9,6 +9,8 @@ from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 DEFAULT_MAX_POINTS = 3_000
 HARD_MAX_POINTS = 20_000
 MAX_SAMPLE_BUCKETS = 20_000
+OUTLIER_BUDGET_RATIO = 0.2
+OUTLIER_SCORE_THRESHOLD = 2.0
 
 
 def get_oc_dotted_chart_data(
@@ -74,6 +76,7 @@ def get_oc_dotted_chart_data(
         }
 
     bucket_count = _bucket_count_for_point_limit(point_limit)
+    outlier_budget = _outlier_budget_for_point_limit(point_limit)
     query = f"""
         WITH dimensioned AS ({dimensioned_sql}),
         filtered AS (
@@ -83,10 +86,12 @@ def get_oc_dotted_chart_data(
         scored AS (
             SELECT
                 *,
-                CASE
+                0.6 * CASE
                     WHEN std_row_ts IS NULL OR std_row_ts = 0 THEN 0
                     ELSE ABS((timestamp_unix - avg_row_ts) / std_row_ts)
-                END AS outlier_score,
+                END
+                + 0.4 * (1 - (COUNT(*) OVER (PARTITION BY activity))::DOUBLE / COUNT(*) OVER ())
+                AS outlier_score,
                 CASE
                     WHEN ? <= 1 OR max_ts = min_ts THEN 0
                     ELSE LEAST(
@@ -112,11 +117,35 @@ def get_oc_dotted_chart_data(
                 ) AS bucket_rank
             FROM scored
         ),
+        marked AS (
+            SELECT
+                *,
+                outlier_score >= ? AND outlier_rank <= ? AS force_include
+            FROM ranked
+        ),
+        budgeted AS (
+            SELECT
+                *,
+                ? - SUM(CASE WHEN force_include THEN 1 ELSE 0 END) OVER () AS remaining_budget
+            FROM marked
+        ),
+        fill_ranked AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY force_include
+                    ORDER BY
+                        bucket_rank ASC,
+                        outlier_score DESC,
+                        hash(event_id, row_id) ASC
+                ) AS fill_rank
+            FROM budgeted
+        ),
         sampled AS (
             SELECT *
-            FROM ranked
-            WHERE outlier_rank <= CEIL(?::DOUBLE * 0.15)
-               OR bucket_rank <= CEIL(?::DOUBLE / ?)
+            FROM fill_ranked
+            WHERE force_include
+               OR fill_rank <= GREATEST(0, remaining_budget)
             ORDER BY {sort_expr} NULLS LAST, timestamp_unix ASC, event_id ASC, row_id ASC
             LIMIT ?
         )
@@ -142,9 +171,9 @@ def get_oc_dotted_chart_data(
             bucket_count,
             bucket_count,
             bucket_count,
+            OUTLIER_SCORE_THRESHOLD,
+            outlier_budget,
             point_limit,
-            point_limit,
-            bucket_count,
             point_limit,
         ],
     ).fetchall()
@@ -332,6 +361,10 @@ def _clamp_max_points(value: int) -> int:
 
 def _bucket_count_for_point_limit(point_limit: int) -> int:
     return max(1, min(int(point_limit), MAX_SAMPLE_BUCKETS))
+
+
+def _outlier_budget_for_point_limit(point_limit: int) -> int:
+    return max(1, int(point_limit * OUTLIER_BUDGET_RATIO))
 
 
 def _parse_time_bound(value: str | int | float | None) -> int | None:

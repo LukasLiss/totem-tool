@@ -2,6 +2,7 @@ from totem_lib.oc_dotted_chart import get_oc_dotted_chart_data
 from totem_lib.oc_dotted_chart.oc_dotted_chart_db import (
     _bucket_count_for_point_limit,
     _clamp_max_points,
+    _outlier_budget_for_point_limit,
 )
 from totem_lib.ocel import import_ocel_db
 
@@ -71,3 +72,8 @@ def test_oc_dotted_chart_point_limit_is_bounded_by_minimum_and_hard_cap():
     assert _clamp_max_points(20) == 100
     assert _clamp_max_points(3_000) == 3_000
     assert _clamp_max_points(25_000) == 20_000
+
+
+def test_oc_dotted_chart_outlier_budget_is_twenty_percent_of_point_limit():
+    assert _outlier_budget_for_point_limit(100) == 20
+    assert _outlier_budget_for_point_limit(3_000) == 600
