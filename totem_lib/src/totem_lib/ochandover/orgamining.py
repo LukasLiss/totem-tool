@@ -249,7 +249,16 @@ class ProfileMatrix:
             })
 
         # ── Co-occurrence fractions ────────────────────────────────────────────
-        # For resource R1: fraction of R1's events in which resource R2 also appears.
+        # Option B formulation: for each event E that R1 participated in,
+        # split credit 1/|participants(E)| equally among all co-participants,
+        # then average over all of R1's events.
+        #
+        # Semantic: pick a random event from R1's events, then pick a random
+        # participant — the probability of landing on R2.  Row sums to 1.0
+        # (simplex over resources), making Hellinger directly applicable.
+        #
+        # Self-entry = average exclusivity of R1's events (1.0 if always solo,
+        # → 0 if always in large groups).
         cooccurrence_by_resource: dict[str, dict[str, float]] = {
             rid: {} for rid in resource_ids
         }
@@ -258,22 +267,21 @@ class ProfileMatrix:
         if "cooccurrence_fractions" in feature_groups:
             er = event_resource.select(["_eventId", "_objId"])
 
-            # Self-join: for each (R1, R2) pair count the events they share.
-            # Self-pairs are included — R1 always co-occurs with itself in every
-            # one of its events, so fraction(R1, R1) = 1.0 (the natural maximum).
-            # Normalise by R1's total event count so all values are in [0, 1].
-            cooc_counts = (
+            participants_per_event = (
+                er
+                .group_by("_eventId")
+                .agg(pl.len().alias("n_participants"))
+            )
+
+            cooc_fractions_df = (
                 er
                 .join(er, on="_eventId", suffix="_other")
+                .join(participants_per_event, on="_eventId", how="left")
+                .with_columns((pl.lit(1.0) / pl.col("n_participants")).alias("credit"))
                 .group_by(["_objId", "_objId_other"])
-                .agg(pl.len().alias("cooc_count"))
-            )
-            cooc_fractions_df = (
-                cooc_counts
+                .agg(pl.col("credit").sum().alias("credit_sum"))
                 .join(totals, on="_objId", how="left")
-                .with_columns(
-                    (pl.col("cooc_count") / pl.col("total")).alias("fraction")
-                )
+                .with_columns((pl.col("credit_sum") / pl.col("total")).alias("fraction"))
                 .select(["_objId", "_objId_other", "fraction"])
             )
             for row in cooc_fractions_df.iter_rows(named=True):
@@ -332,28 +340,38 @@ class ProfileMatrix:
             )
 
         if "object_collaboration_fractions" in feature_groups and resource_bizobj is not None:
+            # Option B formulation: for each object O that R1 touched, split credit
+            # 1/|workers(O)| equally among all resources that also touched O,
+            # then average over all of R1's objects.
+            #
+            # Semantic: pick a random object from R1's portfolio, then pick a random
+            # worker of that object — the probability of landing on R2.  Row sums
+            # to 1.0 (simplex), Hellinger directly applicable.  Rare exclusively-shared
+            # objects contribute more credit than commonly-shared ones (IDF weighting).
+            workers_per_obj = (
+                resource_bizobj
+                .group_by("_bizObjId")
+                .agg(pl.len().alias("n_workers"))
+            )
+
             totals_bizobj = (
                 resource_bizobj
                 .group_by("_resourceId")
                 .agg(pl.len().alias("total_bizobj"))
             )
 
-            shared_bizobj = (
+            collab_fractions_df = (
                 resource_bizobj.rename({"_resourceId": "_r1"})
                 .join(resource_bizobj.rename({"_resourceId": "_r2"}), on="_bizObjId")
+                .join(workers_per_obj, on="_bizObjId", how="left")
+                .with_columns((pl.lit(1.0) / pl.col("n_workers")).alias("credit"))
                 .group_by(["_r1", "_r2"])
-                .agg(pl.len().alias("shared_count"))
-            )
-
-            collab_fractions_df = (
-                shared_bizobj
+                .agg(pl.col("credit").sum().alias("credit_sum"))
                 .join(
                     totals_bizobj.rename({"_resourceId": "_r1", "total_bizobj": "total"}),
                     on="_r1", how="left",
                 )
-                .with_columns(
-                    (pl.col("shared_count") / pl.col("total")).alias("fraction")
-                )
+                .with_columns((pl.col("credit_sum") / pl.col("total")).alias("fraction"))
                 .select(["_r1", "_r2", "fraction"])
             )
 
@@ -625,7 +643,8 @@ class ProfileMatrix:
                     [p.cooccurrence_fractions.get(r, 0.0) for r in self.cooccurring_resources]
                     for p in self.profiles
                 ])
-                D += w * _euclidean(X, np.sqrt(len(self.cooccurring_resources)))
+                # Rows sum to 1.0 (Option B) → use simplex distance.
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.collaborating_resources:
@@ -635,7 +654,8 @@ class ProfileMatrix:
                     [p.object_collaboration_fractions.get(r, 0.0) for r in self.collaborating_resources]
                     for p in self.profiles
                 ])
-                D += w * _euclidean(X, np.sqrt(len(self.collaborating_resources)))
+                # Rows sum to 1.0 (Option B) → use simplex distance.
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.time_bins:
