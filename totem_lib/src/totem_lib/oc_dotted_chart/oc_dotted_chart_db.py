@@ -211,9 +211,11 @@ def _base_events_sql(*, event_attr_columns: list[str]) -> str:
         SELECT
             event_id,
             activity,
-            timestamp_unix
+            timestamp_unix,
+            timestamp_unix - log_start_ts AS since_start
             {event_attr_selects}
         FROM events
+        CROSS JOIN (SELECT MIN(timestamp_unix) AS log_start_ts FROM events) log_bounds
         {base_where_sql}
     """.format(event_attr_selects=event_attr_selects, base_where_sql="{base_where_sql}")
 
@@ -310,6 +312,8 @@ def _row_filters(
 def _axis_expr(axis: str | None, event_attr_columns: list[str]) -> str:
     if axis in ("time", "timestamp", "timestamp_unix"):
         return "timestamp_unix"
+    if axis == "since_start":
+        return "since_start"
     if axis == "activity":
         return "activity"
     if axis in event_attr_columns:

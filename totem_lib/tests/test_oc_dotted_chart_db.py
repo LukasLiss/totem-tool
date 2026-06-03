@@ -61,6 +61,20 @@ def test_oc_dotted_chart_ignores_unknown_y_axis_values():
     assert result["sampled"] is False
 
 
+def test_oc_dotted_chart_supports_since_start_x_axis():
+    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+
+    result = get_oc_dotted_chart_data(
+        db,
+        x_axis="since_start",
+        max_points=500,
+    )
+
+    log_start_timestamp = db.conn.execute("SELECT MIN(timestamp_unix) FROM events").fetchone()[0]
+    assert min(event["x"] for event in result["events"]) == 0
+    assert all(event["x"] == event["timestamp_unix"] - log_start_timestamp for event in result["events"])
+
+
 def test_oc_dotted_chart_bucket_count_is_bounded_by_points_and_frontend_cap():
     assert _bucket_count_for_point_limit(1) == 1
     assert _bucket_count_for_point_limit(100) == 100
