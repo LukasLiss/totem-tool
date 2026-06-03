@@ -160,3 +160,27 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Thin scrollbar for OrgaMining node tooltip and all scrollable children */
+.orga-tooltip,
+.orga-tooltip * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(226, 232, 240, 0.5) transparent;
+}
+.orga-tooltip::-webkit-scrollbar,
+.orga-tooltip *::-webkit-scrollbar {
+  width: 3px;
+}
+.orga-tooltip::-webkit-scrollbar-track,
+.orga-tooltip *::-webkit-scrollbar-track {
+  background: transparent;
+}
+.orga-tooltip::-webkit-scrollbar-thumb,
+.orga-tooltip *::-webkit-scrollbar-thumb {
+  background: rgba(226, 232, 240, 0.5);
+  border-radius: 2px;
+}
+.orga-tooltip::-webkit-scrollbar-thumb:hover,
+.orga-tooltip *::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.65);
+}

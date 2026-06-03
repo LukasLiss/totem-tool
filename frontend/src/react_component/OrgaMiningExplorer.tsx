@@ -1632,6 +1632,7 @@ function TooltipBox({
 
   return (
     <div
+      className="orga-tooltip"
       style={{
         position: "absolute", left, top,
         background: "white", borderRadius: 8, zIndex: 10,
