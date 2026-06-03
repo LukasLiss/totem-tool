@@ -8,6 +8,7 @@ from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 
 DEFAULT_MAX_POINTS = 3_000
 HARD_MAX_POINTS = 10_000
+MAX_SAMPLE_BUCKETS = 1_000
 
 
 def get_oc_dotted_chart_data(
@@ -72,7 +73,7 @@ def get_oc_dotted_chart_data(
             "outlier_count": 0,
         }
 
-    bucket_count = max(1, min(1_000, point_limit // 10))
+    bucket_count = _bucket_count_for_point_limit(point_limit)
     query = f"""
         WITH dimensioned AS ({dimensioned_sql}),
         filtered AS (
@@ -327,6 +328,10 @@ def _objects_for_events(db: OcelDuckDB, event_ids: list[str]) -> dict[str, dict[
 
 def _clamp_max_points(value: int) -> int:
     return max(100, min(int(value or DEFAULT_MAX_POINTS), HARD_MAX_POINTS))
+
+
+def _bucket_count_for_point_limit(point_limit: int) -> int:
+    return max(1, min(int(point_limit), MAX_SAMPLE_BUCKETS))
 
 
 def _parse_time_bound(value: str | int | float | None) -> int | None:
