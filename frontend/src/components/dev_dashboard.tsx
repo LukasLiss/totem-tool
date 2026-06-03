@@ -30,12 +30,12 @@ export function DevDashboard() {
           showNumObjects={true}
           showNumObjectTypes={true}
         />
-        <ProcessArea fileId={selectedFile?.id} />
-        <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
+        {/* <ProcessArea fileId={selectedFile?.id} /> */}
+        {/* <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
           <ReactFlowProvider>
             <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
           </ReactFlowProvider>
-        </div>
+        </div> */}
         <Card className="@container/card">
           <CardHeader className="items-center relative z-10 justify-between">
             <CardTitle>
