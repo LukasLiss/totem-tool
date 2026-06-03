@@ -1,5 +1,8 @@
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_data
-from totem_lib.oc_dotted_chart.oc_dotted_chart_db import _bucket_count_for_point_limit
+from totem_lib.oc_dotted_chart.oc_dotted_chart_db import (
+    _bucket_count_for_point_limit,
+    _clamp_max_points,
+)
 from totem_lib.ocel import import_ocel_db
 
 
@@ -60,4 +63,11 @@ def test_oc_dotted_chart_ignores_unknown_y_axis_values():
 def test_oc_dotted_chart_bucket_count_is_bounded_by_points_and_frontend_cap():
     assert _bucket_count_for_point_limit(1) == 1
     assert _bucket_count_for_point_limit(100) == 100
-    assert _bucket_count_for_point_limit(3_000) == 1_000
+    assert _bucket_count_for_point_limit(3_000) == 3_000
+    assert _bucket_count_for_point_limit(25_000) == 20_000
+
+
+def test_oc_dotted_chart_point_limit_is_bounded_by_minimum_and_hard_cap():
+    assert _clamp_max_points(20) == 100
+    assert _clamp_max_points(3_000) == 3_000
+    assert _clamp_max_points(25_000) == 20_000

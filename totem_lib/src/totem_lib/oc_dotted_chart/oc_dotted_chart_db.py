@@ -7,8 +7,8 @@ from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 
 
 DEFAULT_MAX_POINTS = 3_000
-HARD_MAX_POINTS = 10_000
-MAX_SAMPLE_BUCKETS = 1_000
+HARD_MAX_POINTS = 20_000
+MAX_SAMPLE_BUCKETS = 20_000
 
 
 def get_oc_dotted_chart_data(
