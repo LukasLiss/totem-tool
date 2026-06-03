@@ -1076,7 +1076,7 @@ def profile_matrix(request):
     business_object_types_raw = request.query_params.get("business_object_types", "")
     business_object_types = [t.strip() for t in business_object_types_raw.split(",") if t.strip()] or None
 
-    VALID_FEATURE_GROUPS = {"activity_fractions", "cooccurrence_fractions", "object_collaboration_fractions", "object_portfolio_fractions", "time_fractions", "weekday_fractions"}
+    VALID_FEATURE_GROUPS = {"activity_fractions", "cooccurrence_fractions", "object_collaboration_fractions", "object_portfolio_fractions", "object_instance_fractions", "time_fractions", "weekday_fractions"}
     feature_groups_raw = request.query_params.get("feature_groups", "activity_fractions")
     feature_groups = [g.strip() for g in feature_groups_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS] or ["activity_fractions"]
 
