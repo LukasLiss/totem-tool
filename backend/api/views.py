@@ -1105,6 +1105,10 @@ def profile_matrix(request):
 
     compute_clusters = request.query_params.get("compute_clusters", "true").lower() != "false"
 
+    distance_metric = request.query_params.get("distance_metric", "euclidean")
+    if distance_metric not in ("euclidean", "hellinger"):
+        distance_metric = "euclidean"
+
     try:
         pm = ProfileMatrix.from_ocel(
             ocel,
@@ -1123,6 +1127,7 @@ def profile_matrix(request):
             n_clusters=n_clusters, cluster_method=cluster_method,
             compute_clusters=compute_clusters,
             min_cluster_size=min_cluster_size,
+            distance_metric=distance_metric,
         ),
         status=status.HTTP_200_OK,
     )

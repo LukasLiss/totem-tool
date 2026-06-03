@@ -71,6 +71,7 @@ export default function OrgaMiningExplorer({
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
   const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative" | "hdbscan">("kmeans");
+  const [distanceMetric, setDistanceMetric] = useState<"euclidean" | "hellinger">("euclidean");
   const [minClusterSize, setMinClusterSize] = useState(2);
   const [minClusterSizeStr, setMinClusterSizeStr] = useState("2");
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
@@ -177,6 +178,8 @@ export default function OrgaMiningExplorer({
       if (activeBizTypes.length > 0)
         params.business_object_types = activeBizTypes.join(",");
     }
+
+    params.distance_metric = distanceMetric;
 
     if (clustersEnabled) {
       params.cluster_method = clusterMethod;
@@ -401,6 +404,18 @@ export default function OrgaMiningExplorer({
                       className={`flex-1 py-1 px-2 ${clusterMethod === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                     >
                       {m === "kmeans" ? "K-Means" : m === "agglomerative" ? "Agglom." : "HDBSCAN"}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 mt-3">Distance</p>
+                <div className="flex rounded border overflow-hidden text-xs">
+                  {(["euclidean", "hellinger"] as const).map(d => (
+                    <button
+                      key={d}
+                      onClick={() => setDistanceMetric(d)}
+                      className={`flex-1 py-1 px-2 ${distanceMetric === d ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                    >
+                      {d === "euclidean" ? "Euclidean" : "Hellinger"}
                     </button>
                   ))}
                 </div>

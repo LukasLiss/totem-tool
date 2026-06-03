@@ -570,48 +570,44 @@ class ProfileMatrix:
     def combined_distance_matrix(
         self,
         weights: dict[str, float] | None = None,
+        distance_metric: str = "euclidean",
     ) -> np.ndarray:
         """
         Weighted sum of per-group distance matrices.
 
-        Each group's distance matrix is normalised by the **theoretical maximum**
-        L2 distance for that group's feature space before weighting:
-
-        - activity_fractions            → sqrt(2)          (two simplex vectors
-                                                             with disjoint support)
-        - cooccurrence_fractions        → sqrt(n_resources) (independent [0,1] dims)
-        - object_collaboration_fractions → sqrt(n_resources)
-        - time_fractions               → sqrt(2)          (simplex — fractions sum to 1)
-
-        Using the theoretical maximum (rather than the observed maximum) equalises
-        the scale across groups without erasing how much each group actually varies
-        in this dataset.  It also keeps distances on an absolute, cross-plot-
-        comparable scale: a combined distance of 0.5 with equal weights means
-        "halfway to the most-different-possible pair" in each group.
+        For simplex groups (rows sum to 1) the metric can be either Euclidean
+        (normalised by sqrt(2)) or Hellinger (H = euclidean(sqrt(P), sqrt(Q)) / sqrt(2)),
+        selected via ``distance_metric``.  Non-simplex groups (cooccurrence,
+        collaboration) always use Euclidean normalised by sqrt(n_resources).
 
         Parameters
         ----------
         weights : dict[str, float] | None
-            Mapping from feature-group name to non-negative weight.
-            Missing groups default to 1.0.  Pass ``{"activity_fractions": 1.0,
-            "cooccurrence_fractions": 0.5}`` to halve co-occurrence's influence.
+            Mapping from feature-group name → non-negative weight (default 1.0).
+        distance_metric : str
+            ``"euclidean"`` (default) or ``"hellinger"``.
 
         Returns
         -------
         D : np.ndarray, shape (n_resources, n_resources)
-            Symmetric distance matrix ready for ``dissimilarity="precomputed"``
-            in sklearn's MDS, AgglomerativeClustering, and HDBSCAN.
         """
         from scipy.spatial.distance import cdist
 
         n = len(self.profiles)
         weights = weights or {}
         D = np.zeros((n, n))
+        use_hellinger = distance_metric == "hellinger"
 
-        def _norm_dist(X: np.ndarray, theoretical_max: float) -> np.ndarray:
-            """Euclidean distance matrix normalised by the theoretical maximum."""
+        def _euclidean(X: np.ndarray, max_dist: float) -> np.ndarray:
             d = cdist(X, X, metric="euclidean")
-            return d / theoretical_max if theoretical_max > 0 else d
+            return d / max_dist if max_dist > 0 else d
+
+        def _simplex_dist(X: np.ndarray) -> np.ndarray:
+            """Hellinger or Euclidean for simplex rows (theoretical max sqrt(2))."""
+            if use_hellinger:
+                d = cdist(np.sqrt(X), np.sqrt(X), metric="euclidean")
+                return d / np.sqrt(2)
+            return _euclidean(X, np.sqrt(2))
 
         total_weight = 0.0
 
@@ -619,8 +615,7 @@ class ProfileMatrix:
             w = weights.get("activity_fractions", 1.0)
             if w > 0:
                 X = np.array([p.feature_vector(self.activities) for p in self.profiles])
-                # Max L2 between two probability vectors: sqrt(2)
-                D += w * _norm_dist(X, np.sqrt(2))
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.cooccurring_resources:
@@ -630,8 +625,7 @@ class ProfileMatrix:
                     [p.cooccurrence_fractions.get(r, 0.0) for r in self.cooccurring_resources]
                     for p in self.profiles
                 ])
-                # Max L2 between two [0,1]^k vectors: sqrt(k)
-                D += w * _norm_dist(X, np.sqrt(len(self.cooccurring_resources)))
+                D += w * _euclidean(X, np.sqrt(len(self.cooccurring_resources)))
                 total_weight += w
 
         if self.collaborating_resources:
@@ -641,7 +635,7 @@ class ProfileMatrix:
                     [p.object_collaboration_fractions.get(r, 0.0) for r in self.collaborating_resources]
                     for p in self.profiles
                 ])
-                D += w * _norm_dist(X, np.sqrt(len(self.collaborating_resources)))
+                D += w * _euclidean(X, np.sqrt(len(self.collaborating_resources)))
                 total_weight += w
 
         if self.time_bins:
@@ -651,9 +645,7 @@ class ProfileMatrix:
                     [p.time_fractions.get(h, 0.0) for h in self.time_bins]
                     for p in self.profiles
                 ])
-                # time_fractions sum to 1.0 per resource → same simplex bound as
-                # activity_fractions: max L2 = sqrt(2).
-                D += w * _norm_dist(X, np.sqrt(2))
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.weekday_bins:
@@ -663,8 +655,7 @@ class ProfileMatrix:
                     [p.weekday_fractions.get(d, 0.0) for d in self.weekday_bins]
                     for p in self.profiles
                 ])
-                # weekday_fractions sum to 1.0 → max L2 = sqrt(2).
-                D += w * _norm_dist(X, np.sqrt(2))
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.portfolio_object_types:
@@ -674,7 +665,7 @@ class ProfileMatrix:
                     [p.object_portfolio_fractions.get(t, 0.0) for t in self.portfolio_object_types]
                     for p in self.profiles
                 ])
-                D += w * _norm_dist(X, np.sqrt(2))
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         if self.instance_objects:
@@ -684,8 +675,7 @@ class ProfileMatrix:
                     [p.object_instance_fractions.get(o, 0.0) for o in self.instance_objects]
                     for p in self.profiles
                 ])
-                # Row sums to 1.0 → simplex: max L2 = sqrt(2).
-                D += w * _norm_dist(X, np.sqrt(2))
+                D += w * _simplex_dist(X)
                 total_weight += w
 
         # Divide by total weight → D ∈ [0, 1] regardless of how many groups
@@ -853,6 +843,7 @@ class ProfileMatrix:
         compute_clusters: bool = True,
         min_cluster_size: int = 2,
         group_weights: dict[str, float] | None = None,
+        distance_metric: str = "euclidean",
     ) -> dict:
         """
         Serialisable representation for the API response.
@@ -861,6 +852,7 @@ class ProfileMatrix:
         matrix (weighted, per-group-normalised) is used for MDS and clustering
         (except K-Means, which always uses raw features).
         ``group_weights`` maps feature-group name → weight (default 1.0 each).
+        ``distance_metric`` is ``"euclidean"`` (default) or ``"hellinger"``.
         """
         result: dict = {
             "resources": self.resources,
@@ -886,7 +878,7 @@ class ProfileMatrix:
         # Always use the precomputed distance matrix so the scale is consistent
         # across all configurations (single group, multi-group, any weights).
         # D ∈ [0, 1]: 0 = identical profiles, 1 = maximally different in all groups.
-        precomputed_D = self.combined_distance_matrix(group_weights)
+        precomputed_D = self.combined_distance_matrix(group_weights, distance_metric)
 
         # ── Clustering ────────────────────────────────────────────────────────
         if compute_clusters:
