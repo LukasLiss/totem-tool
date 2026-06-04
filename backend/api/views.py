@@ -1094,9 +1094,9 @@ def profile_matrix(request):
     except ValueError:
         n_clusters = 3
 
-    cluster_method = request.query_params.get("cluster_method", "kmeans")
+    cluster_method = request.query_params.get("cluster_method", "hdbscan")
     if cluster_method not in ("kmeans", "agglomerative", "hdbscan"):
-        cluster_method = "kmeans"
+        cluster_method = "hdbscan"
 
     try:
         min_cluster_size = max(2, int(request.query_params.get("min_cluster_size", 2)))

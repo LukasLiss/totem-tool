@@ -68,7 +68,7 @@ export default function OrgaMiningExplorer({
   const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
   const [nClustersStr, setNClustersStr] = useState("3");
-  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative" | "hdbscan">("kmeans");
+  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative" | "hdbscan">("hdbscan");
   const [distanceMetric, setDistanceMetric] = useState<"euclidean" | "hellinger">("euclidean");
   const [minClusterSize, setMinClusterSize] = useState(2);
   const [minClusterSizeStr, setMinClusterSizeStr] = useState("2");
@@ -1578,7 +1578,6 @@ function TooltipBox({
     timeBins.length   > 0             && "time",
     weekdayBins.length > 0            && "weekday",
     portfolioObjectTypes.length > 0   && "portfolio",
-    instanceObjects.length > 0        && "instance",
   ].filter(Boolean) as string[];
   const firstSection = slices.length === 0 ? (sectionOrder[0] ?? null) : null;
   const sectionStyle = (id: string) =>
@@ -1849,31 +1848,6 @@ function TooltipBox({
           }}>Object collaboration (type)</div>
           {portfolioObjectTypes.map((type, i) => {
             const val = portfolioValues[i] ?? 0;
-            const color = typeColorMap[type] ?? "#94a3b8";
-            return (
-              <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, lineHeight: "18px" }}>
-                <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 10, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {type}
-                </span>
-                <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                  {(val * 100).toFixed(1)}%
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Object collaboration (instance) — grouped by type for readability */}
-      {instanceObjects.length > 0 && instanceTypes.length > 0 && (
-        <div style={sectionStyle("instance")}>
-          <div style={{
-            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-            color: "#94a3b8", marginBottom: 4,
-          }}>Object collaboration (instance)</div>
-          {instanceTypes.map(type => {
-            const val = instanceTypeValues[type] ?? 0;
             const color = typeColorMap[type] ?? "#94a3b8";
             return (
               <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, lineHeight: "18px" }}>
