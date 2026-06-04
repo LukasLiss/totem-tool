@@ -282,7 +282,7 @@ export default function OrgaMiningExplorer({
                   { key: "activity_fractions",          label: "Activity fractions" },
                   { key: "cooccurrence_fractions",      label: "Co-occurrence" },
                   { key: "object_collaboration_fractions", label: "Object collaboration" },
-                  { key: "object_portfolio_fractions",   label: "Object collaboration (type)" },
+                  { key: "object_portfolio_fractions",   label: "BO type fractions" },
                   { key: "time_fractions",              label: "Time binning (hourly)" },
                   { key: "weekday_fractions",           label: "Time binning (weekly)" },
                 ] as const).map(({ key, label }) => (
@@ -516,7 +516,7 @@ export default function OrgaMiningExplorer({
                               {(data.portfolio_object_types?.length ?? 0) > 0 && (
                                 <th colSpan={data.portfolio_object_types!.length}
                                   className="px-3 py-1 text-left text-xs font-semibold text-muted-foreground sticky top-0 bg-muted/60 z-20 border-r whitespace-nowrap">
-                                  Object collab. (type)
+                                  BO type fractions
                                 </th>
                               )}
                             </tr>
@@ -1839,13 +1839,13 @@ function TooltipBox({
         );
       })()}
 
-      {/* Object collaboration (type) — fraction of objects per type */}
+      {/* BO type fractions — fraction of objects per type */}
       {portfolioObjectTypes.length > 0 && (
         <div style={sectionStyle("portfolio")}>
           <div style={{
             fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
             color: "#94a3b8", marginBottom: 4,
-          }}>Object collaboration (type)</div>
+          }}>BO type fractions</div>
           {portfolioObjectTypes.map((type, i) => {
             const val = portfolioValues[i] ?? 0;
             const color = typeColorMap[type] ?? "#94a3b8";
