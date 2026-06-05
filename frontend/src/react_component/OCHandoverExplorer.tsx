@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
 import {
-  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
+  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
 } from "d3-force";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -863,13 +863,30 @@ function HandoverGraph({
   useEffect(() => {
     if (nodes.length === 0) return;
     const { width, height } = size;
+    const cx = width / 2, cy = height / 2;
 
-    const simNodes: SimNode[] = nodes.map(n => ({
-      id: n.id,
-      object_type: n.object_type,
-      x: width / 2 + (Math.random() - 0.5) * width * 0.5,
-      y: height / 2 + (Math.random() - 0.5) * height * 0.5,
-    }));
+    // Weighted degree: sum of edge weights incident to each node
+    const degree: Record<string, number> = {};
+    nodes.forEach(n => { degree[n.id] = 0; });
+    edges.forEach(e => {
+      degree[e.source] = (degree[e.source] ?? 0) + e.raw_weight;
+      degree[e.target] = (degree[e.target] ?? 0) + e.raw_weight;
+    });
+    const maxDeg = Math.max(...Object.values(degree), 1);
+
+    // Initialise high-degree nodes near centre, low-degree near perimeter
+    const maxR = Math.min(width, height) * 0.54;
+    const simNodes: SimNode[] = nodes.map(n => {
+      const norm = degree[n.id] / maxDeg;         // 0 = leaf, 1 = hub
+      const r = (1 - norm) * maxR;
+      const angle = Math.random() * 2 * Math.PI;
+      return {
+        id: n.id,
+        object_type: n.object_type,
+        x: cx + r * Math.cos(angle),
+        y: cy + r * Math.sin(angle),
+      };
+    });
 
     const nodeById: Record<string, SimNode> = {};
     simNodes.forEach(n => { nodeById[n.id] = n; });
@@ -879,12 +896,18 @@ function HandoverGraph({
       .map(e => ({ source: nodeById[e.source], target: nodeById[e.target] }));
 
     const sim = forceSimulation<SimNode>(simNodes)
-      .force("link", forceLink<SimNode, SimLink>(simLinks).distance(150).strength(0.3))
-      .force("charge", forceManyBody<SimNode>().strength(-500))
-      .force("center", forceCenter(width / 2, height / 2))
-      .force("collide", forceCollide<SimNode>(NODE_R + 22));
+      .force("link", forceLink<SimNode, SimLink>(simLinks).distance(190).strength(0.4))
+      .force("charge", forceManyBody<SimNode>().strength(-900))
+      .force("center", forceCenter(cx, cy))
+      .force("collide", forceCollide<SimNode>(NODE_R + 18))
+      // Pull each node toward a radius proportional to (1 - normDegree):
+      // hubs → r≈0 (centre), leaves → r≈maxR (perimeter)
+      .force("radial", forceRadial<SimNode>(
+        n => (1 - degree[n.id] / maxDeg) * maxR,
+        cx, cy,
+      ).strength(0.25));
 
-    for (let i = 0; i < 300; i++) sim.tick();
+    for (let i = 0; i < 500; i++) sim.tick();
     sim.stop();
 
     const pos: Record<string, { x: number; y: number }> = {};

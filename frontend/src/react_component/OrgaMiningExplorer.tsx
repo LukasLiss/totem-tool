@@ -1482,8 +1482,11 @@ function TooltipBox({
       tooltip.resources.forEach(memberId => {
         const profile = allProfiles[memberId];
         if (!profile) return;
+        // self always counts toward its own type (mirrors single-node hasSelf logic)
+        const selfType = resourceObjectTypes[memberId] ?? memberId;
+        typeSumCounts[selfType] = (typeSumCounts[selfType] ?? 0) + 1;
         resourceList.forEach((r, i) => {
-          if (r === memberId) return; // exclude only self
+          if (r === memberId) return;
           const type = resourceObjectTypes[r] ?? r;
           if ((profile[offset + i] ?? 0) > 0)
             typeSumCounts[type] = (typeSumCounts[type] ?? 0) + 1;
