@@ -641,7 +641,7 @@ class ProfileMatrix:
     def cluster(
         self,
         n_clusters: int = 3,
-        method: Literal["kmeans", "agglomerative", "hdbscan"] = "agglomerative",
+        method: Literal["kmeans", "agglomerative", "hdbscan"] = "hdbscan",
         min_cluster_size: int = 2,
         precomputed_D: np.ndarray | None = None,
     ) -> list[int]:

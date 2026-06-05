@@ -807,6 +807,8 @@ class OCHANDOVER(nx.MultiDiGraph):
         plt.axis("off")
         plt.tight_layout()
         plt.show()
+
+
     @classmethod
     def compute_footprint(
         cls,
