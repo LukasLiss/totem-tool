@@ -66,7 +66,7 @@ def variant_signature(variant) -> str:
     discovery. 
     """
     G = variant.graph
-    normalize = lambda label: normalize(label)
+    normalize = lambda label: normalize_label(label)
     node_labels = sorted(normalize(d["label"]) for _, d in G.nodes(data=True))
     edge_tuples = sorted(
         (normalize(G.nodes[u]["label"]),
