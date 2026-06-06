@@ -20,10 +20,11 @@ from datetime import datetime, timezone, tzinfo
 
 from scipy.stats import wasserstein_distance
 
-from totem_lib.simulation.evaluation._log_utils import (
+from totem_lib.simulation.evaluation._eval_utils import (
     event_timestamps,
     get_variants,
     event_timestamps_per_execution,
+    wd_from_bins,
 )
 
 SECONDS_PER_HOUR = 3600
@@ -33,21 +34,6 @@ HOURS_PER_DAY = 24
 def _hour_of_epoch(ts: int) -> int:
     """Integer 'hour bin' index of an epoch timestamp."""
     return ts // SECONDS_PER_HOUR
-
-
-def _weighted_wd_from_bins(bins_act: Counter, bins_sim: Counter) -> float:
-    """scipy wasserstein on two Counters, using the keys as support points."""
-    if not bins_act and not bins_sim:
-        return 0.0
-    if not bins_act or not bins_sim:
-        return float("inf")
-    keys_a = list(bins_act.keys())
-    keys_s = list(bins_sim.keys())
-    return float(wasserstein_distance(
-        keys_a, keys_s,
-        u_weights=[bins_act[k] for k in keys_a],
-        v_weights=[bins_sim[k] for k in keys_s],
-    ))
 
 
 def absolute_event_distribution_distance(actual_ocel, simulated_ocel) -> float:
@@ -64,7 +50,7 @@ def absolute_event_distribution_distance(actual_ocel, simulated_ocel) -> float:
     """
     actual_bins = Counter(_hour_of_epoch(t) for t in event_timestamps(actual_ocel))
     sim_bins = Counter(_hour_of_epoch(t) for t in event_timestamps(simulated_ocel))
-    return _weighted_wd_from_bins(actual_bins, sim_bins)
+    return wd_from_bins(actual_bins, sim_bins)
 
 
 def circadian_event_distribution_distance(
@@ -129,4 +115,4 @@ def relative_event_distribution_distance(actual_ocel, simulated_ocel) -> float:
                 bins[(ts - arrival) // SECONDS_PER_HOUR] += 1
         return bins
 
-    return _weighted_wd_from_bins(_relative_bins(actual_ocel), _relative_bins(simulated_ocel))
+    return wd_from_bins(_relative_bins(actual_ocel), _relative_bins(simulated_ocel))

@@ -11,7 +11,7 @@ Adapted from the implementation of NGDa from Chapela-Campa et al. "Can I Trust M
     Quality of Business Process Simulation Models." BPM 2023.
 """
 from collections import Counter
-from _log_utils import get_variants
+from _eval_utils import get_variants
 
 _DUMMY_TOKEN = "<>"
 
