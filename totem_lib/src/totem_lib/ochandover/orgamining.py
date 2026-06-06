@@ -786,6 +786,76 @@ class ProfileMatrix:
         ]
         return positions, stress, explained_variance, float(scale)
 
+    def _type_n_summaries(self, cluster_labels: list[int] | None = None) -> dict:
+        """
+        Pre-compute the n/m tooltip values for co-occurrence and collaboration.
+
+        For each resource R and each resource type T:
+          n  = 1 (self, if R is of type T) + count of resources r of type T
+               where r ≠ R and the relevant fraction > 0
+          m  = total resources of type T  (returned once in "type_totals")
+
+        For clusters the same logic is applied per member and the n values are
+        averaged across members, matching the frontend tooltip semantics exactly.
+
+        Returns a dict with:
+          "type_totals"  : {type: m}
+          "cooc_type_n"  : {resource_id | "Cluster N": {type: n}}  (if cooc present)
+          "collab_type_n": {resource_id | "Cluster N": {type: n}}  (if collab present)
+        """
+        from collections import Counter
+
+        rot = self.resource_object_types          # {resource_id: type}
+        type_totals: dict[str, int] = dict(Counter(rot.values()))
+        result: dict = {"type_totals": type_totals}
+
+        groups: list[tuple[str, str]] = []
+        if self.cooccurring_resources:
+            groups.append(("cooc_type_n", "cooccurrence_fractions"))
+        if self.collaborating_resources:
+            groups.append(("collab_type_n", "object_collaboration_fractions"))
+
+        for key, attr in groups:
+            n_map: dict[str, dict[str, float]] = {}
+
+            # ── individual resources ──────────────────────────────────────────
+            for profile in self.profiles:
+                rid = profile.resource_id
+                fractions: dict[str, float] = getattr(profile, attr)
+                counts: dict[str, float] = {t: 0.0 for t in type_totals}
+                counts[profile.object_type] += 1.0          # self always counts
+                for other_id, val in fractions.items():
+                    if other_id != rid and val > 0:
+                        other_type = rot.get(other_id)
+                        if other_type:
+                            counts[other_type] += 1.0
+                n_map[rid] = counts
+
+            # ── clusters ─────────────────────────────────────────────────────
+            if cluster_labels is not None:
+                for label in sorted(set(cluster_labels) - {-1}):
+                    members = [
+                        self.profiles[i]
+                        for i, lbl in enumerate(cluster_labels)
+                        if lbl == label
+                    ]
+                    totals: dict[str, float] = {t: 0.0 for t in type_totals}
+                    for member in members:
+                        fractions = getattr(member, attr)
+                        totals[member.object_type] += 1.0   # self
+                        for other_id, val in fractions.items():
+                            if other_id != member.resource_id and val > 0:
+                                other_type = rot.get(other_id)
+                                if other_type:
+                                    totals[other_type] += 1.0
+                    n_map[f"Cluster {label + 1}"] = {
+                        t: v / len(members) for t, v in totals.items()
+                    }
+
+            result[key] = n_map
+
+        return result
+
     def to_dict(
         self,
         width: int | None = None,
@@ -829,6 +899,7 @@ class ProfileMatrix:
         precomputed_D = self.combined_distance_matrix(group_weights, distance_metric)
 
         # ── Clustering ────────────────────────────────────────────────────────
+        cluster_labels_out: list[int] | None = None
         if compute_clusters:
             n = len(self.profiles)
             if n < 2:
@@ -845,6 +916,10 @@ class ProfileMatrix:
                 k = len(set(labels) - {-1}) if cluster_method == "hdbscan" else eff_k
             result["cluster_labels"] = labels
             result["n_clusters"] = k
+            cluster_labels_out = labels
+
+        # ── Type n/m summaries for tooltips ───────────────────────────────────
+        result.update(self._type_n_summaries(cluster_labels=cluster_labels_out))
 
         # ── MDS ───────────────────────────────────────────────────────────────
         if width is not None and height is not None:

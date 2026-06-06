@@ -8,6 +8,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CircleDashed, ScanIcon, Share2 } from "lucide-react";
 
 /* ── Types ─────────────────────────────────────────────────── */
+type TypeNMap = Record<string, Record<string, number>>;  // {resourceId | "Cluster N": {type: n}}
+
 type ProfileMatrixData = {
   resources: string[];
   activities: string[];
@@ -25,6 +27,9 @@ type ProfileMatrixData = {
   mds_scale?: number;
   cluster_labels?: number[];
   n_clusters?: number;
+  type_totals?: Record<string, number>;   // {type: m}
+  cooc_type_n?: TypeNMap;
+  collab_type_n?: TypeNMap;
 };
 
 type OrgaMiningExplorerProps = {
@@ -1316,6 +1321,9 @@ function ResourceGraph({
             weekdayBins={data.weekday_bins ?? []}
             portfolioObjectTypes={data.portfolio_object_types ?? []}
             resourceObjectTypes={data.resource_object_types}
+            typeTotals={data.type_totals ?? {}}
+            coocTypeN={data.cooc_type_n ?? {}}
+            collabTypeN={data.collab_type_n ?? {}}
             activityColorMap={activityColorMap}
             resourceColorMap={resourceColorMap}
             typeColorMap={typeColorMap}
@@ -1415,6 +1423,9 @@ function TooltipBox({
   weekdayBins,
   portfolioObjectTypes,
   resourceObjectTypes,
+  typeTotals,
+  coocTypeN,
+  collabTypeN,
   activityColorMap,
   resourceColorMap,
   typeColorMap,
@@ -1435,6 +1446,9 @@ function TooltipBox({
   weekdayBins: number[];
   portfolioObjectTypes: string[];
   resourceObjectTypes: Record<string, string>;
+  typeTotals: Record<string, number>;
+  coocTypeN: TypeNMap;
+  collabTypeN: TypeNMap;
   activityColorMap: Record<string, string>;
   resourceColorMap: Record<string, string>;
   typeColorMap: Record<string, string>;
@@ -1465,74 +1479,50 @@ function TooltipBox({
   });
 
   // Aggregate co-occurrence / collaboration fractions by object type.
-  // Returns per-type rows with individual resource entries (non-zero only),
-  // sorted by descending peak value within the type.
+  // n/m values come from pre-computed Python data; the items list for the
+  // expandable dropdown is still derived from the raw profile here.
   const selfSet = new Set(tooltip.resources);
-  function typeGroupedRows(resourceList: string[], offset: number) {
+  function typeGroupedRows(resourceList: string[], offset: number, typeNMap: TypeNMap) {
+    const lookupKey = tooltip.isCluster
+      ? `Cluster ${tooltip.clusterLabel + 1}`
+      : tooltip.resources[0];
+    const precomputedN = typeNMap[lookupKey] ?? {};
+
     if (tooltip.isCluster) {
-      // Cluster path: for each cluster member compute their individual n (same as
-      // single-node, excluding only their own self-entry), then average across members.
-      // m = total resources of that type across the whole resourceList — unchanged.
-      const typeTotal: Record<string, number> = {};
-      resourceList.forEach(r => {
-        const type = resourceObjectTypes[r] ?? r;
-        typeTotal[type] = (typeTotal[type] ?? 0) + 1;
-      });
-      const typeSumCounts: Record<string, number> = {};
-      tooltip.resources.forEach(memberId => {
-        const profile = allProfiles[memberId];
-        if (!profile) return;
-        // self always counts toward its own type (mirrors single-node hasSelf logic)
-        const selfType = resourceObjectTypes[memberId] ?? memberId;
-        typeSumCounts[selfType] = (typeSumCounts[selfType] ?? 0) + 1;
-        resourceList.forEach((r, i) => {
-          if (r === memberId) return;
-          const type = resourceObjectTypes[r] ?? r;
-          if ((profile[offset + i] ?? 0) > 0)
-            typeSumCounts[type] = (typeSumCounts[type] ?? 0) + 1;
-        });
-      });
-      const nMembers = tooltip.resources.length;
-      return Object.entries(typeTotal)
+      return Object.entries(typeTotals)
         .map(([type, total]) => ({
           type, total,
-          nonZero: (typeSumCounts[type] ?? 0) / nMembers,
+          nonZero: precomputedN[type] ?? 0,
           items: [] as { resource: string; val: number }[],
         }))
         .filter(({ nonZero }) => nonZero > 0)
         .sort((a, b) => b.nonZero - a.nonZero);
     }
 
-    // Single-node path: build items list for the expandable dropdown.
-    // total counts all resources of that type (including self) so m is stable.
-    // Self is counted in n (diagonal = 1.0 always) but not shown in the dropdown list.
-    const accum: Record<string, { items: { resource: string; val: number }[]; total: number; hasSelf: boolean }> = {};
+    // Single-node: use pre-computed n, but still build the items dropdown from profile.
+    const itemsByType: Record<string, { resource: string; val: number }[]> = {};
     resourceList.forEach((r, i) => {
-      const type = resourceObjectTypes[r] ?? r;
+      if (selfSet.has(r)) return;
       const val = tooltip.profile[offset + i] ?? 0;
-      if (!accum[type]) accum[type] = { items: [], total: 0, hasSelf: false };
-      accum[type].total += 1;
-      if (selfSet.has(r)) {
-        accum[type].hasSelf = true; // diagonal is always 1.0, counts toward n
-      } else if (val > 0) {
-        accum[type].items.push({ resource: r, val });
-      }
+      if (val <= 0) return;
+      const type = resourceObjectTypes[r] ?? r;
+      (itemsByType[type] ??= []).push({ resource: r, val });
     });
-    return Object.entries(accum)
-      .filter(([, { items, hasSelf }]) => items.length > 0 || hasSelf)
-      .map(([type, { items, total, hasSelf }]) => ({
+    return Object.entries(typeTotals)
+      .map(([type, total]) => ({
         type, total,
-        nonZero: items.length + (hasSelf ? 1 : 0),
-        items: items.sort((a, b) => b.val - a.val),
+        nonZero: precomputedN[type] ?? 0,
+        items: (itemsByType[type] ?? []).sort((a, b) => b.val - a.val),
       }))
+      .filter(({ nonZero }) => nonZero > 0)
       .sort((a, b) => b.nonZero - a.nonZero);
   }
 
   const coocRows  = cooccurringResources.length  > 0
-    ? typeGroupedRows(cooccurringResources,  activities.length)
+    ? typeGroupedRows(cooccurringResources,  activities.length, coocTypeN)
     : [];
   const collabRows = collaboratingResources.length > 0
-    ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length)
+    ? typeGroupedRows(collaboratingResources, activities.length + cooccurringResources.length, collabTypeN)
     : [];
 
   // Time bin / portfolio bar values — one value per bin, averaged for clusters.
