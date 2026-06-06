@@ -2,9 +2,12 @@
 Control-flow evaluation measures between OCELs
 
 Implements:
-- N-Gram Distance (NGD) — The Distance between N-Grams of Events, which is equal to the (n-1)th-Markovian Distance. ´
+- N-Gram Distance absolute (NGDa) — The Distance between N-Grams of Events, which is equal to the (n-1)th-Markovian Distance. 
 For n=2, this corresponds to the DFG-based distance. For n>2, this captures longer-range dependencies at the cost of higher sensitivity to infrequent n-grams.
 from: Chapela-Campa et al. "Can I Trust My Simulation Model? Measuring the
+    Quality of Business Process Simulation Models." BPM 2023.
+- N-Gram Distance relative (NGDr) — Similar to NGDa but compares the relative frequencies of n-grams instead of absolute counts, thus ignoring differences in the total number of n-grams between the two logs.
+Adapted from the implementation of NGDa from Chapela-Campa et al. "Can I Trust My Simulation Model? Measuring the
     Quality of Business Process Simulation Models." BPM 2023.
 """
 from collections import Counter
