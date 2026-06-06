@@ -880,16 +880,25 @@ def variants(request):
         "object_types": ocel.object_types
     }, status=status.HTTP_200_OK)
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def ochandover(request):
     from totem_lib.ochandover.ochandover import OCHANDOVER
 
-    file_id = request.query_params.get("file_id")
-    if not file_id:
-        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+    # Support GET (query params) for normal mode and POST (JSON body) for cluster mode
+    p = request.data if request.method == "POST" else request.query_params
 
-    method = request.query_params.get("method", "oc")
+    file_id = p.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    method = p.get("method", "oc")
+
+    cluster_map: dict | None = None
+    if request.method == "POST":
+        raw = request.data.get("cluster_map")
+        if isinstance(raw, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+            cluster_map = raw
 
     try:
         EventLog.objects.get(pk=file_id, project__users=request.user)
@@ -914,37 +923,37 @@ def ochandover(request):
 
     try:
         if method == "flattened":
-            case_type = request.query_params.get("case_type", "")
-            resource_type = request.query_params.get("resource_type", "")
+            case_type = p.get("case_type", "")
+            resource_type = p.get("resource_type", "")
             if not case_type or not resource_type:
                 return Response(
-                    {"error": "Missing ?case_type or ?resource_type"},
+                    {"error": "Missing case_type or resource_type"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            max_gap_raw = request.query_params.get("max_gap")
+            max_gap_raw = p.get("max_gap")
             max_gap = int(max_gap_raw) if max_gap_raw is not None else None
             graph = OCHANDOVER.from_ocel_flattened(ocel, case_type=case_type, resource_type=resource_type, max_gap=max_gap)
         else:
-            resource_types_raw = request.query_params.get("resource_types", "")
-            businessobject_types_raw = request.query_params.get("businessobject_types", "")
+            resource_types_raw = p.get("resource_types", "")
+            businessobject_types_raw = p.get("businessobject_types", "")
             if not resource_types_raw or not businessobject_types_raw:
                 return Response(
-                    {"error": "Missing ?resource_types or ?businessobject_types"},
+                    {"error": "Missing resource_types or businessobject_types"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()]
             businessobject_types = [t.strip() for t in businessobject_types_raw.split(",") if t.strip()]
-            max_gap_raw = request.query_params.get("max_gap")
+            max_gap_raw = p.get("max_gap")
             max_gap = int(max_gap_raw) if max_gap_raw is not None else None
-            normalization_raw = request.query_params.get("normalization", "by_arcs_in_eog")
+            normalization_raw = p.get("normalization", "by_arcs_in_eog")
             valid_normalizations = {"by_source", "by_target", "by_arcs_in_eog", "by_total_weight"}
             if normalization_raw not in valid_normalizations:
                 return Response({"error": f"Invalid normalization: {normalization_raw}"}, status=status.HTTP_400_BAD_REQUEST)
-            normalization_scope_raw = request.query_params.get("normalization_scope", "global")
+            normalization_scope_raw = p.get("normalization_scope", "global")
             if normalization_scope_raw not in {"global", "per_bo_type"}:
                 return Response({"error": f"Invalid normalization_scope: {normalization_scope_raw}"}, status=status.HTTP_400_BAD_REQUEST)
             parallel_threshold = None
-            parallel_threshold_raw = request.query_params.get("parallel_threshold")
+            parallel_threshold_raw = p.get("parallel_threshold")
             if parallel_threshold_raw is not None:
                 try:
                     parallel_threshold = float(parallel_threshold_raw)
@@ -953,7 +962,7 @@ def ochandover(request):
                 except ValueError:
                     return Response({"error": "Invalid parallel_threshold value"}, status=status.HTTP_400_BAD_REQUEST)
             min_parallel_observations = 1
-            min_parallel_observations_raw = request.query_params.get("min_parallel_observations")
+            min_parallel_observations_raw = p.get("min_parallel_observations")
             if min_parallel_observations_raw is not None:
                 try:
                     min_parallel_observations = int(min_parallel_observations_raw)
@@ -961,7 +970,7 @@ def ochandover(request):
                         return Response({"error": "min_parallel_observations must be at least 1"}, status=status.HTTP_400_BAD_REQUEST)
                 except ValueError:
                     return Response({"error": "Invalid min_parallel_observations value"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map)
     except Exception as e:
         import traceback
         traceback.print_exc()

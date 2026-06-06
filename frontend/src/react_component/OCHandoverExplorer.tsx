@@ -269,10 +269,18 @@ export default function OCHandoverExplorer({
       if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
 
       try {
-        const res = await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        });
+        const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+        const res = activeClusterMap
+          ? await fetch("/api/handover/", {
+              method: "POST",
+              credentials: "include",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
+            })
+          : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
+              credentials: "include",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            });
         if (fileIdRef.current !== currentFileId || cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -291,7 +299,7 @@ export default function OCHandoverExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [fileId, hasStartedLoading, onDataLoad]);
+  }, [fileId, hasStartedLoading, onDataLoad, useClusters, clusterInfo]);
 
   const handleCompute = () => {
     hasStartedLoadingRef.current = false;

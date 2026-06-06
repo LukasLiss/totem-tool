@@ -25,7 +25,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                   normalization: Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"] = "by_arcs_in_eog",
                   normalization_scope: Literal["global", "per_bo_type"] = "global",
                   parallel_threshold: float | None = None,
-                  min_parallel_observations: int = 1) -> 'OCHANDOVER':
+                  min_parallel_observations: int = 1,
+                  cluster_map: dict[str, str] | None = None) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -68,6 +69,18 @@ class OCHANDOVER(nx.MultiDiGraph):
         print("Event Resources")
         print(event_resources)
 
+        # Replace individual resource IDs with cluster IDs before the algorithm runs.
+        # Multiple resources from the same cluster in one event collapse to a single entry.
+        # Outliers (resources absent from cluster_map) keep their original ID.
+        if cluster_map:
+            event_resources = (
+                event_resources
+                .with_columns(
+                    pl.col("resources")
+                    .list.eval(pl.element().replace(cluster_map, default=pl.element()))
+                    .list.unique()
+                )
+            )
 
         # Get the type of the objects by their id
 
@@ -82,6 +95,10 @@ class OCHANDOVER(nx.MultiDiGraph):
         for obj_type in resource_types:
             for obj_id in ocel.get_object_ids_by_type(obj_type):
                 resource_type_by_id[obj_id] = obj_type
+
+        if cluster_map:
+            for cluster_id in set(cluster_map.values()):
+                resource_type_by_id[cluster_id] = "cluster"
 
 
         businessobject_type_df = pl.DataFrame({
