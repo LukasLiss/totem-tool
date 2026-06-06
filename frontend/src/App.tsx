@@ -5,6 +5,7 @@ import { Logout } from "./react_component/logout";
 import { Title } from "./Title";
 import UploadView from "./UploadView";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { ClusterProvider } from "./contexts/ClusterContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
@@ -17,6 +18,7 @@ function App() {
 
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
+      <ClusterProvider>
       <DashboardProvider>
         <div className="website-background">
           <Toaster position="top-center" richColors/>
@@ -33,6 +35,7 @@ function App() {
           </Routes>
         </div>
       </DashboardProvider>
+      </ClusterProvider>
     </SelectedFileContext.Provider>
   );
 }

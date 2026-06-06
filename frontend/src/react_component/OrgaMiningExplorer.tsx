@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useContext } from "react";
+import { ClusterContext } from "@/contexts/ClusterContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -78,6 +79,7 @@ export default function OrgaMiningExplorer({
   const [minClusterSize, setMinClusterSize] = useState(2);
   const [minClusterSizeStr, setMinClusterSizeStr] = useState("2");
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const { setClusterInfo } = useContext(ClusterContext);
   const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -241,6 +243,25 @@ export default function OrgaMiningExplorer({
   }, [status, lockedHeight]);
 
   useEffect(() => { setLockedHeight(null); setViewMode("graph"); }, [data]);
+
+  // Sync cluster assignments into ClusterContext whenever a new result arrives.
+  // Clears the context when data is reset or clustering was disabled.
+  useEffect(() => {
+    if (!data?.cluster_labels) { setClusterInfo(null); return; }
+    const labels = data.cluster_labels;
+    const clusterMap: Record<string, string> = {};
+    data.resources.forEach((r, i) => {
+      if (labels[i] >= 0) clusterMap[r] = `Cluster ${labels[i] + 1}`;
+    });
+    setClusterInfo({
+      resources: data.resources,
+      resourceObjectTypes: data.resource_object_types,
+      clusterLabels: labels,
+      nClusters: data.n_clusters ?? 0,
+      hasOutliers: labels.includes(-1),
+      clusterMap,
+    });
+  }, [data, setClusterInfo]);
 
   const handleCompute = () => {
     hasStartedLoadingRef.current = false;

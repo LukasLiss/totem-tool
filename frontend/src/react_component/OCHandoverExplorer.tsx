@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useContext } from "react";
+import { ClusterContext } from "@/contexts/ClusterContext";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
@@ -97,6 +98,8 @@ export default function OCHandoverExplorer({
   const [minParallelObsStr, setMinParallelObsStr] = useState("1");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const { clusterInfo } = useContext(ClusterContext);
+  const [useClusters, setUseClusters] = useState(false);
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [logError, setLogError] = useState("");
@@ -561,6 +564,34 @@ export default function OCHandoverExplorer({
           <div className="flex gap-4 flex-wrap justify-center">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && (
+          <div className="border rounded-md p-3 min-w-[180px] self-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters</p>
+            <div className={`flex items-center gap-2 ${!clusterInfo ? "opacity-40 pointer-events-none" : ""}`}>
+              <Switch
+                id="use-clusters"
+                checked={useClusters && !!clusterInfo}
+                onCheckedChange={v => setUseClusters(v)}
+                disabled={!clusterInfo}
+              />
+              <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
+                Use OrgaMining clusters
+              </Label>
+            </div>
+            {clusterInfo && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {clusterInfo.nClusters} cluster{clusterInfo.nClusters !== 1 ? "s" : ""}
+                {clusterInfo.hasOutliers ? " + outliers" : ""}
+              </p>
+            )}
+            {!clusterInfo && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Compute clusters in Resource-Activity Matrix first.
+              </p>
+            )}
           </div>
         )}
 
