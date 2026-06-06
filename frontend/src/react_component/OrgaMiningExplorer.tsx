@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
-import { ClusterContext } from "@/contexts/ClusterContext";
+import { ClusterContext, type TypeNMap } from "@/contexts/ClusterContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -9,7 +9,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CircleDashed, ScanIcon, Share2 } from "lucide-react";
 
 /* ── Types ─────────────────────────────────────────────────── */
-type TypeNMap = Record<string, Record<string, number>>;  // {resourceId | "Cluster N": {type: n}}
 
 type ProfileMatrixData = {
   resources: string[];
@@ -28,9 +27,11 @@ type ProfileMatrixData = {
   mds_scale?: number;
   cluster_labels?: number[];
   n_clusters?: number;
-  type_totals?: Record<string, number>;   // {type: m}
+  type_totals?: Record<string, number>;
   cooc_type_n?: TypeNMap;
   collab_type_n?: TypeNMap;
+  // activities / time / weekday / portfolio fractions per resource and cluster avg
+  tooltip_profiles?: Record<string, { activities?: number[]; time?: number[]; weekday?: number[]; portfolio?: number[] }>;
 };
 
 type OrgaMiningExplorerProps = {
@@ -260,6 +261,13 @@ export default function OrgaMiningExplorer({
       nClusters: data.n_clusters ?? 0,
       hasOutliers: labels.includes(-1),
       clusterMap,
+      activities: data.activities,
+      cooccurringResources: data.cooccurring_resources ?? [],
+      collaboratingResources: data.collaborating_resources ?? [],
+      tooltipProfiles: data.tooltip_profiles ?? {},
+      typeTotals: data.type_totals ?? {},
+      coocTypeN: data.cooc_type_n ?? {},
+      collabTypeN: data.collab_type_n ?? {},
     });
   }, [data, setClusterInfo]);
 

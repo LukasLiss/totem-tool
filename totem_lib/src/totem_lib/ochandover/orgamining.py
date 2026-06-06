@@ -854,6 +854,48 @@ class ProfileMatrix:
 
             result[key] = n_map
 
+        # ── Tooltip profiles ──────────────────────────────────────────────────
+        # Compact per-resource (and per-cluster average) profile containing only
+        # the "display" feature groups: activities, time, weekday, portfolio.
+        # Co-occurrence and collaboration are intentionally excluded — their
+        # type-level n/m summary (cooc_type_n / collab_type_n) is sufficient
+        # for the tooltip without needing per-resource values.
+        def _avg(members: list, attr: str, keys: list) -> list[float]:
+            return [
+                sum(getattr(m, attr).get(k, 0.0) for m in members) / len(members)
+                for k in keys
+            ]
+
+        all_keys: list[tuple[str, str, list]] = []
+        if self.activities:
+            all_keys.append(("activities", "activity_fractions", self.activities))
+        if self.time_bins:
+            all_keys.append(("time", "time_fractions", self.time_bins))
+        if self.weekday_bins:
+            all_keys.append(("weekday", "weekday_fractions", self.weekday_bins))
+        if self.portfolio_object_types:
+            all_keys.append(("portfolio", "object_portfolio_fractions", self.portfolio_object_types))
+
+        if all_keys:
+            tooltip_profiles: dict[str, dict[str, list[float]]] = {}
+            for profile in self.profiles:
+                tooltip_profiles[profile.resource_id] = {
+                    label: [getattr(profile, attr).get(k, 0.0) for k in keys]
+                    for label, attr, keys in all_keys
+                }
+            if cluster_labels is not None:
+                for lbl in sorted(set(cluster_labels) - {-1}):
+                    members = [
+                        self.profiles[i]
+                        for i, cl in enumerate(cluster_labels)
+                        if cl == lbl
+                    ]
+                    tooltip_profiles[f"Cluster {lbl + 1}"] = {
+                        label: _avg(members, attr, keys)
+                        for label, attr, keys in all_keys
+                    }
+            result["tooltip_profiles"] = tooltip_profiles
+
         return result
 
     def to_dict(

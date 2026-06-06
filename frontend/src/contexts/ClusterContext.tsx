@@ -1,13 +1,27 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
+// {resourceId | "Cluster N": {type: n}}
+export type TypeNMap = Record<string, Record<string, number>>;
+
 export type ClusterInfo = {
+  // cluster assignments
   resources: string[];
   resourceObjectTypes: Record<string, string>;
   clusterLabels: number[];        // parallel to resources; -1 = HDBSCAN outlier
   nClusters: number;
   hasOutliers: boolean;
-  // resource → "Cluster N"; outliers (label -1) are excluded
-  clusterMap: Record<string, string>;
+  clusterMap: Record<string, string>;  // resource → "Cluster N"; outliers excluded
+
+  // profile data for tooltips (covers all resources + cluster averages)
+  activities: string[];
+  cooccurringResources: string[];
+  collaboratingResources: string[];
+  // compact per-node profiles for display: activities, time, weekday, portfolio only
+  // co-occurrence/collaboration per-resource values are intentionally excluded
+  tooltipProfiles: Record<string, { activities?: number[]; time?: number[]; weekday?: number[]; portfolio?: number[] }>;
+  typeTotals: Record<string, number>;
+  coocTypeN: TypeNMap;
+  collabTypeN: TypeNMap;
 };
 
 type ClusterContextValue = {

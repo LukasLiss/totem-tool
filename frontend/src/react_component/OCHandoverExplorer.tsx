@@ -299,6 +299,14 @@ export default function OCHandoverExplorer({
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
+  // When cluster mode is enabled, auto-select the resource types present in the cluster data.
+  useEffect(() => {
+    if (useClusters && clusterInfo) {
+      const types = new Set(Object.values(clusterInfo.resourceObjectTypes));
+      setResourceTypes(types);
+    }
+  }, [useClusters, clusterInfo]);
+
   const toggleResourceType = (t: string) =>
     setResourceTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
 
@@ -555,7 +563,7 @@ export default function OCHandoverExplorer({
 
         {fileId && objectTypes.length > 0 && method === "oc" && (
           <div className="flex gap-4 flex-wrap justify-center">
-            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} />
+            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
           </div>
         )}
@@ -730,16 +738,16 @@ export default function OCHandoverExplorer({
 
 /* ── TypeSelector ───────────────────────────────────────────── */
 function TypeSelector({
-  title, types, selected, onToggle,
-}: { title: string; types: string[]; selected: Set<string>; onToggle: (t: string) => void }) {
+  title, types, selected, onToggle, disabled = false,
+}: { title: string; types: string[]; selected: Set<string>; onToggle: (t: string) => void; disabled?: boolean }) {
   return (
-    <div className="border rounded-md p-3 min-w-[180px]">
+    <div className={`border rounded-md p-3 min-w-[180px] ${disabled ? "opacity-60" : ""}`}>
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
       <div className="space-y-1.5">
         {types.map(t => (
           <div key={t} className="flex items-center gap-2">
-            <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} />
-            <Label htmlFor={`${title}-${t}`} className="text-sm cursor-pointer">{t}</Label>
+            <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={disabled} />
+            <Label htmlFor={`${title}-${t}`} className={`text-sm ${disabled ? "cursor-default" : "cursor-pointer"}`}>{t}</Label>
           </div>
         ))}
       </div>
