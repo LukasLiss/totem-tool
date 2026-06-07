@@ -16,8 +16,11 @@ export type ClusterInfo = {
   activities: string[];
   cooccurringResources: string[];
   collaboratingResources: string[];
-  // compact per-node profiles for display: activities, time, weekday, portfolio only
-  // co-occurrence/collaboration per-resource values are intentionally excluded
+  timeBins: number[];
+  weekdayBins: number[];
+  portfolioObjectTypes: string[];
+  // compact per-node profiles: activities, time, weekday, portfolio only
+  // co-occurrence/collaboration per-resource values intentionally excluded
   tooltipProfiles: Record<string, { activities?: number[]; time?: number[]; weekday?: number[]; portfolio?: number[] }>;
   typeTotals: Record<string, number>;
   coocTypeN: TypeNMap;

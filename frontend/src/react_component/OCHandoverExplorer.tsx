@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
-import { ClusterContext } from "@/contexts/ClusterContext";
+import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
+import TooltipBox from "@/react_component/ResourceTooltip";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
@@ -663,6 +664,7 @@ export default function OCHandoverExplorer({
                   data={data}
                   typeColorMap={typeColorMap}
                   onBack={() => setSelectedNode(null)}
+                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
                 />
               ) : (
                 <HandoverGraph
@@ -670,6 +672,7 @@ export default function OCHandoverExplorer({
                   edges={data.edges}
                   typeColorMap={typeColorMap}
                   onNodeClick={setSelectedNode}
+                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
                 />
               )
             )}
@@ -873,16 +876,20 @@ function EventLogTable({
 type SimNode = SimulationNodeDatum & { id: string; object_type: string };
 type SimLink = SimulationLinkDatum<SimNode>;
 
+const CLUSTER_COLORS = ["#f43f5e","#f97316","#eab308","#22c55e","#06b6d4","#8b5cf6","#ec4899","#14b8a6"];
+
 function HandoverGraph({
   nodes,
   edges,
   typeColorMap,
   onNodeClick,
+  clusterInfo,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
   typeColorMap: Record<string, string>;
   onNodeClick?: (id: string) => void;
+  clusterInfo?: ClusterInfo;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -897,7 +904,7 @@ function HandoverGraph({
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
-  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; label: string } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string } | null>(null);
 
   // Measure container
   useEffect(() => {
@@ -1261,7 +1268,7 @@ function HandoverGraph({
                   if (dragId) return;
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect) return;
-                  setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, label: node.id });
+                  setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId: node.id });
                 }}
                 onMouseMove={e => {
                   if (dragId) return;
@@ -1342,22 +1349,49 @@ function HandoverGraph({
           </div>
         )}
         {nodeTooltip && (() => {
-          const TW = 180, TH = 32;
           const cw = containerRef.current?.offsetWidth ?? size.width;
           const ch = containerRef.current?.offsetHeight ?? size.height;
+          const nId = nodeTooltip.nodeId;
+          if (clusterInfo) {
+            const isCluster = nId.startsWith("Cluster ");
+            const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
+            const members = isCluster
+              ? clusterInfo.resources.filter(r => clusterInfo.clusterMap[r] === nId)
+              : [nId];
+            const resourceColorMap = Object.fromEntries(
+              clusterInfo.resources.map(r => [r, typeColorMap[clusterInfo.resourceObjectTypes[r] ?? ""] ?? "#94a3b8"])
+            );
+            const activityColorMap = mapTypesToColors(clusterInfo.activities);
+            return (
+              <TooltipBox
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: false, cw, ch }}
+                activities={clusterInfo.activities}
+                cooccurringResources={clusterInfo.cooccurringResources}
+                collaboratingResources={clusterInfo.collaboratingResources}
+                timeBins={clusterInfo.timeBins}
+                weekdayBins={clusterInfo.weekdayBins}
+                portfolioObjectTypes={clusterInfo.portfolioObjectTypes}
+                resourceObjectTypes={clusterInfo.resourceObjectTypes}
+                typeTotals={clusterInfo.typeTotals}
+                coocTypeN={clusterInfo.coocTypeN}
+                collabTypeN={clusterInfo.collabTypeN}
+                activityColorMap={activityColorMap}
+                resourceColorMap={resourceColorMap}
+                typeColorMap={typeColorMap}
+                clusterColors={CLUSTER_COLORS}
+                allProfiles={{}}
+                tooltipProfiles={clusterInfo.tooltipProfiles}
+                showDropdown={false}
+                highlightedActivity={null}
+              />
+            );
+          }
+          const TW = 180, TH = 32;
           const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
           const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
           return (
-            <div style={{
-              position: "absolute", left, top,
-              background: "white", border: "1px solid #E2E8F0",
-              borderRadius: 8, padding: "5px 10px",
-              fontSize: 12, fontWeight: 600,
-              boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-              pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap",
-              maxWidth: TW,
-            }}>
-              {nodeTooltip.label}
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
+              {nId}
             </div>
           );
         })()}
@@ -1420,18 +1454,20 @@ function NodeDetailView({
   data,
   typeColorMap,
   onBack,
+  clusterInfo,
 }: {
   selectedNode: string;
   data: HandoverData;
   typeColorMap: Record<string, string>;
   onBack: () => void;
+  clusterInfo?: ClusterInfo;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(700);
   const [egoNorm, setEgoNorm] = useState(false);
   const [detailLayout, setDetailLayout] = useState<DetailLayout>("counterpart-center");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
-  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; label: string } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1613,11 +1649,11 @@ function NodeDetailView({
 
   const lbl = (id: string) => id.length > 11 ? id.slice(0, 11) + "…" : id;
 
-  const nodeHandlers = (label: string) => ({
+  const nodeHandlers = (nodeId: string) => ({
     onMouseEnter: (e: React.MouseEvent<SVGGElement>) => {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, label });
+      setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId });
     },
     onMouseMove: (e: React.MouseEvent<SVGGElement>) => {
       const rect = containerRef.current?.getBoundingClientRect();
@@ -1783,22 +1819,49 @@ function NodeDetailView({
           </div>
         )}
         {nodeTooltip && (() => {
-          const TW = 180, TH = 32;
           const cw = containerRef.current?.offsetWidth ?? width;
           const ch = containerRef.current?.offsetHeight ?? svgHeight;
+          const nId = nodeTooltip.nodeId;
+          if (clusterInfo) {
+            const isCluster = nId.startsWith("Cluster ");
+            const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
+            const members = isCluster
+              ? clusterInfo.resources.filter(r => clusterInfo.clusterMap[r] === nId)
+              : [nId];
+            const resourceColorMap = Object.fromEntries(
+              clusterInfo.resources.map(r => [r, typeColorMap[clusterInfo.resourceObjectTypes[r] ?? ""] ?? "#94a3b8"])
+            );
+            const activityColorMap = mapTypesToColors(clusterInfo.activities);
+            return (
+              <TooltipBox
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: false, cw, ch }}
+                activities={clusterInfo.activities}
+                cooccurringResources={clusterInfo.cooccurringResources}
+                collaboratingResources={clusterInfo.collaboratingResources}
+                timeBins={clusterInfo.timeBins}
+                weekdayBins={clusterInfo.weekdayBins}
+                portfolioObjectTypes={clusterInfo.portfolioObjectTypes}
+                resourceObjectTypes={clusterInfo.resourceObjectTypes}
+                typeTotals={clusterInfo.typeTotals}
+                coocTypeN={clusterInfo.coocTypeN}
+                collabTypeN={clusterInfo.collabTypeN}
+                activityColorMap={activityColorMap}
+                resourceColorMap={resourceColorMap}
+                typeColorMap={typeColorMap}
+                clusterColors={CLUSTER_COLORS}
+                allProfiles={{}}
+                tooltipProfiles={clusterInfo.tooltipProfiles}
+                showDropdown={false}
+                highlightedActivity={null}
+              />
+            );
+          }
+          const TW = 180, TH = 32;
           const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
           const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
           return (
-            <div style={{
-              position: "absolute", left, top,
-              background: "white", border: "1px solid #E2E8F0",
-              borderRadius: 8, padding: "5px 10px",
-              fontSize: 12, fontWeight: 600,
-              boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
-              pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap",
-              maxWidth: TW,
-            }}>
-              {nodeTooltip.label}
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
+              {nId}
             </div>
           );
         })()}
