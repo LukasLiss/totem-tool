@@ -904,7 +904,16 @@ function HandoverGraph({
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
-  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
+  const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNodeTooltip(null); };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
+  }, []);
 
   // Measure container
   useEffect(() => {
@@ -1263,20 +1272,34 @@ function HandoverGraph({
                 transform={`translate(${pos.x},${pos.y})`}
                 style={{ cursor: onNodeClick ? "pointer" : "grab" }}
                 onMouseDown={e => handleNodeMouseDown(node.id, e)}
-                onClick={() => { if (!dragHasMoved.current) onNodeClick?.(node.id); }}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (dragHasMoved.current) return;
+                  if (nodeTooltip?.nodeId === node.id) {
+                    setNodeTooltip(t => t ? { ...t, pinned: !t.pinned } : null);
+                  } else {
+                    onNodeClick?.(node.id);
+                  }
+                }}
                 onMouseEnter={e => {
                   if (dragId) return;
-                  const rect = containerRef.current?.getBoundingClientRect();
-                  if (!rect) return;
-                  setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId: node.id });
+                  cancelHide();
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  setNodeTooltip(prev => prev?.pinned ? prev : {
+                    x: e.clientX - rect.left, y: e.clientY - rect.top,
+                    nodeId: node.id, pinned: false,
+                    cw: el.offsetWidth, ch: el.offsetHeight,
+                  });
                 }}
                 onMouseMove={e => {
                   if (dragId) return;
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect) return;
-                  setNodeTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                  setNodeTooltip(t => t && !t.pinned ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : t);
                 }}
-                onMouseLeave={() => setNodeTooltip(null)}
+                onMouseLeave={() => scheduleHide()}
               >
                 <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                 <text
@@ -1349,9 +1372,9 @@ function HandoverGraph({
           </div>
         )}
         {nodeTooltip && (() => {
-          const cw = containerRef.current?.offsetWidth ?? size.width;
-          const ch = containerRef.current?.offsetHeight ?? size.height;
           const nId = nodeTooltip.nodeId;
+          const cw = nodeTooltip.cw;
+          const ch = nodeTooltip.ch;
           if (clusterInfo) {
             const isCluster = nId.startsWith("Cluster ");
             const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
@@ -1364,7 +1387,7 @@ function HandoverGraph({
             const activityColorMap = mapTypesToColors(clusterInfo.activities);
             return (
               <TooltipBox
-                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: false, cw, ch }}
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: nodeTooltip.pinned, cw, ch }}
                 activities={clusterInfo.activities}
                 cooccurringResources={clusterInfo.cooccurringResources}
                 collaboratingResources={clusterInfo.collaboratingResources}
@@ -1383,6 +1406,10 @@ function HandoverGraph({
                 tooltipProfiles={clusterInfo.tooltipProfiles}
                 showDropdown={false}
                 highlightedActivity={null}
+                onPin={() => setNodeTooltip(t => t ? { ...t, pinned: true } : null)}
+                onClose={() => setNodeTooltip(null)}
+                onTooltipMouseEnter={cancelHide}
+                onTooltipMouseLeave={scheduleHide}
               />
             );
           }
@@ -1467,7 +1494,16 @@ function NodeDetailView({
   const [egoNorm, setEgoNorm] = useState(false);
   const [detailLayout, setDetailLayout] = useState<DetailLayout>("counterpart-center");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
-  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
+  const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNodeTooltip(null); };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1651,16 +1687,25 @@ function NodeDetailView({
 
   const nodeHandlers = (nodeId: string) => ({
     onMouseEnter: (e: React.MouseEvent<SVGGElement>) => {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setNodeTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, nodeId });
+      cancelHide();
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setNodeTooltip(prev => prev?.pinned ? prev : {
+        x: e.clientX - rect.left, y: e.clientY - rect.top,
+        nodeId, pinned: false, cw: el.offsetWidth, ch: el.offsetHeight,
+      });
     },
     onMouseMove: (e: React.MouseEvent<SVGGElement>) => {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      setNodeTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+      setNodeTooltip(t => t && !t.pinned ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : t);
     },
-    onMouseLeave: () => setNodeTooltip(null),
+    onMouseLeave: () => scheduleHide(),
+    onClick: (e: React.MouseEvent<SVGGElement>) => {
+      e.stopPropagation();
+      setNodeTooltip(t => t?.nodeId === nodeId ? { ...t, pinned: !t.pinned } : t);
+    },
   });
 
   const nodeTypesPresent = [...new Set([
@@ -1819,9 +1864,9 @@ function NodeDetailView({
           </div>
         )}
         {nodeTooltip && (() => {
-          const cw = containerRef.current?.offsetWidth ?? width;
-          const ch = containerRef.current?.offsetHeight ?? svgHeight;
           const nId = nodeTooltip.nodeId;
+          const cw = nodeTooltip.cw;
+          const ch = nodeTooltip.ch;
           if (clusterInfo) {
             const isCluster = nId.startsWith("Cluster ");
             const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
@@ -1834,7 +1879,7 @@ function NodeDetailView({
             const activityColorMap = mapTypesToColors(clusterInfo.activities);
             return (
               <TooltipBox
-                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: false, cw, ch }}
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: nodeTooltip.pinned, cw, ch }}
                 activities={clusterInfo.activities}
                 cooccurringResources={clusterInfo.cooccurringResources}
                 collaboratingResources={clusterInfo.collaboratingResources}
@@ -1853,6 +1898,10 @@ function NodeDetailView({
                 tooltipProfiles={clusterInfo.tooltipProfiles}
                 showDropdown={false}
                 highlightedActivity={null}
+                onPin={() => setNodeTooltip(t => t ? { ...t, pinned: true } : null)}
+                onClose={() => setNodeTooltip(null)}
+                onTooltipMouseEnter={cancelHide}
+                onTooltipMouseLeave={scheduleHide}
               />
             );
           }
