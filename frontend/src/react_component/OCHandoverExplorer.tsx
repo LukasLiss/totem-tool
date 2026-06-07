@@ -1199,7 +1199,8 @@ function HandoverGraph({
 
   return (
     <div className="space-y-3">
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
+      <div className="relative">
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
         <svg
           ref={svgRef}
           width={size.width}
@@ -1371,7 +1372,8 @@ function HandoverGraph({
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
           </div>
         )}
-        {nodeTooltip && (() => {
+      </div>
+      {nodeTooltip && (() => {
           const nId = nodeTooltip.nodeId;
           const cw = nodeTooltip.cw;
           const ch = nodeTooltip.ch;
@@ -1735,7 +1737,8 @@ function NodeDetailView({
         </div>
       </div>
 
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background relative">
+      <div className="relative">
+      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
         <svg width={width} height={svgHeight} style={{ display: "block" }}>
           <defs>
             {allBoTypes.map(bt => {
@@ -1863,7 +1866,8 @@ function NodeDetailView({
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
           </div>
         )}
-        {nodeTooltip && (() => {
+      </div>
+      {nodeTooltip && (() => {
           const nId = nodeTooltip.nodeId;
           const cw = nodeTooltip.cw;
           const ch = nodeTooltip.ch;

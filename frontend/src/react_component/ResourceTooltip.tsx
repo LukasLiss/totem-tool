@@ -29,6 +29,7 @@ export default function TooltipBox({
   allProfiles,
   tooltipProfiles,
   showDropdown = true,
+  positionMode = "center",
   highlightedActivity,
   onActivityClick,
   onPin,
@@ -57,6 +58,9 @@ export default function TooltipBox({
   tooltipProfiles?: Record<string, { activities?: number[]; time?: number[]; weekday?: number[]; portfolio?: number[] }>;
   // When false, the expandable per-resource dropdown is suppressed in type rows.
   showDropdown?: boolean;
+  // "center": vertically center on cursor (OrgaMining default).
+  // "top-anchor": anchor top near cursor and grow downward — stable when content height changes.
+  positionMode?: "center" | "top-anchor";
   highlightedActivity: string | null;
   onActivityClick?: (act: string) => void;
   onPin?: () => void;
@@ -179,7 +183,9 @@ export default function TooltipBox({
 
   const fittedH = Math.min(estH, tooltip.ch - 8);
   const left = Math.min(tooltip.x + 14, tooltip.cw - estW - 4);
-  const top  = Math.max(4, Math.min(tooltip.y - fittedH / 2, tooltip.ch - fittedH - 4));
+  const top = positionMode === "top-anchor"
+    ? Math.max(4, Math.min(tooltip.y - 40, tooltip.ch - 4))
+    : Math.max(4, Math.min(tooltip.y - fittedH / 2, tooltip.ch - fittedH - 4));
   const maxH = tooltip.ch - top - 4;
 
   return (
