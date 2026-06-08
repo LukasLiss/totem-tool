@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import {
   CartesianGrid,
   Scatter,
@@ -13,11 +13,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   formatAxisTick,
-  formatTimestamp,
   makeAxisLabelLookup,
   makeColorScale,
   makeShapeScale,
-  objectSummary,
   renderPointShape,
   toChartPoints,
   type AxisOption,
@@ -139,14 +137,11 @@ export default function DottedChart({
           />
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            wrapperStyle={{ pointerEvents: "auto" }}
             content={
               <DottedChartTooltip
                 xAxis={xAxis}
                 yAxis={yAxis}
                 colorBy={colorBy}
-                shapeBy={shapeBy}
-                sortBy={sortBy}
               />
             }
           />
@@ -249,23 +244,16 @@ function DottedChartTooltip({
   xAxis,
   yAxis,
   colorBy,
-  shapeBy,
-  sortBy,
 }: {
   active?: boolean;
   payload?: Array<{ payload: ChartPoint }>;
   xAxis: AxisOption;
   yAxis: AxisOption;
   colorBy: AxisOption;
-  shapeBy: AxisOption;
-  sortBy: SortOption | AxisOption;
 }) {
-  const [showDetails, setShowDetails] = useState(false);
-
   if (!active || !payload?.length) return null;
 
   const point = payload[0].payload as ChartPoint;
-  const detailRows = buildDetailRows(point, { xAxis, yAxis, colorBy, shapeBy, sortBy });
 
   return (
     <div className="max-w-[360px] rounded-md border bg-background px-3 py-2 text-xs shadow-md">
@@ -280,127 +268,14 @@ function DottedChartTooltip({
         <div>
           <span className="text-foreground">{formatAxisLabel(yAxis)} (Y-Axis):</span> {point.yLabel}
         </div>
+        {colorBy.type !== "none" && (
+          <div>
+            <span className="text-foreground">{formatAxisLabel(colorBy)} (Color):</span> {valueLabel(point.color_value)}
+          </div>
+        )}
       </div>
-      <button
-        type="button"
-        className="mt-2 text-xs font-medium text-foreground underline-offset-4 hover:underline"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => setShowDetails((current) => !current)}
-      >
-        {showDetails ? "Hide details" : "Show more details"}
-      </button>
-      {showDetails && (
-        <div className="mt-2 grid max-h-64 gap-1 overflow-auto border-t pt-2 text-muted-foreground">
-          {detailRows.map((row) => (
-            <div key={row.label}>
-              <span className="text-foreground">{formatDetailLabel(row)}:</span> {row.value}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
-}
-
-type DetailRow = {
-  label: string;
-  value: string;
-  roles?: string[];
-};
-
-type DetailRoleContext = {
-  xAxis: AxisOption;
-  yAxis: AxisOption;
-  colorBy: AxisOption;
-  shapeBy: AxisOption;
-  sortBy: SortOption | AxisOption;
-};
-
-function buildDetailRows(point: ChartPoint, context: DetailRoleContext): DetailRow[] {
-  return [
-    {
-      label: "Activity",
-      value: point.activity,
-      roles: rolesForAxisValue("activity", context),
-    },
-    {
-      label: "activity_id",
-      value: point.id,
-    },
-    {
-      label: "Time",
-      value: formatTimestamp(point.timestamp, point.timestamp_unix),
-      roles: rolesForAxisValue("time", context),
-    },
-    {
-      label: "timestamp_unix",
-      value: String(point.timestamp_unix),
-      roles: rolesForAxisValue("time", context),
-    },
-    {
-      label: formatAxisLabel(context.xAxis),
-      value: point.xLabel,
-      roles: ["X-Axis"],
-    },
-    {
-      label: formatAxisLabel(context.yAxis),
-      value: point.yLabel,
-      roles: ["Y-Axis"],
-    },
-    {
-      label: "color_value",
-      value: valueLabel(point.color_value),
-      roles: context.colorBy.type === "none" ? [] : ["Color"],
-    },
-    {
-      label: "shape_value",
-      value: valueLabel(point.shape_value),
-      roles: context.shapeBy.type === "none" ? [] : ["Shape"],
-    },
-    {
-      label: "row_id",
-      value: valueLabel(point.row_id),
-      roles: ["Y row"],
-    },
-    {
-      label: "row_index",
-      value: valueLabel(point.row_index),
-      roles: ["Y row order"],
-    },
-    {
-      label: "event_index_in_row",
-      value: valueLabel(point.event_index_in_row),
-      roles: ["Point order in row"],
-    },
-    {
-      label: "Objects",
-      value: objectSummary(point.objects),
-    },
-  ];
-}
-
-function rolesForAxisValue(valueType: "activity" | "time", context: DetailRoleContext): string[] {
-  const roles: string[] = [];
-  if (axisUsesValue(context.xAxis, valueType)) roles.push("X-Axis");
-  if (axisUsesValue(context.yAxis, valueType)) roles.push("Y-Axis");
-  if (axisUsesValue(context.colorBy, valueType)) roles.push("Color");
-  if (axisUsesValue(context.shapeBy, valueType)) roles.push("Shape");
-  if (axisUsesValue(sortAxis(context.sortBy), valueType)) roles.push("Sort");
-  return roles;
-}
-
-function axisUsesValue(axis: AxisOption, valueType: "activity" | "time"): boolean {
-  if (valueType === "activity") return axis.type === "activity";
-  return isTimeAxis(axis);
-}
-
-function sortAxis(sortBy: SortOption | AxisOption): AxisOption {
-  return "type" in sortBy ? sortBy : sortBy.field;
-}
-
-function formatDetailLabel(row: DetailRow): string {
-  if (!row.roles?.length) return row.label;
-  return `${row.label} (${row.roles.join(", ")})`;
 }
 
 function valueLabel(value: number | string | null | undefined): string {
