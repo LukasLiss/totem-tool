@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Brush,
   CartesianGrid,
   Scatter,
   ScatterChart,
@@ -122,22 +121,6 @@ export default function DottedChart({
     });
   }, []);
 
-  const handleBrushChange = useCallback(
-    (range: { startIndex?: number; endIndex?: number }) => {
-      if (!points.length) return;
-      applyZoomRange(
-        clampBrushRange(
-          {
-            startIndex: range.startIndex ?? effectiveBrushRange.startIndex,
-            endIndex: range.endIndex ?? effectiveBrushRange.endIndex,
-          },
-          points.length
-        )
-      );
-    },
-    [applyZoomRange, effectiveBrushRange, points.length]
-  );
-
   const handleZoomCommit = useCallback(
     (values: number[]) => {
       const nextZoom = values[0] ?? 0;
@@ -257,29 +240,120 @@ export default function DottedChart({
               return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
             }}
           />
-          <Brush
-            dataKey="chartX"
-            height={24}
-            travellerWidth={8}
-            startIndex={effectiveBrushRange.startIndex}
-            endIndex={effectiveBrushRange.endIndex}
-            tickFormatter={(value) => formatXAxisTick(value, xAxis, xLabels)}
-            onChange={handleBrushChange}
-          />
         </ScatterChart>
       </ChartContainer>
 
-      {isZoomApplying && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
-          <ZoomApplyingSpinner />
-        </div>
-      )}
+      <DottedChartRangeSlider
+        range={effectiveBrushRange}
+        points={points}
+        xAxis={xAxis}
+        xLabels={xLabels}
+        isApplying={isZoomApplying}
+        onCommit={applyZoomRange}
+      />
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 text-sm text-muted-foreground">
           Loading dotted chart...
         </div>
       )}
+    </div>
+  );
+}
+
+function DottedChartRangeSlider({
+  range,
+  points,
+  xAxis,
+  xLabels,
+  isApplying,
+  onCommit,
+}: {
+  range: BrushRange;
+  points: ChartPoint[];
+  xAxis: AxisOption;
+  xLabels: Map<number, string>;
+  isApplying: boolean;
+  onCommit: (range: BrushRange) => void;
+}) {
+  const pointCount = points.length;
+  const [draftRange, setDraftRange] = useState(range);
+  const effectiveDraftRange = useMemo(
+    () => clampBrushRange(draftRange, pointCount),
+    [draftRange, pointCount]
+  );
+  const minStepsBetweenThumbs = Math.max(0, Math.min(MIN_BRUSH_POINTS - 1, pointCount - 1));
+  const startPercent = indexToPercent(effectiveDraftRange.startIndex, pointCount);
+  const endPercent = indexToPercent(effectiveDraftRange.endIndex, pointCount);
+
+  useEffect(() => {
+    setDraftRange(range);
+  }, [range]);
+
+  const handleRangeChange = useCallback(
+    (values: number[]) => {
+      setDraftRange(
+        clampBrushRange(
+          {
+            startIndex: values[0] ?? range.startIndex,
+            endIndex: values[1] ?? range.endIndex,
+          },
+          pointCount
+        )
+      );
+    },
+    [pointCount, range]
+  );
+
+  const handleRangeCommit = useCallback(
+    (values: number[]) => {
+      onCommit(
+        clampBrushRange(
+          {
+            startIndex: values[0] ?? range.startIndex,
+            endIndex: values[1] ?? range.endIndex,
+          },
+          pointCount
+        )
+      );
+    },
+    [onCommit, pointCount, range]
+  );
+
+  return (
+    <div className="px-4 pb-1 pt-2">
+      <div className="relative mx-auto w-full max-w-[calc(100%-2rem)]">
+        <Slider
+          min={0}
+          max={Math.max(0, pointCount - 1)}
+          step={1}
+          minStepsBetweenThumbs={minStepsBetweenThumbs}
+          value={[effectiveDraftRange.startIndex, effectiveDraftRange.endIndex]}
+          onValueChange={handleRangeChange}
+          onValueCommit={handleRangeCommit}
+          disabled={pointCount <= 1}
+          className="w-full"
+        />
+        <div className="relative h-7 text-[11px] text-muted-foreground">
+          <span
+            className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
+            style={{ left: `${startPercent}%` }}
+          >
+            {formatRangePointLabel(points[effectiveDraftRange.startIndex], xAxis, xLabels)}
+          </span>
+          <span
+            className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
+            style={{ left: `${endPercent}%` }}
+          >
+            {formatRangePointLabel(points[effectiveDraftRange.endIndex], xAxis, xLabels)}
+          </span>
+        </div>
+        {isApplying && (
+          <div className="pointer-events-none absolute left-1/2 top-8 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
+            <ZoomApplyingSpinner />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -292,6 +366,20 @@ function ZoomApplyingSpinner() {
       title="Applying zoom"
     />
   );
+}
+
+function indexToPercent(index: number, pointCount: number): number {
+  if (pointCount <= 1) return 0;
+  return (index / (pointCount - 1)) * 100;
+}
+
+function formatRangePointLabel(
+  point: ChartPoint | undefined,
+  axis: AxisOption,
+  labels: Map<number, string>
+): string {
+  if (!point) return "";
+  return formatXAxisTick(point.chartX, axis, labels);
 }
 
 function getDataDomain(values: number[]): [number, number] {
