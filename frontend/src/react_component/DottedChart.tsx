@@ -167,6 +167,18 @@ export default function DottedChart({
         <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
       </div>
 
+      <DottedChartZoomControls
+        range={effectiveBrushRange}
+        points={points}
+        xAxis={xAxis}
+        xLabels={xLabels}
+        zoomValue={zoomValue}
+        isApplying={isZoomApplying}
+        onZoomCommit={handleZoomCommit}
+        onReset={handleResetViewport}
+        onCommit={applyZoomRange}
+      />
+
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
         className="min-h-0 flex-1 rounded-md border bg-background p-2"
@@ -217,18 +229,6 @@ export default function DottedChart({
           />
         </ScatterChart>
       </ChartContainer>
-
-      <DottedChartZoomControls
-        range={effectiveBrushRange}
-        points={points}
-        xAxis={xAxis}
-        xLabels={xLabels}
-        zoomValue={zoomValue}
-        isApplying={isZoomApplying}
-        onZoomCommit={handleZoomCommit}
-        onReset={handleResetViewport}
-        onCommit={applyZoomRange}
-      />
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 text-sm text-muted-foreground">
