@@ -212,6 +212,14 @@ export const SimulationDashboard: React.FC = () => {
     setPhase("configure");
   }, [fileId]);
 
+  // Default the simulation duration to the source log's time span so the
+  // simulated log is directly comparable to the original.
+  useEffect(() => {
+    if (processAreasData?.log_duration_days) {
+      setSimDurationDays(processAreasData.log_duration_days);
+    }
+  }, [processAreasData]);
+
   // Compute which activities are relevant based on selected object types
   const relevantActivities = useMemo(() => {
     if (!processAreasData?.object_type_to_activities) return new Set<string>();
@@ -264,13 +272,16 @@ export const SimulationDashboard: React.FC = () => {
   const selectProcessArea = (pa: ProcessAreaInfo) => {
     setSelectedObjectTypes(pa.object_types);
     setSelectedActivities(pa.activities);
+    const counts = processAreasData?.object_type_counts ?? {};
     const pool: Record<string, number> = {};
     if (processAreasData?.process_areas) {
       for (const otherPa of processAreasData.process_areas) {
         if (otherPa.level >= pa.level) {
           for (const ot of otherPa.object_types) {
             if (!pa.object_types.includes(ot)) {
-              pool[ot] = 3;
+              // Match the source log: use the actual object count of this type
+              // as the available resource count.
+              pool[ot] = counts[ot] ?? 3;
             }
           }
         }
@@ -306,7 +317,8 @@ export const SimulationDashboard: React.FC = () => {
 
   const addResourceType = (resType: string) => {
     if (!resourcePool[resType]) {
-      setResourcePool((prev) => ({ ...prev, [resType]: 3 }));
+      const count = processAreasData?.object_type_counts?.[resType] ?? 3;
+      setResourcePool((prev) => ({ ...prev, [resType]: count }));
     }
   };
 
@@ -719,6 +731,15 @@ export const SimulationDashboard: React.FC = () => {
                     <Label htmlFor="sim-duration">Duration (days)</Label>
                     <Input id="sim-duration" type="number" min={1} value={simDurationDays}
                       onChange={(e) => setSimDurationDays(parseInt(e.target.value) || 7)} />
+                    {processAreasData?.log_duration_days != null && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Source log spans {processAreasData.log_duration_days} day
+                        {processAreasData.log_duration_days === 1 ? "" : "s"}
+                        {simDurationDays === processAreasData.log_duration_days
+                          ? " (matched)"
+                          : ""}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <Label htmlFor="tick-size">Tick size (seconds)</Label>

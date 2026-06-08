@@ -39,6 +39,7 @@ from django.conf import settings
 from django.http import HttpResponse
 
 import os
+import math
 import uuid
 import datetime as dt
 from hashlib import sha1
@@ -2319,6 +2320,19 @@ def get_process_areas(request):
             type_objects = ocel.objects.filter(pl.col("_objType") == obj_type).select("_objId").to_series().to_list()
             obj_type_event_count[obj_type] = len(type_objects)
 
+        # Compute the time span of the source log so the frontend can default the
+        # simulation duration to exactly match it.
+        log_start_unix = None
+        log_end_unix = None
+        log_duration_days = None
+        if ocel.events.height > 0:
+            ts = ocel.events.select("_timestampUnix").to_series()
+            log_start_unix = int(ts.min())
+            log_end_unix = int(ts.max())
+            span_s = max(0, log_end_unix - log_start_unix)
+            # Round up so the full span is covered; at least 1 day.
+            log_duration_days = max(1, math.ceil(span_s / 86400))
+
         # Build object_type_to_activities mapping from the totem
         object_type_to_activities = {}
         ot_to_evt = getattr(totem, "object_type_to_event_types", {})
@@ -2345,6 +2359,9 @@ def get_process_areas(request):
             "object_type_counts": obj_type_event_count,
             "object_type_to_activities": object_type_to_activities,
             "process_areas": process_areas,
+            "log_start_unix": log_start_unix,
+            "log_end_unix": log_end_unix,
+            "log_duration_days": log_duration_days,
         }, status=status.HTTP_200_OK)
 
     except Exception as e:

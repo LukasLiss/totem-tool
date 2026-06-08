@@ -14,6 +14,9 @@ export type ProcessAreasResponse = {
   object_type_counts: Record<string, number>;
   object_type_to_activities: Record<string, string[]>;
   process_areas: ProcessAreaInfo[];
+  log_start_unix: number | null;
+  log_end_unix: number | null;
+  log_duration_days: number | null;
 };
 
 export type SimulationMode = "simple" | "advanced";
