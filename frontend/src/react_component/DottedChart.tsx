@@ -137,7 +137,10 @@ export default function DottedChart({
             tickMargin={8}
             width={140}
           />
-          <Tooltip cursor={{ strokeDasharray: "3 3" }} content={<DottedChartTooltip />} />
+          <Tooltip
+            cursor={{ strokeDasharray: "3 3" }}
+            content={<DottedChartTooltip xAxis={xAxis} yAxis={yAxis} />}
+          />
           <Scatter
             name="Events"
             data={points}
@@ -204,6 +207,25 @@ function formatUnixDateTick(value: number): string {
   return new Date(milliseconds).toLocaleDateString();
 }
 
+function formatAxisLabel(axis: AxisOption): string {
+  switch (axis.type) {
+    case "time":
+    case "timestamp":
+    case "timestamp_unix":
+      return "Time";
+    case "since_start":
+      return "Time Since Start";
+    case "activity":
+      return "Activity";
+    case "event_attribute":
+      return axis.name;
+    case "none":
+      return "None";
+    default:
+      return "Value";
+  }
+}
+
 function DottedChartState({ className, message }: { className?: string; message: string }) {
   return (
     <div className={cn("flex h-[320px] items-center justify-center rounded-md border bg-background p-4", className)}>
@@ -212,7 +234,17 @@ function DottedChartState({ className, message }: { className?: string; message:
   );
 }
 
-function DottedChartTooltip({ active, payload }: any) {
+function DottedChartTooltip({
+  active,
+  payload,
+  xAxis,
+  yAxis,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: ChartPoint }>;
+  xAxis: AxisOption;
+  yAxis: AxisOption;
+}) {
   if (!active || !payload?.length) return null;
 
   const point = payload[0].payload as ChartPoint;
@@ -220,18 +252,18 @@ function DottedChartTooltip({ active, payload }: any) {
   return (
     <div className="max-w-[360px] rounded-md border bg-background px-3 py-2 text-xs shadow-md">
       <div className="mb-1 flex items-center justify-between gap-3">
-        <span className="font-medium text-foreground">{point.activity}</span>
-        <span className="text-muted-foreground">{point.id}</span>
+        <span className="font-medium text-foreground">Activity: {point.activity}</span>
+        <span className="text-muted-foreground">activity_id: {point.id}</span>
       </div>
       <div className="grid gap-1 text-muted-foreground">
         <div>
           <span className="text-foreground">Time:</span> {formatTimestamp(point.timestamp, point.timestamp_unix)}
         </div>
         <div>
-          <span className="text-foreground">X:</span> {point.xLabel}
+          <span className="text-foreground">{formatAxisLabel(xAxis)} (X-Axis):</span> {point.xLabel}
         </div>
         <div>
-          <span className="text-foreground">Y:</span> {point.yLabel}
+          <span className="text-foreground">{formatAxisLabel(yAxis)} (Y-Axis):</span> {point.yLabel}
         </div>
         <div>
           <span className="text-foreground">Objects:</span> {objectSummary(point.objects)}
