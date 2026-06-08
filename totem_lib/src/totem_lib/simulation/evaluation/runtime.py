@@ -2,8 +2,10 @@
 Timer context manager and a measure_runtime decorator-style
 wrapper around an arbitrary callable. Used to report wall-clock time in seconds.
 """
+
 import time
-from typing import Callable, Any
+from collections.abc import Callable
+from typing import Any
 
 
 class Timer:

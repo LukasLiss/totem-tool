@@ -7,9 +7,10 @@ Resource-oriented evaluation measures.
 - ``resource_utilization_rate`` — busy-time / available-time per resource and
   per type.
 """
-from collections import defaultdict
+
 import json
 import statistics
+from collections import defaultdict
 
 from scipy.stats import wasserstein_distance
 
@@ -25,9 +26,9 @@ def _events_with_resources(ocel) -> list[dict]:
     obj_type_map = ocel.obj_type_map
     out = []
 
-    rows = ocel.events.select(
-        ["_timestampUnix", "_activity", "_attributes"]
-    ).iter_rows(named=True)
+    rows = ocel.events.select(["_timestampUnix", "_activity", "_attributes"]).iter_rows(
+        named=True
+    )
 
     for row in rows:
         ts = row["_timestampUnix"]
@@ -87,8 +88,7 @@ def resource_distribution(ocel) -> dict[str, dict]:
             "n_resources": len(per_type_rids[rtype]),
             "n_event_participations": per_type_event_count[rtype],
             "events_per_resource": {
-                rid: per_resource_event_count[rid]
-                for rid in per_type_rids[rtype]
+                rid: per_resource_event_count[rid] for rid in per_type_rids[rtype]
             },
         }
     return result
@@ -119,9 +119,13 @@ def resource_distribution_distance(actual_ocel, simulated_ocel) -> dict[str, dic
             "n_resources_actual": a.get("n_resources", 0),
             "n_resources_simulated": s.get("n_resources", 0),
             "events_per_resource_1wd": (
-                0.0 if not a_counts and not s_counts
-                else float("inf") if not a_counts or not s_counts
-                else float(wasserstein_distance(a_counts, s_counts))
+                0.0
+                if not a_counts and not s_counts
+                else (
+                    float("inf")
+                    if not a_counts or not s_counts
+                    else float(wasserstein_distance(a_counts, s_counts))
+                )
             ),
         }
     return result

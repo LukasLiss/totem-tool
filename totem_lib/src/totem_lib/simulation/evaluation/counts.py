@@ -6,6 +6,7 @@ Count- and size-based summary measures of OCELs.
 - ``count_summary_distance`` — absolute / relative differences of the summary
   counts above between two logs.
 """
+
 import statistics
 
 from totem_lib.simulation.evaluation._eval_utils import get_variants
@@ -32,8 +33,8 @@ def count_summary(ocel) -> dict:
     variants = get_variants(ocel)
 
     n_executions = 0
-    execution_sizes: list[int] = []        # #events per execution
-    variant_event_sizes: list[int] = []    # #events per variant representative
+    execution_sizes: list[int] = []  # #events per execution
+    variant_event_sizes: list[int] = []  # #events per variant representative
     variant_execution_counts: list[int] = []  # #executions per variant
 
     n_variants = 0

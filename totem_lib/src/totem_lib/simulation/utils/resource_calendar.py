@@ -1,8 +1,16 @@
+import datetime as dt
 import json
 import random
-import datetime as dt
 
-WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WEEKDAYS = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
 HOURS_PER_DAY = 24
 
 
@@ -22,7 +30,9 @@ class ResourceCalendar:
     def __init__(self, identifier: str, type: str):
         self.identifier = identifier
         self.type = type
-        self.probability: dict[str, list[float]] = {day: [0.0] * HOURS_PER_DAY for day in WEEKDAYS}
+        self.probability: dict[str, list[float]] = {
+            day: [0.0] * HOURS_PER_DAY for day in WEEKDAYS
+        }
 
     def get_probability(self, weekday: str, hour: int) -> float:
         """Returns the availability probability for the given weekday and hour."""
@@ -35,7 +45,11 @@ class ResourceCalendar:
         return random.random() < prob
 
     def to_dict(self) -> dict:
-        return {"identifier": self.identifier, "type": self.type, "probability": self.probability}
+        return {
+            "identifier": self.identifier,
+            "type": self.type,
+            "probability": self.probability,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "ResourceCalendar":
@@ -43,7 +57,7 @@ class ResourceCalendar:
         cal.probability = data["probability"]
         cal.type = data["type"]
         return cal
-    
+
 
 def discover_resource_calendars(
     ocel,
@@ -123,7 +137,9 @@ def discover_resource_calendars(
 
             # Per individual resource
             if rid not in active_weeks_by_rid:
-                active_weeks_by_rid[rid] = {day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS}
+                active_weeks_by_rid[rid] = {
+                    day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS
+                }
             active_weeks_by_rid[rid][weekday][hour].add(year_week)
 
     total_weeks = len(all_weeks)
@@ -156,7 +172,9 @@ def discover_resource_calendars(
     return type_calendars, resource_calendars
 
 
-def _extract_resources(row: dict, obj_type_map: dict, resource_types_set: set) -> list[str]:
+def _extract_resources(
+    row: dict, obj_type_map: dict, resource_types_set: set
+) -> list[str]:
     """Extracts resource IDs from process_area_resources in the event's _attributes."""
     if not row["_attributes"]:
         return []

@@ -1,9 +1,16 @@
-from collections import defaultdict, Counter
-from datetime import datetime, timezone
 import json
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 
-
-WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WEEKDAY_NAMES = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
 
 
 def variant_arrival_distribution(ocel, variants):
@@ -39,7 +46,8 @@ def variant_arrival_distribution(ocel, variants):
     full_weeks, remaining_days = divmod(total_days, 7)
     # Every weekday appears at least full_weeks times; weekdays from start_weekday to (start_weekday + remaining_days - 1) appear one extra time.
     observed_weekdays = {
-        WEEKDAY_NAMES[i]: full_weeks + (1 if (i - start_dt.weekday()) % 7 < remaining_days else 0)
+        WEEKDAY_NAMES[i]: full_weeks
+        + (1 if (i - start_dt.weekday()) % 7 < remaining_days else 0)
         for i in range(7)
     }
 
@@ -50,10 +58,7 @@ def variant_arrival_distribution(ocel, variants):
         hourly_counts = defaultdict(lambda: defaultdict(int))
 
         for execution in variant.executions:
-            timestamps = [
-                ocel.get_event_timestamp(event_id)
-                for event_id in execution
-            ]
+            timestamps = [ocel.get_event_timestamp(event_id) for event_id in execution]
             timestamps = [t for t in timestamps if t is not None]
             if not timestamps:
                 continue
@@ -70,13 +75,13 @@ def variant_arrival_distribution(ocel, variants):
 
         result[variant] = {
             "weekday_counts": dict(weekday_counts),
-            "weekday_probabilities": {
-                day: count / total_executions
-                for day, count in weekday_counts.items()
-            } if total_executions > 0 else {},
+            "weekday_probabilities": (
+                {day: count / total_executions for day, count in weekday_counts.items()}
+                if total_executions > 0
+                else {}
+            ),
             "hourly_counts": {
-                day: dict(hour_counts)
-                for day, hour_counts in hourly_counts.items()
+                day: dict(hour_counts) for day, hour_counts in hourly_counts.items()
             },
             "hourly_probabilities": {
                 day: {
@@ -136,7 +141,7 @@ def object_distribution_of_variants(ocel, variants):
                 if activity is None:
                     continue
                 type_counts = Counter()
-                for obj_id in (ocel.get_value(event_id, "event_objects") or []):
+                for obj_id in ocel.get_value(event_id, "event_objects") or []:
                     obj_type = ocel.obj_type_map.get(obj_id)
                     if obj_type:
                         type_counts[obj_type] += 1
@@ -157,12 +162,18 @@ def object_distribution_of_variants(ocel, variants):
 
                 type_stats[obj_type] = {
                     "presence_probability": num_present / num_invocations,
-                    "count_distribution": {
-                        cnt: freq / num_present
-                        for cnt, freq in Counter(present_counts).items()
-                    } if num_present > 0 else {},
+                    "count_distribution": (
+                        {
+                            cnt: freq / num_present
+                            for cnt, freq in Counter(present_counts).items()
+                        }
+                        if num_present > 0
+                        else {}
+                    ),
                     "mean_count": sum(counts) / num_invocations,
-                    "mean_count_when_present": sum(present_counts) / num_present if num_present > 0 else 0.0,
+                    "mean_count_when_present": (
+                        sum(present_counts) / num_present if num_present > 0 else 0.0
+                    ),
                 }
 
             activity_stats[activity] = type_stats
@@ -202,8 +213,11 @@ def resource_distribution_of_variants(ocel, variants):
 
     # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
     resource_lookup: dict[str, list] = {
-        row["_eventId"]: (json.loads(row["_attributes"]).get("process_area_resources", [])
-                          if row["_attributes"] else [])
+        row["_eventId"]: (
+            json.loads(row["_attributes"]).get("process_area_resources", [])
+            if row["_attributes"]
+            else []
+        )
         for row in ocel.events.select(["_eventId", "_attributes"]).iter_rows(named=True)
     }
 

@@ -3,7 +3,9 @@ class ProcessArea:
     Represents a single process area consisting of a set of activities and object types and a level.
     """
 
-    def __init__(self, object_types: list[str], activities: list[str], level: float = None):
+    def __init__(
+        self, object_types: list[str], activities: list[str], level: float = None
+    ):
         self.object_types = list(object_types)
         self.activities = list(activities)
         self.level = level

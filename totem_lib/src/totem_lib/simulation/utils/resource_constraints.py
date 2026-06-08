@@ -1,9 +1,15 @@
-import json
-from collections import defaultdict, Counter
 import itertools
+import json
+from collections import Counter, defaultdict
 
 
-def generate_resource_constraints(ocel, variants, support_threshold_percentage=0.8, min_occurrences_within_execution=5, min_occurrences_across_executions=10):
+def generate_resource_constraints(
+    ocel,
+    variants,
+    support_threshold_percentage=0.8,
+    min_occurrences_within_execution=5,
+    min_occurrences_across_executions=10,
+):
     """
     Generate resource constraints based on the given variants and support threshold.
 
@@ -21,18 +27,23 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
 
     # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
     resource_lookup: dict[str, list] = {
-        row["_eventId"]: (json.loads(row["_attributes"]).get("process_area_resources", [])
-                          if row["_attributes"] else [])
+        row["_eventId"]: (
+            json.loads(row["_attributes"]).get("process_area_resources", [])
+            if row["_attributes"]
+            else []
+        )
         for row in ocel.events.select(["_eventId", "_attributes"]).iter_rows(named=True)
     }
 
     constraints = {}
 
     for v_idx, variant in enumerate(variants):
-        print(f"[Variant {v_idx}] support={variant.support}, executions={len(variant.executions)}")
+        print(
+            f"[Variant {v_idx}] support={variant.support}, executions={len(variant.executions)}"
+        )
         aggregated_constraints = defaultdict(lambda: [0, 0, 0, 0])
 
-        for e_idx, execution in enumerate(variant.executions):  
+        for e_idx, execution in enumerate(variant.executions):
             process_exec_analysis_dict = defaultdict(lambda: [0, 0, 0, 0])
 
             # Group event IDs by activity
@@ -41,7 +52,9 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
                 activity = ocel.get_value(event_id, "event_activity")
                 activity_to_events[activity].append(event_id)
 
-            print(f"  [Execution {e_idx}] {len(execution)} events, {len(activity_to_events)} activities, max_events_per_act={max((len(v) for v in activity_to_events.values()), default=0)}")
+            print(
+                f"  [Execution {e_idx}] {len(execution)} events, {len(activity_to_events)} activities, max_events_per_act={max((len(v) for v in activity_to_events.values()), default=0)}"
+            )
 
             # Group events per activity by their resource frozenset and count occurrences. Avoid pairwise comparisons on acitvity level
             activity_to_resource_counts: dict[str, Counter] = {
@@ -53,8 +66,10 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
             }
 
             activities = list(activity_to_resource_counts.keys())
-            pairs = list(itertools.permutations(activities, 2)) + [(act, act) for act in activities]
-            for (act1, act2) in pairs:
+            pairs = list(itertools.permutations(activities, 2)) + [
+                (act, act) for act in activities
+            ]
+            for act1, act2 in pairs:
                 key = (act1, act2)
                 for rs1, count1 in activity_to_resource_counts[act1].items():
                     for rs2, count2 in activity_to_resource_counts[act2].items():
@@ -122,20 +137,27 @@ def generate_resource_constraints(ocel, variants, support_threshold_percentage=0
             inverse_vector = filtered_constraints.get((act2, act1), [0, 0, 0, 0])
             inverse_total = sum(inverse_vector)
 
-            if (vector[0] / total >= support_threshold_percentage
-                    and inverse_vector[0] / inverse_total >= support_threshold_percentage):
+            if (
+                vector[0] / total >= support_threshold_percentage
+                and inverse_vector[0] / inverse_total >= support_threshold_percentage
+            ):
                 # Same resource (symmetric)
                 constraints_for_variant[act1][act2] = "same_resource"
                 constraints_for_variant[act2][act1] = "same_resource"
                 processed_pairs.add((act2, act1))
 
-            elif (vector[1]  + vector[0] / total >= support_threshold_percentage # Subset or Equal
-                    and inverse_vector[3] / inverse_total >= support_threshold_percentage):
+            elif (
+                vector[1] + vector[0] / total
+                >= support_threshold_percentage  # Subset or Equal
+                and inverse_vector[3] / inverse_total >= support_threshold_percentage
+            ):
                 # Subset relation (act1 resources ⊆ act2 resources)
                 constraints_for_variant[act1][act2] = "subset"
 
-            elif (vector[2] / total >= support_threshold_percentage
-                    and inverse_vector[2] / inverse_total >= support_threshold_percentage):
+            elif (
+                vector[2] / total >= support_threshold_percentage
+                and inverse_vector[2] / inverse_total >= support_threshold_percentage
+            ):
                 # Disjoint (symmetric)
                 constraints_for_variant[act1][act2] = "disjoint"
                 constraints_for_variant[act2][act1] = "disjoint"

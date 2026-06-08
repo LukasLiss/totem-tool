@@ -1,17 +1,18 @@
 """
 Shared utilities used by the evaluation metrics.
 """
+
 from collections import Counter, defaultdict
 
 from scipy.stats import wasserstein_distance
 
 from totem_lib.variants.ocvariants import (
-    find_object_variants_connected_component,
     Variants,
+    find_object_variants_connected_component,
 )
 
-
 # ────────────────────────── OCEL extraction ──────────────────────────
+
 
 def event_timestamps(ocel) -> list[int]:
     """All event timestamps in the log (unix seconds, unsorted)."""
@@ -51,11 +52,13 @@ def execution_arrivals_and_cycles(
 
     return arrivals, cycles
 
+
 def normalize_label(label: str) -> str:
     head, sep, tail = label.rpartition("_")
     if sep and tail.isdigit():
         return head
     return label
+
 
 def variant_signature(variant) -> str:
     """
@@ -63,19 +66,19 @@ def variant_signature(variant) -> str:
 
     Derived from its representative event-object graph (normalized activity
     labels + typed edges), matching the signature scheme used during variant
-    discovery. 
+    discovery.
     """
     G = variant.graph
-    normalize = lambda label: normalize_label(label)
-    node_labels = sorted(normalize(d["label"]) for _, d in G.nodes(data=True))
+    node_labels = sorted(normalize_label(d["label"]) for _, d in G.nodes(data=True))
     edge_tuples = sorted(
-        (normalize(G.nodes[u]["label"]),
-         normalize(G.nodes[v]["label"]),
-         d.get("type", ""))
+        (
+            normalize_label(G.nodes[u]["label"]),
+            normalize_label(G.nodes[v]["label"]),
+            d.get("type", ""),
+        )
         for u, v, d in G.edges(data=True)
     )
     return f"nodes:{'|'.join(node_labels)};edges:{'|'.join(map(str, edge_tuples))}"
-
 
 
 def variant_arrivals_by_signature(
@@ -124,6 +127,7 @@ def event_timestamps_per_execution(
 
 # ─────────────────────────── Distance helpers ────────────────────────
 
+
 def wd_from_bins(bins_a: Counter, bins_s: Counter) -> float:
     """
     Wasserstein on two Counters, using the keys as support
@@ -135,11 +139,14 @@ def wd_from_bins(bins_a: Counter, bins_s: Counter) -> float:
         return float("inf")
     keys_a = list(bins_a.keys())
     keys_s = list(bins_s.keys())
-    return float(wasserstein_distance(
-        keys_a, keys_s,
-        u_weights=[bins_a[k] for k in keys_a],
-        v_weights=[bins_s[k] for k in keys_s],
-    ))
+    return float(
+        wasserstein_distance(
+            keys_a,
+            keys_s,
+            u_weights=[bins_a[k] for k in keys_a],
+            v_weights=[bins_s[k] for k in keys_s],
+        )
+    )
 
 
 def l1_from_bins(bins_a: Counter, bins_s: Counter) -> float:

@@ -2,7 +2,7 @@
 Control-flow evaluation measures between OCELs
 
 Implements:
-- N-Gram Distance absolute (NGDa) — The Distance between N-Grams of Events, which is equal to the (n-1)th-Markovian Distance. 
+- N-Gram Distance absolute (NGDa) — The Distance between N-Grams of Events, which is equal to the (n-1)th-Markovian Distance.
 For n=2, this corresponds to the DFG-based distance. For n>2, this captures longer-range dependencies at the cost of higher sensitivity to infrequent n-grams.
 from: Chapela-Campa et al. "Can I Trust My Simulation Model? Measuring the
     Quality of Business Process Simulation Models." BPM 2023.
@@ -10,6 +10,7 @@ from: Chapela-Campa et al. "Can I Trust My Simulation Model? Measuring the
 Adapted from the implementation of NGDa from Chapela-Campa et al. "Can I Trust My Simulation Model? Measuring the
     Quality of Business Process Simulation Models." BPM 2023.
 """
+
 from collections import Counter
 
 from totem_lib.simulation.evaluation._eval_utils import get_variants
@@ -20,7 +21,7 @@ _DUMMY_TOKEN = "<>"
 
 def _build_ngram_counter(sequences: list[list[str]], n: int) -> Counter:
     """Counts all n-grams across the given activity sequences with start/end padding.
-    
+
     Args:
         sequences: List of activity-label sequences.
         n: N-gram size.
@@ -35,6 +36,7 @@ def _build_ngram_counter(sequences: list[list[str]], n: int) -> Counter:
         for i in range(len(padded) - n + 1):
             counts[tuple(padded[i : i + n])] += 1
     return counts
+
 
 def _execution_sequences(ocel, variants: Variants | None = None) -> list[list[str]]:
     """
@@ -101,6 +103,7 @@ def n_gram_distance_absolute(actual_ocel, simulated_ocel, n: int = 2) -> float:
     # Return Absolute N-Gram Distance
     return diff / total if total > 0 else 0.0
 
+
 def _normalize_counts(counts: Counter) -> dict:
     total = sum(counts.values())
     if total == 0:
@@ -127,7 +130,7 @@ def n_gram_distance_relative(actual_ocel, simulated_ocel, n: int = 2) -> float:
     """
     if n < 1:
         raise ValueError("n must be >= 1.")
-    
+
     # Calculate the frequncies of n-grams in both logs
     actual_counts = _build_ngram_counter(_execution_sequences(actual_ocel), n)
     sim_counts = _build_ngram_counter(_execution_sequences(simulated_ocel), n)
@@ -152,6 +155,5 @@ def n_gram_distance_relative(actual_ocel, simulated_ocel, n: int = 2) -> float:
 
     # Return difference in relative frequencies
     return 0.5 * sum(
-        abs(actual_freq.get(g, 0.0) - sim_freq.get(g, 0.0))
-        for g in all_ngrams
+        abs(actual_freq.get(g, 0.0) - sim_freq.get(g, 0.0)) for g in all_ngrams
     )

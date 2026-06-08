@@ -15,6 +15,7 @@ true distance instead of collapsing to neighbouring indices.
 
 Adapted from: Chapela-Campa et al. (BPM 2023)
 """
+
 from collections import Counter
 from datetime import datetime, timezone, tzinfo
 
@@ -22,8 +23,8 @@ from scipy.stats import wasserstein_distance
 
 from totem_lib.simulation.evaluation._eval_utils import (
     event_timestamps,
-    get_variants,
     event_timestamps_per_execution,
+    get_variants,
     wd_from_bins,
 )
 
@@ -104,6 +105,7 @@ def relative_event_distribution_distance(actual_ocel, simulated_ocel) -> float:
     weighted 1-Wasserstein distance with the relative-hour indices as support
     points.
     """
+
     def _relative_bins(ocel) -> Counter:
         bins: Counter = Counter()
         variants = get_variants(ocel)

@@ -22,16 +22,17 @@ many* arrivals there are.
 Reference:
     Chapela-Campa et al. "Can I Trust My Simulation Model?" BPM 2023.
 """
-from collections import Counter
+
 import statistics
+from collections import Counter
 
 from scipy.stats import wasserstein_distance
 
 from totem_lib.simulation.evaluation._eval_utils import (
     execution_arrivals_and_cycles,
+    l1_from_bins,
     variant_arrivals_by_signature,
     wd_from_bins,
-    l1_from_bins,
 )
 
 SECONDS_PER_HOUR = 3600
@@ -40,7 +41,7 @@ SECONDS_PER_HOUR = 3600
 def _interarrival_times(arrivals: list[int]) -> list[int]:
     """Gaps (seconds) between consecutive execution arrivals, sorted by time."""
     ordered = sorted(arrivals)
-    return [b - a for a, b in zip(ordered, ordered[1:])]
+    return [b - a for a, b in zip(ordered, ordered[1:], strict=False)]
 
 
 def cycle_time_distribution_distance(actual_ocel, simulated_ocel) -> float:
@@ -70,7 +71,7 @@ def cycle_time_distribution_distance(actual_ocel, simulated_ocel) -> float:
 def cycle_time_summary(ocel) -> dict:
     """
     Mean/std/min/max/count of the per-execution cycle times in seconds —
-    useful for comparison with Benedikt Knopp et al. "Discovering Object-Centric Process Simulation Models", ICPM 2023. 
+    useful for comparison with Benedikt Knopp et al. "Discovering Object-Centric Process Simulation Models", ICPM 2023.
     """
     _, cycles = execution_arrivals_and_cycles(ocel)
     if not cycles:
@@ -90,7 +91,7 @@ def interarrival_time_distribution_distance(actual_ocel, simulated_ocel) -> floa
 
     Compares the empirical distributions of the gaps between consecutive
     execution arrivals (arrivals sorted by time) via the 1-Wasserstein distance,
-    measured in hours. 
+    measured in hours.
     """
     actual_arrivals, _ = execution_arrivals_and_cycles(actual_ocel)
     sim_arrivals, _ = execution_arrivals_and_cycles(simulated_ocel)
@@ -113,13 +114,13 @@ def execution_arrival_distribution_distance(actual_ocel, simulated_ocel) -> floa
     Bins the execution-arrival timestamps of both logs into 1-hour bins on
     the absolute timeline and returns the weighted 1-Wasserstein distance
     using the bin indices as support points.
-    Differences in total count of arrivals are not penalized directly 
+    Differences in total count of arrivals are not penalized directly
     """
     # Get execution arrival timestamps for both logs
     actual_arrivals, _ = execution_arrivals_and_cycles(actual_ocel)
     sim_arrivals, _ = execution_arrivals_and_cycles(simulated_ocel)
 
-    # Bin arrivals into hours 
+    # Bin arrivals into hours
     actual_bins = Counter(t // SECONDS_PER_HOUR for t in actual_arrivals)
     sim_bins = Counter(t // SECONDS_PER_HOUR for t in sim_arrivals)
 

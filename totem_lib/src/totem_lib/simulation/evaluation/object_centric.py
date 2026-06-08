@@ -3,7 +3,7 @@ Object-centric specific evaluation measures.
 
 These measures target properties that are unique to object-centric event logs
 and that are not covered by the control-flow / temporal / congestion measures
-of Chapela-Campa et al. 
+of Chapela-Campa et al.
 
 Implemented measures:
 - ``object_count`` / ``object_count_distance`` — number of objects generated
@@ -15,6 +15,7 @@ Implemented measures:
 - ``object_lifecycle_distribution`` / ``object_lifecycle_distance`` —
   per-object lifecycle length (#events) and lifecycle time (last-first).
 """
+
 from collections import Counter, defaultdict
 
 import networkx as nx
@@ -24,7 +25,6 @@ from totem_lib.simulation.evaluation._eval_utils import (
     get_variants,
     wd_from_bins,
 )
-
 
 
 def object_count(ocel) -> dict[str, int]:
@@ -55,8 +55,14 @@ def object_count_distance(actual_ocel, simulated_ocel) -> dict[str, dict]:
         a = actual.get(ot, 0)
         s = sim.get(ot, 0)
         rel = abs(a - s) / a if a > 0 else float("nan")
-        result[ot] = {"actual": a, "simulated": s, "abs_diff": abs(a - s), "rel_diff": rel}
+        result[ot] = {
+            "actual": a,
+            "simulated": s,
+            "abs_diff": abs(a - s),
+            "rel_diff": rel,
+        }
     return result
+
 
 def cardinality_distribution(ocel) -> dict[tuple[str, str], dict[int, int]]:
     """
@@ -109,7 +115,9 @@ def cardinality_distribution(ocel) -> dict[tuple[str, str], dict[int, int]]:
     return {k: dict(v) for k, v in result.items()}
 
 
-def cardinality_distribution_distance(actual_ocel, simulated_ocel) -> dict[tuple[str, str], float]:
+def cardinality_distribution_distance(
+    actual_ocel, simulated_ocel
+) -> dict[tuple[str, str], float]:
     """
     Per (anchor_type, related_type) pair, the weighted 1-Wasserstein distance
     between the two cardinality histograms. The cardinality values themselves
@@ -146,7 +154,9 @@ def object_lifecycle_distribution(ocel) -> dict[str, dict[str, list]]:
         for oid in row["_objects"] or []:
             per_object_ts[oid].append(int(ts))
 
-    by_type: dict[str, dict[str, list]] = defaultdict(lambda: {"lengths": [], "times_s": []})
+    by_type: dict[str, dict[str, list]] = defaultdict(
+        lambda: {"lengths": [], "times_s": []}
+    )
     for oid, ts_list in per_object_ts.items():
         ot = obj_type_map.get(oid)
         if ot is None:
@@ -157,7 +167,9 @@ def object_lifecycle_distribution(ocel) -> dict[str, dict[str, list]]:
     return dict(by_type)
 
 
-def object_lifecycle_distance(actual_ocel, simulated_ocel) -> dict[str, dict[str, float]]:
+def object_lifecycle_distance(
+    actual_ocel, simulated_ocel
+) -> dict[str, dict[str, float]]:
     """
     Per object type, the 1WD between actual and simulated lifecycle-length and
     lifecycle-time distributions.
@@ -185,7 +197,10 @@ def object_lifecycle_distance(actual_ocel, simulated_ocel) -> dict[str, dict[str
         }
     return result
 
-def _variant_graph_edit_distance(g1: nx.DiGraph, g2: nx.DiGraph, timeout_s: float) -> float:
+
+def _variant_graph_edit_distance(
+    g1: nx.DiGraph, g2: nx.DiGraph, timeout_s: float
+) -> float:
     """
     Calculates GED between two variant representative graphs, matching node
     labels (activity name) and edge labels (object types).
@@ -232,8 +247,10 @@ def _directed_ged_coverage(source_variants, target_variants, timeout_s: float) -
             sum(
                 (v.graph.number_of_nodes() + v.graph.number_of_edges()) * v.support
                 for v in source_variants
-            ) / total_support
-            if total_support > 0 else 0.0
+            )
+            / total_support
+            if total_support > 0
+            else 0.0
         )
 
     weighted_sum, total_weight = 0.0, 0.0
@@ -258,7 +275,7 @@ def object_graph_edit_distance(
     Computes the directed GED coverage in both directions and averages:
     - actual → simulated: penalizes actual variants the simulator misses
     - simulated → actual: penalizes spurious variants the simulator invents
-    
+
     Args:
         timeout_s: per-pair timeout forwarded to networkx.
     """
