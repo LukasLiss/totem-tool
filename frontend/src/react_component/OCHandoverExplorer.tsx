@@ -1209,6 +1209,7 @@ function HandoverGraph({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
+          onClick={() => setNodeTooltip(t => t?.pinned ? null : t)}
           style={{ cursor: dragId ? "grabbing" : "default", display: "block" }}
         >
           <defs>
@@ -1739,7 +1740,7 @@ function NodeDetailView({
 
       <div className="relative">
       <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
-        <svg width={width} height={svgHeight} style={{ display: "block" }}>
+        <svg width={width} height={svgHeight} onClick={() => setNodeTooltip(t => t?.pinned ? null : t)} style={{ display: "block" }}>
           <defs>
             {allBoTypes.map(bt => {
               const color = typeColorMap[bt] ?? "#94a3b8";
