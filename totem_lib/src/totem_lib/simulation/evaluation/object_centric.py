@@ -187,7 +187,7 @@ def object_lifecycle_distance(actual_ocel, simulated_ocel) -> dict[str, dict[str
 
 def _variant_graph_edit_distance(g1: nx.DiGraph, g2: nx.DiGraph, timeout_s: float) -> float:
     """
-    Approximate GED between two variant representative graphs, matching node
+    Calculates GED between two variant representative graphs, matching node
     labels (activity name) and edge labels (object types).
     """
     try:
@@ -258,14 +258,7 @@ def object_graph_edit_distance(
     Computes the directed GED coverage in both directions and averages:
     - actual → simulated: penalizes actual variants the simulator misses
     - simulated → actual: penalizes spurious variants the simulator invents
-
-    Averaging the two prevents the metric from being "free" when the
-    simulator over-produces variants (a one-sided actual→simulated check
-    would not see those extras).
-
-    NOTE: ``nx.graph_edit_distance`` is NP-hard in general — ``timeout_s`` is
-    passed to networkx to cap computation per pair. Use only as a reference.
-
+    
     Args:
         timeout_s: per-pair timeout forwarded to networkx.
     """
