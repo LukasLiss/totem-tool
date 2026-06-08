@@ -140,3 +140,11 @@ def wd_from_bins(bins_a: Counter, bins_s: Counter) -> float:
         u_weights=[bins_a[k] for k in keys_a],
         v_weights=[bins_s[k] for k in keys_s],
     ))
+
+
+def l1_from_bins(bins_a: Counter, bins_s: Counter) -> float:
+    """
+    Total absolute count difference between two Counters (L1 / Manhattan).
+    """
+    keys = set(bins_a) | set(bins_s)
+    return float(sum(abs(bins_a.get(k, 0) - bins_s.get(k, 0)) for k in keys))
