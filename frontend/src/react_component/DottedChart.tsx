@@ -48,6 +48,11 @@ const DEFAULT_COLOR_BY: AxisOption = { type: "activity" };
 const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_SORT_BY: AxisOption = { type: "time" };
 const MIN_BRUSH_POINTS = 10;
+const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
+const Y_AXIS_WIDTH = 140;
+const CHART_PADDING = 8;
+const PLOT_LEFT_OFFSET = CHART_PADDING + Y_AXIS_WIDTH + CHART_MARGIN.left;
+const PLOT_RIGHT_OFFSET = CHART_PADDING + CHART_MARGIN.right;
 
 export default function DottedChart({
   fileId,
@@ -196,7 +201,7 @@ export default function DottedChart({
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
         className="min-h-0 flex-1 rounded-md border bg-background p-2"
       >
-        <ScatterChart data={points} margin={{ top: 16, right: 20, bottom: 46, left: 12 }}>
+        <ScatterChart data={points} margin={CHART_MARGIN}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="chartX"
@@ -217,7 +222,7 @@ export default function DottedChart({
             allowDecimals={false}
             tickFormatter={(value) => yLabels.get(Number(value)) ?? formatAxisTick(Number(value))}
             tickMargin={8}
-            width={140}
+            width={Y_AXIS_WIDTH}
           />
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
@@ -321,8 +326,14 @@ function DottedChartRangeSlider({
   );
 
   return (
-    <div className="px-4 pb-1 pt-2">
-      <div className="relative mx-auto w-full max-w-[calc(100%-2rem)]">
+    <div
+      className="pb-1 pt-2"
+      style={{
+        paddingLeft: PLOT_LEFT_OFFSET,
+        paddingRight: PLOT_RIGHT_OFFSET,
+      }}
+    >
+      <div className="relative w-full">
         <Slider
           min={0}
           max={Math.max(0, pointCount - 1)}
