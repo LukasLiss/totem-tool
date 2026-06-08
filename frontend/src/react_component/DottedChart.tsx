@@ -75,6 +75,9 @@ export default function DottedChart({
   const shapeScale = useMemo(() => makeShapeScale(points), [points]);
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
+  const xDomain = useMemo(() => getDataDomain(points.map((point) => point.chartX)), [points]);
+  const yTicks = useMemo(() => getUniqueSortedValues(points.map((point) => point.chartY)), [points]);
+  const yDomain = useMemo(() => getRowDomain(yTicks), [yTicks]);
 
   if (!fileId) {
     return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
@@ -117,6 +120,7 @@ export default function DottedChart({
             dataKey="chartX"
             name="x"
             type="number"
+            domain={xDomain}
             tickFormatter={(value) => xLabels.get(Number(value)) ?? formatAxisTick(Number(value))}
             tickMargin={8}
             minTickGap={28}
@@ -125,9 +129,13 @@ export default function DottedChart({
             dataKey="chartY"
             name="y"
             type="number"
+            domain={yDomain}
+            ticks={yTicks}
+            interval={0}
+            allowDecimals={false}
             tickFormatter={(value) => yLabels.get(Number(value)) ?? formatAxisTick(Number(value))}
             tickMargin={8}
-            width={96}
+            width={140}
           />
           <Tooltip cursor={{ strokeDasharray: "3 3" }} content={<DottedChartTooltip />} />
           <Scatter
@@ -151,6 +159,26 @@ export default function DottedChart({
       )}
     </div>
   );
+}
+
+function getDataDomain(values: number[]): [number, number] {
+  const finiteValues = values.filter(Number.isFinite);
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+  if (min === max) return [min - 1, max + 1];
+
+  return [min, max];
+}
+
+function getRowDomain(values: number[]): [number, number] {
+  const [min, max] = getDataDomain(values);
+  return [min - 0.5, max + 0.5];
+}
+
+function getUniqueSortedValues(values: number[]): number[] {
+  return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b);
 }
 
 function DottedChartState({ className, message }: { className?: string; message: string }) {
