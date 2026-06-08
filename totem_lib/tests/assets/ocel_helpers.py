@@ -1,13 +1,14 @@
 import json
 import polars as pl
 
-from totem_lib.ocel.ocel import ObjectCentricEventLog
+from totem_lib.ocel.ocel import ObjectCentricEventLog, EVENTS_SCHEMA, OBJECTS_SCHEMA
 
 
 def make_ocel(events, objects):
+    # Allows easy OCEL creation within tests, without having to entier OCELs
     return ObjectCentricEventLog(
-        events=pl.DataFrame(events),
-        objects=pl.DataFrame(objects),
+        events=pl.DataFrame(events, schema=EVENTS_SCHEMA),
+        objects=pl.DataFrame(objects, schema=OBJECTS_SCHEMA),
     )
 
 
