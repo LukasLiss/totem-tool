@@ -30,15 +30,65 @@ export type SimulationConfig = {
   mode: SimulationMode;
 };
 
-export type EvaluationResult = {
-  event_count: { original: number; simulated: number };
-  activity_frequencies: Record<string, { original: number; simulated: number; diff: number }>;
-  object_type_counts: Record<string, { original: number; simulated: number }>;
-  variants: {
-    original_count: number;
-    simulated_count: number;
-    original_frequencies: number[];
-    simulated_frequencies: number[];
+export type CycleTimeSummary = {
+  mean_s: number;
+  std_s: number;
+  min_s: number;
+  max_s: number;
+  count: number;
+};
+
+export type CountRow = {
+  metric: string;
+  actual: number;
+  simulated: number;
+  abs_diff: number;
+  rel_diff: number | null;
+};
+
+export type PaperEvaluationResult = {
+  counts: CountRow[];
+  control_flow: {
+    n_gram_distance_absolute: number;
+    n_gram_distance_relative: number;
+  };
+  temporal: {
+    absolute_event_distribution: number;
+    circadian_event_distribution: number;
+    relative_event_distribution: number;
+  };
+  congestion: {
+    cycle_time_distribution: number;
+    interarrival_time_distribution: number;
+    execution_arrival_rate: number;
+    execution_arrival_count: number;
+    variant_arrival_distribution: number;
+    variant_arrival_count: number;
+    cycle_time_actual: CycleTimeSummary;
+    cycle_time_simulated: CycleTimeSummary;
+  };
+  object_centric: {
+    object_counts: { type: string; actual: number; simulated: number; abs_diff: number }[];
+    cardinality: { anchor: string; related: string; emd: number }[];
+    lifecycle: { type: string; length_emd: number; time_s_emd: number }[];
+    graph_edit_distance: number | null;
+  };
+  resources: {
+    per_type: {
+      type: string;
+      n_actual: number;
+      n_simulated: number;
+      events_actual: number;
+      events_simulated: number;
+      events_per_resource_emd: number;
+      mean_utilization_actual: number | null;
+      mean_utilization_simulated: number | null;
+    }[];
+    observation_window_actual_s: number;
+    observation_window_simulated_s: number;
+  };
+  runtime: {
+    simulation_s: number;
   };
 };
 
@@ -53,7 +103,9 @@ export type SimulationResult = {
   finished_instances: number;
   simulated_events: number;
   simulated_objects: number;
-  evaluation: EvaluationResult;
+  evaluation: PaperEvaluationResult | null;
+  evaluation_error?: string | null;
+  sim_run_id?: string;
   simulated_file?: SimulatedFileInfo;
 };
 
@@ -146,4 +198,18 @@ export async function runSimulation(config: SimulationConfig): Promise<Simulatio
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+export async function fetchGraphEditDistance(simRunId: string): Promise<number | null> {
+  const res = await authFetch(`${BASE_URL}/simulation/graph-edit-distance/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sim_run_id: simRunId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.graph_edit_distance;
 }

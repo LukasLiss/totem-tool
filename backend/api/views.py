@@ -19,7 +19,10 @@ from totem_lib.ocel.importer import (
     load_events_from_xml, load_objects_from_xml,
     import_ocel_from_csv,
 )
-from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration, quick_evaluation
+from totem_lib.ocel.exporter import build_ocel2_json
+from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration
+from totem_lib.simulation.evaluation.runtime import Timer as EvalTimer
+from .simulation_evaluation import build_evaluation_payload, compute_graph_edit_distance
 from totem_lib.simulation.utils.process_area import ProcessArea
 from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
@@ -33,8 +36,10 @@ from collections import defaultdict
 from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.conf import settings
+from django.http import HttpResponse
 
 import os
+import uuid
 import datetime as dt
 from hashlib import sha1
 import json
@@ -352,6 +357,38 @@ class EventLogViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["get"])
+    def export(self, request, pk=None):
+        """Export the event log as a downloadable OCEL 2.0 JSON file.
+
+        Re-derives a standard OCEL 2.0 document from our internal representation
+        via the totem_lib exporter, regardless of the original upload format
+        (sqlite/xml/csv/json).
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        cache_key = f"ocel_object_{pk}"
+        ocel = cache.get(cache_key)
+        if not ocel:
+            try:
+                ocel = _build_ocel_from_path(user_file.file.path)
+                cache.set(cache_key, ocel, timeout=3600)
+            except Exception as e:
+                return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            json_content = _export_ocel_to_json(ocel)
+        except Exception as e:
+            return Response({"error": f"Failed to export OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        base_name = os.path.splitext(os.path.basename(user_file.file.name))[0]
+        response = HttpResponse(json_content, content_type="application/json")
+        response["Content-Disposition"] = f'attachment; filename="{base_name}.json"'
+        return response
 
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
@@ -2045,39 +2082,13 @@ def OCDFGViewSet(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 def _export_ocel_to_json(ocel) -> str:
-    """Export an ObjectCentricEventLog to OCEL 2.0 JSON string."""
-    events_list = []
-    if ocel.events is not None and ocel.events.height > 0:
-        for row in ocel.events.iter_rows(named=True):
-            ts_unix = row.get("_timestampUnix", 0)
-            ts_str = dt.datetime.fromtimestamp(ts_unix, tz=dt.timezone.utc).isoformat()
-            objects = row.get("_objects", []) or []
-            qualifiers = row.get("_qualifiers", []) or []
-            relationships = []
-            for oid, qual in zip(objects, qualifiers):
-                relationships.append({"objectId": oid, "qualifier": qual})
-            events_list.append({
-                "id": row.get("_eventId", ""),
-                "type": row.get("_activity", ""),
-                "time": ts_str,
-                "relationships": relationships,
-            })
+    """Export an ObjectCentricEventLog to an OCEL 2.0 JSON string.
 
-    objects_list = []
-    if ocel.objects is not None and ocel.objects.height > 0:
-        for row in ocel.objects.iter_rows(named=True):
-            targets = row.get("_targetObjects", []) or []
-            quals = row.get("_qualifiers", []) or []
-            relationships = []
-            for tid, qual in zip(targets, quals):
-                relationships.append({"objectId": tid, "qualifier": qual})
-            objects_list.append({
-                "id": row.get("_objId", ""),
-                "type": row.get("_objType", ""),
-                "relationships": relationships,
-            })
-
-    return json.dumps({"events": events_list, "objects": objects_list}, indent=2)
+    Delegates to the totem_lib exporter so the produced file is a standard
+    OCEL 2.0 document (with objectTypes/eventTypes, attributes and inferred
+    attribute types) that can be re-imported for further analyses.
+    """
+    return json.dumps(build_ocel2_json(ocel), ensure_ascii=False, indent=2)
 
 
 @api_view(['POST'])
@@ -2152,21 +2163,34 @@ def run_simulation(request):
 
         # Run simulation
         sim_duration_s = int(sim_duration_days * 24 * 3600)
-        sim_log, finished_count = simulation_model.run(
-            sim_duration_s=sim_duration_s,
-            resource_pool=resource_pool,
-            tick_size_s=tick_size_s,
-        )
+        with EvalTimer() as sim_timer:
+            sim_log, finished_count = simulation_model.run(
+                sim_duration_s=sim_duration_s,
+                resource_pool=resource_pool,
+                tick_size_s=tick_size_s,
+            )
 
         # Filter original OCEL by process area for comparison
         totem = totemDiscovery(ocel)
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
-        # Run quick evaluation
-        evaluation = quick_evaluation(filtered_ocel, sim_log)
+        # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
+        evaluation = None
+        evaluation_error = None
+        try:
+            cooldown_dist = getattr(simulation_model, "resource_cooldown_distribution", None)
+            evaluation = build_evaluation_payload(
+                filtered_ocel, sim_log,
+                cooldown_distribution=cooldown_dist,
+            )
+            evaluation["runtime"] = {"simulation_s": sim_timer.elapsed_s}
+        except Exception as eval_err:
+            import traceback
+            traceback.print_exc()
+            evaluation_error = str(eval_err)
 
-        # Save simulated OCEL as a new EventLog entry
+        # Save simulated OCEL as a new EventLog entry (standard OCEL 2.0 JSON).
         original_log = EventLog.objects.get(pk=file_id)
         original_name = os.path.splitext(os.path.basename(original_log.file.name))[0]
         timestamp_str = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2176,12 +2200,25 @@ def run_simulation(request):
         sim_log_entry = EventLog(project=original_log.project)
         sim_log_entry.file.save(sim_filename, ContentFile(json_content.encode("utf-8")), save=True)
 
+        # Cache only the actual (filtered) OCEL plus a reference to the persisted
+        # simulated log, so the expensive graph edit distance can be computed
+        # lazily by reloading the simulated log from its EventLog file instead of
+        # holding a second full copy of the whole log in memory.
+        sim_run_id = uuid.uuid4().hex
+        cache.set(
+            f"sim_run_{sim_run_id}",
+            {"actual_ocel": filtered_ocel, "simulated_file_id": sim_log_entry.id},
+            timeout=3600,
+        )
+
         # Build response
         response_data = {
             "finished_instances": finished_count,
             "simulated_events": sim_log.events.height if sim_log.events is not None else 0,
             "simulated_objects": sim_log.objects.height if sim_log.objects is not None else 0,
             "evaluation": evaluation,
+            "evaluation_error": evaluation_error,
+            "sim_run_id": sim_run_id,
             "simulated_file": {
                 "id": sim_log_entry.id,
                 "project": sim_log_entry.project_id,
@@ -2196,6 +2233,50 @@ def run_simulation(request):
         import traceback
         traceback.print_exc()
         return Response({"error": f"Simulation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def simulation_graph_edit_distance(request):
+    """
+    Lazily compute the (expensive) Object Graph Edit Distance for a finished
+    simulation run.
+
+    The frontend calls this after the cheap metrics are already shown, using
+    the ``sim_run_id`` returned by ``run_simulation``. The actual (filtered)
+    OCEL is looked up from the server-side cache, while the simulated log is
+    reloaded from its persisted EventLog file rather than kept fully in memory.
+    """
+    sim_run_id = request.data.get("sim_run_id")
+    if not sim_run_id:
+        return Response({"error": "Missing sim_run_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    cached = cache.get(f"sim_run_{sim_run_id}")
+    if cached is None:
+        return Response(
+            {"error": "Simulation result expired. Re-run the simulation to compute the graph edit distance."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    filtered_ocel = cached["actual_ocel"]
+    simulated_file_id = cached["simulated_file_id"]
+
+    try:
+        sim_file = EventLog.objects.get(pk=simulated_file_id, project__users=request.user)
+    except EventLog.DoesNotExist:
+        return Response(
+            {"error": "Simulated event log no longer available. Re-run the simulation."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        sim_log = _build_ocel_from_path(sim_file.file.path)
+        value = compute_graph_edit_distance(filtered_ocel, sim_log, timeout_s=1.0)
+        return Response({"graph_edit_distance": value}, status=status.HTTP_200_OK)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": f"Graph edit distance computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

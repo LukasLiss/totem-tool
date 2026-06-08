@@ -11,6 +11,7 @@ import {
   fetchProcessAreas,
   fetchSimulationDetails,
   runSimulation,
+  fetchGraphEditDistance,
   ProcessAreaInfo,
   ProcessAreasResponse,
   SimulationConfig,
@@ -21,7 +22,10 @@ import {
   CalendarProbability,
   CooldownDistribution,
   AllocationStrategy,
+  PaperEvaluationResult,
 } from "@/api/simulationApi";
+import { downloadOcelExport } from "@/api/fileApi";
+import { toast } from "sonner";
 import { ArrivalDistributionEditor } from "@/components/simulation/ArrivalDistributionEditor";
 import { ResourceCalendarEditor } from "@/components/simulation/ResourceCalendarEditor";
 import { ConstraintsEditorPanel } from "@/components/simulation/ConstraintsEditor";
@@ -1084,15 +1088,34 @@ export const SimulationDashboard: React.FC = () => {
                   <span className="text-muted-foreground">Simulated event log saved: </span>
                   <span className="font-medium">{result.simulated_file.file.split("/").pop()}</span>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSelectedFile(result.simulated_file);
-                  }}
-                >
-                  Open as Event Log
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      const simFile = result.simulated_file!;
+                      const name = simFile.file.split("/").pop() || "simulated_log.json";
+                      try {
+                        await downloadOcelExport(simFile.id, name);
+                      } catch (err) {
+                        toast.error("Export failed", {
+                          description: err instanceof Error ? err.message : String(err),
+                        });
+                      }
+                    }}
+                  >
+                    Download OCEL 2.0 JSON
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedFile(result.simulated_file);
+                    }}
+                  >
+                    Open as Event Log
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -1128,110 +1151,374 @@ const SimulationResults: React.FC<{ result: SimulationResult }> = ({ result }) =
       </Card>
     </div>
 
-    <Card>
-      <CardHeader><CardTitle>Event Comparison</CardTitle></CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="text-center p-4 bg-muted rounded">
-            <p className="text-2xl font-bold">{result.evaluation.event_count.original}</p>
-            <p className="text-sm text-muted-foreground">Original</p>
-          </div>
-          <div className="text-center p-4 bg-muted rounded">
-            <p className="text-2xl font-bold">{result.evaluation.event_count.simulated}</p>
-            <p className="text-sm text-muted-foreground">Simulated</p>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-
-    <Card>
-      <CardHeader><CardTitle>Activity Frequencies (normalized)</CardTitle></CardHeader>
-      <CardContent>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b">
-              <th className="text-left py-2 pr-4">Activity</th>
-              <th className="text-right py-2 px-2">Original</th>
-              <th className="text-right py-2 px-2">Simulated</th>
-              <th className="text-right py-2 pl-2">Diff</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(result.evaluation.activity_frequencies).map(([act, vals]) => (
-              <tr key={act} className="border-b last:border-0">
-                <td className="py-1.5 pr-4 font-medium">{act}</td>
-                <td className="text-right py-1.5 px-2">{vals.original.toFixed(4)}</td>
-                <td className="text-right py-1.5 px-2">{vals.simulated.toFixed(4)}</td>
-                <td className="text-right py-1.5 pl-2">
-                  <span className={vals.diff > 0.05 ? "text-destructive" : vals.diff > 0.02 ? "text-yellow-600" : "text-green-600"}>
-                    {vals.diff.toFixed(4)}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
-
-    <Card>
-      <CardHeader><CardTitle>Object Type Counts</CardTitle></CardHeader>
-      <CardContent>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b">
-              <th className="text-left py-2 pr-4">Object Type</th>
-              <th className="text-right py-2 px-2">Original</th>
-              <th className="text-right py-2 pl-2">Simulated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(result.evaluation.object_type_counts).map(([ot, vals]) => (
-              <tr key={ot} className="border-b last:border-0">
-                <td className="py-1.5 pr-4 font-medium">{ot}</td>
-                <td className="text-right py-1.5 px-2">{vals.original}</td>
-                <td className="text-right py-1.5 pl-2">{vals.simulated}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
-
-    <Card>
-      <CardHeader><CardTitle>Variants</CardTitle></CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="text-center p-3 bg-muted rounded">
-            <p className="text-xl font-bold">{result.evaluation.variants.original_count}</p>
-            <p className="text-xs text-muted-foreground">Original</p>
-          </div>
-          <div className="text-center p-3 bg-muted rounded">
-            <p className="text-xl font-bold">{result.evaluation.variants.simulated_count}</p>
-            <p className="text-xs text-muted-foreground">Simulated</p>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-4 text-xs">
-          <div>
-            <p className="text-muted-foreground mb-1">Original (Top 10)</p>
-            {result.evaluation.variants.original_frequencies.slice(0, 10).map((f, i) => (
-              <div key={i} className="flex justify-between">
-                <span>Variant {i + 1}</span><span>{(f * 100).toFixed(1)}%</span>
-              </div>
-            ))}
-          </div>
-          <div>
-            <p className="text-muted-foreground mb-1">Simulated (Top 10)</p>
-            {result.evaluation.variants.simulated_frequencies.slice(0, 10).map((f, i) => (
-              <div key={i} className="flex justify-between">
-                <span>Variant {i + 1}</span><span>{(f * 100).toFixed(1)}%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    {/* Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras) */}
+    {result.evaluation && <EvaluationMetricsCard metrics={result.evaluation} simRunId={result.sim_run_id} />}
+    {result.evaluation_error && (
+      <Card>
+        <CardContent className="pt-4 text-sm text-destructive">
+          Failed to compute evaluation metrics: {result.evaluation_error}
+        </CardContent>
+      </Card>
+    )}
   </div>
 );
+
+// --- Evaluation metrics card ---
+
+const fmt = (v: number, digits = 3) =>
+  Number.isFinite(v) ? v.toFixed(digits) : "—";
+
+const fmtSeconds = (s: number) => {
+  if (!Number.isFinite(s)) return "—";
+  if (s < 60) return `${s.toFixed(1)}s`;
+  if (s < 3600) return `${(s / 60).toFixed(1)}m`;
+  if (s < 86400) return `${(s / 3600).toFixed(2)}h`;
+  return `${(s / 86400).toFixed(2)}d`;
+};
+
+const MetricRow: React.FC<{ name: string; value: number | null; hint?: string }> = ({
+  name,
+  value,
+  hint,
+}) => (
+  <div className="flex items-baseline justify-between gap-3 border-b last:border-0 py-1.5">
+    <div className="flex flex-col min-w-0">
+      <span className="text-sm font-medium truncate">{name}</span>
+      {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
+    </div>
+    <span className="font-mono text-sm">
+      {value === null || value === undefined ? "—" : fmt(value)}
+    </span>
+  </div>
+);
+
+const COUNT_LABELS: Record<string, string> = {
+  n_executions: "Executions",
+  n_events: "Events",
+  n_variants: "Variants",
+  avg_events_per_execution: "Avg. events / execution",
+  avg_events_per_variant: "Avg. events / variant",
+  avg_executions_per_variant: "Avg. executions / variant",
+};
+
+type GedState = { status: "loading" | "done" | "error"; value: number | null; error?: string };
+
+const EvaluationMetricsCard: React.FC<{ metrics: PaperEvaluationResult; simRunId?: string }> = ({ metrics, simRunId }) => {
+  const { counts, control_flow, temporal, congestion, object_centric, resources, runtime } = metrics;
+
+  // The Graph Edit Distance is expensive (tens of seconds), so it is fetched
+  // lazily after the cheap metrics are already on screen.
+  const [ged, setGed] = useState<GedState>({ status: "loading", value: null });
+  useEffect(() => {
+    if (!simRunId) {
+      setGed({ status: "error", value: null, error: "no run id" });
+      return;
+    }
+    let cancelled = false;
+    setGed({ status: "loading", value: null });
+    fetchGraphEditDistance(simRunId)
+      .then((v) => !cancelled && setGed({ status: "done", value: v }))
+      .catch((e) => !cancelled && setGed({ status: "error", value: null, error: String(e?.message ?? e) }));
+    return () => {
+      cancelled = true;
+    };
+  }, [simRunId]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Evaluation Metrics</CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Multi-perspective distance between actual log and simulation. Lower = better match.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Counts & sizes */}
+        {counts.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Counts &amp; Sizes</h4>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1">Metric</th>
+                  <th className="text-right py-1">Actual</th>
+                  <th className="text-right py-1">Simulated</th>
+                  <th className="text-right py-1">|Δ|</th>
+                  <th className="text-right py-1">Rel. Δ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {counts.map((c) => (
+                  <tr key={c.metric} className="border-b last:border-0">
+                    <td className="py-1 font-medium">{COUNT_LABELS[c.metric] ?? c.metric}</td>
+                    <td className="text-right py-1 font-mono">{fmt(c.actual, 2)}</td>
+                    <td className="text-right py-1 font-mono">{fmt(c.simulated, 2)}</td>
+                    <td className="text-right py-1 font-mono">{fmt(c.abs_diff, 2)}</td>
+                    <td className="text-right py-1 font-mono">
+                      {c.rel_diff === null ? "—" : (c.rel_diff * 100).toFixed(1) + "%"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Control flow */}
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Control Flow</h4>
+          <MetricRow
+            name="N-Gram Distance absolute (n=2)"
+            value={control_flow.n_gram_distance_absolute}
+            hint="[0, 1] — sum of |freq diffs| of 2-grams, count-normalized"
+          />
+          <MetricRow
+            name="N-Gram Distance relative (n=2)"
+            value={control_flow.n_gram_distance_relative}
+            hint="[0, 1] — sum of |relative freq diffs| of 2-grams"
+          />
+        </div>
+
+        {/* Temporal */}
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Temporal Performance</h4>
+          <MetricRow
+            name="Absolute Event Distribution"
+            value={temporal.absolute_event_distribution}
+            hint="Scaled EMD over (date, hour) — trend"
+          />
+          <MetricRow
+            name="Circadian Event Distribution"
+            value={temporal.circadian_event_distribution}
+            hint="Avg. scaled EMD per weekday × hour — seasonality"
+          />
+          <MetricRow
+            name="Relative Event Distribution"
+            value={temporal.relative_event_distribution}
+            hint="Scaled EMD relative to case start"
+          />
+        </div>
+
+        {/* Congestion */}
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Congestion</h4>
+          <MetricRow
+            name="Cycle Time Distribution"
+            value={congestion.cycle_time_distribution}
+            hint="EMD on hourly cycle-time histogram (hours)"
+          />
+          <MetricRow
+            name="Inter-Arrival Time Distribution"
+            value={congestion.interarrival_time_distribution}
+            hint="EMD on gaps between consecutive arrivals (hours)"
+          />
+          <MetricRow
+            name="Execution Arrival Rate"
+            value={congestion.execution_arrival_rate}
+            hint="Wasserstein on hourly arrival counts (timing only)"
+          />
+          <MetricRow
+            name="Execution Arrival Count"
+            value={congestion.execution_arrival_count}
+            hint="L1 of hourly arrival histograms (count-preserving)"
+          />
+          <MetricRow
+            name="Variant Arrival Distribution"
+            value={congestion.variant_arrival_distribution}
+            hint="Support-weighted EMD per variant arrivals (timing only)"
+          />
+          <MetricRow
+            name="Variant Arrival Count"
+            value={congestion.variant_arrival_count}
+            hint="L1 of per-variant arrival histograms (count-preserving)"
+          />
+          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div className="p-2 bg-muted rounded">
+              <div className="text-[10px] text-muted-foreground uppercase">Cycle time — actual</div>
+              <div className="font-mono mt-1">
+                mean: {fmtSeconds(congestion.cycle_time_actual.mean_s)} ·
+                std: {fmtSeconds(congestion.cycle_time_actual.std_s)}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                n={congestion.cycle_time_actual.count}
+              </div>
+            </div>
+            <div className="p-2 bg-muted rounded">
+              <div className="text-[10px] text-muted-foreground uppercase">Cycle time — simulated</div>
+              <div className="font-mono mt-1">
+                mean: {fmtSeconds(congestion.cycle_time_simulated.mean_s)} ·
+                std: {fmtSeconds(congestion.cycle_time_simulated.std_s)}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                n={congestion.cycle_time_simulated.count}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Object-centric */}
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Object-Centric</h4>
+
+          {object_centric.object_counts.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs text-muted-foreground mb-1">Object counts per type</p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-1">Type</th>
+                    <th className="text-right py-1">Actual</th>
+                    <th className="text-right py-1">Simulated</th>
+                    <th className="text-right py-1">|Δ|</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {object_centric.object_counts.map((c) => (
+                    <tr key={c.type} className="border-b last:border-0">
+                      <td className="py-1 font-medium">{c.type}</td>
+                      <td className="text-right py-1 font-mono">{c.actual}</td>
+                      <td className="text-right py-1 font-mono">{c.simulated}</td>
+                      <td className="text-right py-1 font-mono">{c.abs_diff}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {object_centric.lifecycle.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs text-muted-foreground mb-1">
+                Object lifecycle distance (EMD)
+              </p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-1">Type</th>
+                    <th className="text-right py-1">#Events EMD</th>
+                    <th className="text-right py-1">Time EMD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {object_centric.lifecycle.map((l) => (
+                    <tr key={l.type} className="border-b last:border-0">
+                      <td className="py-1 font-medium">{l.type}</td>
+                      <td className="text-right py-1 font-mono">{fmt(l.length_emd, 2)}</td>
+                      <td className="text-right py-1 font-mono">
+                        {fmtSeconds(l.time_s_emd)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {object_centric.cardinality.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs text-muted-foreground mb-1">
+                Cardinality distance per object-type pair (anchor → related, EMD; only non-zero)
+              </p>
+              <div className="max-h-40 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-card">
+                    <tr className="border-b">
+                      <th className="text-left py-1">Anchor</th>
+                      <th className="text-left py-1">Related</th>
+                      <th className="text-right py-1">EMD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {object_centric.cardinality.slice(0, 25).map((c, i) => (
+                      <tr key={i} className="border-b last:border-0">
+                        <td className="py-1">{c.anchor}</td>
+                        <td className="py-1">{c.related}</td>
+                        <td className="text-right py-1 font-mono">{fmt(c.emd, 3)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-baseline justify-between gap-3 border-b last:border-0 py-1.5">
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-medium truncate">Object Graph Edit Distance</span>
+              <span className="text-[10px] text-muted-foreground">
+                {ged.status === "error"
+                  ? `Support-weighted GED across variant graphs — ${ged.error}`
+                  : "Support-weighted GED across variant graphs (computed lazily)"}
+              </span>
+            </div>
+            <span className="font-mono text-sm">
+              {ged.status === "loading" ? (
+                <span className="text-muted-foreground">computing…</span>
+              ) : ged.status === "done" && ged.value !== null ? (
+                fmt(ged.value)
+              ) : (
+                "—"
+              )}
+            </span>
+          </div>
+        </div>
+
+        {/* Resources */}
+        {resources.per_type.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Resources</h4>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-1">Type</th>
+                  <th className="text-right py-1">#Resources A/S</th>
+                  <th className="text-right py-1">#Events A/S</th>
+                  <th className="text-right py-1">Events EMD</th>
+                  <th className="text-right py-1">Util A/S</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resources.per_type.map((r) => (
+                  <tr key={r.type} className="border-b last:border-0">
+                    <td className="py-1 font-medium">{r.type}</td>
+                    <td className="text-right py-1 font-mono">
+                      {r.n_actual} / {r.n_simulated}
+                    </td>
+                    <td className="text-right py-1 font-mono">
+                      {r.events_actual} / {r.events_simulated}
+                    </td>
+                    <td className="text-right py-1 font-mono">{fmt(r.events_per_resource_emd, 2)}</td>
+                    <td className="text-right py-1 font-mono">
+                      {r.mean_utilization_actual === null
+                        ? "—"
+                        : (r.mean_utilization_actual * 100).toFixed(1) + "%"}{" "}
+                      /{" "}
+                      {r.mean_utilization_simulated === null
+                        ? "—"
+                        : (r.mean_utilization_simulated * 100).toFixed(1) + "%"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Util = busy_time / observation_window. Busy time is estimated from the discovered
+              resource cooldowns; "—" means no cooldown info available.
+            </p>
+          </div>
+        )}
+
+        {/* Runtime */}
+        <div>
+          <h4 className="text-sm font-semibold mb-2">Runtime</h4>
+          <div className="p-2 bg-muted rounded flex justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">Simulation</span>
+            <span className="font-mono">{fmtSeconds(runtime.simulation_s)}</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 export default SimulationDashboard;

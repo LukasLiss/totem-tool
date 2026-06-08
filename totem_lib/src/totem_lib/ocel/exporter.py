@@ -74,13 +74,24 @@ def _infer_ocel_type(value) -> str:
     return "string"
 
 
-def export_ocel_to_json(ocel: ObjectCentricEventLog, full_path: str) -> None:
+def build_ocel2_json(ocel: ObjectCentricEventLog) -> dict:
     """
-    Exports an OCEL to an OCEL 2.0 JSON file
+    Builds the OCEL 2.0 JSON structure for an OCEL as a plain (serializable) dict
+    with the top-level keys ``objectTypes``, ``eventTypes``, ``objects`` and
+    ``events``.
+
+    Factored out of :func:`export_ocel_to_json` so callers (e.g. the backend API)
+    can obtain the document in memory without going through a file.
+
+    Attribute types in the type declarations are inferred from the values
+    (integer / float / boolean / string); attributes with conflicting types
+    across instances are widened to ``"string"``.
 
     Args:
-        ocel: The object-centric event log to export.
-        full_path: The full path (including filename and extension) to write to.
+        ocel: The object-centric event log to convert.
+
+    Returns:
+        dict: The OCEL 2.0 JSON document.
 
     Raises:
         ValueError: If an event or object attribute record has a null timestamp.
@@ -226,12 +237,24 @@ def export_ocel_to_json(ocel: ObjectCentricEventLog, full_path: str) -> None:
         for activity, attrs in sorted(event_type_attrs.items())
     ]
 
-    ocel_json = {
+    return {
         "objectTypes": object_types_json,
         "eventTypes": event_types_json,
         "objects": objects_json,
         "events": events_json,
     }
 
+
+def export_ocel_to_json(ocel: ObjectCentricEventLog, full_path: str) -> None:
+    """
+    Exports an OCEL to an OCEL 2.0 JSON file (see :func:`build_ocel2_json`).
+
+    Args:
+        ocel: The object-centric event log to export.
+        full_path: The full path (including filename and extension) to write to.
+
+    Raises:
+        ValueError: If an event or object attribute record has a null timestamp.
+    """
     with open(full_path, "w", encoding="utf-8") as f:
-        json.dump(ocel_json, f, ensure_ascii=False, indent=2)
+        json.dump(build_ocel2_json(ocel), f, ensure_ascii=False, indent=2)
