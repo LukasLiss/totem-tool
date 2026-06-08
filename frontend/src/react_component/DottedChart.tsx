@@ -74,18 +74,22 @@ export default function DottedChart({
   });
 
   const points = useMemo(() => toChartPoints(data?.events ?? []), [data?.events]);
-  const colorScale = useMemo(() => makeColorScale(points), [points]);
-  const shapeScale = useMemo(() => makeShapeScale(points), [points]);
-  const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
-  const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
-  const xDomain = useMemo(() => getDataDomain(points.map((point) => point.chartX)), [points]);
-  const yTicks = useMemo(() => getUniqueSortedValues(points.map((point) => point.chartY)), [points]);
-  const yDomain = useMemo(() => getRowDomain(yTicks), [yTicks]);
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const effectiveBrushRange = useMemo(
     () => clampBrushRange(brushRange, points.length),
     [brushRange, points.length]
   );
+  const visiblePoints = useMemo(
+    () => points.slice(effectiveBrushRange.startIndex, effectiveBrushRange.endIndex + 1),
+    [effectiveBrushRange, points]
+  );
+  const colorScale = useMemo(() => makeColorScale(points), [points]);
+  const shapeScale = useMemo(() => makeShapeScale(points), [points]);
+  const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
+  const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
+  const xDomain = useMemo(() => getDataDomain(visiblePoints.map((point) => point.chartX)), [visiblePoints]);
+  const yTicks = useMemo(() => getUniqueSortedValues(points.map((point) => point.chartY)), [points]);
+  const yDomain = useMemo(() => getRowDomain(yTicks), [yTicks]);
   const zoomValue = useMemo(
     () => brushRangeToZoomValue(effectiveBrushRange, points.length),
     [effectiveBrushRange, points.length]
@@ -93,7 +97,7 @@ export default function DottedChart({
 
   useEffect(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
-  }, [points.length]);
+  }, [points]);
 
   const handleBrushChange = useCallback(
     (range: { startIndex?: number; endIndex?: number }) => {
@@ -148,7 +152,7 @@ export default function DottedChart({
     <div className={cn("relative flex h-[420px] min-h-[320px] flex-col gap-2", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <span>
-          Showing {points.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
+          Showing {visiblePoints.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
           {data?.sampled ? " (sampled)" : ""}
         </span>
         <div className="flex flex-wrap items-center gap-3">
@@ -184,7 +188,7 @@ export default function DottedChart({
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
         className="min-h-0 flex-1 rounded-md border bg-background p-2"
       >
-        <ScatterChart margin={{ top: 16, right: 20, bottom: 46, left: 12 }}>
+        <ScatterChart data={points} margin={{ top: 16, right: 20, bottom: 46, left: 12 }}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="chartX"
@@ -219,7 +223,7 @@ export default function DottedChart({
           />
           <Scatter
             name="Events"
-            data={points}
+            data={visiblePoints}
             isAnimationActive={false}
             shape={(props: any) => {
               const point = props.payload as ChartPoint;
