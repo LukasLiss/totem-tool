@@ -272,6 +272,8 @@ function DottedChartZoomControls({
   const minStepsBetweenThumbs = Math.max(0, Math.min(MIN_BRUSH_POINTS - 1, pointCount - 1));
   const startPercent = indexToPercent(effectiveDraftRange.startIndex, pointCount);
   const endPercent = indexToPercent(effectiveDraftRange.endIndex, pointCount);
+  const startLabelPlacement = getRangeLabelPlacement(startPercent);
+  const endLabelPlacement = getRangeLabelPlacement(endPercent);
   const supportsDateBounds = isTimeAxis(xAxis);
 
   useEffect(() => {
@@ -403,14 +405,14 @@ function DottedChartZoomControls({
           />
           <div className="relative h-7 text-[11px] text-muted-foreground">
             <span
-              className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
-              style={{ left: `${startPercent}%` }}
+              className={cn("absolute top-2 whitespace-nowrap", startLabelPlacement.className)}
+              style={{ left: `${startLabelPlacement.left}%` }}
             >
               {formatRangePointLabel(points[effectiveDraftRange.startIndex], xAxis, xLabels)}
             </span>
             <span
-              className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
-              style={{ left: `${endPercent}%` }}
+              className={cn("absolute top-2 whitespace-nowrap", endLabelPlacement.className)}
+              style={{ left: `${endLabelPlacement.left}%` }}
             >
               {formatRangePointLabel(points[effectiveDraftRange.endIndex], xAxis, xLabels)}
             </span>
@@ -468,6 +470,12 @@ function ZoomApplyingSpinner() {
 function indexToPercent(index: number, pointCount: number): number {
   if (pointCount <= 1) return 0;
   return (index / (pointCount - 1)) * 100;
+}
+
+function getRangeLabelPlacement(percent: number): { left: number; className: string } {
+  if (percent <= 6) return { left: 0, className: "translate-x-0 text-left" };
+  if (percent >= 94) return { left: 100, className: "-translate-x-full text-right" };
+  return { left: percent, className: "-translate-x-1/2 text-center" };
 }
 
 function formatRangePointLabel(
