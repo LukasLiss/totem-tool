@@ -2,27 +2,26 @@
 Tests for the OCEL exporter, including round-trip fidelity
 with the importer.
 """
+
 import json
 import os
 
 import polars as pl
 import pytest
 
-from totem_lib.ocel.importer import import_ocel, import_ocel_from_csv
+from totem_lib.ocel import ObjectCentricEventLog
 from totem_lib.ocel.exporter import (
-    export_ocel,
-    export_ocel_to_csv,
-    export_ocel_to_json,
     _infer_ocel_type,
     _unix_to_iso,
+    export_ocel,
+    export_ocel_to_json,
 )
-from totem_lib.ocel import ObjectCentricEventLog
+from totem_lib.ocel.importer import import_ocel, import_ocel_from_csv
 from totem_lib.ocel.ocel import (
     EVENTS_SCHEMA,
-    OBJECTS_SCHEMA,
     OBJECT_ATTRIBUTE_SCHEMA,
+    OBJECTS_SCHEMA,
 )
-
 
 EXAMPLE_CSV_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -36,7 +35,9 @@ def ocel_log():
     return import_ocel_from_csv(EXAMPLE_CSV_PATH)
 
 
-def _assert_logs_equivalent(original: ObjectCentricEventLog, reloaded: ObjectCentricEventLog):
+def _assert_logs_equivalent(
+    original: ObjectCentricEventLog, reloaded: ObjectCentricEventLog
+):
     """Asserts that two logs carry the same events, objects, types and o2o edges."""
     assert sorted(original.events["_eventId"].to_list()) == sorted(
         reloaded.events["_eventId"].to_list()
@@ -65,6 +66,7 @@ class TestExportDispatch:
         path = export_ocel("out", ocel_log, file_format="json", file_path=target_dir)
         assert os.path.isfile(path)
 
+
 class TestJSONExport:
     """Tests for the JSON exporter."""
 
@@ -86,7 +88,13 @@ class TestJSONExport:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         event = data["events"][0]
-        assert set(event.keys()) == {"id", "type", "time", "attributes", "relationships"}
+        assert set(event.keys()) == {
+            "id",
+            "type",
+            "time",
+            "attributes",
+            "relationships",
+        }
 
     def test_object_attributes_carry_time(self, ocel_log, tmp_path):
         path = os.path.join(str(tmp_path), "out.json")
@@ -174,7 +182,14 @@ class TestAttributeTypeInference:
             schema=EVENTS_SCHEMA,
         )
         objects = pl.DataFrame(
-            [{"_objId": "o1", "_objType": "order", "_targetObjects": [], "_qualifiers": []}],
+            [
+                {
+                    "_objId": "o1",
+                    "_objType": "order",
+                    "_targetObjects": [],
+                    "_qualifiers": [],
+                }
+            ],
             schema=OBJECTS_SCHEMA,
         )
         object_attributes = pl.DataFrame(

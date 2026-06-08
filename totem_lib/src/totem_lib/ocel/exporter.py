@@ -1,7 +1,6 @@
-import os
 import json
+import os
 from datetime import datetime, timezone
-from typing import Optional
 
 from . import ObjectCentricEventLog
 
@@ -10,7 +9,7 @@ def export_ocel(
     filename: str,
     ocel: ObjectCentricEventLog,
     file_format: str = "csv",
-    file_path: Optional[str] = None,
+    file_path: str | None = None,
 ) -> str:
     """
     Exports the given OCEL to a file in the specified format.
@@ -48,9 +47,8 @@ def export_ocel(
     return full_path
 
 
-def _unix_to_iso(timestamp_unix: Optional[int]) -> str:
-    """Converts a Unix timestamp (seconds) to an ISO 8601 string in UTC.
-    """
+def _unix_to_iso(timestamp_unix: int | None) -> str:
+    """Converts a Unix timestamp (seconds) to an ISO 8601 string in UTC."""
     if timestamp_unix is None:
         raise ValueError(
             "OCEL export requires non-null timestamps; got None for _timestampUnix."
@@ -89,7 +87,7 @@ def export_ocel_to_json(ocel: ObjectCentricEventLog, full_path: str) -> None:
     """
     obj_type_map = ocel.obj_type_map
 
-    # Track attribute name & Inferred type => Widen to String if conflicting 
+    # Track attribute name & Inferred type => Widen to String if conflicting
     event_type_attrs: dict[str, dict[str, str]] = {}
     object_type_attrs: dict[str, dict[str, str]] = {}
 
@@ -97,13 +95,21 @@ def export_ocel_to_json(ocel: ObjectCentricEventLog, full_path: str) -> None:
         inferred = _infer_ocel_type(value)
         attrs = registry.setdefault(type_key, {})
         existing = attrs.get(name)
-        attrs[name] = "string" if existing is not None and existing != inferred else inferred
+        attrs[name] = (
+            "string" if existing is not None and existing != inferred else inferred
+        )
 
     has_attributes = "_attributes" in ocel.events.columns
 
     # --- Events -------------------------------------------------------------
     events_json = []
-    event_columns = ["_eventId", "_activity", "_timestampUnix", "_objects", "_qualifiers"]
+    event_columns = [
+        "_eventId",
+        "_activity",
+        "_timestampUnix",
+        "_objects",
+        "_qualifiers",
+    ]
     if has_attributes:
         event_columns.append("_attributes")
     events_iter = ocel.events.select(event_columns).iter_rows(named=True)
