@@ -7,10 +7,17 @@ This module exposes three measures targeting these properties:
 
 - CTD (Cycle Time Distribution) — distance between empirical distributions of
   execution cycle times.
+- IATD (Inter-Arrival Time Distribution) — distance between empirical
+  distributions of the gaps between consecutive execution arrivals.
 - EAR (Execution Arrival Rate/Case Arrival Rate) — distance between time-binned execution
-  arrivals. 
+  arrivals.
 - Variant Arrival Distribution — same idea, but evaluated per variant; the
   measure aggregates the per-variant distances weighted by support.
+
+The ``*_count_distance`` variants are count-preserving (L1) complements to the
+mass-normalized Wasserstein measures: where the Wasserstein distance captures
+only *when* arrivals occur, the L1 variants also penalize a difference in *how
+many* arrivals there are.
 
 Reference:
     Chapela-Campa et al. "Can I Trust My Simulation Model?" BPM 2023.
@@ -18,13 +25,22 @@ Reference:
 from collections import Counter
 import statistics
 
+from scipy.stats import wasserstein_distance
+
 from totem_lib.simulation.evaluation._eval_utils import (
     execution_arrivals_and_cycles,
     variant_arrivals_by_signature,
     wd_from_bins,
+    l1_from_bins,
 )
 
 SECONDS_PER_HOUR = 3600
+
+
+def _interarrival_times(arrivals: list[int]) -> list[int]:
+    """Gaps (seconds) between consecutive execution arrivals, sorted by time."""
+    ordered = sorted(arrivals)
+    return [b - a for a, b in zip(ordered, ordered[1:])]
 
 
 def cycle_time_distribution_distance(actual_ocel, simulated_ocel) -> float:
@@ -66,6 +82,28 @@ def cycle_time_summary(ocel) -> dict:
         "max_s": int(max(cycles)),
         "count": len(cycles),
     }
+
+
+def interarrival_time_distribution_distance(actual_ocel, simulated_ocel) -> float:
+    """
+    Inter-Arrival Time Distribution (IATD) distance.
+
+    Compares the empirical distributions of the gaps between consecutive
+    execution arrivals (arrivals sorted by time) via the 1-Wasserstein distance,
+    measured in hours. 
+    """
+    actual_arrivals, _ = execution_arrivals_and_cycles(actual_ocel)
+    sim_arrivals, _ = execution_arrivals_and_cycles(simulated_ocel)
+
+    actual_gaps = [g / SECONDS_PER_HOUR for g in _interarrival_times(actual_arrivals)]
+    sim_gaps = [g / SECONDS_PER_HOUR for g in _interarrival_times(sim_arrivals)]
+
+    if not actual_gaps and not sim_gaps:
+        return 0.0
+    if not actual_gaps or not sim_gaps:
+        return float("inf")
+
+    return float(wasserstein_distance(actual_gaps, sim_gaps))
 
 
 def execution_arrival_distribution_distance(actual_ocel, simulated_ocel) -> float:
@@ -142,3 +180,30 @@ def variant_arrival_distribution_distance(
         total_weight += weight
 
     return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+
+def execution_arrival_count_distance(actual_ocel, simulated_ocel) -> float:
+    """
+    Count-preserving (L1) complement to ``execution_arrival_distribution_distance``.
+    """
+    actual_arrivals, _ = execution_arrivals_and_cycles(actual_ocel)
+    sim_arrivals, _ = execution_arrivals_and_cycles(simulated_ocel)
+
+    actual_bins = Counter(t // SECONDS_PER_HOUR for t in actual_arrivals)
+    sim_bins = Counter(t // SECONDS_PER_HOUR for t in sim_arrivals)
+    return l1_from_bins(actual_bins, sim_bins)
+
+
+def variant_arrival_count_distance(actual_ocel, simulated_ocel) -> float:
+    """
+    Count-preserving (L1) complement to ``variant_arrival_distribution_distance``.
+    """
+    actual = variant_arrivals_by_signature(actual_ocel)
+    sim = variant_arrivals_by_signature(simulated_ocel)
+
+    total = 0.0
+    for sig in set(actual) | set(sim):
+        a_bins = Counter(t // SECONDS_PER_HOUR for t in actual.get(sig, []))
+        s_bins = Counter(t // SECONDS_PER_HOUR for t in sim.get(sig, []))
+        total += l1_from_bins(a_bins, s_bins)
+    return total
