@@ -1,5 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Brush,
   CartesianGrid,
   Scatter,
   ScatterChart,
@@ -8,9 +9,12 @@ import {
   YAxis,
 } from "recharts";
 
+import { Button } from "@/components/ui/button";
 import { ChartContainer } from "@/components/ui/chart";
+import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { ScanIcon, ZoomIn, ZoomOut } from "lucide-react";
 import {
   formatAxisTick,
   makeAxisLabelLookup,
@@ -44,6 +48,7 @@ const DEFAULT_Y_AXIS: AxisOption = { type: "activity" };
 const DEFAULT_COLOR_BY: AxisOption = { type: "activity" };
 const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_SORT_BY: AxisOption = { type: "time" };
+const MIN_BRUSH_POINTS = 10;
 
 export default function DottedChart({
   fileId,
@@ -76,6 +81,47 @@ export default function DottedChart({
   const xDomain = useMemo(() => getDataDomain(points.map((point) => point.chartX)), [points]);
   const yTicks = useMemo(() => getUniqueSortedValues(points.map((point) => point.chartY)), [points]);
   const yDomain = useMemo(() => getRowDomain(yTicks), [yTicks]);
+  const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
+  const effectiveBrushRange = useMemo(
+    () => clampBrushRange(brushRange, points.length),
+    [brushRange, points.length]
+  );
+  const zoomValue = useMemo(
+    () => brushRangeToZoomValue(effectiveBrushRange, points.length),
+    [effectiveBrushRange, points.length]
+  );
+
+  useEffect(() => {
+    setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
+  }, [points.length]);
+
+  const handleBrushChange = useCallback(
+    (range: { startIndex?: number; endIndex?: number }) => {
+      if (!points.length) return;
+      setBrushRange(
+        clampBrushRange(
+          {
+            startIndex: range.startIndex ?? effectiveBrushRange.startIndex,
+            endIndex: range.endIndex ?? effectiveBrushRange.endIndex,
+          },
+          points.length
+        )
+      );
+    },
+    [effectiveBrushRange, points.length]
+  );
+
+  const handleZoomChange = useCallback(
+    (values: number[]) => {
+      const nextZoom = values[0] ?? 0;
+      setBrushRange(zoomValueToBrushRange(nextZoom, effectiveBrushRange, points.length));
+    },
+    [effectiveBrushRange, points.length]
+  );
+
+  const handleResetViewport = useCallback(() => {
+    setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
+  }, [points.length]);
 
   if (!fileId) {
     return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
@@ -105,14 +151,40 @@ export default function DottedChart({
           Showing {points.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
           {data?.sampled ? " (sampled)" : ""}
         </span>
-        <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+          <div className="flex items-center gap-2">
+            <ZoomOut className="h-4 w-4 text-muted-foreground" />
+            <Slider
+              min={0}
+              max={100}
+              step={1}
+              value={[zoomValue]}
+              onValueChange={handleZoomChange}
+              disabled={points.length <= 1}
+              className="w-[120px]"
+            />
+            <ZoomIn className="h-4 w-4 text-muted-foreground" />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={handleResetViewport}
+              disabled={points.length <= 1 || zoomValue === 0}
+              className="h-8 w-8 rounded-full"
+              title="Reset dotted chart viewport"
+            >
+              <ScanIcon className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </div>
 
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
         className="min-h-0 flex-1 rounded-md border bg-background p-2"
       >
-        <ScatterChart margin={{ top: 16, right: 20, bottom: 18, left: 12 }}>
+        <ScatterChart margin={{ top: 16, right: 20, bottom: 46, left: 12 }}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="chartX"
@@ -156,6 +228,15 @@ export default function DottedChart({
               return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
             }}
           />
+          <Brush
+            dataKey="chartX"
+            height={24}
+            travellerWidth={8}
+            startIndex={effectiveBrushRange.startIndex}
+            endIndex={effectiveBrushRange.endIndex}
+            tickFormatter={(value) => formatXAxisTick(value, xAxis, xLabels)}
+            onChange={handleBrushChange}
+          />
         </ScatterChart>
       </ChartContainer>
 
@@ -186,6 +267,49 @@ function getRowDomain(values: number[]): [number, number] {
 
 function getUniqueSortedValues(values: number[]): number[] {
   return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b);
+}
+
+type BrushRange = {
+  startIndex: number;
+  endIndex: number;
+};
+
+function clampBrushRange(range: BrushRange, pointCount: number): BrushRange {
+  if (pointCount <= 0) return { startIndex: 0, endIndex: 0 };
+  const maxIndex = pointCount - 1;
+  const startIndex = Math.max(0, Math.min(maxIndex, Math.floor(range.startIndex)));
+  const endIndex = Math.max(startIndex, Math.min(maxIndex, Math.floor(range.endIndex)));
+  return { startIndex, endIndex };
+}
+
+function brushRangeToZoomValue(range: BrushRange, pointCount: number): number {
+  if (pointCount <= 1) return 0;
+  const visibleCount = range.endIndex - range.startIndex + 1;
+  const minVisible = Math.min(MIN_BRUSH_POINTS, pointCount);
+  if (pointCount <= minVisible) return 0;
+  const zoom = ((pointCount - visibleCount) / (pointCount - minVisible)) * 100;
+  return Math.max(0, Math.min(100, Math.round(zoom)));
+}
+
+function zoomValueToBrushRange(zoomValue: number, currentRange: BrushRange, pointCount: number): BrushRange {
+  if (pointCount <= 0) return { startIndex: 0, endIndex: 0 };
+  if (pointCount === 1) return { startIndex: 0, endIndex: 0 };
+
+  const minVisible = Math.min(MIN_BRUSH_POINTS, pointCount);
+  const clampedZoom = Math.max(0, Math.min(100, zoomValue));
+  const visibleCount = Math.max(
+    minVisible,
+    Math.round(pointCount - (clampedZoom / 100) * (pointCount - minVisible))
+  );
+  const center = (currentRange.startIndex + currentRange.endIndex) / 2;
+  const startIndex = Math.round(center - (visibleCount - 1) / 2);
+  return clampBrushRange(
+    {
+      startIndex,
+      endIndex: startIndex + visibleCount - 1,
+    },
+    pointCount
+  );
 }
 
 function formatXAxisTick(
