@@ -132,6 +132,15 @@ def n_gram_distance_relative(actual_ocel, simulated_ocel, n: int = 2) -> float:
     actual_counts = _build_ngram_counter(_execution_sequences(actual_ocel), n)
     sim_counts = _build_ngram_counter(_execution_sequences(simulated_ocel), n)
 
+    # Catch edge cases
+    actual_total = sum(actual_counts.values())
+    sim_total = sum(sim_counts.values())
+
+    if actual_total == 0 and sim_total == 0:
+        return 0.0
+    if actual_total == 0 or sim_total == 0:
+        return 1.0
+
     # Normalize frequencies for each log
     actual_freq = _normalize_counts(actual_counts)
     sim_freq = _normalize_counts(sim_counts)
