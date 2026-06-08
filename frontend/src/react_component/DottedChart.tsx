@@ -10,6 +10,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { ChartContainer } from "@/components/ui/chart";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -50,9 +51,6 @@ const DEFAULT_SORT_BY: AxisOption = { type: "time" };
 const MIN_BRUSH_POINTS = 10;
 const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
 const Y_AXIS_WIDTH = 140;
-const CHART_PADDING = 8;
-const PLOT_LEFT_OFFSET = CHART_PADDING + Y_AXIS_WIDTH + CHART_MARGIN.left;
-const PLOT_RIGHT_OFFSET = CHART_PADDING + CHART_MARGIN.right;
 
 export default function DottedChart({
   fileId,
@@ -160,41 +158,13 @@ export default function DottedChart({
   }
 
   return (
-    <div className={cn("relative flex h-[420px] min-h-[320px] flex-col gap-2", className)}>
+    <div className={cn("relative flex h-[500px] min-h-[420px] flex-col gap-3", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <span>
           Showing {visiblePoints.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
           {data?.sampled ? " (sampled)" : ""}
         </span>
-        <div className="flex flex-wrap items-center gap-3">
-          <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
-          <div className="flex items-center gap-2">
-            <ZoomOut className="h-4 w-4 text-muted-foreground" />
-            <Slider
-              key={`dotted-chart-zoom-${zoomValue}`}
-              min={0}
-              max={100}
-              step={1}
-              defaultValue={[zoomValue]}
-              onValueCommit={handleZoomCommit}
-              disabled={points.length <= 1}
-              className="w-[120px]"
-            />
-            <ZoomIn className="h-4 w-4 text-muted-foreground" />
-            {isZoomApplying && <ZoomApplyingSpinner />}
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={handleResetViewport}
-              disabled={points.length <= 1 || zoomValue === 0}
-              className="h-8 w-8 rounded-full"
-              title="Reset dotted chart viewport"
-            >
-              <ScanIcon className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+        <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
       </div>
 
       <ChartContainer
@@ -248,12 +218,15 @@ export default function DottedChart({
         </ScatterChart>
       </ChartContainer>
 
-      <DottedChartRangeSlider
+      <DottedChartZoomControls
         range={effectiveBrushRange}
         points={points}
         xAxis={xAxis}
         xLabels={xLabels}
+        zoomValue={zoomValue}
         isApplying={isZoomApplying}
+        onZoomCommit={handleZoomCommit}
+        onReset={handleResetViewport}
         onCommit={applyZoomRange}
       />
 
@@ -266,23 +239,32 @@ export default function DottedChart({
   );
 }
 
-function DottedChartRangeSlider({
+function DottedChartZoomControls({
   range,
   points,
   xAxis,
   xLabels,
+  zoomValue,
   isApplying,
+  onZoomCommit,
+  onReset,
   onCommit,
 }: {
   range: BrushRange;
   points: ChartPoint[];
   xAxis: AxisOption;
   xLabels: Map<number, string>;
+  zoomValue: number;
   isApplying: boolean;
+  onZoomCommit: (values: number[]) => void;
+  onReset: () => void;
   onCommit: (range: BrushRange) => void;
 }) {
   const pointCount = points.length;
   const [draftRange, setDraftRange] = useState(range);
+  const [startDateInput, setStartDateInput] = useState("");
+  const [endDateInput, setEndDateInput] = useState("");
+  const [dateError, setDateError] = useState<string | null>(null);
   const effectiveDraftRange = useMemo(
     () => clampBrushRange(draftRange, pointCount),
     [draftRange, pointCount]
@@ -290,10 +272,14 @@ function DottedChartRangeSlider({
   const minStepsBetweenThumbs = Math.max(0, Math.min(MIN_BRUSH_POINTS - 1, pointCount - 1));
   const startPercent = indexToPercent(effectiveDraftRange.startIndex, pointCount);
   const endPercent = indexToPercent(effectiveDraftRange.endIndex, pointCount);
+  const supportsDateBounds = isTimeAxis(xAxis);
 
   useEffect(() => {
     setDraftRange(range);
-  }, [range]);
+    setStartDateInput(formatRangeDateInput(points[range.startIndex], xAxis));
+    setEndDateInput(formatRangeDateInput(points[range.endIndex], xAxis));
+    setDateError(null);
+  }, [points, range, xAxis]);
 
   const handleRangeChange = useCallback(
     (values: number[]) => {
@@ -312,58 +298,158 @@ function DottedChartRangeSlider({
 
   const handleRangeCommit = useCallback(
     (values: number[]) => {
-      onCommit(
-        clampBrushRange(
-          {
-            startIndex: values[0] ?? range.startIndex,
-            endIndex: values[1] ?? range.endIndex,
-          },
-          pointCount
-        )
+      const nextRange = clampBrushRange(
+        {
+          startIndex: values[0] ?? range.startIndex,
+          endIndex: values[1] ?? range.endIndex,
+        },
+        pointCount
       );
+      setStartDateInput(formatRangeDateInput(points[nextRange.startIndex], xAxis));
+      setEndDateInput(formatRangeDateInput(points[nextRange.endIndex], xAxis));
+      setDateError(null);
+      onCommit(nextRange);
     },
-    [onCommit, pointCount, range]
+    [onCommit, pointCount, points, range, xAxis]
+  );
+
+  const handleDateSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+
+      if (!supportsDateBounds) {
+        setDateError("Date bounds are only available for time-based x axes.");
+        return;
+      }
+
+      const start = parseDateInput(startDateInput, "start");
+      const end = parseDateInput(endDateInput, "end");
+
+      if (!start || !end) {
+        setDateError("Use mm/dd/yyyy for both date bounds.");
+        return;
+      }
+      if (start.value > end.value) {
+        setDateError("Start date must be before end date.");
+        return;
+      }
+
+      const nextRange = findRangeForDateBounds(points, start.value, end.value);
+
+      if (!nextRange) {
+        setDateError("No events found inside those dates.");
+        return;
+      }
+
+      setDateError(null);
+      setDraftRange(nextRange);
+      onCommit(nextRange);
+    },
+    [endDateInput, onCommit, points, startDateInput, supportsDateBounds]
+  );
+
+  const handleDateInputChange = useCallback(
+    (setter: React.Dispatch<React.SetStateAction<string>>) =>
+      (event: React.ChangeEvent<HTMLInputElement>) => {
+        setter(event.target.value);
+        setDateError(null);
+      },
+    []
   );
 
   return (
-    <div
-      className="pb-1 pt-2"
-      style={{
-        paddingLeft: PLOT_LEFT_OFFSET,
-        paddingRight: PLOT_RIGHT_OFFSET,
-      }}
-    >
-      <div className="relative w-full">
-        <Slider
-          min={0}
-          max={Math.max(0, pointCount - 1)}
-          step={1}
-          minStepsBetweenThumbs={minStepsBetweenThumbs}
-          value={[effectiveDraftRange.startIndex, effectiveDraftRange.endIndex]}
-          onValueChange={handleRangeChange}
-          onValueCommit={handleRangeCommit}
-          disabled={pointCount <= 1}
-          className="w-full"
-        />
-        <div className="relative h-7 text-[11px] text-muted-foreground">
-          <span
-            className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
-            style={{ left: `${startPercent}%` }}
-          >
-            {formatRangePointLabel(points[effectiveDraftRange.startIndex], xAxis, xLabels)}
-          </span>
-          <span
-            className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
-            style={{ left: `${endPercent}%` }}
-          >
-            {formatRangePointLabel(points[effectiveDraftRange.endIndex], xAxis, xLabels)}
-          </span>
+    <div className="rounded-md border bg-background px-3 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex min-w-[260px] flex-1 items-center gap-2">
+          <ZoomOut className="h-4 w-4 text-muted-foreground" />
+          <Slider
+            key={`dotted-chart-zoom-${zoomValue}`}
+            min={0}
+            max={100}
+            step={1}
+            defaultValue={[zoomValue]}
+            onValueCommit={onZoomCommit}
+            disabled={pointCount <= 1}
+            className="min-w-[140px] flex-1"
+          />
+          <ZoomIn className="h-4 w-4 text-muted-foreground" />
+          {isApplying && <ZoomApplyingSpinner />}
         </div>
-        {isApplying && (
-          <div className="pointer-events-none absolute left-1/2 top-8 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
-            <ZoomApplyingSpinner />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={onReset}
+          disabled={pointCount <= 1 || zoomValue === 0}
+          className="h-8 w-8 rounded-full"
+          title="Reset dotted chart viewport"
+        >
+          <ScanIcon className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-start">
+        <div className="relative w-full px-1">
+          <Slider
+            min={0}
+            max={Math.max(0, pointCount - 1)}
+            step={1}
+            minStepsBetweenThumbs={minStepsBetweenThumbs}
+            value={[effectiveDraftRange.startIndex, effectiveDraftRange.endIndex]}
+            onValueChange={handleRangeChange}
+            onValueCommit={handleRangeCommit}
+            disabled={pointCount <= 1}
+            className="w-full"
+          />
+          <div className="relative h-7 text-[11px] text-muted-foreground">
+            <span
+              className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
+              style={{ left: `${startPercent}%` }}
+            >
+              {formatRangePointLabel(points[effectiveDraftRange.startIndex], xAxis, xLabels)}
+            </span>
+            <span
+              className="absolute top-2 -translate-x-1/2 whitespace-nowrap"
+              style={{ left: `${endPercent}%` }}
+            >
+              {formatRangePointLabel(points[effectiveDraftRange.endIndex], xAxis, xLabels)}
+            </span>
           </div>
-        )}
+          {isApplying && (
+            <div className="pointer-events-none absolute left-1/2 top-8 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
+              <ZoomApplyingSpinner />
+            </div>
+          )}
+        </div>
+
+        <form className="flex flex-wrap items-start gap-2" onSubmit={handleDateSubmit}>
+          <Input
+            value={startDateInput}
+            onChange={handleDateInputChange(setStartDateInput)}
+            placeholder="mm/dd/yyyy"
+            disabled={!supportsDateBounds || pointCount <= 1}
+            className="h-8 w-[116px] text-xs"
+            aria-label="Start date"
+          />
+          <Input
+            value={endDateInput}
+            onChange={handleDateInputChange(setEndDateInput)}
+            placeholder="mm/dd/yyyy"
+            disabled={!supportsDateBounds || pointCount <= 1}
+            className="h-8 w-[116px] text-xs"
+            aria-label="End date"
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            disabled={!supportsDateBounds || pointCount <= 1}
+            className="h-8"
+          >
+            Apply
+          </Button>
+          {dateError && <span className="basis-full text-xs text-destructive">{dateError}</span>}
+        </form>
       </div>
     </div>
   );
@@ -391,6 +477,58 @@ function formatRangePointLabel(
 ): string {
   if (!point) return "";
   return formatXAxisTick(point.chartX, axis, labels);
+}
+
+function formatRangeDateInput(point: ChartPoint | undefined, axis: AxisOption): string {
+  if (!point || !isTimeAxis(axis)) return "";
+  const date = new Date(toUnixMilliseconds(point.chartX));
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
+}
+
+function parseDateInput(value: string, boundary: "start" | "end"): { value: number } | null {
+  const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+  const date = boundary === "start"
+    ? new Date(year, month - 1, day, 0, 0, 0, 0)
+    : new Date(year, month - 1, day, 23, 59, 59, 999);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return { value: date.getTime() };
+}
+
+function findRangeForDateBounds(
+  points: ChartPoint[],
+  startMilliseconds: number,
+  endMilliseconds: number
+): BrushRange | null {
+  let startIndex: number | null = null;
+  let endIndex: number | null = null;
+
+  points.forEach((point, index) => {
+    const value = toUnixMilliseconds(point.chartX);
+    if (!Number.isFinite(value) || value < startMilliseconds || value > endMilliseconds) return;
+    if (startIndex === null) startIndex = index;
+    endIndex = index;
+  });
+
+  if (startIndex === null || endIndex === null) return null;
+  return { startIndex, endIndex };
+}
+
+function toUnixMilliseconds(value: number): number {
+  return Math.abs(value) >= 1_000_000_000_000 ? value : value * 1000;
 }
 
 function getDataDomain(values: number[]): [number, number] {
