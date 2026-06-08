@@ -7,7 +7,8 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { CircleDashed, ScanIcon, Share2 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChevronDown, CircleDashed, ScanIcon, Share2 } from "lucide-react";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -33,6 +34,7 @@ type ProfileMatrixData = {
   collab_type_n?: TypeNMap;
   // activities / time / weekday / portfolio fractions per resource and cluster avg
   tooltip_profiles?: Record<string, { activities?: number[]; time?: number[]; weekday?: number[]; portfolio?: number[] }>;
+  mds_feature_mask?: boolean[];
 };
 
 type OrgaMiningExplorerProps = {
@@ -72,6 +74,7 @@ export default function OrgaMiningExplorer({
   const hasStartedLoadingRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [featureGroups, setFeatureGroups] = useState<Set<string>>(new Set(["activity_fractions"]));
+  const [tooltipFeatureGroups, setTooltipFeatureGroups] = useState<Set<string>>(new Set());
   const [businessObjectTypes, setBusinessObjectTypes] = useState<Set<string>>(new Set());
   const [clustersEnabled, setClustersEnabled] = useState(true);
   const [nClusters, setNClusters] = useState(3);
@@ -178,6 +181,9 @@ export default function OrgaMiningExplorer({
     params.width      = String(graphSize.width);
     params.height     = String(graphSize.height);
     params.feature_groups = [...featureGroups].join(",");
+
+    const tooltipOnly = [...tooltipFeatureGroups].filter(g => !featureGroups.has(g));
+    if (tooltipOnly.length > 0) params.tooltip_feature_groups = tooltipOnly.join(",");
 
     if (featureGroups.has("object_collaboration_fractions")) {
       // Send only business object types that are not currently resource types.
@@ -341,6 +347,51 @@ export default function OrgaMiningExplorer({
                 ))}
               </div>
             </div>
+
+            {/* Tooltip extras — features computed for tooltip only, excluded from MDS/clustering */}
+            {(() => {
+              const all = [
+                { key: "activity_fractions",             label: "Activities" },
+                { key: "cooccurrence_fractions",         label: "Co-occurrence" },
+                { key: "object_collaboration_fractions", label: "Object collaboration" },
+                { key: "object_portfolio_fractions",     label: "BO type fractions" },
+                { key: "time_fractions",                 label: "Time binning (hourly)" },
+                { key: "weekday_fractions",              label: "Time binning (weekly)" },
+              ];
+              const extras = all.filter(f => !featureGroups.has(f.key));
+              if (extras.length === 0) return null;
+              const nSelected = extras.filter(f => tooltipFeatureGroups.has(f.key)).length;
+              return (
+                <div className="border rounded-md p-3 min-w-[180px]">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tooltip extras</p>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button className="flex items-center justify-between w-full text-sm border rounded px-2 py-1 hover:bg-muted gap-2">
+                        <span>{nSelected === 0 ? "None selected" : `${nSelected} selected`}</span>
+                        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-52 p-1" align="start">
+                      {extras.map(({ key, label }) => (
+                        <label key={key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                          <input
+                            type="checkbox"
+                            checked={tooltipFeatureGroups.has(key)}
+                            onChange={() => setTooltipFeatureGroups(prev => {
+                              const n = new Set(prev);
+                              n.has(key) ? n.delete(key) : n.add(key);
+                              return n;
+                            })}
+                            className="accent-primary"
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              );
+            })()}
 
             {/* Business object type selector — only when object collaboration is active */}
             {featureGroups.has("object_collaboration_fractions") && (() => {
@@ -867,7 +918,10 @@ function ResourceGraph({
   const groups = useMemo<NodeGroup[]>(() => {
     const map = new Map<string, NodeGroup>();
     data.resources.forEach((resource, i) => {
-      const key = JSON.stringify(data.values[i]);
+      const mask = data.mds_feature_mask;
+      const key = mask
+        ? JSON.stringify(data.values[i].filter((_, j) => mask[j]))
+        : JSON.stringify(data.values[i]);
       const objType = data.resource_object_types[resource] ?? "";
       if (map.has(key)) {
         const group = map.get(key)!;

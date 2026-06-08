@@ -1089,6 +1089,9 @@ def profile_matrix(request):
     feature_groups_raw = request.query_params.get("feature_groups", "activity_fractions")
     feature_groups = [g.strip() for g in feature_groups_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS] or ["activity_fractions"]
 
+    tooltip_only_raw = request.query_params.get("tooltip_feature_groups", "")
+    tooltip_only = [g.strip() for g in tooltip_only_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS and g.strip() not in feature_groups]
+
     width = height = None
     try:
         w_raw = request.query_params.get("width")
@@ -1122,13 +1125,16 @@ def profile_matrix(request):
         pm = ProfileMatrix.from_ocel(
             ocel,
             resource_types=resource_types,
-            feature_groups=feature_groups,
+            feature_groups=feature_groups + tooltip_only,
             business_object_types=business_object_types,
+            tooltip_only_groups=tooltip_only,
         )
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    group_weights = {g: 0.0 for g in tooltip_only} if tooltip_only else None
 
     return Response(
         pm.to_dict(
@@ -1137,6 +1143,7 @@ def profile_matrix(request):
             compute_clusters=compute_clusters,
             min_cluster_size=min_cluster_size,
             distance_metric=distance_metric,
+            group_weights=group_weights,
         ),
         status=status.HTTP_200_OK,
     )

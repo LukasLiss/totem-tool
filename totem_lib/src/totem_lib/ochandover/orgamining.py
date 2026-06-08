@@ -110,6 +110,7 @@ class ProfileMatrix:
         time_bins: list[int] | None = None,
         weekday_bins: list[int] | None = None,
         portfolio_object_types: list[str] | None = None,
+        tooltip_only_groups: list[str] | None = None,
     ) -> None:
         self.profiles = profiles
         self.activities = activities
@@ -118,6 +119,7 @@ class ProfileMatrix:
         self.time_bins: list[int] = time_bins or []
         self.weekday_bins: list[int] = weekday_bins or []
         self.portfolio_object_types: list[str] = portfolio_object_types or []
+        self._tooltip_only: set[str] = set(tooltip_only_groups or [])
 
     # ── convenience accessors ──────────────────────────────────────────────────
 
@@ -131,20 +133,14 @@ class ProfileMatrix:
 
     @property
     def feature_groups(self) -> list[str]:
-        """Which feature groups are present in this matrix."""
+        """Feature groups used for MDS and clustering (excludes tooltip-only groups)."""
         groups = []
-        if self.activities:
-            groups.append("activity_fractions")
-        if self.cooccurring_resources:
-            groups.append("cooccurrence_fractions")
-        if self.collaborating_resources:
-            groups.append("object_collaboration_fractions")
-        if self.time_bins:
-            groups.append("time_fractions")
-        if self.weekday_bins:
-            groups.append("weekday_fractions")
-        if self.portfolio_object_types:
-            groups.append("object_portfolio_fractions")
+        if self.activities            and "activity_fractions"             not in self._tooltip_only: groups.append("activity_fractions")
+        if self.cooccurring_resources and "cooccurrence_fractions"         not in self._tooltip_only: groups.append("cooccurrence_fractions")
+        if self.collaborating_resources and "object_collaboration_fractions" not in self._tooltip_only: groups.append("object_collaboration_fractions")
+        if self.time_bins             and "time_fractions"                 not in self._tooltip_only: groups.append("time_fractions")
+        if self.weekday_bins          and "weekday_fractions"              not in self._tooltip_only: groups.append("weekday_fractions")
+        if self.portfolio_object_types and "object_portfolio_fractions"    not in self._tooltip_only: groups.append("object_portfolio_fractions")
         return groups
 
     # ── construction ──────────────────────────────────────────────────────────
@@ -156,6 +152,7 @@ class ProfileMatrix:
         resource_types: List[str] | None = None,
         feature_groups: List[str] | None = None,
         business_object_types: List[str] | None = None,
+        tooltip_only_groups: List[str] | None = None,
     ) -> "ProfileMatrix":
         """
         Build a ProfileMatrix from an OCEL.
@@ -509,6 +506,7 @@ class ProfileMatrix:
             time_bins=time_bins_list or None,
             weekday_bins=weekday_bins_list or None,
             portfolio_object_types=portfolio_object_types_list or None,
+            tooltip_only_groups=tooltip_only_groups,
         )
 
     # ── matrix operations ─────────────────────────────────────────────────────
@@ -935,6 +933,18 @@ class ProfileMatrix:
             result["weekday_bins"] = self.weekday_bins
         if self.portfolio_object_types:
             result["portfolio_object_types"] = self.portfolio_object_types
+        if self._tooltip_only:
+            mask: list[bool] = []
+            for group, attr in [
+                ("activity_fractions",             "activities"),
+                ("cooccurrence_fractions",         "cooccurring_resources"),
+                ("object_collaboration_fractions", "collaborating_resources"),
+                ("time_fractions",                 "time_bins"),
+                ("weekday_fractions",              "weekday_bins"),
+                ("object_portfolio_fractions",     "portfolio_object_types"),
+            ]:
+                mask.extend([group not in self._tooltip_only] * len(getattr(self, attr)))
+            result["mds_feature_mask"] = mask
         # Always use the precomputed distance matrix so the scale is consistent
         # across all configurations (single group, multi-group, any weights).
         # D ∈ [0, 1]: 0 = identical profiles, 1 = maximally different in all groups.
