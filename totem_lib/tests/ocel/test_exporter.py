@@ -57,8 +57,8 @@ class TestExportDispatch:
             export_ocel("out", ocel_log, file_format="xml", file_path=str(tmp_path))
 
     def test_returns_full_path(self, ocel_log, tmp_path):
-        path = export_ocel("out", ocel_log, file_format="csv", file_path=str(tmp_path))
-        assert path == os.path.join(str(tmp_path), "out.csv")
+        path = export_ocel("out", ocel_log, file_format="json", file_path=str(tmp_path))
+        assert path == os.path.join(str(tmp_path), "out.json")
         assert os.path.isfile(path)
 
     def test_creates_missing_directory(self, ocel_log, tmp_path):
