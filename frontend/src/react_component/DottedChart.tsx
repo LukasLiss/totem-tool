@@ -115,7 +115,7 @@ export default function DottedChart({
     [effectiveBrushRange, points.length]
   );
 
-  const handleZoomChange = useCallback(
+  const handleZoomCommit = useCallback(
     (values: number[]) => {
       const nextZoom = values[0] ?? 0;
       setBrushRange(zoomValueToBrushRange(nextZoom, effectiveBrushRange, points.length));
@@ -160,11 +160,12 @@ export default function DottedChart({
           <div className="flex items-center gap-2">
             <ZoomOut className="h-4 w-4 text-muted-foreground" />
             <Slider
+              key={`dotted-chart-zoom-${zoomValue}`}
               min={0}
               max={100}
               step={1}
-              value={[zoomValue]}
-              onValueChange={handleZoomChange}
+              defaultValue={[zoomValue]}
+              onValueCommit={handleZoomCommit}
               disabled={points.length <= 1}
               className="w-[120px]"
             />
