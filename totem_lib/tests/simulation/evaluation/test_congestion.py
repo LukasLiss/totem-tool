@@ -1,15 +1,17 @@
 """Tests for the congestion distance measures."""
-from tests.assets.ocel_helpers import make_ocel, event, obj
+
+import pytest
+
+from tests.assets.ocel_helpers import event, make_ocel, obj
 from totem_lib.simulation.evaluation.congestion import (
     cycle_time_distribution_distance,
     cycle_time_summary,
-    interarrival_time_distribution_distance,
-    execution_arrival_distribution_distance,
     execution_arrival_count_distance,
-    variant_arrival_distribution_distance,
+    execution_arrival_distribution_distance,
+    interarrival_time_distribution_distance,
     variant_arrival_count_distance,
+    variant_arrival_distribution_distance,
 )
-import pytest
 
 HOUR = 3600
 
@@ -22,18 +24,33 @@ def _arrivals(times):
 
 
 def test_cycle_time_distribution_distance_in_hours():
-    actual = make_ocel([event("e1", "A", 0, ["o1"]), event("e2", "B", 2 * HOUR, ["o1"])], [obj("o1", "T")])
-    simulated = make_ocel([event("e1", "A", 0, ["o1"]), event("e2", "B", 4 * HOUR, ["o1"])], [obj("o1", "T")])
+    actual = make_ocel(
+        [event("e1", "A", 0, ["o1"]), event("e2", "B", 2 * HOUR, ["o1"])],
+        [obj("o1", "T")],
+    )
+    simulated = make_ocel(
+        [event("e1", "A", 0, ["o1"]), event("e2", "B", 4 * HOUR, ["o1"])],
+        [obj("o1", "T")],
+    )
     assert cycle_time_distribution_distance(actual, simulated) == 2.0
 
 
 def test_cycle_time_summary():
-    log = make_ocel([event("e1", "A", 0, ["o1"]), event("e2", "B", 2 * HOUR, ["o1"])], [obj("o1", "T")])
-    assert cycle_time_summary(log) == {"mean_s": 7200.0, "std_s": 0.0, "min_s": 7200, "max_s": 7200, "count": 1}
+    log = make_ocel(
+        [event("e1", "A", 0, ["o1"]), event("e2", "B", 2 * HOUR, ["o1"])],
+        [obj("o1", "T")],
+    )
+    assert cycle_time_summary(log) == {
+        "mean_s": 7200.0,
+        "std_s": 0.0,
+        "min_s": 7200,
+        "max_s": 7200,
+        "count": 1,
+    }
 
 
 def test_interarrival_time_distribution_distance():
-    actual = _arrivals([0, 1 * HOUR, 2 * HOUR])     # gaps 1h, 1h
+    actual = _arrivals([0, 1 * HOUR, 2 * HOUR])  # gaps 1h, 1h
     simulated = _arrivals([0, 2 * HOUR, 4 * HOUR])  # gaps 2h, 2h
     assert interarrival_time_distribution_distance(actual, simulated) == 1.0
 
@@ -42,8 +59,10 @@ def test_arrival_count_penalizes_magnitude_while_rate_does_not():
     # Both logs put all arrivals in hour-bin 0, but with different counts.
     actual = _arrivals([0, 100])
     simulated = _arrivals([200])
-    assert execution_arrival_distribution_distance(actual, simulated) == 0.0  # normalized: timing only
-    assert execution_arrival_count_distance(actual, simulated) == 1.0         # L1: 2 vs 1
+    assert (
+        execution_arrival_distribution_distance(actual, simulated) == 0.0
+    )  # normalized: timing only
+    assert execution_arrival_count_distance(actual, simulated) == 1.0  # L1: 2 vs 1
 
 
 def test_variant_arrival_distribution_missing_variant_penalty():
@@ -67,6 +86,7 @@ def test_identical_logs_are_zero():
     assert variant_arrival_distribution_distance(log, log) == 0.0
     assert variant_arrival_count_distance(log, log) == 0.0
 
+
 def test_cycle_time_distribution_is_continuous_not_hour_binned():
     actual = make_ocel(
         [
@@ -85,11 +105,13 @@ def test_cycle_time_distribution_is_continuous_not_hour_binned():
 
     assert cycle_time_distribution_distance(actual, simulated) == pytest.approx(20 / 60)
 
+
 def test_interarrival_with_single_execution_each_is_zero():
     actual = _arrivals([0])
     simulated = _arrivals([10 * HOUR])
 
     assert interarrival_time_distribution_distance(actual, simulated) == 0.0
+
 
 def test_variant_arrival_distribution_same_variant_shifted_time():
     actual = _arrivals([0])
