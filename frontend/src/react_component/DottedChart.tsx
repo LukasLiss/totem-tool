@@ -193,13 +193,7 @@ export default function DottedChart({
               className="w-[120px]"
             />
             <ZoomIn className="h-4 w-4 text-muted-foreground" />
-            {isZoomApplying && (
-              <span
-                className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground"
-                aria-label="Applying zoom"
-                title="Applying zoom"
-              />
-            )}
+            {isZoomApplying && <ZoomApplyingSpinner />}
             <Button
               type="button"
               variant="outline"
@@ -275,12 +269,28 @@ export default function DottedChart({
         </ScatterChart>
       </ChartContainer>
 
+      {isZoomApplying && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
+          <ZoomApplyingSpinner />
+        </div>
+      )}
+
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 text-sm text-muted-foreground">
           Loading dotted chart...
         </div>
       )}
     </div>
+  );
+}
+
+function ZoomApplyingSpinner() {
+  return (
+    <span
+      className="block h-4 w-4 animate-spin rounded-full border-2 border-dotted border-muted-foreground/70 border-t-transparent"
+      aria-label="Applying zoom"
+      title="Applying zoom"
+    />
   );
 }
 
