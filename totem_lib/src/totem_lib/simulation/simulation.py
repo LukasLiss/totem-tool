@@ -8,7 +8,7 @@ import polars as pl
 from totem_lib import totemDiscovery, mlpaDiscovery
 from totem_lib.ocel.ocel import ObjectCentricEventLog, EVENTS_SCHEMA, OBJECTS_SCHEMA
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
-from totem_lib.simulation.utils.basic_simulation_statistics import WEEKDAY_NAMES, variant_arrival_distribution as compute_variant_arrival_distribution
+from totem_lib.simulation.utils.basic_simulation_statistics import WEEKDAY_NAMES, variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
 from totem_lib.simulation.utils.resource_statistics import resource_cooldown_distribution, calculate_resource_allocation_strategy
 
@@ -622,91 +622,6 @@ class VariantPlayoutStrategy:
         return ObjectCentricEventLog(events_df, objects_df), finished_count
 
 
-def quick_evaluation(original_ocel, simulated_ocel):
-    """
-    Quick comparison between original and simulated OCEL.
-    Compares activity frequencies, object type counts, and variant distributions.
-    Returns a dict with the comparison results and prints a summary.
-    """
-    from totem_lib.variants.ocvariants import find_object_variants_connected_component
-
-    result = {}
-
-    # --- 1. Event count ---
-    orig_count = original_ocel.events.height
-    sim_count = simulated_ocel.events.height
-    result['event_count'] = {'original': orig_count, 'simulated': sim_count}
-
-    # --- 2. Activity frequency distribution (normalized) ---
-    orig_acts = original_ocel.events.group_by('_activity').len().sort('_activity')
-    sim_acts = simulated_ocel.events.group_by('_activity').len().sort('_activity')
-
-    orig_act_freq = {row[0]: row[1] / orig_count for row in orig_acts.iter_rows()}
-    sim_act_freq = {row[0]: row[1] / sim_count for row in sim_acts.iter_rows()} if sim_count > 0 else {}
-
-    all_activities = sorted(set(orig_act_freq.keys()) | set(sim_act_freq.keys()))
-    activity_comparison = {}
-    for act in all_activities:
-        o = orig_act_freq.get(act, 0.0)
-        s = sim_act_freq.get(act, 0.0)
-        activity_comparison[act] = {'original': round(o, 4), 'simulated': round(s, 4), 'diff': round(abs(o - s), 4)}
-    result['activity_frequencies'] = activity_comparison
-
-    # --- 3. Object type counts ---
-    orig_obj_types = original_ocel.objects.group_by('_objType').len().sort('_objType')
-    sim_obj_types = simulated_ocel.objects.group_by('_objType').len().sort('_objType')
-    orig_ot = {row[0]: row[1] for row in orig_obj_types.iter_rows()}
-    sim_ot = {row[0]: row[1] for row in sim_obj_types.iter_rows()}
-    all_types = sorted(set(orig_ot.keys()) | set(sim_ot.keys()))
-    result['object_type_counts'] = {t: {'original': orig_ot.get(t, 0), 'simulated': sim_ot.get(t, 0)} for t in all_types}
-
-    # --- 4. Variant distribution ---
-    orig_variants = find_object_variants_connected_component(original_ocel)
-    sim_variants = find_object_variants_connected_component(simulated_ocel)
-
-    orig_total_exec = sum(v.support for v in orig_variants)
-    sim_total_exec = sum(v.support for v in sim_variants)
-
-    orig_var_freq = sorted(
-        [round(v.support / orig_total_exec, 4) for v in orig_variants], reverse=True
-    ) if orig_total_exec > 0 else []
-    sim_var_freq = sorted(
-        [round(v.support / sim_total_exec, 4) for v in sim_variants], reverse=True
-    ) if sim_total_exec > 0 else []
-
-    result['variants'] = {
-        'original_count': len(orig_variants),
-        'simulated_count': len(sim_variants),
-        'original_frequencies': orig_var_freq,
-        'simulated_frequencies': sim_var_freq,
-    }
-
-    # --- Print summary ---
-    print("=" * 60)
-    print("QUICK EVALUATION: Original vs. Simulated OCEL")
-    print("=" * 60)
-
-    print(f"\nEvents:  original={orig_count}  simulated={sim_count}  ratio={sim_count/orig_count:.2f}" if orig_count > 0 else "\nEvents: original=0")
-
-    print(f"\nActivity Frequencies (normalized):")
-    print(f"  {'Activity':<35} {'Orig':>8} {'Sim':>8} {'Diff':>8}")
-    print(f"  {'-'*35} {'-'*8} {'-'*8} {'-'*8}")
-    for act, vals in activity_comparison.items():
-        print(f"  {act:<35} {vals['original']:>8.4f} {vals['simulated']:>8.4f} {vals['diff']:>8.4f}")
-
-    print(f"\nObject Type Counts:")
-    for t, vals in result['object_type_counts'].items():
-        print(f"  {t:<25} original={vals['original']:<6} simulated={vals['simulated']}")
-
-    print(f"\nVariants:  original={len(orig_variants)}  simulated={len(sim_variants)}")
-    print(f"  Original frequencies:  {orig_var_freq}")
-    print(f"  Simulated frequencies: {sim_var_freq}")
-
-    print("=" * 60)
-
-    return result
-
-
 class StateSpacePlayoutStrategy:
     """
     A more complex playout strategy that simulates the execution of the process based on the stochastic state-space of the process. 
@@ -788,5 +703,3 @@ if __name__ == "__main__":
     sim_log, finished_count = simulation_model.run(sim_duration_s=3600*24*7*100, resource_pool={'Truck': 3, 'Forklift': 5}, tick_size_s=60)
     print(f"Finished {finished_count} instances in the simulation.")
     print(sim_log)
-
-    quick_evaluation(filtered_ocel, sim_log)
