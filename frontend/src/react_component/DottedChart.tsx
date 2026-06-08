@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Brush,
   CartesianGrid,
@@ -75,6 +75,9 @@ export default function DottedChart({
 
   const points = useMemo(() => toChartPoints(data?.events ?? []), [data?.events]);
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
+  const [isZoomApplying, setIsZoomApplying] = useState(false);
+  const zoomFrameRef = useRef<number | null>(null);
+  const zoomFinishFrameRef = useRef<number | null>(null);
   const effectiveBrushRange = useMemo(
     () => clampBrushRange(brushRange, points.length),
     [brushRange, points.length]
@@ -99,10 +102,30 @@ export default function DottedChart({
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
   }, [points]);
 
+  useEffect(() => {
+    return () => {
+      if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current);
+      if (zoomFinishFrameRef.current !== null) window.cancelAnimationFrame(zoomFinishFrameRef.current);
+    };
+  }, []);
+
+  const applyZoomRange = useCallback((nextRange: BrushRange) => {
+    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current);
+    if (zoomFinishFrameRef.current !== null) window.cancelAnimationFrame(zoomFinishFrameRef.current);
+
+    setIsZoomApplying(true);
+    zoomFrameRef.current = window.requestAnimationFrame(() => {
+      setBrushRange(nextRange);
+      zoomFinishFrameRef.current = window.requestAnimationFrame(() => {
+        setIsZoomApplying(false);
+      });
+    });
+  }, []);
+
   const handleBrushChange = useCallback(
     (range: { startIndex?: number; endIndex?: number }) => {
       if (!points.length) return;
-      setBrushRange(
+      applyZoomRange(
         clampBrushRange(
           {
             startIndex: range.startIndex ?? effectiveBrushRange.startIndex,
@@ -112,15 +135,15 @@ export default function DottedChart({
         )
       );
     },
-    [effectiveBrushRange, points.length]
+    [applyZoomRange, effectiveBrushRange, points.length]
   );
 
   const handleZoomCommit = useCallback(
     (values: number[]) => {
       const nextZoom = values[0] ?? 0;
-      setBrushRange(zoomValueToBrushRange(nextZoom, effectiveBrushRange, points.length));
+      applyZoomRange(zoomValueToBrushRange(nextZoom, effectiveBrushRange, points.length));
     },
-    [effectiveBrushRange, points.length]
+    [applyZoomRange, effectiveBrushRange, points.length]
   );
 
   const handleResetViewport = useCallback(() => {
@@ -170,6 +193,13 @@ export default function DottedChart({
               className="w-[120px]"
             />
             <ZoomIn className="h-4 w-4 text-muted-foreground" />
+            {isZoomApplying && (
+              <span
+                className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground"
+                aria-label="Applying zoom"
+                title="Applying zoom"
+              />
+            )}
             <Button
               type="button"
               variant="outline"
