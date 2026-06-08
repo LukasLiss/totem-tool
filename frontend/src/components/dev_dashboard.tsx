@@ -38,6 +38,23 @@ export function DevDashboard() {
         <Card className="@container/card">
           <CardHeader className="items-center relative z-10 justify-between">
             <CardTitle>
+              Variants Explorer
+            </CardTitle>
+            <CardDescription>
+              Object-centric variant analysis
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 pb-0">
+            <VariantsExplorer
+              fileId={selectedFile?.id}
+              colWidth={120}
+              embedded={true}
+            />
+          </CardContent>
+        </Card>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
               OC Dotted Chart
             </CardTitle>
             <CardDescription>
@@ -53,23 +70,6 @@ export function DevDashboard() {
               shapeBy={{ type: "none" }}
               sortBy={{ type: "time" }}
               maxPoints={10000}
-            />
-          </CardContent>
-        </Card>
-        <Card className="@container/card">
-          <CardHeader className="items-center relative z-10 justify-between">
-            <CardTitle>
-              Variants Explorer
-            </CardTitle>
-            <CardDescription>
-              Object-centric variant analysis
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0 pb-0">
-            <VariantsExplorer
-              fileId={selectedFile?.id}
-              colWidth={120}
-              embedded={true}
             />
           </CardContent>
         </Card>
