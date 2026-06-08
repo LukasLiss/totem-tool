@@ -179,7 +179,7 @@ export function renderPointShape(
   if (shape === "cross") {
     return <Cross x={cx - 4} y={cy - 4} width={8} height={8} fill="none" {...common} />;
   }
-  return <circle cx={cx} cy={cy} r={3.5} {...common} />;
+  return <circle cx={cx} cy={cy} r={3.5} {...common} fill="transparent" strokeWidth={1.75} />;
 }
 
 function numericValue(value: number | string | null): number {

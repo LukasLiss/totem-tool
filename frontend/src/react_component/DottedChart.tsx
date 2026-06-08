@@ -121,7 +121,7 @@ export default function DottedChart({
             name="x"
             type="number"
             domain={xDomain}
-            tickFormatter={(value) => xLabels.get(Number(value)) ?? formatAxisTick(Number(value))}
+            tickFormatter={(value) => formatXAxisTick(value, xAxis, xLabels)}
             tickMargin={8}
             minTickGap={28}
           />
@@ -179,6 +179,29 @@ function getRowDomain(values: number[]): [number, number] {
 
 function getUniqueSortedValues(values: number[]): number[] {
   return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b);
+}
+
+function formatXAxisTick(
+  value: number | string,
+  axis: AxisOption,
+  labels: Map<number, string>
+): string {
+  const numericValue = Number(value);
+
+  if (isTimeAxis(axis) && Number.isFinite(numericValue)) {
+    return formatUnixDateTick(numericValue);
+  }
+
+  return labels.get(numericValue) ?? formatAxisTick(numericValue);
+}
+
+function isTimeAxis(axis: AxisOption): boolean {
+  return axis.type === "time" || axis.type === "timestamp" || axis.type === "timestamp_unix";
+}
+
+function formatUnixDateTick(value: number): string {
+  const milliseconds = Math.abs(value) >= 1_000_000_000_000 ? value : value * 1000;
+  return new Date(milliseconds).toLocaleDateString();
 }
 
 function DottedChartState({ className, message }: { className?: string; message: string }) {
