@@ -275,9 +275,6 @@ function DottedChartTooltip({
       </div>
       <div className="grid gap-1 text-muted-foreground">
         <div>
-          <span className="text-foreground">Time:</span> {formatTimestamp(point.timestamp, point.timestamp_unix)}
-        </div>
-        <div>
           <span className="text-foreground">{formatAxisLabel(xAxis)} (X-Axis):</span> {point.xLabel}
         </div>
         <div>
