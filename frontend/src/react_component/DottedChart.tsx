@@ -364,18 +364,24 @@ function DottedChartZoomControls({
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[260px] flex-1 items-center gap-2">
           <ZoomOut className="h-4 w-4 text-muted-foreground" />
-          <Slider
-            key={`dotted-chart-zoom-${zoomValue}`}
-            min={0}
-            max={100}
-            step={1}
-            defaultValue={[zoomValue]}
-            onValueCommit={onZoomCommit}
-            disabled={pointCount <= 1}
-            className="min-w-[140px] flex-1"
-          />
+          <div className="relative min-w-[140px] flex-1">
+            <Slider
+              key={`dotted-chart-zoom-${zoomValue}`}
+              min={0}
+              max={100}
+              step={1}
+              defaultValue={[zoomValue]}
+              onValueCommit={onZoomCommit}
+              disabled={pointCount <= 1}
+              className="w-full"
+            />
+            {isApplying && (
+              <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-background/80 p-1 shadow-sm">
+                <ZoomApplyingSpinner />
+              </div>
+            )}
+          </div>
           <ZoomIn className="h-4 w-4 text-muted-foreground" />
-          {isApplying && <ZoomApplyingSpinner />}
         </div>
         <Button
           type="button"
@@ -403,6 +409,11 @@ function DottedChartZoomControls({
             disabled={pointCount <= 1}
             className="w-full"
           />
+          {isApplying && (
+            <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full bg-background/80 p-1 shadow-sm">
+              <ZoomApplyingSpinner />
+            </div>
+          )}
           <div className="relative h-7 text-[11px] text-muted-foreground">
             <span
               className={cn("absolute top-2 whitespace-nowrap", startLabelPlacement.className)}
@@ -417,11 +428,6 @@ function DottedChartZoomControls({
               {formatRangePointLabel(points[effectiveDraftRange.endIndex], xAxis, xLabels)}
             </span>
           </div>
-          {isApplying && (
-            <div className="pointer-events-none absolute left-1/2 top-8 -translate-x-1/2 rounded-full bg-background/80 p-1 shadow-sm">
-              <ZoomApplyingSpinner />
-            </div>
-          )}
         </div>
 
         <form className="flex flex-wrap items-start gap-2" onSubmit={handleDateSubmit}>
