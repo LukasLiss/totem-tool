@@ -211,6 +211,14 @@ function formatUnixDateTick(value: number): string {
   return new Date(milliseconds).toLocaleDateString();
 }
 
+function formatAxisValue(axis: AxisOption, value: number | string | null, fallback: string): string {
+  const numericValue = Number(value);
+  if (isTimeAxis(axis) && Number.isFinite(numericValue)) {
+    return formatUnixDateTick(numericValue);
+  }
+  return fallback;
+}
+
 function formatAxisLabel(axis: AxisOption): string {
   switch (axis.type) {
     case "time":
@@ -263,10 +271,12 @@ function DottedChartTooltip({
       </div>
       <div className="grid gap-1 text-muted-foreground">
         <div>
-          <span className="text-foreground">{formatAxisLabel(xAxis)} (X-Axis):</span> {point.xLabel}
+          <span className="text-foreground">{formatAxisLabel(xAxis)} (X-Axis):</span>{" "}
+          {formatAxisValue(xAxis, point.x, point.xLabel)}
         </div>
         <div>
-          <span className="text-foreground">{formatAxisLabel(yAxis)} (Y-Axis):</span> {point.yLabel}
+          <span className="text-foreground">{formatAxisLabel(yAxis)} (Y-Axis):</span>{" "}
+          {formatAxisValue(yAxis, point.y, point.yLabel)}
         </div>
         {colorBy.type !== "none" && (
           <div>
