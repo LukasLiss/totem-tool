@@ -1,11 +1,17 @@
 import json
 import statistics
-import itertools
 from collections import defaultdict
 
-ALLOCATION_STRATEGIES = ["random", "FIFO", "LIFO"] # TODO: consider adding more complex strategies(round-robin,...)
+ALLOCATION_STRATEGIES = [
+    "random",
+    "FIFO",
+    "LIFO",
+]  # TODO: consider adding more complex strategies(round-robin,...)
 
-def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activities: list[str]) -> dict:
+
+def resource_cooldown_distribution(
+    ocel, objects_to_analyze: list[str], activities: list[str]
+) -> dict:
     """
     For each activity in the list and each resource type in the list, computes the distribution of how long
     a resource of that type is occupied after performing that activity.
@@ -33,14 +39,15 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
         }
     """
 
-    
     open_cooldowns: dict[str, tuple[int, str]] = {}
     finished_intervals: dict[tuple[str, str], list[int]] = defaultdict(list)
 
     activities_set = set(activities)
 
     if ocel.events.is_empty():
-        print("Error: Cannot compute resource cooldown distribution on an empty event log.")
+        print(
+            "Error: Cannot compute resource cooldown distribution on an empty event log."
+        )
         return {}
 
     sorted_events = ocel.events.sort("_timestampUnix")
@@ -58,7 +65,9 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
             if obj_id in open_cooldowns:
                 # Any event closes an open interval, regardless of whether its activity is tracked
                 start_ts, start_act = open_cooldowns.pop(obj_id)
-                finished_intervals[(start_act, resource_type)].append(timestamp - start_ts)
+                finished_intervals[(start_act, resource_type)].append(
+                    timestamp - start_ts
+                )
 
             if activity in activities_set:
                 # Only tracked activities open a new interval
@@ -68,7 +77,9 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
     for (activity, resource_type), durations in finished_intervals.items():
         result[activity][resource_type] = {
             "mean_duration_s": statistics.mean(durations),
-            "std_duration_s": statistics.stdev(durations) if len(durations) > 1 else 0.0,
+            "std_duration_s": (
+                statistics.stdev(durations) if len(durations) > 1 else 0.0
+            ),
             "min_duration_s": min(durations),
             "max_duration_s": max(durations),
             "sample_count": len(durations),
@@ -77,7 +88,9 @@ def resource_cooldown_distribution(ocel, objects_to_analyze: list[str], activiti
     return result
 
 
-def calculate_resource_allocation_strategy(ocel, resource_cooldowns: dict = None, resource_type_map: dict = None) -> dict:
+def calculate_resource_allocation_strategy(
+    ocel, resource_cooldowns: dict = None, resource_type_map: dict = None
+) -> dict:
     """
     Analyzes the event log to determine the most likely resource allocation strategy per resource type.
 
@@ -104,12 +117,14 @@ def calculate_resource_allocation_strategy(ocel, resource_cooldowns: dict = None
         resource_type_map = ocel.obj_type_map
 
     # scores[resource_type][strategy] = hit count
-    scores: dict[str, dict[str, int]] = defaultdict(lambda: {"FIFO": 0, "LIFO": 0, "random": 0})
-    
+    scores: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"FIFO": 0, "LIFO": 0, "random": 0}
+    )
+
     # idle_queue[resource_type] = list of (available_at_ts, resource_id), sorted ascending by ts (FIFO order)
     idle_queue: dict[str, list[tuple[int, str]]] = defaultdict(list)
 
-    # Iterate over events 
+    # Iterate over events
     for row in ocel.events.sort("_timestampUnix").iter_rows(named=True):
         timestamp: int = row["_timestampUnix"]
         activity: str = row["_activity"]
@@ -151,8 +166,14 @@ def calculate_resource_allocation_strategy(ocel, resource_cooldowns: dict = None
                     scores[rt]["random"] += 1
 
             # Reschedule resource: remove old entry, add with updated availability
-            idle_queue[rt] = [(ts, rid) for ts, rid in idle_queue[rt] if rid != actual_rid]
-            mean_cooldown = resource_cooldowns.get(activity, {}).get(rt, {}).get("mean_duration_s", 0)
+            idle_queue[rt] = [
+                (ts, rid) for ts, rid in idle_queue[rt] if rid != actual_rid
+            ]
+            mean_cooldown = (
+                resource_cooldowns.get(activity, {})
+                .get(rt, {})
+                .get("mean_duration_s", 0)
+            )
             idle_queue[rt].append((int(timestamp + mean_cooldown), actual_rid))
 
     # Pick the strategy with the highest score per resource type
