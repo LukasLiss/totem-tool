@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,11 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import type { AxisOption, SortOption } from "./dottedChartUtils";
+import {
+  DEFAULT_DOTTED_CHART_OPTIONS,
+  useDottedChartOptions,
+  type DottedChartOption,
+} from "./useDottedChartOptions";
 
 export type DottedChartConfig = {
   xAxis: AxisOption;
@@ -21,36 +27,45 @@ export type DottedChartConfig = {
 };
 
 type DottedChartControlsProps = {
+  fileId?: number;
   config: DottedChartConfig;
   onConfigChange: (config: DottedChartConfig) => void;
   className?: string;
 };
 
-const AXIS_OPTIONS: Array<{ label: string; value: AxisControlValue }> = [
-  { label: "Time", value: "time" },
-  { label: "Timestamp", value: "timestamp" },
-  { label: "Timestamp (Unix)", value: "timestamp_unix" },
-  { label: "Since Start", value: "since_start" },
-  { label: "Activity", value: "activity" },
-];
-
-const OPTIONAL_AXIS_OPTIONS: Array<{ label: string; value: AxisControlValue }> = [
-  ...AXIS_OPTIONS,
-  { label: "None", value: "none" },
-];
-
-type AxisControlValue = AxisOption["type"];
+type AxisControlValue = string;
 
 export function DottedChartControls({
+  fileId,
   config,
   onConfigChange,
   className,
 }: DottedChartControlsProps) {
-  const sortAxis = "type" in config.sortBy ? config.sortBy : config.sortBy.field;
-  const sortDirection = "type" in config.sortBy ? "asc" : config.sortBy.direction ?? "asc";
+  const { options, loading: loadingOptions, error: optionsError } = useDottedChartOptions(fileId);
+  const [draftConfig, setDraftConfig] = useState<DottedChartConfig>(config);
+  const sortAxis = "type" in draftConfig.sortBy ? draftConfig.sortBy : draftConfig.sortBy.field;
+  const sortDirection = "type" in draftConfig.sortBy ? "asc" : draftConfig.sortBy.direction ?? "asc";
+  const hasPendingChanges = useMemo(
+    () => JSON.stringify(draftConfig) !== JSON.stringify(config),
+    [config, draftConfig]
+  );
+  const selectOptions = useMemo(
+    () => ({
+      x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
+      y_axis: withCurrentOption(options.y_axis, draftConfig.yAxis),
+      color_by: withCurrentOption(options.color_by, draftConfig.colorBy),
+      shape_by: withCurrentOption(options.shape_by, draftConfig.shapeBy),
+      sort_by: withCurrentOption(options.sort_by, sortAxis),
+    }),
+    [draftConfig.colorBy, draftConfig.shapeBy, draftConfig.xAxis, draftConfig.yAxis, options, sortAxis]
+  );
 
-  const updateConfig = (patch: Partial<DottedChartConfig>) => {
-    onConfigChange({ ...config, ...patch });
+  useEffect(() => {
+    setDraftConfig(config);
+  }, [config]);
+
+  const updateDraftConfig = (patch: Partial<DottedChartConfig>) => {
+    setDraftConfig((current) => ({ ...current, ...patch }));
   };
 
   return (
@@ -72,34 +87,34 @@ export function DottedChartControls({
         <div className="grid gap-3 border-t px-3 py-3 md:grid-cols-3 xl:grid-cols-6">
           <AxisSelect
             label="X Axis"
-            value={axisToControlValue(config.xAxis)}
-            options={AXIS_OPTIONS}
-            onChange={(value) => updateConfig({ xAxis: controlValueToAxis(value) })}
+            value={axisToControlValue(draftConfig.xAxis)}
+            options={selectOptions.x_axis}
+            onChange={(value) => updateDraftConfig({ xAxis: controlValueToAxis(value) })}
           />
           <AxisSelect
             label="Y Axis"
-            value={axisToControlValue(config.yAxis)}
-            options={AXIS_OPTIONS}
-            onChange={(value) => updateConfig({ yAxis: controlValueToAxis(value) })}
+            value={axisToControlValue(draftConfig.yAxis)}
+            options={selectOptions.y_axis}
+            onChange={(value) => updateDraftConfig({ yAxis: controlValueToAxis(value) })}
           />
           <AxisSelect
             label="Color By"
-            value={axisToControlValue(config.colorBy)}
-            options={OPTIONAL_AXIS_OPTIONS}
-            onChange={(value) => updateConfig({ colorBy: controlValueToAxis(value) })}
+            value={axisToControlValue(draftConfig.colorBy)}
+            options={selectOptions.color_by}
+            onChange={(value) => updateDraftConfig({ colorBy: controlValueToAxis(value) })}
           />
           <AxisSelect
             label="Shape By"
-            value={axisToControlValue(config.shapeBy)}
-            options={OPTIONAL_AXIS_OPTIONS}
-            onChange={(value) => updateConfig({ shapeBy: controlValueToAxis(value) })}
+            value={axisToControlValue(draftConfig.shapeBy)}
+            options={selectOptions.shape_by}
+            onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
           />
           <AxisSelect
             label="Sort By"
             value={axisToControlValue(sortAxis)}
-            options={AXIS_OPTIONS}
+            options={selectOptions.sort_by}
             onChange={(value) =>
-              updateConfig({
+              updateDraftConfig({
                 sortBy: { field: controlValueToAxis(value), direction: sortDirection },
               })
             }
@@ -109,7 +124,7 @@ export function DottedChartControls({
             <select
               value={sortDirection}
               onChange={(event) =>
-                updateConfig({
+                updateDraftConfig({
                   sortBy: { field: sortAxis, direction: event.target.value as "asc" | "desc" },
                 })
               }
@@ -123,16 +138,46 @@ export function DottedChartControls({
             <div className="flex items-center justify-between gap-3">
               <Label className="text-xs text-muted-foreground">Max Points</Label>
               <span className="text-xs tabular-nums text-muted-foreground">
-                {config.maxPoints.toLocaleString()}
+                {draftConfig.maxPoints.toLocaleString()}
               </span>
             </div>
             <Slider
               min={1000}
               max={50000}
               step={1000}
-              value={[config.maxPoints]}
-              onValueChange={(values) => updateConfig({ maxPoints: values[0] ?? config.maxPoints })}
+              value={[draftConfig.maxPoints]}
+              onValueChange={(values) =>
+                updateDraftConfig({ maxPoints: values[0] ?? draftConfig.maxPoints })
+              }
             />
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-6">
+            <span className="mr-auto text-xs text-muted-foreground">
+              {loadingOptions
+                ? "Loading available columns..."
+                : optionsError
+                  ? optionsError
+                  : hasPendingChanges
+                    ? "Changes are not applied yet."
+                    : "Configuration is applied."}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!hasPendingChanges}
+              onClick={() => setDraftConfig(config)}
+            >
+              Reset
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!hasPendingChanges}
+              onClick={() => onConfigChange(draftConfig)}
+            >
+              Confirm
+            </Button>
           </div>
         </div>
       </CollapsibleContent>
@@ -148,7 +193,7 @@ function AxisSelect({
 }: {
   label: string;
   value: AxisControlValue;
-  options: Array<{ label: string; value: AxisControlValue }>;
+  options: DottedChartOption[];
   onChange: (value: AxisControlValue) => void;
 }) {
   return (
@@ -170,9 +215,38 @@ function AxisSelect({
 }
 
 function axisToControlValue(axis: AxisOption): AxisControlValue {
+  if (axis.type === "event_attribute") return axis.name;
   return axis.type;
 }
 
 function controlValueToAxis(value: AxisControlValue): AxisOption {
-  return { type: value } as AxisOption;
+  if (isBuiltinAxis(value)) return { type: value };
+  return { type: "event_attribute", name: value };
+}
+
+function withCurrentOption(options: DottedChartOption[], axis: AxisOption): DottedChartOption[] {
+  const currentValue = axisToControlValue(axis);
+  if (options.some((option) => option.value === currentValue)) return options;
+  const fallback = findDefaultOption(currentValue);
+  if (fallback) return [fallback, ...options];
+  return [
+    {
+      label: currentValue,
+      value: currentValue,
+      kind: axis.type === "event_attribute" ? "categorical" : "none",
+    },
+    ...options,
+  ];
+}
+
+function findDefaultOption(value: string): DottedChartOption | undefined {
+  return Object.values(DEFAULT_DOTTED_CHART_OPTIONS)
+    .flat()
+    .find((option) => option.value === value);
+}
+
+function isBuiltinAxis(
+  value: string
+): value is "time" | "timestamp" | "timestamp_unix" | "since_start" | "activity" | "none" {
+  return ["time", "timestamp", "timestamp_unix", "since_start", "activity", "none"].includes(value);
 }

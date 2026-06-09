@@ -218,6 +218,7 @@ export default function DottedChart({
 
       {showControls && (
         <DottedChartControls
+          fileId={fileId}
           config={effectiveConfig}
           onConfigChange={setConfig}
         />

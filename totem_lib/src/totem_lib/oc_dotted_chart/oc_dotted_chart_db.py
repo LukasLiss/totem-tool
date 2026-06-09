@@ -205,6 +205,43 @@ def get_oc_dotted_chart_data(
     }
 
 
+def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]]]:
+    event_attr_columns = _event_attr_columns(db)
+    attr_options = [
+        {
+            "value": column,
+            "label": _humanize_column_name(column),
+            "kind": "time" if _is_time_related_column(column) else "categorical",
+        }
+        for column in event_attr_columns
+    ]
+    time_options = [
+        {"value": "time", "label": "Time", "kind": "time"},
+        {"value": "timestamp", "label": "Timestamp", "kind": "time"},
+        {"value": "timestamp_unix", "label": "Timestamp (Unix)", "kind": "time"},
+        {"value": "since_start", "label": "Since Start", "kind": "time"},
+        *[option for option in attr_options if option["kind"] == "time"],
+    ]
+    categorical_options = [
+        {"value": "activity", "label": "Activity", "kind": "categorical"},
+        *[option for option in attr_options if option["kind"] == "categorical"],
+    ]
+
+    return {
+        "x_axis": time_options,
+        "y_axis": categorical_options,
+        "color_by": [
+            {"value": "none", "label": "None", "kind": "none"},
+            *categorical_options,
+        ],
+        "shape_by": [
+            {"value": "none", "label": "None", "kind": "none"},
+            *categorical_options,
+        ],
+        "sort_by": [*time_options, *categorical_options],
+    }
+
+
 def _base_events_sql(*, event_attr_columns: list[str]) -> str:
     event_attr_selects = _event_attr_selects(event_attr_columns, table_alias=None)
     return """
@@ -322,7 +359,7 @@ def _axis_expr(axis: str | None, event_attr_columns: list[str]) -> str:
 
 
 def _event_attr_columns(db: OcelDuckDB) -> list[str]:
-    fixed_columns = {"event_id", "activity", "timestamp_unix"}
+    fixed_columns = {"event_id", "activity", "timestamp", "timestamp_unix"}
     rows = db.conn.execute("PRAGMA table_info('events')").fetchall()
     return [row[1] for row in rows if row[1] not in fixed_columns]
 
@@ -337,6 +374,15 @@ def _event_attr_selects(event_attr_columns: list[str], table_alias: str | None) 
 
 def _quote_identifier(identifier: str) -> str:
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _is_time_related_column(column: str) -> bool:
+    normalized = column.lower()
+    return any(token in normalized for token in ("time", "timestamp", "date", "datetime"))
+
+
+def _humanize_column_name(column: str) -> str:
+    return column.replace("_", " ").strip().title() or column
 
 
 def _objects_for_events(db: OcelDuckDB, event_ids: list[str]) -> dict[str, dict[str, list[str]]]:
