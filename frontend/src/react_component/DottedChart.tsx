@@ -28,6 +28,10 @@ import {
   type OCEvent,
   type SortOption,
 } from "./dottedChart/dottedChartUtils";
+import {
+  DottedChartControls,
+  type DottedChartConfig,
+} from "./dottedChart/DottedChartControls";
 import { useDottedChartData } from "./dottedChart/useDottedChartData";
 
 interface DottedChartProps {
@@ -39,6 +43,7 @@ interface DottedChartProps {
   sortBy?: SortOption | AxisOption;
   maxPoints?: number;
   viewport?: DottedChartViewport;
+  showControls?: boolean;
   className?: string;
   onEventClick?: (event: OCEvent) => void;
 }
@@ -61,17 +66,61 @@ export default function DottedChart({
   sortBy = DEFAULT_SORT_BY,
   maxPoints = 20_000,
   viewport,
+  showControls = false,
   className,
   onEventClick,
 }: DottedChartProps) {
+  const defaultConfig = useMemo<DottedChartConfig>(
+    () => ({
+      xAxis,
+      yAxis,
+      colorBy,
+      shapeBy,
+      sortBy,
+      maxPoints,
+    }),
+    [colorBy, maxPoints, shapeBy, sortBy, xAxis, yAxis]
+  );
+  const storageKey = fileId ? `oc-dotted-chart-config:${fileId}` : null;
+  const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
+  const [loadedConfigKey, setLoadedConfigKey] = useState<string | null>(null);
+  const effectiveConfig = showControls ? config : defaultConfig;
+
+  useEffect(() => {
+    if (!showControls) {
+      setConfig(defaultConfig);
+      setLoadedConfigKey(null);
+      return;
+    }
+
+    if (!storageKey) {
+      setConfig(defaultConfig);
+      setLoadedConfigKey(null);
+      return;
+    }
+
+    try {
+      const storedConfig = window.localStorage.getItem(storageKey);
+      setConfig(storedConfig ? { ...defaultConfig, ...JSON.parse(storedConfig) } : defaultConfig);
+    } catch {
+      setConfig(defaultConfig);
+    }
+    setLoadedConfigKey(storageKey);
+  }, [defaultConfig, showControls, storageKey]);
+
+  useEffect(() => {
+    if (!showControls || !storageKey || loadedConfigKey !== storageKey) return;
+    window.localStorage.setItem(storageKey, JSON.stringify(config));
+  }, [config, loadedConfigKey, showControls, storageKey]);
+
   const { data, loading, error } = useDottedChartData({
     fileId,
-    xAxis,
-    yAxis,
-    colorBy,
-    shapeBy,
-    sortBy,
-    maxPoints,
+    xAxis: effectiveConfig.xAxis,
+    yAxis: effectiveConfig.yAxis,
+    colorBy: effectiveConfig.colorBy,
+    shapeBy: effectiveConfig.shapeBy,
+    sortBy: effectiveConfig.sortBy,
+    maxPoints: effectiveConfig.maxPoints,
     viewport,
   });
 
@@ -167,10 +216,17 @@ export default function DottedChart({
         <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
       </div>
 
+      {showControls && (
+        <DottedChartControls
+          config={effectiveConfig}
+          onConfigChange={setConfig}
+        />
+      )}
+
       <DottedChartZoomControls
         range={effectiveBrushRange}
         points={points}
-        xAxis={xAxis}
+        xAxis={effectiveConfig.xAxis}
         xLabels={xLabels}
         zoomValue={zoomValue}
         isApplying={isZoomApplying}
@@ -190,7 +246,7 @@ export default function DottedChart({
             name="x"
             type="number"
             domain={xDomain}
-            tickFormatter={(value) => formatXAxisTick(value, xAxis, xLabels)}
+            tickFormatter={(value) => formatXAxisTick(value, effectiveConfig.xAxis, xLabels)}
             tickMargin={8}
             minTickGap={28}
           />
@@ -210,9 +266,9 @@ export default function DottedChart({
             cursor={{ strokeDasharray: "3 3" }}
             content={
               <DottedChartTooltip
-                xAxis={xAxis}
-                yAxis={yAxis}
-                colorBy={colorBy}
+                xAxis={effectiveConfig.xAxis}
+                yAxis={effectiveConfig.yAxis}
+                colorBy={effectiveConfig.colorBy}
               />
             }
           />

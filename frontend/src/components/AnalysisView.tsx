@@ -83,6 +83,7 @@ export function AnalysisView() {
                   shapeBy={{ type: "none" }}
                   sortBy={{ type: "time" }}
                   maxPoints={10000}
+                  showControls={true}
                   className="h-[700px]"
                 />
               </CardContent>
