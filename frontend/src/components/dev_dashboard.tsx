@@ -13,6 +13,7 @@ import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import DottedChart from "@/react_component/DottedChart";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -48,6 +49,27 @@ export function DevDashboard() {
               fileId={selectedFile?.id}
               colWidth={120}
               embedded={true}
+            />
+          </CardContent>
+        </Card>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              OC Dotted Chart
+            </CardTitle>
+            <CardDescription>
+              Object-centric event distribution
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DottedChart
+              fileId={selectedFile?.id}
+              xAxis={{ type: "time" }}
+              yAxis={{ type: "activity" }}
+              colorBy={{ type: "activity" }}
+              shapeBy={{ type: "none" }}
+              sortBy={{ type: "time" }}
+              maxPoints={10000}
             />
           </CardContent>
         </Card>
