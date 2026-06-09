@@ -102,8 +102,8 @@ export function getLayoutedElements(
     layoutOptions: elkOptions,
     children: nodes.map(node => ({
       ...node,
-      width: 150,
-      height: 50,
+      width: node.width ?? 150,
+      height: node.height ?? 50,
       // This is the key: assign each node to a horizontal "partition" based on its rank
       'elk.partition': ranks.get(node.id) || 0,
     })),

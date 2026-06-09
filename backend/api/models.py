@@ -100,3 +100,8 @@ class LogStatisticsComponent(DashboardComponent):
 class OCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
+
+
+class NewOCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)

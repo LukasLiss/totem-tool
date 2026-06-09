@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -13,7 +13,7 @@ from django.db.models import Max
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
 # Django side. Polars-only algorithms (`discover_oc_petri_net_polars`,
 # `discover_occn`) are not currently wired into the UI.
-from totem_lib.dfg import OCDFGDb
+from totem_lib.dfg import OCDFGDb, NewOCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
@@ -393,6 +393,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'NewOCDFGComponent':
+                components.append(NewOCDFGComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -496,6 +498,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == 'OCDFGComponent':
                 OCDFGComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
+                )
+            elif component_name == 'NewOCDFGComponent':
+                NewOCDFGComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],
                     y=item['y'],
@@ -744,6 +757,57 @@ def _extract_trace_variants_per_type(
             "total_objects": int(totals.get(t, 0)),
         }
     return result
+
+
+def _apply_trace_limits(
+    graph: "nx.MultiDiGraph",
+    trace_variants: dict,
+    trace_limits: dict,
+) -> "nx.MultiDiGraph":
+    """
+    Return a copy of *graph* filtered by per-type trace-count limits.
+
+    *trace_limits*  –  {obj_type: N}  keep only edges that appear in the
+                        top-N trace variants for that type.  Types absent
+                        from the dict are left untouched.
+
+    Start and end connector edges (role == 'start' or 'end') are always
+    preserved so the graph stays structurally complete.
+    """
+    # Build allowed (src, tgt) sets per restricted type
+    allowed: dict[str, set[tuple] | None] = {}
+    for otype, entry in trace_variants.items():
+        limit = trace_limits.get(otype)
+        if limit is None:
+            allowed[otype] = None          # unrestricted
+            continue
+        top_variants = entry.get("variants", [])[:limit]
+        pairs: set[tuple] = set()
+        for v in top_variants:
+            activities = v.get("trace", [])
+            for i in range(len(activities) - 1):
+                pairs.add((activities[i], activities[i + 1]))
+        allowed[otype] = pairs
+
+    filtered = nx.MultiDiGraph()
+    filtered.graph.update(graph.graph)
+    for node, data in graph.nodes(data=True):
+        filtered.add_node(node, **data)
+
+    for u, v, key, data in graph.edges(keys=True, data=True):
+        otype = data.get("objtype", key)
+        role = data.get("role")
+        # Always keep structural start/end edges
+        if role in ("start", "end"):
+            filtered.add_edge(u, v, key=key, **data)
+            continue
+        pair_set = allowed.get(otype)
+        if pair_set is None or (u, v) in pair_set:
+            filtered.add_edge(u, v, key=key, **data)
+
+    return filtered
+
+
 
 
 def _serialize_totem(totem: Totem) -> dict:
@@ -2172,7 +2236,94 @@ def OCDFGViewSet(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def NewOCDFGViewSet(request):
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Optional object-type filter (comma-separated)
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
+
+    # Optional per-type trace-count limits  e.g. "Container:10,Forklift:5"
+    raw_trace_limits = request.query_params.get("trace_limits")
+    trace_limits: dict[str, int] = {}
+    if raw_trace_limits:
+        for part in raw_trace_limits.split(","):
+            part = part.strip()
+            if ":" in part:
+                otype, _, n_str = part.partition(":")
+                try:
+                    trace_limits[otype.strip()] = max(0, int(n_str.strip()))
+                except ValueError:
+                    pass  # ignore malformed entries
+
+    try:
+        user_file = EventLog.objects.get(id=file_id)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        with _with_ocel_db(user_file) as db:
+            # Build full multigraph
+            ocdfg_full = NewOCDFGDb.from_ocel_db(
+                db, object_types=sorted(object_type_filter) if object_type_filter else None
+            )
+
+            # Compute trace variants (needed both for the response and for
+            # applying trace-count limits, so always run it once).
+            filter_error = None
+            trace_variants = None
+            try:
+                types_for_variants = object_type_filter or set(_object_types(db))
+                if types_for_variants:
+                    trace_variants = _extract_trace_variants_per_type(db, types_for_variants)
+            except Exception as e:
+                print(f"[NewOCDFG] Failed to compute trace variants: {e}")
+
+            # Apply per-type trace-count limits if requested
+            if trace_limits and trace_variants:
+                try:
+                    ocdfg_full = _apply_trace_limits(ocdfg_full, trace_variants, trace_limits)
+                except Exception as e:
+                    filter_error = f"Failed to apply trace limits: {e}"
+
+            if len(ocdfg_full.nodes) == 0:
+                dfg_json = {
+                    "directed": True, "multigraph": True,
+                    "graph": {"kind": "new_ocdfg"}, "nodes": [], "links": [],
+                }
+            else:
+                dfg_json = nx.node_link_data(ocdfg_full, edges="links")
+
+            all_nodes = [
+                {
+                    "id": n.get("id"),
+                    "types": n.get("types", []),
+                    "role": n.get("role"),
+                    "object_type": n.get("object_type"),
+                }
+                for n in dfg_json.get("nodes", [])
+            ]
+
+        response_payload = {"dfg": dfg_json, "all_nodes": all_nodes}
+        if filter_error:
+            response_payload["filter_error"] = filter_error
+        if trace_variants:
+            response_payload["trace_variants"] = trace_variants
+
+        return Response(response_payload, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['DELETE'])
+
 @permission_classes([IsAuthenticated])
 def delete_user_data(request):
     confirm = request.data.get("confirm")
