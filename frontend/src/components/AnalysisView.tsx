@@ -84,7 +84,7 @@ export function AnalysisView() {
                   sortBy={{ type: "time" }}
                   maxPoints={10000}
                   showControls={true}
-                  className="h-[700px]"
+                  className="min-h-[700px]"
                 />
               </CardContent>
             </Card>

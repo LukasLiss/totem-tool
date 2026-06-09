@@ -55,7 +55,9 @@ const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_SORT_BY: AxisOption = { type: "time" };
 const MIN_BRUSH_POINTS = 10;
 const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
-const Y_AXIS_WIDTH = 140;
+const Y_AXIS_WIDTH = 180;
+const CHART_HEIGHT = 500;
+const MAX_Y_TICK_LABEL_LENGTH = 24;
 
 export default function DottedChart({
   fileId,
@@ -207,7 +209,7 @@ export default function DottedChart({
   }
 
   return (
-    <div className={cn("relative flex h-[500px] min-h-[420px] flex-col gap-3", className)}>
+    <div className={cn("relative flex min-h-[500px] flex-col gap-3", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <span>
           Showing {visiblePoints.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
@@ -238,7 +240,8 @@ export default function DottedChart({
 
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
-        className="min-h-0 flex-1 rounded-md border bg-background p-2"
+        className="aspect-auto shrink-0 rounded-md border bg-background p-2"
+        style={{ height: CHART_HEIGHT }}
       >
         <ScatterChart data={points} margin={CHART_MARGIN}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -259,7 +262,9 @@ export default function DottedChart({
             ticks={yTicks}
             interval={0}
             allowDecimals={false}
-            tickFormatter={(value) => yLabels.get(Number(value)) ?? formatAxisTick(Number(value))}
+            tickFormatter={(value) =>
+              truncateAxisLabel(yLabels.get(Number(value)) ?? formatAxisTick(Number(value)))
+            }
             tickMargin={8}
             width={Y_AXIS_WIDTH}
           />
@@ -686,6 +691,11 @@ function formatXAxisTick(
   }
 
   return labels.get(numericValue) ?? formatAxisTick(numericValue);
+}
+
+function truncateAxisLabel(label: string): string {
+  if (label.length <= MAX_Y_TICK_LABEL_LENGTH) return label;
+  return `${label.slice(0, MAX_Y_TICK_LABEL_LENGTH - 1)}...`;
 }
 
 function isTimeAxis(axis: AxisOption): boolean {
