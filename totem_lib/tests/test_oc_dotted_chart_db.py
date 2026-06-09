@@ -1,4 +1,4 @@
-from totem_lib.oc_dotted_chart import get_oc_dotted_chart_data
+from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.oc_dotted_chart.oc_dotted_chart_db import (
     _bucket_count_for_point_limit,
     _clamp_max_points,
@@ -73,6 +73,24 @@ def test_oc_dotted_chart_supports_since_start_x_axis():
     log_start_timestamp = db.conn.execute("SELECT MIN(timestamp_unix) FROM events").fetchone()[0]
     assert min(event["x"] for event in result["events"]) == 0
     assert all(event["x"] == event["timestamp_unix"] - log_start_timestamp for event in result["events"])
+
+
+def test_oc_dotted_chart_exposes_object_dimensions_for_configuration():
+    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+
+    columns = get_oc_dotted_chart_columns(db)
+    y_values = {option["value"] for option in columns["y_axis"]}
+    x_values = {option["value"] for option in columns["x_axis"]}
+
+    assert {"object_id", "object_type", "qualifier", "object_attr:Status"} <= y_values
+    assert "object_attr:DepartureDate" not in y_values
+    assert "object_attr:DepartureDate" in x_values
+
+    result = get_oc_dotted_chart_data(db, y_axis="object_type", color_by="object_attr:Status", max_points=250)
+
+    assert result["total_count"] > 0
+    assert any(event["y"] for event in result["events"])
+    assert any(event["color_value"] for event in result["events"])
 
 
 def test_oc_dotted_chart_bucket_count_is_bounded_by_points_and_frontend_cap():
