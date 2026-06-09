@@ -217,6 +217,7 @@ def get_oc_dotted_chart_data(
 def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]]]:
     event_attr_columns = _event_attr_columns(db)
     object_attr_columns = _object_attr_columns(db)
+    object_types = _object_types(db)
     attr_options = [
         {
             "value": column,
@@ -224,6 +225,14 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
             "kind": "time" if _is_time_related_column(column) else "categorical",
         }
         for column in event_attr_columns
+    ]
+    object_type_row_options = [
+        {
+            "value": f"object_type:{object_type}",
+            "label": _humanize_column_name(object_type),
+            "kind": "categorical",
+        }
+        for object_type in object_types
     ]
     object_options = [
         {"value": "object_id", "label": "Object ID", "kind": "categorical"},
@@ -250,11 +259,20 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         {"value": "activity", "label": "Activity", "kind": "categorical"},
         *[option for option in attr_options if option["kind"] == "categorical"],
         *[option for option in object_options if option["kind"] == "categorical"],
+        *object_type_row_options,
+    ]
+    y_axis_options = [
+        {"value": "activity", "label": "Activity", "kind": "categorical"},
+        *[option for option in attr_options if option["kind"] == "categorical"],
+        *object_type_row_options,
+        {"value": "object_id", "label": "All Objects", "kind": "categorical"},
+        {"value": "qualifier", "label": "Qualifier", "kind": "categorical"},
+        *[option for option in object_options if option["kind"] == "categorical" and option["value"].startswith("object_attr:")],
     ]
 
     return {
         "x_axis": time_options,
-        "y_axis": categorical_options,
+        "y_axis": y_axis_options,
         "color_by": [
             {"value": "none", "label": "None", "kind": "none"},
             *categorical_options,
@@ -417,6 +435,9 @@ def _axis_expr(axis: str | None, event_attr_columns: list[str], object_attr_colu
         return "object_id"
     if axis == "object_type":
         return "object_type"
+    if axis and axis.startswith("object_type:"):
+        object_type = axis.split(":", 1)[1]
+        return f"CASE WHEN object_type = {_quote_literal(object_type)} THEN object_id ELSE NULL END"
     if axis == "qualifier":
         return "qualifier"
     if axis and axis.startswith("object_attr:"):
@@ -440,6 +461,13 @@ def _object_attr_columns(db: OcelDuckDB) -> list[str]:
     return [row[1] for row in rows if row[1] not in fixed_columns]
 
 
+def _object_types(db: OcelDuckDB) -> list[str]:
+    rows = db.conn.execute(
+        "SELECT DISTINCT obj_type FROM objects WHERE obj_type IS NOT NULL ORDER BY obj_type"
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
 def _column_selects(columns: list[str], table_alias: str | None) -> str:
     prefix = f"{table_alias}." if table_alias else ""
     return "".join(
@@ -450,6 +478,10 @@ def _column_selects(columns: list[str], table_alias: str | None) -> str:
 
 def _quote_identifier(identifier: str) -> str:
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _quote_literal(value: str) -> str:
+    return f"'{value.replace(chr(39), chr(39) * 2)}'"
 
 
 def _is_time_related_column(column: str) -> bool:
@@ -467,6 +499,8 @@ def _object_attr_alias(column: str) -> str:
 
 def _axis_uses_object_columns(axis: str | None, object_attr_columns: list[str]) -> bool:
     if axis in {"object_id", "object_type", "qualifier"}:
+        return True
+    if axis and axis.startswith("object_type:"):
         return True
     if axis and axis.startswith("object_attr:"):
         return axis.split(":", 1)[1] in object_attr_columns
