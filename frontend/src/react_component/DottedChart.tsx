@@ -327,8 +327,12 @@ function DottedChartZoomControls({
       const start = parseDateInput(startDateInput, "start");
       const end = parseDateInput(endDateInput, "end");
 
-      if (!start || !end) {
+      if (start.status === "invalid-format" || end.status === "invalid-format") {
         setDateError("Use mm/dd/yyyy for both date bounds.");
+        return;
+      }
+      if (start.status === "invalid-date" || end.status === "invalid-date") {
+        setDateError("Enter a valid calendar date.");
         return;
       }
       if (start.value > end.value) {
@@ -500,9 +504,14 @@ function formatRangeDateInput(point: ChartPoint | undefined, axis: AxisOption): 
   return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
 }
 
-function parseDateInput(value: string, boundary: "start" | "end"): { value: number } | null {
+type ParsedDateInput =
+  | { status: "valid"; value: number }
+  | { status: "invalid-format" }
+  | { status: "invalid-date" };
+
+function parseDateInput(value: string, boundary: "start" | "end"): ParsedDateInput {
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!match) return null;
+  if (!match) return { status: "invalid-format" };
 
   const month = Number(match[1]);
   const day = Number(match[2]);
@@ -516,10 +525,10 @@ function parseDateInput(value: string, boundary: "start" | "end"): { value: numb
     date.getMonth() !== month - 1 ||
     date.getDate() !== day
   ) {
-    return null;
+    return { status: "invalid-date" };
   }
 
-  return { value: date.getTime() };
+  return { status: "valid", value: date.getTime() };
 }
 
 function findRangeForDateBounds(
