@@ -83,37 +83,12 @@ export default function DottedChart({
     }),
     [colorBy, maxPoints, shapeBy, sortBy, xAxis, yAxis]
   );
-  const storageKey = fileId ? `oc-dotted-chart-config:${fileId}` : null;
   const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
-  const [loadedConfigKey, setLoadedConfigKey] = useState<string | null>(null);
   const effectiveConfig = showControls ? config : defaultConfig;
 
   useEffect(() => {
-    if (!showControls) {
-      setConfig(defaultConfig);
-      setLoadedConfigKey(null);
-      return;
-    }
-
-    if (!storageKey) {
-      setConfig(defaultConfig);
-      setLoadedConfigKey(null);
-      return;
-    }
-
-    try {
-      const storedConfig = window.localStorage.getItem(storageKey);
-      setConfig(storedConfig ? { ...defaultConfig, ...JSON.parse(storedConfig) } : defaultConfig);
-    } catch {
-      setConfig(defaultConfig);
-    }
-    setLoadedConfigKey(storageKey);
-  }, [defaultConfig, showControls, storageKey]);
-
-  useEffect(() => {
-    if (!showControls || !storageKey || loadedConfigKey !== storageKey) return;
-    window.localStorage.setItem(storageKey, JSON.stringify(config));
-  }, [config, loadedConfigKey, showControls, storageKey]);
+    setConfig(defaultConfig);
+  }, [defaultConfig]);
 
   const { data, loading, error } = useDottedChartData({
     fileId,
