@@ -50,15 +50,32 @@ export function DottedChartControls({
     () => JSON.stringify(draftConfig) !== JSON.stringify(config),
     [config, draftConfig]
   );
+  const objectTypeOptions = useMemo(
+    () => options.y_axis.filter((option) => option.value.startsWith("object_type:")),
+    [options.y_axis]
+  );
+  const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
+  const sortOptions = useMemo(
+    () => buildSortOptions(draftConfig.xAxis, draftConfig.yAxis, options),
+    [draftConfig.xAxis, draftConfig.yAxis, options]
+  );
   const selectOptions = useMemo(
     () => ({
       x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
       y_axis: withCurrentOption(collapseObjectTypeOptions(options.y_axis), draftConfig.yAxis),
       color_by: withCurrentOption(options.color_by, draftConfig.colorBy),
       shape_by: withCurrentOption(options.shape_by, draftConfig.shapeBy),
-      sort_by: withCurrentOption(options.sort_by, sortAxis),
+      sort_by: sortOptions,
     }),
-    [draftConfig.colorBy, draftConfig.shapeBy, draftConfig.xAxis, draftConfig.yAxis, options, sortAxis]
+    [
+      draftConfig.colorBy,
+      draftConfig.shapeBy,
+      draftConfig.xAxis,
+      draftConfig.yAxis,
+      options,
+      sortAxis,
+      sortOptions,
+    ]
   );
 
   useEffect(() => {
@@ -68,11 +85,27 @@ export function DottedChartControls({
   const updateDraftConfig = (patch: Partial<DottedChartConfig>) => {
     setDraftConfig((current) => ({ ...current, ...patch }));
   };
-  const objectTypeOptions = useMemo(
-    () => options.y_axis.filter((option) => option.value.startsWith("object_type:")),
-    [options.y_axis]
-  );
-  const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
+  const updateConfigWithAxisChange = (
+    axisKey: "xAxis" | "yAxis",
+    axis: AxisOption,
+    direction: "asc" | "desc"
+  ) => {
+    setDraftConfig((current) => {
+      const nextConfig = { ...current, [axisKey]: axis };
+      const currentSortAxis = "type" in current.sortBy ? current.sortBy : current.sortBy.field;
+      const allowedSortAxes = [nextConfig.xAxis, nextConfig.yAxis];
+      const nextSortAxis = allowedSortAxes.some((allowedAxis) =>
+        areAxisOptionsEqual(allowedAxis, currentSortAxis)
+      )
+        ? currentSortAxis
+        : axis;
+
+      return {
+        ...nextConfig,
+        sortBy: { field: nextSortAxis, direction },
+      };
+    });
+  };
 
   return (
     <Collapsible defaultOpen={false} className={cn("rounded-md border bg-background", className)}>
@@ -95,20 +128,24 @@ export function DottedChartControls({
             label="X Axis"
             value={axisToControlValue(draftConfig.xAxis)}
             options={selectOptions.x_axis}
-            onChange={(value) => updateDraftConfig({ xAxis: controlValueToAxis(value) })}
+            onChange={(value) =>
+              updateConfigWithAxisChange("xAxis", controlValueToAxis(value), sortDirection)
+            }
           />
           <AxisSelect
             label="Y Axis"
             value={axisToPrimaryControlValue(draftConfig.yAxis)}
             options={selectOptions.y_axis}
             onChange={(value) =>
-              updateDraftConfig({
-                yAxis: controlValueToAxis(
+              updateConfigWithAxisChange(
+                "yAxis",
+                controlValueToAxis(
                   value === OBJECT_TYPE_CONTROL_VALUE
                     ? objectTypeOptions[0]?.value ?? "object_id"
                     : value
                 ),
-              })
+                sortDirection
+              )
             }
           />
           {axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE && (
@@ -116,7 +153,9 @@ export function DottedChartControls({
               label="Object Type"
               value={selectedYObjectType}
               options={objectTypeOptions}
-              onChange={(value) => updateDraftConfig({ yAxis: controlValueToAxis(value) })}
+              onChange={(value) =>
+                updateConfigWithAxisChange("yAxis", controlValueToAxis(value), sortDirection)
+              }
             />
           )}
           <AxisSelect
@@ -300,6 +339,56 @@ function getObjectTypeValue(axis: AxisOption, options: DottedChartOption[]): Axi
   const value = axisToControlValue(axis);
   if (value.startsWith("object_type:")) return value;
   return options[0]?.value ?? "";
+}
+
+function buildSortOptions(
+  xAxis: AxisOption,
+  yAxis: AxisOption,
+  options: {
+    x_axis: DottedChartOption[];
+    y_axis: DottedChartOption[];
+  }
+): DottedChartOption[] {
+  const axes = [xAxis, yAxis];
+  const sortOptions: DottedChartOption[] = [];
+
+  axes.forEach((axis) => {
+    const value = axisToControlValue(axis);
+    if (sortOptions.some((option) => option.value === value)) return;
+    sortOptions.push(findOptionForAxis(axis, options) ?? fallbackOptionForAxis(axis));
+  });
+
+  return sortOptions;
+}
+
+function findOptionForAxis(
+  axis: AxisOption,
+  options: {
+    x_axis: DottedChartOption[];
+    y_axis: DottedChartOption[];
+  }
+): DottedChartOption | undefined {
+  const value = axisToControlValue(axis);
+  return [...options.x_axis, ...options.y_axis].find((option) => option.value === value);
+}
+
+function fallbackOptionForAxis(axis: AxisOption): DottedChartOption {
+  const value = axisToControlValue(axis);
+  const fallback = findDefaultOption(value);
+  if (fallback) return fallback;
+  return {
+    label: value,
+    value,
+    kind: "categorical",
+  };
+}
+
+function areAxisOptionsEqual(left: AxisOption, right: AxisOption): boolean {
+  if (left.type !== right.type) return false;
+  if (left.type === "event_attribute" && right.type === "event_attribute") {
+    return left.name === right.name;
+  }
+  return true;
 }
 
 function findDefaultOption(value: string): DottedChartOption | undefined {
