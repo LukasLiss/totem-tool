@@ -34,6 +34,7 @@ type DottedChartControlsProps = {
 };
 
 type AxisControlValue = string;
+const OBJECT_TYPE_CONTROL_VALUE = "__object_type__";
 
 export function DottedChartControls({
   fileId,
@@ -52,7 +53,7 @@ export function DottedChartControls({
   const selectOptions = useMemo(
     () => ({
       x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
-      y_axis: withCurrentOption(options.y_axis, draftConfig.yAxis),
+      y_axis: withCurrentOption(collapseObjectTypeOptions(options.y_axis), draftConfig.yAxis),
       color_by: withCurrentOption(options.color_by, draftConfig.colorBy),
       shape_by: withCurrentOption(options.shape_by, draftConfig.shapeBy),
       sort_by: withCurrentOption(options.sort_by, sortAxis),
@@ -67,6 +68,11 @@ export function DottedChartControls({
   const updateDraftConfig = (patch: Partial<DottedChartConfig>) => {
     setDraftConfig((current) => ({ ...current, ...patch }));
   };
+  const objectTypeOptions = useMemo(
+    () => options.y_axis.filter((option) => option.value.startsWith("object_type:")),
+    [options.y_axis]
+  );
+  const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
 
   return (
     <Collapsible defaultOpen={false} className={cn("rounded-md border bg-background", className)}>
@@ -93,10 +99,26 @@ export function DottedChartControls({
           />
           <AxisSelect
             label="Y Axis"
-            value={axisToControlValue(draftConfig.yAxis)}
+            value={axisToPrimaryControlValue(draftConfig.yAxis)}
             options={selectOptions.y_axis}
-            onChange={(value) => updateDraftConfig({ yAxis: controlValueToAxis(value) })}
+            onChange={(value) =>
+              updateDraftConfig({
+                yAxis: controlValueToAxis(
+                  value === OBJECT_TYPE_CONTROL_VALUE
+                    ? objectTypeOptions[0]?.value ?? "object_id"
+                    : value
+                ),
+              })
+            }
           />
+          {axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE && (
+            <AxisSelect
+              label="Object Type"
+              value={selectedYObjectType}
+              options={objectTypeOptions}
+              onChange={(value) => updateDraftConfig({ yAxis: controlValueToAxis(value) })}
+            />
+          )}
           <AxisSelect
             label="Color By"
             value={axisToControlValue(draftConfig.colorBy)}
@@ -219,13 +241,19 @@ function axisToControlValue(axis: AxisOption): AxisControlValue {
   return axis.type;
 }
 
+function axisToPrimaryControlValue(axis: AxisOption): AxisControlValue {
+  const value = axisToControlValue(axis);
+  if (value.startsWith("object_type:")) return OBJECT_TYPE_CONTROL_VALUE;
+  return value;
+}
+
 function controlValueToAxis(value: AxisControlValue): AxisOption {
   if (isBuiltinAxis(value)) return { type: value };
   return { type: "event_attribute", name: value };
 }
 
 function withCurrentOption(options: DottedChartOption[], axis: AxisOption): DottedChartOption[] {
-  const currentValue = axisToControlValue(axis);
+  const currentValue = axisToPrimaryControlValue(axis);
   if (options.some((option) => option.value === currentValue)) return options;
   const fallback = findDefaultOption(currentValue);
   if (fallback) return [fallback, ...options];
@@ -237,6 +265,41 @@ function withCurrentOption(options: DottedChartOption[], axis: AxisOption): Dott
     },
     ...options,
   ];
+}
+
+function collapseObjectTypeOptions(options: DottedChartOption[]): DottedChartOption[] {
+  const collapsed: DottedChartOption[] = [];
+  let hasObjectTypes = false;
+
+  options.forEach((option) => {
+    if (option.value.startsWith("object_type:")) {
+      hasObjectTypes = true;
+      return;
+    }
+    collapsed.push(option);
+  });
+
+  if (!hasObjectTypes) return collapsed;
+
+  const insertAfterActivity = collapsed.findIndex((option) => option.value === "activity");
+  const objectTypeOption = {
+    label: "Object Type",
+    value: OBJECT_TYPE_CONTROL_VALUE,
+    kind: "categorical" as const,
+  };
+
+  if (insertAfterActivity === -1) return [objectTypeOption, ...collapsed];
+  return [
+    ...collapsed.slice(0, insertAfterActivity + 1),
+    objectTypeOption,
+    ...collapsed.slice(insertAfterActivity + 1),
+  ];
+}
+
+function getObjectTypeValue(axis: AxisOption, options: DottedChartOption[]): AxisControlValue {
+  const value = axisToControlValue(axis);
+  if (value.startsWith("object_type:")) return value;
+  return options[0]?.value ?? "";
 }
 
 function findDefaultOption(value: string): DottedChartOption | undefined {
