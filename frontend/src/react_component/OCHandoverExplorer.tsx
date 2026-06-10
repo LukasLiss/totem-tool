@@ -104,6 +104,14 @@ export default function OCHandoverExplorer({
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [logError, setLogError] = useState("");
+
+  type MlpaLayer = { level: number; areas: { objectTypes: string[] }[] };
+  const [mlpaLayers, setMlpaLayers] = useState<MlpaLayer[] | null>(null);
+  const [mlpaStatus, setMlpaStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [selectedMlpaLevel, setSelectedMlpaLevel] = useState<number | null>(null);
+  const useClustersRef = useRef(useClusters);
+  useEffect(() => { useClustersRef.current = useClusters; }, [useClusters]);
+
   const resultsRef = useRef<HTMLDivElement>(null);
   const viewModeRef = useRef(viewMode);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
@@ -190,6 +198,37 @@ export default function OCHandoverExplorer({
     setLogError("");
   }, [fileId]);
 
+  // Reset and fetch MLPA layers when fileId or method changes
+  useEffect(() => {
+    setMlpaLayers(null);
+    setMlpaStatus("idle");
+    setSelectedMlpaLevel(null);
+
+    if (!fileId || method !== "oc") return;
+
+    let cancelled = false;
+    setMlpaStatus("loading");
+    (async () => {
+      const token = localStorage.getItem("access_token");
+      if (!token) { if (!cancelled) setMlpaStatus("error"); return; }
+      try {
+        const res = await fetch(`/api/files/${fileId}/discover_mlpa/`, {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (cancelled) return;
+        setMlpaLayers(json.layers ?? null);
+        setMlpaStatus("ready");
+      } catch {
+        if (!cancelled) setMlpaStatus("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [fileId, method]);
+
   // Fetch event log lazily when the Log view is opened
   useEffect(() => {
     if (viewMode !== "log" || !fileId || logStatus !== "idle") return;
@@ -270,7 +309,7 @@ export default function OCHandoverExplorer({
       if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
 
       try {
-        const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+        const activeClusterMap = useClustersRef.current && clusterInfo ? clusterInfo.clusterMap : null;
         const res = activeClusterMap
           ? await fetch("/api/handover/", {
               method: "POST",
@@ -300,7 +339,10 @@ export default function OCHandoverExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [fileId, hasStartedLoading, onDataLoad, useClusters, clusterInfo]);
+  // useClusters intentionally omitted (read via ref): toggling it should not auto-recompute.
+  // clusterInfo is included so OrgaMining recomputes propagate when useClusters is on.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, hasStartedLoading, onDataLoad, clusterInfo]);
 
   const handleCompute = () => {
     hasStartedLoadingRef.current = false;
@@ -566,6 +608,57 @@ export default function OCHandoverExplorer({
                   </div>
                 )}
               </div>
+            )}
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
+          <div className="border rounded-md p-3 self-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="min-w-[110px] justify-between">
+                    {selectedMlpaLevel !== null ? `Level ${selectedMlpaLevel}` : "Select level"}
+                    <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuRadioGroup
+                    value={selectedMlpaLevel !== null ? String(selectedMlpaLevel) : ""}
+                    onValueChange={v => setSelectedMlpaLevel(Number(v))}
+                  >
+                    {mlpaLayers.map(l => (
+                      <DropdownMenuRadioItem key={l.level} value={String(l.level)}>
+                        Level {l.level} — {l.areas.flatMap(a => a.objectTypes).join(", ")}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={selectedMlpaLevel === null}
+                onClick={() => {
+                  if (selectedMlpaLevel === null) return;
+                  const boSet = new Set(
+                    mlpaLayers.filter(l => l.level === selectedMlpaLevel).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                  );
+                  const resSet = new Set(
+                    mlpaLayers.filter(l => l.level > selectedMlpaLevel).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                  );
+                  setBoTypes(boSet);
+                  setResourceTypes(resSet);
+                }}
+              >
+                Apply
+              </Button>
+            </div>
+            {selectedMlpaLevel !== null && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Business objects: level {selectedMlpaLevel} · Resources: levels above
+              </p>
             )}
           </div>
         )}
