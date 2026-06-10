@@ -22,7 +22,12 @@ def generate_resource_constraints(
 
     Returns:
         dict: Keys are Variant objects, values are dicts mapping activity -> {other_activity: constraint_type}.
-              Constraint types: "same_resource", "subset" (act1 ⊆ act2), "disjoint".
+              Constraint types: "same_resource" (symmetric), "disjoint" (symmetric),
+              and the asymmetric pair "subset"/"superset" — if act1's resources
+              are a subset of act2's, then (act1, act2) is "subset" and the
+              inverse (act2, act1) is "superset". Emitting both directions lets
+              the simulator enforce the relation regardless of which activity
+              fires first.
     """
 
     # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
@@ -110,7 +115,8 @@ def generate_resource_constraints(
             # Aggregate filtered entries onto variant-level dict
             for key, vector in filtered_exec_dict.items():
                 aggregated_constraints[key] = [
-                    a + b for a, b in zip(aggregated_constraints[key], vector)
+                    a + b
+                    for a, b in zip(aggregated_constraints[key], vector, strict=True)
                 ]
 
         # Filter: Remove entries that do not appear at least min_occurrences_across_executions times across executions within variant
@@ -136,10 +142,26 @@ def generate_resource_constraints(
 
             inverse_vector = filtered_constraints.get((act2, act1), [0, 0, 0, 0])
             inverse_total = sum(inverse_vector)
+            if inverse_total == 0:
+                # No evidence for the reverse direction -> cannot confirm the
+                # relation (and avoids a division by zero below). Skip the pair.
+                continue
+
+            # Support of each relation as a fraction of the observed resource-set
+            # pairs. Vector indices: [same_resource, rs1⊊rs2, disjoint, neither].
+            same_fwd = vector[0] / total
+            same_inv = inverse_vector[0] / inverse_total
+            # Subset-or-equal: rs1 ⊆ rs2 covers strict subset (idx 1) and equality (idx 0).
+            subset_fwd = (vector[1] + vector[0]) / total
+            # If act1 ⊆ act2, the reverse pair (act2, act1) is "neither" (idx 3),
+            # i.e. act2 is a superset of act1.
+            superset_inv = inverse_vector[3] / inverse_total
+            disjoint_fwd = vector[2] / total
+            disjoint_inv = inverse_vector[2] / inverse_total
 
             if (
-                vector[0] / total >= support_threshold_percentage
-                and inverse_vector[0] / inverse_total >= support_threshold_percentage
+                same_fwd >= support_threshold_percentage
+                and same_inv >= support_threshold_percentage
             ):
                 # Same resource (symmetric)
                 constraints_for_variant[act1][act2] = "same_resource"
@@ -147,16 +169,17 @@ def generate_resource_constraints(
                 processed_pairs.add((act2, act1))
 
             elif (
-                vector[1] + vector[0] / total
-                >= support_threshold_percentage  # Subset or Equal
-                and inverse_vector[3] / inverse_total >= support_threshold_percentage
+                subset_fwd >= support_threshold_percentage
+                and superset_inv >= support_threshold_percentage
             ):
-                # Subset relation (act1 resources ⊆ act2 resources)
+                # Asymmetric: act1 ⊆ act2, emit both directions.
                 constraints_for_variant[act1][act2] = "subset"
+                constraints_for_variant[act2][act1] = "superset"
+                processed_pairs.add((act2, act1))
 
             elif (
-                vector[2] / total >= support_threshold_percentage
-                and inverse_vector[2] / inverse_total >= support_threshold_percentage
+                disjoint_fwd >= support_threshold_percentage
+                and disjoint_inv >= support_threshold_percentage
             ):
                 # Disjoint (symmetric)
                 constraints_for_variant[act1][act2] = "disjoint"

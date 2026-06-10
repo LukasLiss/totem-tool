@@ -1,7 +1,7 @@
 import datetime as dt
 import json
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 import polars as pl
@@ -27,6 +27,167 @@ from totem_lib.variants.ocvariants import find_object_variants_connected_compone
 ### Default Configuration
 RESOURCE_CONSTRAINT_VIOLATION_DEGREE = 0.0  # Degree to which resource constraints can be violated. Value between 0 and 1 where 0 means strictly following all constraints and 1 allows to ignore all constraints.
 CONSTRAINT_LOOKBACK_LENGTH = None  # Number of prior events to look back for when checking constraints. Higher values may lead to more realistic simulations but also increased computational complexity. If value is None, then all prior events will be considered.
+# Relative cost of violating each constraint type, expressed in budget units. A
+# higher cost makes a violation of that type rarer for a given violation degree.
+VIOLATION_COST_WEIGHTS = {
+    "same_resource": 2.0,
+    "subset": 1.0,
+    "disjoint": 1.0,
+    "superset": 1.0,
+}
+
+
+class _ViolationBudget:
+    """
+    Per-instance budget for soft resource-constraint violations.
+
+    The budget is measured in *cost units*. The cost of a single resource pick is
+    the **sum** of ``cost_weights[type]`` over every constraint that pick would
+    break — so a resource that violates several constraints at once is charged
+    for all of them (see ``_inclusion_cost``).
+    The budget is set once per process instance, based on the known/expected number of events and following from that the expected number of resource allocations.
+    It is then spent online, one constraint-relevant resource slot at a time, to avoid temporal bias.
+    """
+
+    def __init__(self, remaining_budget, remaining_slots, cost_weights):
+        self.remaining_budget = float(remaining_budget)
+        self.remaining_slots = int(remaining_slots)
+        self.cost_weights = cost_weights
+        self.used = 0.0
+
+    def clone(self):
+        c = _ViolationBudget(
+            self.remaining_budget, self.remaining_slots, self.cost_weights
+        )
+        c.used = self.used
+        return c
+
+    def try_spend(self, cost, forced):
+        """
+        Decide whether to spend ``cost`` budget units at the current slot.
+
+        ``cost`` is the *summed* violation cost of the resource being considered
+        (0 if it is fully compliant). The per-slot probability keeps the expected
+        spend per slot constant — ``remaining_budget / remaining_slots`` — so
+        violations are spread evenly over the execution and a dearer violation
+        (higher cost) is correspondingly rarer.
+
+        Args:
+            cost: Summed cost of the candidate violation (>= 0).
+            forced: True if there is no compliant (cost-0) alternative for this
+                slot, so the violation is unavoidable.
+
+        Returns:
+            True  -> spend (budget already charged),
+            False -> do not violate this slot,
+            None  -> infeasible: a forced violation cannot be afforded, so the
+                     whole allocation must fail.
+        """
+        if cost <= 0:
+            # Compliant pick: no charge, but the slot is consumed.
+            self.remaining_slots = max(0, self.remaining_slots - 1)
+            return False
+
+        if forced:
+            if self.remaining_budget < cost:
+                return None
+            self.remaining_budget -= cost
+            self.used += cost
+            self.remaining_slots = max(0, self.remaining_slots - 1)
+            return True
+
+        spend = False
+        if self.remaining_budget >= cost and self.remaining_slots > 0:
+            p = min(1.0, (self.remaining_budget / self.remaining_slots) / cost)
+            if random.random() < p:
+                spend = True
+                self.remaining_budget -= cost
+                self.used += cost
+        self.remaining_slots = max(0, self.remaining_slots - 1)
+        return spend
+
+
+def _estimate_constraint_slots(
+    variant_constraints, variant_res_dist, resource_pool_expanded
+):
+    """
+    Estimate the number of constraint-relevant resource slots of a process instance.
+    Used in the simple Simulation Model to set the per-instance violation budget.
+
+    Counts, for every activity that carries at least one resource constraint, the
+    rounded number of resources it needs of each type present in the pool(Upper Bound Approximation).
+
+    Args:
+        variant_constraints: {activity: {other_activity: constraint_type}} dict for this variant.
+        variant_res_dist: {activity: {res_type: {"mean_count": float}}} dict for this variant.
+        resource_pool_expanded: Set of resource types actually available in the pool.
+    """
+    total = 0
+    for activity in variant_constraints:
+        activity_res_dist = variant_res_dist.get(activity, {})
+        for res_type, stats in activity_res_dist.items():
+            if res_type in resource_pool_expanded:
+                total += max(0, round(stats["mean_count"]))
+    return total
+
+
+def _estimate_expected_constraint_slots(
+    expected_activity_occurrences,
+    constrained_activities,
+    expected_resource_demand,
+    resource_pool_expanded,
+):
+    """
+    Expected number of constraint-relevant resource slots of a *state-space* instance.
+    Used in the Advanced Simulation Model to set the per-instance violation budget.
+
+    Args:
+        expected_activity_occurrences: {activity: E[#occurrences per instance]},
+            e.g. expected number of visits to transitions labelled with the
+            activity before absorption in the state space.
+        constrained_activities: Set/collection of activities that carry at least
+            one discovered resource constraint (the indicator above).
+        expected_resource_demand: {activity: {res_type: {"mean_count": float}}}
+            — mean resource demand per occurrence.
+        resource_pool_expanded: Resource types actually available in the pool.
+
+    Returns:
+        Expected slot count as a float. Callers resolve the fractional part via
+        stochastic rounding in ``_make_violation_budget``.
+    """
+    constrained = set(constrained_activities)
+    total = 0.0
+    for activity, expected_visits in expected_activity_occurrences.items():
+        if activity not in constrained:
+            continue
+        demand = expected_resource_demand.get(activity, {})
+        for res_type, stats in demand.items():
+            if res_type in resource_pool_expanded:
+                total += expected_visits * max(0.0, stats.get("mean_count", 0.0))
+    return total
+
+
+def _make_violation_budget(total_slots, simulation_config):
+    """
+    Pre-sample a per-instance ``_ViolationBudget`` from a (possibly expected) slot count.
+
+    Args:
+        total_slots: Number (int or float) of constraint-relevant slots.
+        simulation_config: Provides violation degree and cost weights.
+
+    Returns:
+        A fresh ``_ViolationBudget`` for one process instance.
+    """
+    degree = simulation_config.resource_constraint_violation_degree
+    raw_budget = total_slots * degree
+    budget_units = int(raw_budget)
+    if random.random() < (raw_budget - budget_units):
+        budget_units += 1  # stochastic rounding of the fractional part
+    return _ViolationBudget(
+        budget_units,
+        max(0, round(total_slots)),
+        simulation_config.violation_cost_weights,
+    )
 
 
 def _get_node_objects(graph, node):
@@ -68,6 +229,134 @@ def _get_resources_by_activity(simulated_events, resource_id_type_map):
     return result
 
 
+def _inclusion_cost(resource, restrictive_constraints, cost_weights):
+    """
+    Summed violation cost of *including* ``resource``.
+
+    Adds up the weight of every restrictive constraint the resource would break:
+    a ``subset``/``same_resource`` constraint is broken when the resource lies
+    *outside* its reference set, a ``disjoint`` constraint when it lies *inside*.
+    A resource that breaks several constraints pays for all of them.
+
+    Args:
+        resource: The resource ID under consideration.
+        restrictive_constraints: List of (ctype, refs) where ctype is one of
+            "subset", "same_resource", "disjoint" and refs is a frozenset.
+        cost_weights: Per-type cost weights (e.g. VIOLATION_COST_WEIGHTS).
+
+    Returns:
+        Total cost (float). 0.0 means the resource is fully compliant.
+    """
+    cost = 0.0
+    for ctype, refs in restrictive_constraints:
+        if ctype == "disjoint":
+            if resource in refs:
+                cost += cost_weights.get("disjoint", 1.0)
+        else:  # "subset" or "same_resource": the resource must lie within refs
+            if resource not in refs:
+                cost += cost_weights.get(ctype, 1.0)
+    return cost
+
+
+def _allocate_single_type(n, free, constraints, vb, strategy):
+    """
+    Allocate ``n`` resources of one type, spending the violation budget ``vb``.
+
+    ``constraints`` is the *raw*, un-aggregated list of constraints affecting this
+    type — one ``(ctype, refs)`` entry per (prior activity, constraint).
+
+    When the budget allows a deliberate violation, the *cheapest* non-compliant
+    resource is chosen (minimal deviation); a violation is otherwise only taken
+    when forced (no compliant resource is available).
+
+    Args:
+        n: Number of resources to allocate.
+        free: Iterable of currently available resource IDs of this type.
+        constraints: List of (ctype, frozenset(refs)) affecting this type.
+        vb: The (cloned) _ViolationBudget to spend.
+        strategy: Allocation strategy name for picking within a pool.
+
+    Returns:
+        list of resource IDs, or None if no feasible allocation exists.
+    """
+    weights = vb.cost_weights
+    restrictive = [
+        (ct, refs)
+        for ct, refs in constraints
+        if ct in ("subset", "disjoint", "same_resource")
+    ]
+    superset_refs = [refs for ct, refs in constraints if ct == "superset"]
+
+    free_pool = list(free)
+    selected = []
+
+    # --- no constraints on this type: plain strategy allocation, no budget ---
+    # These slots are not constraint-relevant, so they must NOT consume the
+    # violation budget's slot counter
+    if not restrictive and not superset_refs:
+        if len(free_pool) < n:
+            return None
+        for _ in range(n):
+            chosen = _select_by_strategy(free_pool, strategy)
+            free_pool.remove(chosen)
+            selected.append(chosen)
+        return selected
+
+    # --- superset (must_use): required inclusions / charged omissions ---
+    if superset_refs:
+        required_counts = Counter()
+        for refs in superset_refs:
+            for m in refs:
+                required_counts[m] += 1
+        w_sup = weights.get("superset", 1.0)
+        for m, cnt in required_counts.items():
+            if m in free_pool and len(selected) < n:
+                # Include m, but pay for any *other* constraints it breaks.
+                if vb.try_spend(_inclusion_cost(m, restrictive, weights), True) is None:
+                    return None
+                free_pool.remove(m)
+                selected.append(m)
+            else:
+                # Cannot include (unavailable or no slot left) -> charged omission.
+                if vb.try_spend(cnt * w_sup, forced=True) is None:
+                    return None
+
+    if len(selected) > n:
+        return None
+
+    # --- remaining slots: pick by summed inclusion cost ---
+    for _ in range(n - len(selected)):
+        if not free_pool:
+            return None
+
+        costs = {r: _inclusion_cost(r, restrictive, weights) for r in free_pool}
+        compliant = [r for r in free_pool if costs[r] == 0]
+        violating = [r for r in free_pool if costs[r] > 0]
+
+        # The deviation we would take this slot is the cheapest non-compliant one.
+        if violating:
+            min_cost = min(costs[r] for r in violating)
+            cheapest = [r for r in violating if costs[r] == min_cost]
+            viol_cand = _select_by_strategy(cheapest, strategy)
+            viol_cost = costs[viol_cand]
+        else:
+            viol_cand, viol_cost = None, 0.0
+
+        forced = not compliant
+        spent = vb.try_spend(viol_cost, forced=forced)
+        if spent is None:
+            return None  # forced violation the budget cannot afford
+        if spent:
+            chosen = viol_cand
+        else:
+            chosen = _select_by_strategy(compliant, strategy)
+
+        free_pool.remove(chosen)
+        selected.append(chosen)
+
+    return selected
+
+
 def _allocate_resources(
     activity,
     variant_constraints,
@@ -77,29 +366,29 @@ def _allocate_resources(
     allocation_strategy,
     needed_res_types,
     simulation_config,
+    violation_budget,
 ):
     """
     Allocate resources for an activity, respecting the given constraints.
 
     Uses a two-phase approach:
-        Phase 1 — Resolve all constraints into per-type sets:
-            - exact:        Resources forced by same_resource constraints (exact match)
-            - forbidden:    Resources excluded by disjoint constraints
-            - allowed_only: Resources where current Activity has Subset Constraint with previous Event -> Resources must be subset from this set
-            - must_use:     Resources where previous Events have Subset Constraint with current activity -> Must be included
+        Phase 1 — Collect the raw constraints per resource type (one entry per
+            (prior activity, constraint type).
 
-        Phase 2 — Allocate per resource type using the resolved sets:
-            - If exact is set, validate and use it directly.
-            - Otherwise, filter candidates by forbidden/allowed_only, include must_use,
-              and fill remaining slots via allocation strategy.
+        Phase 2 — Allocate per resource type via ``_allocate_single_type``, which
+            spends the per-instance violation budget on a working copy. The copy
+            is only committed (returned) when the whole allocation succeeds.
 
-    The simulation_config controls constraint strictness via two parameters:
+    The simulation_config controls constraint strictness via:
         - resource_constraint_violation_degree:
-            0   → All constraints are hard filters (strict mode).
-            0-1 → subset acts as a soft preference; same_resource/disjoint still enforced.
-            1   → All constraints are skipped entirely.
+            0   → strict: constraints act as hard filters (budget is 0).
+            0-1 → soft: up to ~degree of the constraint-relevant resource slots
+                  of an instance may deviate, weighted by violation_cost_weights.
+            1   → all constraints are skipped entirely.
         - constraint_lookback_length:
-            If set, only the last N simulated events are considered for constraint resolution.
+            If set, only the last N simulated events are considered.
+        - violation_cost_weights:
+            Relative cost per constraint type (same_resource is dearest).
 
     Args:
         activity: The activity to allocate resources for.
@@ -111,22 +400,23 @@ def _allocate_resources(
         allocation_strategy: {res_type: strategy_name} for picking from available pool.
         needed_res_types: Dict {res_type: count} — how many of each type this activity needs.
         simulation_config: Config of the Simulation Model.
+        violation_budget: The instance's _ViolationBudget (spent on a working copy).
 
     Returns:
-        dict {res_type: [res_id, ...]} if allocation succeeded, None if not possible.
+        (assignment, budget) where assignment is {res_type: [res_id, ...]} and
+        budget is the updated _ViolationBudget on success, or (None, unchanged
+        budget) if no allocation is possible.
     """
 
     violation_degree = simulation_config.resource_constraint_violation_degree
-    lookback = simulation_config.constraint_lookback_length
-    strict_constraints = violation_degree == 0
 
     # If violation_degree == 1, skip all constraint logic and just allocate freely
-    if violation_degree >= 1.0:
+    if violation_degree == 1.0:
         assignment = {}
         for res_type, n in needed_res_types.items():
             available = list(resource_queues.get(res_type, []))
             if len(available) < n:
-                return None
+                return None, violation_budget
             strategy = allocation_strategy.get(res_type, "random")
             selected = []
             for _ in range(n):
@@ -134,9 +424,10 @@ def _allocate_resources(
                 selected.append(chosen)
                 available.remove(chosen)
             assignment[res_type] = selected
-        return assignment
+        return assignment, violation_budget
 
     # Apply lookback limit to simulated events
+    lookback = simulation_config.constraint_lookback_length
     previous_events_limited = simulated_events
     if lookback is not None:
         previous_events_limited = simulated_events[-lookback:]
@@ -146,139 +437,35 @@ def _allocate_resources(
         previous_events_limited, resource_id_type_map
     )
 
-    # ── Phase 1: Resolve constraints into per-type sets ──
-
-    exact = {}  # res_type -> set of res_ids (from same_resource)
-    forbidden = defaultdict(set)  # res_type -> set of res_ids to exclude
-    allowed_only = {}  # res_type -> set of res_ids (intersection of subset refs)
-    must_use = defaultdict(set)  # res_type -> set of res_ids that must be included
-
+    # ── Phase 1: Collect the raw constraints per resource type ──
+    constraints_by_type = defaultdict(list)  # res_type -> [(ctype, frozenset), ...]
     for other_act, ctype in constraints_for_activity.items():
         if other_act not in prior_assignments:
             continue
-
         for res_type, res_ids in prior_assignments[other_act].items():
-            # TODO: Logik checken
             if res_type not in needed_res_types:
                 continue
-            refs = set(res_ids)
+            constraints_by_type[res_type].append((ctype, frozenset(res_ids)))
 
-            if ctype == "same_resource":
-                if res_type in exact and exact[res_type] != refs:
-                    return None  # Conflicting same_resource constraints
-                exact[res_type] = refs
+    # ── Phase 2: Allocate per resource type, spending a working copy of the budget ──
 
-            elif ctype == "disjoint":
-                forbidden[res_type] |= refs
-
-            elif ctype == "subset":
-                if res_type not in allowed_only:
-                    allowed_only[res_type] = set(refs)
-                else:
-                    allowed_only[res_type] &= refs
-
-            elif ctype == "superset":
-                must_use[res_type] |= refs
-
-    # ── Phase 2: Allocate per resource type ──
-
+    vb = violation_budget.clone()
     assignment = {}
 
     for res_type, n in needed_res_types.items():
-        free = set(resource_queues.get(res_type, []))
+        strategy = allocation_strategy.get(res_type, "random")
+        result = _allocate_single_type(
+            n,
+            resource_queues.get(res_type, []),
+            constraints_by_type.get(res_type, []),
+            vb,
+            strategy,
+        )
+        if result is None:
+            return None, violation_budget  # discard the working copy
+        assignment[res_type] = result
 
-        # --- Exact allocation (same_resource) ---
-        if res_type in exact:
-            selected = exact[res_type]
-
-            if len(selected) != n:
-                return None  # Count mismatch
-
-            if not selected.issubset(free):
-                return None  # Required resources not available
-
-            if selected & forbidden[res_type]:
-                return None  # Conflicts with disjoint constraint
-
-            if must_use.get(res_type) and not must_use[res_type].issubset(selected):
-                return None  # Conflicts with superset constraint
-
-            if res_type in allowed_only and not selected.issubset(
-                allowed_only[res_type]
-            ):
-                return None  # Conflicts with subset constraint
-
-            assignment[res_type] = list(selected)
-            continue
-
-        # --- Build candidate list ---
-        candidates = list(resource_queues.get(res_type, []))
-
-        if strict_constraints and res_type in allowed_only:
-            candidates = [r for r in candidates if r in allowed_only[res_type]]
-
-        candidates = [r for r in candidates if r not in forbidden[res_type]]
-
-        # Validate must_use feasibility
-        must = must_use.get(res_type, set())
-        if not must.issubset(set(candidates)):
-            return None  # Must-use resources not available or excluded
-
-        if len(must) > n:
-            return None  # More must-use resources than needed
-
-        # --- Select remaining resources ---
-        remaining = [r for r in candidates if r not in must]
-        k = n - len(must)
-
-        if strict_constraints:
-            # Hard mode: all resources must come from candidates (already filtered)
-            # TODO: check that comment is wrong, not logic itself. Because there can be additional resources
-            if len(remaining) < k:
-                return None
-
-            strategy = allocation_strategy.get(res_type, "random")
-            extra = []
-            for _ in range(k):
-                chosen = _select_by_strategy(remaining, strategy)
-                extra.append(chosen)
-                remaining.remove(chosen)
-        else:
-            # Soft mode: prefer allowed_only as a preference, then fill from full pool
-            # TODO: Hier muss noch irgendeine Logik rein, die unterscheidet was in dem Degree drinsteht. Also irgendeine Logik die irgendwie basierend auf einer Wahrscheinlichkeit den Grad der Abweichung beschränkt
-            preferred = []
-            fallback = []
-            if res_type in allowed_only:
-                for r in remaining:
-                    if r in allowed_only[res_type]:
-                        preferred.append(r)
-                    else:
-                        fallback.append(r)
-            else:
-                fallback = remaining
-
-            strategy = allocation_strategy.get(res_type, "random")
-            extra = []
-
-            # First pick from preferred
-            for _ in range(min(k, len(preferred))):
-                chosen = _select_by_strategy(preferred, strategy)
-                extra.append(chosen)
-                preferred.remove(chosen)
-
-            # Then fill from fallback
-            still_needed = k - len(extra)
-            if still_needed > 0:
-                if len(fallback) < still_needed:
-                    return None
-                for _ in range(still_needed):
-                    chosen = _select_by_strategy(fallback, strategy)
-                    extra.append(chosen)
-                    fallback.remove(chosen)
-
-        assignment[res_type] = list(must) + extra
-
-    return assignment
+    return assignment, vb
 
 
 class OCProcessAreaSimulationConfiguration:
@@ -288,15 +475,20 @@ class OCProcessAreaSimulationConfiguration:
 
     - Resource constraint violation degree: Degree to which resource constraints can be violated. Value between 0 and 1 where 0 means strictly following all Constraints and 1 allows to ignore all constraints
     - Constraint_Lookback_Length: Number of prior events to look back for when checking constraints. Higher values may lead to more realistic simulations but also increased computational complexity. If value is None, then all prior events will be considered
+    - Violation_Cost_Weights: Relative cost (in budget units) of violating each
+      constraint type. A higher cost makes that violation type rarer for a given
+      violation degree;
     """
 
     def __init__(
         self,
         resource_constraint_violation_degree=RESOURCE_CONSTRAINT_VIOLATION_DEGREE,
         constraint_lookback_length=CONSTRAINT_LOOKBACK_LENGTH,
+        violation_cost_weights=VIOLATION_COST_WEIGHTS,
     ):
         self.resource_constraint_violation_degree = resource_constraint_violation_degree
         self.constraint_lookback_length = constraint_lookback_length
+        self.violation_cost_weights = violation_cost_weights.copy()
 
 
 class OCProcessAreaSimulationModel:
@@ -589,6 +781,16 @@ class VariantPlayoutStrategy:
                     obj_map[orig_oid] = new_oid
                     object_output[new_oid] = otype
 
+                # Calculate Violation Budget for this instance
+                total_slots = _estimate_constraint_slots(
+                    resource_constraints.get(variant, {}),
+                    resource_distribution_of_variants.get(variant, {}),
+                    resource_pool_expanded,
+                )
+                violation_budget = _make_violation_budget(
+                    total_slots, simulation_config
+                )
+
                 active_executions.append(
                     {
                         "id": instance_counter,
@@ -597,6 +799,7 @@ class VariantPlayoutStrategy:
                         "simulated_events": [],
                         "variant": variant,
                         "obj_map": obj_map,
+                        "violation_budget": violation_budget,
                     }
                 )
 
@@ -644,7 +847,7 @@ class VariantPlayoutStrategy:
                     variant_constraints = resource_constraints.get(inst["variant"], {})
 
                     # Allocate resources respecting constraints
-                    allocated = _allocate_resources(
+                    allocated, new_budget = _allocate_resources(
                         activity,
                         variant_constraints,
                         inst["simulated_events"],
@@ -653,11 +856,15 @@ class VariantPlayoutStrategy:
                         allocation_strategy,
                         needed_res_types,
                         simulation_config,
+                        inst["violation_budget"],
                     )
 
                     if allocated is None:
                         # Cannot fire this activity, as no resource allocation is possible
                         continue
+
+                    # Commit the budget only now that the activity actually fires.
+                    inst["violation_budget"] = new_budget
 
                     # --- Execute the activity ---
 
@@ -760,8 +967,74 @@ class StateSpacePlayoutStrategy:
         self.connected_component_distribution = connected_component_distribution
         return
 
-    def run(self, simulation_model):
-        return
+    def expected_activity_occurrences(self):
+        """
+        [SCAFFOLD] Expected number of occurrences of each activity per instance.
+
+        For a stochastic state space this is the expected number of visits to the
+        transitions labelled with each activity before an instance reaches an
+        absorbing (end) state — e.g. derived from the fundamental matrix
+        ``N = (I − Q)^-1`` of the absorbing Markov chain, or by power-iterating
+        the transition probabilities until convergence.
+
+        Returns:
+            dict {activity: expected_occurrences (float)}.
+        """
+        # TODO(advanced-simulation): compute from self.state_space once it exists.
+        raise NotImplementedError(
+            "expected_activity_occurrences requires the stochastic state space, "
+            "which is not implemented yet."
+        )
+
+    def estimate_constraint_slots(
+        self,
+        simulation_model,
+        resource_pool_expanded,
+        constrained_activities,
+    ):
+        """
+        [SCAFFOLD] Expected constraint-relevant resource slots of a state-space instance.
+
+        Wraps ``_estimate_expected_constraint_slots`` with the state-space-derived
+        expected activity occurrences. Used to size the per-instance violation
+        budget via ``_make_violation_budget`` (mirroring the exact computation in
+        the variant playout).
+
+        Args:
+            simulation_model: The OCProcessAreaSimulationModel (provides the
+                expected resource demand per activity).
+            resource_pool_expanded: Resource types available in the pool.
+            constrained_activities: Activities carrying a resource constraint.
+
+        Returns:
+            Expected slot count as a float.
+        """
+        return _estimate_expected_constraint_slots(
+            self.expected_activity_occurrences(),
+            constrained_activities,
+            simulation_model.needed_resources_per_activity or {},
+            resource_pool_expanded,
+        )
+
+    def run(
+        self,
+        simulation_model,
+        sim_duration_s: int,
+        resource_pool: dict,
+        tick_size_s: int = 60,
+        start_datetime: dt.datetime = None,
+    ) -> dict:
+        # TODO(advanced-simulation): mirror VariantPlayoutStrategy.run but spawn
+        # instances from the state space + connected-component arrival distribution.
+        # The per-instance violation budget would be created with:
+        #     total_slots = self.estimate_constraint_slots(
+        #         simulation_model, resource_pool_expanded, constrained_activities
+        #     )
+        #     budget = _make_violation_budget(total_slots, simulation_model.simulation_config)
+        raise NotImplementedError(
+            "State-space playout is not implemented yet (requires the stochastic "
+            "state space and connected-component arrival distribution)."
+        )
 
 
 if __name__ == "__main__":
