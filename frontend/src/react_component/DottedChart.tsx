@@ -262,9 +262,7 @@ export default function DottedChart({
             ticks={yTicks}
             interval={0}
             allowDecimals={false}
-            tickFormatter={(value) =>
-              truncateAxisLabel(yLabels.get(Number(value)) ?? formatAxisTick(Number(value)))
-            }
+            tick={(props) => <DottedChartYAxisTick {...props} labels={yLabels} />}
             tickMargin={8}
             width={Y_AXIS_WIDTH}
           />
@@ -696,6 +694,36 @@ function formatXAxisTick(
 function truncateAxisLabel(label: string): string {
   if (label.length <= MAX_Y_TICK_LABEL_LENGTH) return label;
   return `${label.slice(0, MAX_Y_TICK_LABEL_LENGTH - 1)}...`;
+}
+
+function DottedChartYAxisTick({
+  x,
+  y,
+  payload,
+  labels,
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value: number | string };
+  labels: Map<number, string>;
+}) {
+  const numericValue = Number(payload?.value);
+  const label = labels.get(numericValue) ?? formatAxisTick(numericValue);
+
+  return (
+    <g transform={`translate(${x ?? 0},${y ?? 0})`}>
+      <text
+        x={0}
+        y={0}
+        dy={4}
+        textAnchor="end"
+        className="fill-muted-foreground text-[11px]"
+      >
+        <title>{label}</title>
+        {truncateAxisLabel(label)}
+      </text>
+    </g>
+  );
 }
 
 function isTimeAxis(axis: AxisOption): boolean {
