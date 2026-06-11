@@ -355,14 +355,25 @@ export default function OCHandoverExplorer({
     if (useClusters && clusterInfo) {
       const types = new Set(Object.values(clusterInfo.resourceObjectTypes));
       setResourceTypes(types);
+      setBoTypes(prev => {
+        const hasOverlap = [...types].some(t => prev.has(t));
+        if (!hasOverlap) return prev;
+        const n = new Set(prev);
+        types.forEach(t => n.delete(t));
+        return n;
+      });
     }
   }, [useClusters, clusterInfo]);
 
-  const toggleResourceType = (t: string) =>
+  const toggleResourceType = (t: string) => {
     setResourceTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
+    setBoTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+  };
 
-  const toggleBoType = (t: string) =>
+  const toggleBoType = (t: string) => {
     setBoTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
+    setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+  };
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
@@ -387,10 +398,16 @@ export default function OCHandoverExplorer({
       return sortDir === "desc" ? -cmp : cmp;
     });
   }, [data, sortCol, sortDir]);
-  const maxRaw = useMemo(
-    () => sortedEdges.reduce((m, e) => Math.max(m, e.raw_weight), 1),
-    [sortedEdges],
-  );
+
+  const weightDenominators = useMemo(() => {
+    if (normalizationScope === "per_bo_type") {
+      const totals: Record<string, number> = {};
+      for (const e of sortedEdges) totals[e.businessobject_type] = (totals[e.businessobject_type] ?? 0) + e.weight;
+      return totals;
+    }
+    const total = sortedEdges.reduce((s, e) => s + e.weight, 0);
+    return { _global: total };
+  }, [sortedEdges, normalizationScope]);
 
   const Wrapper = embedded ? "div" : Card;
 
@@ -804,7 +821,10 @@ export default function OCHandoverExplorer({
                   <tbody>
                     {sortedEdges.map((edge, i) => {
                       const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
-                      const barPct = Math.round((edge.raw_weight / maxRaw) * 100);
+                      const denom = normalizationScope === "per_bo_type"
+                        ? (weightDenominators[edge.businessobject_type] ?? 1)
+                        : (weightDenominators._global ?? 1);
+                      const barPct = denom > 0 ? (edge.weight / denom) * 100 : 0;
                       return (
                         <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
                           <td className="px-3 py-2 font-mono">{edge.source}</td>
@@ -820,9 +840,7 @@ export default function OCHandoverExplorer({
                               <div className="flex-1 h-2 bg-muted rounded overflow-hidden">
                                 <div className="h-full rounded" style={{ width: `${barPct}%`, background: color }} />
                               </div>
-                              <span className="tabular-nums text-xs text-muted-foreground w-12 text-right">
-                                {edge.weight.toFixed(4)}
-                              </span>
+                              <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
                             </div>
                           </td>
                         </tr>
