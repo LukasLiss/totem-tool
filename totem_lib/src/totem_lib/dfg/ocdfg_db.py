@@ -160,12 +160,17 @@ class OCDFGDb(OCDFG):
 
         return graph
 
-
 class NewOCDFGDb(nx.MultiDiGraph):
     """
-    DuckDB-backed Object-Centric Directly-Follows MultiGraph.
+    DuckDB-backed Object-Centric Directly-Follows MultiGraph (OCDFG).
 
-    Each arc represents a single object type (separate arcs per object type).
+    Inherits from NetworkX MultiDiGraph to support parallel directed edges (arcs)
+    between the same source and target nodes. Each parallel edge represents a
+    distinct object type (identified by the `key` parameter), ensuring that type-specific
+    frequencies are maintained separately rather than aggregated.
+
+    Attributes:
+        graph (dict): Metadata about the graph. Includes key `kind` set to 'new_ocdfg'.
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -177,7 +182,24 @@ class NewOCDFGDb(nx.MultiDiGraph):
         ocel_db: OcelDuckDB,
         object_types: Optional[List[str]] = None,
     ) -> "NewOCDFGDb":
-        """Build the new OC-DFG (MultiDiGraph) from a DuckDB-backed event log."""
+        """
+        Build the new OC-DFG (MultiDiGraph) from a DuckDB-backed event log.
+
+        This method queries the event log database via DuckDB to construct the
+        directly-follows relationships for each object type. It populates
+        the multigraph with activity nodes, terminal start/end nodes, and the
+        corresponding type-specific directed edges.
+
+        Args:
+            ocel_db (OcelDuckDB): The DuckDB-backed event log database wrapper.
+            object_types (Optional[List[str]]): A list of object types to filter by.
+                If None or empty, all object types present in the event log are used.
+
+        Returns:
+            NewOCDFGDb: An initialized NewOCDFGDb multigraph instance populated with
+                nodes and parallel edges representing the directly-follows relation
+                for the selected object types.
+        """
         type_filter = ""
         params: list = []
         if object_types is not None:
@@ -269,6 +291,9 @@ class NewOCDFGDb(nx.MultiDiGraph):
                 target = row["activity"]
                 w = row["weight"]
                 if graph.has_node(target):
+                    # Since MultiDiGraph allows parallel edges between the same nodes,
+                    # the key parameter is required by NetworkX to uniquely identify
+                    # and update the specific parallel edge representing a given object type.
                     graph.add_edge(
                         start_node, target,
                         key=otype, objtype=otype, weight=w, role="start"
@@ -291,6 +316,9 @@ class NewOCDFGDb(nx.MultiDiGraph):
                 source = row["activity"]
                 w = row["weight"]
                 if graph.has_node(source):
+                    # Since MultiDiGraph allows parallel edges between the same nodes,
+                    # the key parameter is required by NetworkX to uniquely identify
+                    # and update the specific parallel edge representing a given object type.
                     graph.add_edge(
                         source, end_node,
                         key=otype, objtype=otype, weight=w, role="end"
@@ -299,6 +327,9 @@ class NewOCDFGDb(nx.MultiDiGraph):
         # 4. Regular edges
         for row in edges_df.iter_rows(named=True):
             u, v, w, otype = row["src"], row["tgt"], row["weight"], row["obj_type"]
+            # Since MultiDiGraph allows parallel edges between the same nodes,
+            # the key parameter is required by NetworkX to uniquely identify
+            # and update the specific parallel edge representing a given object type.
             graph.add_edge(u, v, key=otype, objtype=otype, weight=w)
 
         return graph

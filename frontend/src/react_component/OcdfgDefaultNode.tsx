@@ -64,6 +64,10 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
       textAlign: 'center' as const,
       flexDirection: 'column' as const,
       gap: 6,
+      overflow: 'hidden',
+      boxSizing: 'border-box' as const,
+      minWidth: 0,
+      pointerEvents: 'all' as const,
     }),
     [style],
   );
@@ -85,9 +89,16 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
           position: 'relative',
           zIndex: 1,
           overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          width: '100%',
+          minWidth: 0,
+          boxSizing: 'border-box',
+          display: 'block',
           textAlign: 'center',
           lineHeight: 1.25,
         }}
+        title={label}
       >
         {label}
       </span>
