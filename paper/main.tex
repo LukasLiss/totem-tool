@@ -21,6 +21,9 @@
 \usepackage{booktabs}
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, fit}
+\usepackage{multirow}
 
 \lstdefinestyle{sqlstyle}{
   language=SQL,
@@ -156,6 +159,33 @@ Variant analysis~\cite{adams2022variants} partitions a log into \emph{process ex
 \section{A Relational Architecture for OCPM}
 \label{sec:framework}
 
+\begin{figure}
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  box/.style={draw, rounded corners=1pt, align=center, inner sep=3pt, minimum height=14pt},
+  store/.style={box, fill=green!8},
+  comp/.style={box, fill=blue!6},
+  outbox/.style={box, fill=orange!10},
+  arr/.style={-{Stealth[length=4pt]}, thick}
+]
+\node[box] (src) {\ocel sources\\ \tiny SQLite / JSON / XML / CSV};
+\node[store, right=8mm of src] (db) {relational OCEL\\ \tiny 5 tables + indexes};
+\node[store, below=4mm of db] (state) {maintained summaries\\ \tiny DF edges, lifetimes, pairs, counters};
+\node[comp, right=8mm of db] (sql) {set-based discovery\\ \tiny P1--P4 query patterns};
+\node[outbox, right=8mm of sql] (models) {models\\ \tiny OC-DFG, TOTeM,\\ \tiny variants};
+\node[box, below=4mm of src] (stream) {event stream\\ \tiny append batches};
+\draw[arr] (src) -- node[above]{\tiny import} (db);
+\draw[arr] (db) -- (sql);
+\draw[arr] (sql) -- (models);
+\draw[arr] (stream) -- node[below, sloped]{\tiny $\Delta$-maintain} (state);
+\draw[arr] (stream) -- (db.south west);
+\draw[arr] (state) -| node[below, pos=0.25]{\tiny refresh} (models.south);
+\end{tikzpicture}
+\caption{\sys architecture. Discovery runs as SQL inside the engine; appends maintain summary tables from which models are refreshed without scanning the log.}
+\label{fig:arch}
+\end{figure}
+
 \subsection{Schema}
 \label{sec:schema}
 
@@ -250,7 +280,21 @@ JOIN lifetimes lt ON ac.tgt_obj = lt.obj_id
 GROUP BY ls.obj_type, lt.obj_type;
 \end{lstlisting}
 
-With $\bar{L}$ the mean trace length, eager aggregation reduces the intermediate from $\Theta(|{\sim}|\,\bar{L}^2)$ to $\Theta(m + |{\sim}|)$ rows. The same rewrite applies to log cardinalities, where the count of connected objects per type is aggregated per source object before bucketing into $\{0, 1, >1\}$. Phase~(3) computes, for every event and type, the number of participating objects of that type (P4) and buckets them per source--target type pair; the final model assembly (selecting the most precise label per type pair under $\tau$) operates on a few hundred aggregate rows in Python, unchanged from the reference implementation~\cite{liss2024totem}.
+With $\bar{L}$ the mean trace length, eager aggregation reduces the intermediate from $\Theta(|{\sim}|\,\bar{L}^2)$ to $\Theta(m + |{\sim}|)$ rows (Table~\ref{tab:complexity}).
+
+\begin{table}
+\caption{Dominant intermediate sizes of the naive vs.\ optimized formulations ($m=|R|$, $\bar{L}$ mean trace length, $\sim$ connected object pairs).}
+\label{tab:complexity}
+\small
+\begin{tabular}{lll}
+\toprule
+Phase & Naive & Optimized \\
+\midrule
+DF extraction & $\Theta(\sum_o L_o^2)$ pairs $\times$ $O(L_o)$ checks & $O(m \log m)$ \\
+Temporal rel. & $\Theta(|{\sim}|\,\bar{L}^2)$ & $\Theta(m + |{\sim}|)$ \\
+\bottomrule
+\end{tabular}
+\end{table} The same rewrite applies to log cardinalities, where the count of connected objects per type is aggregated per source object before bucketing into $\{0, 1, >1\}$. Phase~(3) computes, for every event and type, the number of participating objects of that type (P4) and buckets them per source--target type pair; the final model assembly (selecting the most precise label per type pair under $\tau$) operates on a few hundred aggregate rows in Python, unchanged from the reference implementation~\cite{liss2024totem}.
 
 \subsection{Variants: Hybrid Set-Based/Graph Processing}
 \label{sec:variants-sql}
@@ -286,7 +330,50 @@ The per-batch maintenance cost is $O(|B|\log|B| + |\Delta{\sim}| + |{\sim_{\math
 \section{Experimental Evaluation}
 \label{sec:eval}
 
-\emph{[Evaluation text is generated from the benchmark results; see Section placeholders below.]}
+We evaluate five questions.
+\textbf{RQ1}: How does \sys scale with log size compared to in-memory OCPM (Section~\ref{sec:eval-scaling})?
+\textbf{RQ2}: How much do the two query rewrites of Section~\ref{sec:algorithms} contribute (Section~\ref{sec:eval-ablation})?
+\textbf{RQ3}: What does incremental maintenance save over recomputation (Section~\ref{sec:eval-inc})?
+\textbf{RQ4}: Does \sys deliver under a hard memory budget (Section~\ref{sec:eval-mem})?
+\textbf{RQ5}: How do storage footprint and end-to-end times compare on real logs (Section~\ref{sec:eval-real})?
+
+\subsection{Setup}
+\label{sec:eval-setup}
+
+\paragraph{Environment}
+All experiments run on a 4-core Intel Xeon @\,2.10\,GHz with 15\,GB RAM and local SSD, Linux, Python 3.11, DuckDB 1.5.3, Polars 1.41, pm4py 2.7.22. Every measurement executes in a fresh process; we report wall-clock time of the discovery computation itself (data loading reported separately where relevant) and the peak resident set size of the process. Runs are repeated three times up to $3{\cdot}10^5$ events (we report medians; variance is below 5\%) and once above. The timeout is 600\,s.
+
+\paragraph{Baselines}
+(i)~\emph{Polars}: the in-memory reference implementations of totem-tool, which already use a columnar dataframe engine and are therefore a strong baseline---they represent the state of practice of dedicated in-memory OCPM code. (ii)~\emph{pm4py}~\cite{pm4py}, the most widely used OCPM library, for OC-DFG discovery (pm4py implements no TOTeM). All three implementations of each algorithm produce identical models (verified).
+
+\paragraph{Real logs}
+We use the three public \ocel logs of Table~\ref{tab:datasets}: a container logistics process, a procure-to-pay (P2P) process, and the order management process.
+
+\begin{table}
+\caption{Real \ocel logs and their storage footprint (MB) in the three \ocel serializations vs.\ the \sys database.}
+\label{tab:datasets}
+\small
+\setlength{\tabcolsep}{3.4pt}
+\begin{tabular}{lrrrr|rrrr}
+\toprule
+ & & & & & \multicolumn{4}{c}{size [MB]} \\
+Log & $|E|$ & $|O|$ & $|R|$ & types & JSON & XML & SQLite & \sys \\
+\midrule
+Logistics & 35,372 & 13,882 & 74,272 & 7 & 10.0 & 13.4 & 23.0 & \textbf{2.4} \\
+P2P & 14,671 & 9,543 & 35,927 & 7 & 14.3 & 18.4 & 13.7 & \textbf{2.6} \\
+Orders & 21,008 & 10,840 & 147,385 & 6 & 12.6 & 15.2 & 36.6 & \textbf{3.2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Synthetic logs}
+The public logs are tiny by database standards. For controlled scaling we built a set-based generator that synthesizes \ocel logs \emph{inside} the engine (no Python row loops; $10^7$ events in under two minutes): $K{=}3$ object types form a hierarchy (e.g., order--item--package), every object runs a 10-event lifecycle, children start within their parent's lifetime, 30\% of child events also reference the parent (creating shared events and type interaction), and child--parent links are mirrored in O2O relations. All randomness is hash-based and seeded, so every configuration is exactly reproducible. We scale the number of objects to obtain $3{\cdot}10^4$--$10^7$ events.
+
+% FILL:RQ1
+% FILL:RQ2
+% FILL:RQ3
+% FILL:RQ4
+% FILL:RQ5
 
 \section{Conclusion}
 \label{sec:conclusion}
