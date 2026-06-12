@@ -147,6 +147,47 @@ def fig_ablation(out):
     plt.close(fig)
 
 
+def fig_ablation_tracelen(out):
+    rows = read("ablation_tracelen")
+    if not rows:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.3))
+    for ax, algo, title in ((axes[0], "ocdfg", "OC-DFG (300k events)"),
+                            (axes[1], "totem", "TOTeM (300k events)")):
+        sub_rows = [r for r in rows if r["algo"] == algo
+                    and r["status"] != "skipped"]
+        variants = []
+        for r in sub_rows:
+            if r["variant"] not in variants:
+                variants.append(r["variant"])
+        for variant in variants:
+            sub = [r for r in sub_rows if r["variant"] == variant]
+            xs = [int(r["trace_len"]) for r in sub if r["status"] == "ok"]
+            ys = [_f(r, "elapsed_s") for r in sub if r["status"] == "ok"]
+            style = ENGINE_STYLE.get(variant, dict(marker="o", label=variant))
+            ax.plot(xs, ys, markersize=3.5, linewidth=1.2, **style)
+            for r in sub:
+                if r["status"] in ("timeout", "oom", "error"):
+                    y = _f(r, "elapsed_s") or 600.0
+                    ax.plot([int(r["trace_len"])], [y], marker="x",
+                            markersize=6, color=style.get("color", "k"),
+                            linestyle="none")
+                    ax.annotate(r["status"].upper(), (int(r["trace_len"]), y),
+                                textcoords="offset points", xytext=(0, 4),
+                                ha="center", fontsize=6,
+                                color=style.get("color", "k"))
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("trace length L")
+        ax.set_title(title)
+        ax.grid(True, which="both", alpha=0.25, linewidth=0.4)
+    axes[0].set_ylabel("runtime [s]")
+    axes[0].legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out / "fig_ablation_tracelen.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
 def fig_incremental(out):
     rows = [r for r in read("incremental") if r["status"] == "ok"]
     if not rows:
@@ -221,6 +262,7 @@ def main():
     fig_scaling(out)
     fig_scaling_memory(out)
     fig_ablation(out)
+    fig_ablation_tracelen(out)
     fig_incremental(out)
     fig_real(out)
     print(f"figures written to {out}")

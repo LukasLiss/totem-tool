@@ -393,7 +393,27 @@ First, \emph{\sys scales linearly and stays interactive}: OC-DFG and TOTeM disco
 Second, \emph{the gap to dedicated in-memory code depends on the algorithm's shape}. For the OC-DFG---essentially one grouped aggregation---the Polars baseline is marginally faster on the discovery step itself (7.1\,s vs.\ 10.5\,s at $10^7$), confirming that \sys's window-function plan is competitive with hand-written columnar code. For TOTeM, whose pair-classification step in-memory iterates over object pairs in Python, \sys is $17\times$ faster at $10^7$ events (10.7\,s vs.\ 180.6\,s) with the gap widening with size.
 
 Third, \emph{the in-memory architecture pays hidden costs that \sys avoids}. The dataframe baseline must first materialize the log in RAM---21.9\,s of loading at $10^7$ events before the first query, against milliseconds to open the \sys database---and its footprint grows to 9.0\,GB (OC-DFG) and 12.9\,GB (TOTeM) at $10^7$ events, 86\% of the machine's RAM: the next log-size step is out of reach, exactly where Figure~\ref{fig:scaling-mem} shows \sys at 2.0--2.2\,GB, and RQ4 shows \sys completing the same workload in 500\,MB.
-% FILL:RQ2
+\subsection{RQ2: Effect of the Query Rewrites}
+\label{sec:eval-ablation}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_ablation.pdf}
+\caption{Optimized vs.\ naive SQL formulations over log size (trace length $L{=}10$).}
+\label{fig:ablation}
+\end{figure*}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_ablation_tracelen.pdf}
+\caption{Optimized vs.\ naive formulations over trace length $L$ at a fixed $3{\cdot}10^5$ events.}
+\label{fig:ablation-tracelen}
+\end{figure*}
+
+Figure~\ref{fig:ablation} compares the optimized formulations against their naive counterparts on identical data (both produce identical models; enforced by tests). With short traces ($L{=}10$), the window-function OC-DFG is already $5.4\times$ faster than the self-join formulation at $3{\cdot}10^6$ events (2.8\,s vs.\ 14.9\,s) while using $6.6\times$ less memory (0.9\,GB vs.\ 6.1\,GB)---the quadratic candidate space materializes as memory pressure before it dominates runtime. Eager lifetime aggregation accelerates TOTeM by $1.8\times$ at this trace length.
+
+The decisive variable is trace length (Figure~\ref{fig:ablation-tracelen}): holding the event count fixed at $3{\cdot}10^5$ and growing $L$ from 10 to 300 leaves the optimized formulations essentially flat, while the naive intermediates grow as predicted by Table~\ref{tab:complexity}.
+% FILL:tracelen
 % FILL:RQ3
 % FILL:RQ4
 % FILL:RQ5

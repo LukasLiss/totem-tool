@@ -17,6 +17,7 @@ HERE = Path(__file__).parent
 BENCHES = [
     "bench_scaling.py",
     "bench_ablation.py",
+    "bench_ablation_tracelen.py",
     "bench_incremental.py",
     "bench_memory.py",
     "bench_real.py",
