@@ -369,7 +369,30 @@ Orders & 21,008 & 10,840 & 147,385 & 6 & 12.6 & 15.2 & 36.6 & \textbf{3.2} \\
 \paragraph{Synthetic logs}
 The public logs are tiny by database standards. For controlled scaling we built a set-based generator that synthesizes \ocel logs \emph{inside} the engine (no Python row loops; $10^7$ events in under two minutes): $K{=}3$ object types form a hierarchy (e.g., order--item--package), every object runs a 10-event lifecycle, children start within their parent's lifetime, 30\% of child events also reference the parent (creating shared events and type interaction), and child--parent links are mirrored in O2O relations. All randomness is hash-based and seeded, so every configuration is exactly reproducible. We scale the number of objects to obtain $3{\cdot}10^4$--$10^7$ events.
 
-% FILL:RQ1
+\subsection{RQ1: Scalability}
+\label{sec:eval-scaling}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_scaling.pdf}
+\caption{Discovery runtime over synthetic log size (log--log). $\times$ marks a failed run at its budget.}
+\label{fig:scaling}
+\end{figure*}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_scaling_memory.pdf}
+\caption{Peak process RSS for the runs of Figure~\ref{fig:scaling}.}
+\label{fig:scaling-mem}
+\end{figure*}
+
+Figure~\ref{fig:scaling} shows discovery runtimes from $3{\cdot}10^4$ to $10^7$ events; Figure~\ref{fig:scaling-mem} the corresponding peak memory. Three observations.
+
+First, \emph{\sys scales linearly and stays interactive}: OC-DFG and TOTeM discovery over $10^7$ events take 10.5\,s and 10.7\,s respectively. pm4py, the most widely used OCPM implementation, is two orders of magnitude slower throughout (e.g., OC-DFG at $10^6$ events: 148\,s vs.\ 1.0\,s) and exceeds the 600\,s timeout at $10^7$ events.
+
+Second, \emph{the gap to dedicated in-memory code depends on the algorithm's shape}. For the OC-DFG---essentially one grouped aggregation---the Polars baseline is marginally faster on the discovery step itself (7.1\,s vs.\ 10.5\,s at $10^7$), confirming that \sys's window-function plan is competitive with hand-written columnar code. For TOTeM, whose pair-classification step in-memory iterates over object pairs in Python, \sys is $17\times$ faster at $10^7$ events (10.7\,s vs.\ 180.6\,s) with the gap widening with size.
+
+Third, \emph{the in-memory architecture pays hidden costs that \sys avoids}. The dataframe baseline must first materialize the log in RAM---21.9\,s of loading at $10^7$ events before the first query, against milliseconds to open the \sys database---and its footprint grows to 9.0\,GB (OC-DFG) and 12.9\,GB (TOTeM) at $10^7$ events, 86\% of the machine's RAM: the next log-size step is out of reach, exactly where Figure~\ref{fig:scaling-mem} shows \sys at 2.0--2.2\,GB, and RQ4 shows \sys completing the same workload in 500\,MB.
 % FILL:RQ2
 % FILL:RQ3
 % FILL:RQ4
