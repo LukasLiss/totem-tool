@@ -88,7 +88,7 @@ interface DfgData {
   trace_variants?: TraceVariantsMap;
 }
 
-interface NewOCDFGVisualizerProps {
+interface NewOCDFGVariantsVisualizerProps {
   height?: string | number;
   data?: OcdfgGraph;
   fileId?: number;
@@ -293,7 +293,7 @@ function extractElkPolyline(elkEdge: any): Array<{ x: number; y: number }> | und
   return points;
 }
 
-function NewOCDFGVisualizer({
+function NewOCDFGVariantsVisualizer({
   height = 'calc(100vh - 50px)',
   data,
   fileId,
@@ -304,8 +304,8 @@ function NewOCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
-}: NewOCDFGVisualizerProps) {
-  console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
+}: NewOCDFGVariantsVisualizerProps) {
+  console.log('[NewOCDFGVariantsVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -322,9 +322,13 @@ function NewOCDFGVisualizer({
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
 
-  // Edge weight slider state
-  const [weightMax, setWeightMax] = useState<Record<string, number>>({});
-  const [weightLimit, setWeightLimit] = useState<Record<string, number>>({});
+  // Trace-count slider state
+  const [traceMax, setTraceMax]   = useState<Record<string, number>>({});
+  const [traceLimit, setTraceLimit] = useState<Record<string, number>>({});
+  // Debounce ref: cleared/reset on each slider interaction
+  const traceLimitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks whether we are currently re-fetching after a slider settle
+  const [traceFetching, setTraceFetching] = useState(false);
 
   const [animateEdges, setAnimateEdges] = useState(false);
   const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
@@ -493,9 +497,9 @@ function NewOCDFGVisualizer({
         onSizeChange(measured);
       }
     },
-    // nodes and edges intentionally omitted — we use refs to avoid an
-    // infinite loop: setNodes → nodes changes → reportGraphSize recreated
-    // → effect re-runs → setNodes again.
+    // nodes and edges intentionally omitted ΓÇö we use refs to avoid an
+    // infinite loop: setNodes ΓåÆ nodes changes ΓåÆ reportGraphSize recreated
+    // ΓåÆ effect re-runs ΓåÆ setNodes again.
     [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
   );
 
@@ -557,6 +561,19 @@ function NewOCDFGVisualizer({
     autoFitView,
   ]);
 
+  // Build the URL for the OCDFG endpoint, injecting trace limits when set.
+  const buildFetchUrl = useCallback(
+    (limits: Record<string, number>) => {
+      let url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
+      const limitParts = Object.entries(limits)
+        .map(([t, n]) => `${encodeURIComponent(t)}:${n}`)
+        .join(',');
+      if (limitParts) url += `&trace_limits=${limitParts}`;
+      return url;
+    },
+    [fileId],
+  );
+
   useEffect(() => {
     if (data) {
       setDfgData(data);
@@ -569,7 +586,8 @@ function NewOCDFGVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
+    // On initial load always use current traceLimit (empty == unfiltered)
+    const url = buildFetchUrl(traceLimit);
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {
@@ -577,6 +595,25 @@ function NewOCDFGVisualizer({
         const graph = payload?.dfg;
         if (graph) setDfgData(graph);
         else        setDfgData({ nodes: [], links: [] });
+
+        // Seed trace variant state from the initial response
+        const tv = payload?.trace_variants;
+        if (tv) {
+          setTraceMax(prev => {
+            const next: Record<string, number> = { ...prev };
+            Object.entries(tv).forEach(([t, entry]) => {
+              if (!(t in next)) next[t] = entry.variants.length;
+            });
+            return next;
+          });
+          setTraceLimit(prev => {
+            const next: Record<string, number> = { ...prev };
+            Object.entries(tv).forEach(([t, entry]) => {
+              if (!(t in next)) next[t] = entry.variants.length;
+            });
+            return next;
+          });
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -586,13 +623,40 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, fileId]);
 
-  const handleWeightLimitChange = useCallback(
-    (otype: string, value: number) => {
-      setWeightLimit(prev => ({ ...prev, [otype]: value }));
+  // Debounced re-fetch when slider values settle (1.5 s after last change)
+  const refetchWithLimits = useCallback(
+    (limits: Record<string, number>) => {
+      if (!fileId || data) return;  // data-prop mode: no fetching
+      const url = buildFetchUrl(limits);
+      setTraceFetching(true);
+      axios.get<DfgData>(url)
+        .then(({ data: payload }) => {
+          const graph = payload?.dfg;
+          if (graph) setDfgData(graph);
+          else        setDfgData({ nodes: [], links: [] });
+        })
+        .catch(err => console.error('[NewOCDFGVisualizer] Trace-limit re-fetch failed', err))
+        .finally(() => setTraceFetching(false));
     },
-    [],
+    [fileId, data, buildFetchUrl],
+  );
+
+  const handleTraceLimitChange = useCallback(
+    (otype: string, value: number) => {
+      setTraceLimit(prev => ({ ...prev, [otype]: value }));
+      // Reset debounce timer
+      if (traceLimitDebounceRef.current) clearTimeout(traceLimitDebounceRef.current);
+      traceLimitDebounceRef.current = setTimeout(() => {
+        setTraceLimit(current => {
+          refetchWithLimits(current);
+          return current;
+        });
+      }, 1500);
+    },
+    [refetchWithLimits],
   );
 
   useEffect(() => {
@@ -627,29 +691,6 @@ function NewOCDFGVisualizer({
     const initialVisibility = Object.fromEntries(allTypes.map((type) => [type, true]));
     setTypeVisibility(initialVisibility);
     initialAvailabilityRef.current = null;
-
-    // Compute max edge weight per object type
-    const maxWeights: Record<string, number> = {};
-    allTypes.forEach((type) => {
-      maxWeights[type] = 0;
-    });
-    dfgLinks.forEach((link) => {
-      const otype = link.key ?? link.objtype ?? 'default';
-      const weight = link.weight ?? 0;
-      if (maxWeights[otype] === undefined || weight > maxWeights[otype]) {
-        maxWeights[otype] = weight;
-      }
-    });
-    setWeightMax(maxWeights);
-    setWeightLimit((prev) => {
-      const next = { ...prev };
-      allTypes.forEach((type) => {
-        if (next[type] === undefined) {
-          next[type] = 0;
-        }
-      });
-      return next;
-    });
 
     const groupCounts: Record<string, number> = {};
     dfgLinks.forEach((link) => {
@@ -818,7 +859,6 @@ function NewOCDFGVisualizer({
           frequency: frequencies[index],
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
-          weight: link.weight ?? 1,
         },
       } as Edge;
     });
@@ -849,13 +889,7 @@ function NewOCDFGVisualizer({
 
     const filteredEdges = rawEdges.filter(edge => {
       const ownerTypes = (edge.data as { ownerTypes?: string[] } | undefined)?.ownerTypes ?? [];
-      const isVisible = ownerTypes.some(t => typeVisibility[t] !== false);
-      if (!isVisible) return false;
-
-      const objtype = (edge.data as any)?.objtype;
-      const weight = (edge.data as any)?.weight ?? 0;
-      const threshold = weightLimit[objtype] ?? 0;
-      return weight >= threshold;
+      return ownerTypes.some(t => typeVisibility[t] !== false);
     });
 
     const naiveNodes = dfgData.nodes;
@@ -930,7 +964,6 @@ function NewOCDFGVisualizer({
     autoFitView,
     shiftForLegend,
     addLegendSpacer,
-    weightLimit,
   ]);
 
   useEffect(() => {
@@ -1017,7 +1050,6 @@ function NewOCDFGVisualizer({
   return (
     <div
       ref={containerRef}
-      className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
       <ReactFlow
@@ -1071,10 +1103,25 @@ function NewOCDFGVisualizer({
             }}
           >
             <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-              Object-Centric DFG (Arc Weight)
+              Object-Centric DFG (Variants)
             </div>
           </div>
-
+          {/* Loading indicator while debounced re-fetch is in progress */}
+          {traceFetching && (
+            <div
+              style={{
+                background: 'rgba(255,255,255,0.92)',
+                border: '1px solid #E5E7EB',
+                borderRadius: 10,
+                padding: '8px 14px',
+                fontSize: 12,
+                color: '#64748B',
+                fontFamily: 'var(--font-primary, Inter, sans-serif)',
+              }}
+            >
+              Updating graphΓÇª
+            </div>
+          )}
 
           {Object.keys(typeColors).length > 0 && (
             <div
@@ -1161,8 +1208,8 @@ function NewOCDFGVisualizer({
                         />
                       </div>
 
-                      {/* Per-type edge weight slider */}
-                      {weightMax[type] !== undefined && weightMax[type] > 0 && (
+                      {/* Per-type trace-count slider */}
+                      {traceMax[type] !== undefined && traceMax[type] > 0 && (
                         <div
                           style={{
                             display: 'flex',
@@ -1174,15 +1221,14 @@ function NewOCDFGVisualizer({
                           <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
                             <Slider
                               min={0}
-                              max={weightMax[type]}
+                              max={traceMax[type]}
                               step={1}
-                              value={[weightLimit[type] ?? 0]}
-                              onValueChange={(values) => handleWeightLimitChange(type, values?.[0] ?? 0)}
+                              value={[traceLimit[type] ?? traceMax[type]]}
+                              onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
                               disabled={typeAvailability[type] !== true}
-                              inverted
                             />
-                            <span style={{ fontSize: 12, color: '#475569', minWidth: 80, textAlign: 'right' }}>
-                              Min Weight: {weightLimit[type] ?? 0}
+                            <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
+                              {traceLimit[type] ?? traceMax[type]}/{traceMax[type]} variants
                             </span>
                           </div>
                         </div>
@@ -1270,4 +1316,4 @@ function NewOCDFGVisualizer({
   );
 }
 
-export default NewOCDFGVisualizer;
+export default NewOCDFGVariantsVisualizer;

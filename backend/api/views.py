@@ -393,7 +393,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'NewOCDFGComponent':
+            elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
@@ -507,7 +507,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
-            elif component_name == 'NewOCDFGComponent':
+            elif component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 NewOCDFGComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],

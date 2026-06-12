@@ -250,7 +250,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
-      } else if (component_name === "NewOCDFGComponent") {
+      } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
         props = {
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
@@ -333,7 +333,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
         } else if (item.component_name === "NewOCDFGComponent") {
-          content = "New OCDFG";
+          content = "Object-Centric DFG (Arc Weight)";
+        } else if (item.component_name === "NewOCDFGVariantsComponent") {
+          content = "Object-Centric DFG (Variants)";
         } else {
           content = "Unknown";
         }
