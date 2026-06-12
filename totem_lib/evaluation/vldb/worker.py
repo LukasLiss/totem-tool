@@ -291,10 +291,43 @@ def op_incremental(task):
         OCDFGDb.from_ocel_db(target)
     full_s = time.perf_counter() - t0
 
+    # Baseline: plain ingestion of the same batches without any summary
+    # maintenance, to separate ingestion cost from maintenance overhead.
+    plain = empty_ocel_db()
+    insert_times = []
+    for b in batches[1:]:
+        t0 = time.perf_counter()
+        plain.conn.register("pb_events", b.events)
+        plain.conn.register("pb_eo", b.event_object)
+        plain.conn.register("pb_objects", b.objects)
+        plain.conn.execute(
+            "INSERT INTO objects (obj_id, obj_type) SELECT obj_id, obj_type FROM pb_objects"
+        )
+        plain.conn.execute(
+            "INSERT INTO events (event_id, activity, timestamp_unix) "
+            "SELECT event_id, activity, timestamp_unix FROM pb_events"
+        )
+        plain.conn.execute(
+            "INSERT INTO event_object (event_id, obj_id, qualifier) "
+            "SELECT event_id, obj_id, qualifier FROM pb_eo"
+        )
+        if len(b.object_relations) > 0:
+            plain.conn.register("pb_o2o", b.object_relations)
+            plain.conn.execute(
+                "INSERT INTO object_relations SELECT * FROM pb_o2o "
+                "ON CONFLICT DO NOTHING"
+            )
+            plain.conn.unregister("pb_o2o")
+        insert_times.append(time.perf_counter() - t0)
+        for v in ("pb_events", "pb_eo", "pb_objects"):
+            plain.conn.unregister(v)
+    plain.close()
+
     return {
         "base_s": base_s,
         "mean_append_s": sum(append_times) / len(append_times),
         "max_append_s": max(append_times),
+        "mean_insert_s": sum(insert_times) / len(insert_times),
         "mean_refresh_s": sum(refresh_times) / len(refresh_times),
         "full_recompute_s": full_s,
         "elapsed_s": sum(append_times) + sum(refresh_times),
