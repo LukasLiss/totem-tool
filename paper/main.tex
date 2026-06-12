@@ -415,7 +415,33 @@ Figure~\ref{fig:ablation} compares the optimized formulations against their naiv
 The decisive variable is trace length (Figure~\ref{fig:ablation-tracelen}): holding the event count fixed at $3{\cdot}10^5$ and growing $L$ from 10 to 300 leaves the optimized formulations essentially flat, while the naive intermediates grow as predicted by Table~\ref{tab:complexity}.
 % FILL:tracelen
 % FILL:RQ3
-% FILL:RQ4
+\subsection{RQ4: Discovery under a Memory Budget}
+\label{sec:eval-mem}
+
+\begin{table}
+\caption{Discovery over the $10^7$-event log under hard memory budgets. \sys budgets bound the engine's buffer pool (spilling to disk); the in-memory baseline gets a 4\,GB address-space limit.}
+\label{tab:memory}
+\small
+\begin{tabular}{llrrr}
+\toprule
+Algorithm & Engine & Budget & Time [s] & Peak RSS \\
+\midrule
+\multirow{4}{*}{OC-DFG}
+ & \sys & 4\,GB & 10.6 & 2.2\,GB \\
+ & \sys & 1\,GB & 11.7 & 1.3\,GB \\
+ & \sys & 500\,MB & 15.4 & 0.85\,GB \\
+ & Polars & 4\,GB & \multicolumn{2}{c}{out of memory} \\
+\midrule
+\multirow{4}{*}{TOTeM}
+ & \sys & 4\,GB & 11.1 & 2.3\,GB \\
+ & \sys & 1\,GB & 15.5 & 1.6\,GB \\
+ & \sys & 500\,MB & 22.1 & 0.99\,GB \\
+ & Polars & 4\,GB & \multicolumn{2}{c}{out of memory} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Scalability in RQ1 was bounded by the machine's 15\,GB of RAM. Table~\ref{tab:memory} probes behavior when memory is scarce: we repeat the $10^7$-event experiment with the engine's memory limit set to 4\,GB, 1\,GB, and 500\,MB (with a disk spill directory), and give the in-memory baseline an equivalent 4\,GB address-space budget. \sys completes every configuration: constraining the budget by $8\times$ (4\,GB${\to}$500\,MB) slows OC-DFG discovery by only $1.5\times$ and TOTeM by $2.0\times$, the signature of out-of-core operators that degrade gracefully rather than fail. The in-memory implementations---which need 9.0--12.9\,GB for this log (Figure~\ref{fig:scaling-mem})---abort with out-of-memory errors three seconds into loading. Bounded-memory execution is not a corner case: it is precisely the situation of an analyst's laptop or a multi-tenant analysis service, and it is where the architectural difference is qualitative, not quantitative.
 % FILL:RQ5
 
 \section{Conclusion}
