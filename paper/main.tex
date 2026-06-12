@@ -163,24 +163,24 @@ Variant analysis~\cite{adams2022variants} partitions a log into \emph{process ex
 \centering
 \begin{tikzpicture}[
   font=\scriptsize,
-  box/.style={draw, rounded corners=1pt, align=center, inner sep=3pt, minimum height=14pt},
+  box/.style={draw, rounded corners=1pt, align=center, inner sep=2.5pt, minimum height=13pt},
   store/.style={box, fill=green!8},
   comp/.style={box, fill=blue!6},
   outbox/.style={box, fill=orange!10},
   arr/.style={-{Stealth[length=4pt]}, thick}
 ]
-\node[box] (src) {\ocel sources\\ \tiny SQLite / JSON / XML / CSV};
-\node[store, right=8mm of src] (db) {relational OCEL\\ \tiny 5 tables + indexes};
-\node[store, below=4mm of db] (state) {maintained summaries\\ \tiny DF edges, lifetimes, pairs, counters};
-\node[comp, right=8mm of db] (sql) {set-based discovery\\ \tiny P1--P4 query patterns};
-\node[outbox, right=8mm of sql] (models) {models\\ \tiny OC-DFG, TOTeM,\\ \tiny variants};
-\node[box, below=4mm of src] (stream) {event stream\\ \tiny append batches};
+\node[box] (src) {\ocel sources\\ \tiny SQLite/JSON/XML/CSV};
+\node[store, right=5.5mm of src] (db) {relational OCEL\\ \tiny 5 tables + indexes};
+\node[comp, right=5.5mm of db] (sql) {discovery\\ \tiny P1--P4 in SQL};
+\node[box, below=5mm of src] (stream) {event stream\\ \tiny append batches};
+\node[store, below=5mm of db] (state) {summaries\\ \tiny DF, lifetimes, pairs};
+\node[outbox, below=5mm of sql] (models) {models\\ \tiny OC-DFG, TOTeM, var.};
 \draw[arr] (src) -- node[above]{\tiny import} (db);
 \draw[arr] (db) -- (sql);
 \draw[arr] (sql) -- (models);
-\draw[arr] (stream) -- node[below, sloped]{\tiny $\Delta$-maintain} (state);
-\draw[arr] (stream) -- (db.south west);
-\draw[arr] (state) -| node[below, pos=0.25]{\tiny refresh} (models.south);
+\draw[arr] (stream) -- node[above]{\tiny $\Delta$} (state);
+\draw[arr] (stream) -- (db);
+\draw[arr] (state) -- node[above]{\tiny refresh} (models);
 \end{tikzpicture}
 \caption{\sys architecture. Discovery runs as SQL inside the engine; appends maintain summary tables from which models are refreshed without scanning the log.}
 \label{fig:arch}
@@ -212,7 +212,9 @@ CREATE TABLE object_relations (
   qualifier VARCHAR, PRIMARY KEY (source_obj_id, target_obj_id));
 \end{lstlisting}
 
+\sloppy
 The schema mirrors Definition~\ref{def:ocel}: \texttt{events} and \texttt{objects} carry the functions $\mathit{act}$, $\mathit{time}$, $\mathit{type}$; \texttt{event\_object} is $R$ with qualifiers; \texttt{object\_relations} is $R_O$; \texttt{object\_attribute\_history} captures \ocel's dynamic object attributes. Three design decisions matter for performance. (i)~\emph{Attribute pivoting}: instead of storing attributes as JSON blobs or key--value pairs (as in the \ocel SQLite serialization, which spreads attributes over one table per event/object type), attributes become real columns discovered at import time, so analysts write plain SQL and the engine prunes unused columns. (ii)~\emph{Surrogate-free keys}: the natural identifiers are the keys, and secondary indexes on \texttt{event\_object(obj\_id)}, \texttt{event\_object(event\_id)}, \texttt{objects(obj\_type)}, and \texttt{events(timestamp\_unix)} cover all access paths used by discovery. (iii)~\emph{Single-file persistence}: the populated database is the cache; re-opening it costs milliseconds, whereas every in-memory tool re-parses the source log on every session (Section~\ref{sec:eval-real}).
+\par\fussy
 
 Import supports all three \ocel serializations (SQLite, JSON, XML) plus CSV, with a bulk path (attach/Arrow ingestion) and a constant-memory streaming path for sources larger than a configurable threshold; referential violations (dangling links, duplicate keys) are optionally dropped during import.
 
@@ -259,7 +261,8 @@ The window formulation costs one sort (or hash partition) of the $m$ E2O rows, $
 \subsection{TOTeM: Eager Lifetime Aggregation}
 \label{sec:totem-sql}
 
-TOTeM discovery decomposes into five queries over the schema: (1)~activity/type mappings, (2)~related type pairs, (3)~event cardinalities via P4, (4)~log cardinalities via P3+P4, and (5)~temporal relations via P2+P3. The performance-critical phase is (5). A literal transcription of the in-memory algorithm iterates over connected object pairs and, for each pair, inspects both objects' events---in SQL, a join of the pair relation with \emph{all events of both objects}, producing $\sum_{(o_1,o_2)\in\sim} |\mathit{ev}(o_1)|\cdot|\mathit{ev}(o_2)|$ intermediate rows before aggregating interval bounds per pair (\emph{lazy aggregation}). \sys instead applies eager aggregation~\cite{yan1995eager}: P2 first reduces every object to one row $(\mathit{obj}, \mathit{type}, \min t, \max t)$, after which the pair join touches exactly $|{\sim}|$ rows, and the interval classification is a constant-time CASE expression per pair:
+\sloppy
+TOTeM discovery decomposes into five queries over the schema: (1)~activity/type mappings, (2)~related type pairs, (3)~event cardinalities via P4, (4)~log cardinalities via P3+P4, and (5)~temporal relations via P2+P3. The performance-critical phase is (5). A literal transcription of the in-memory algorithm iterates over connected object pairs and, for each pair, inspects both objects' events---in SQL, a join of the pair relation with \emph{all events of both objects}, producing $\sum_{(o_1,o_2)} |\mathit{ev}(o_1)|\,|\mathit{ev}(o_2)|$ intermediate rows (summing over connected pairs) before aggregating interval bounds per pair (\emph{lazy aggregation}). \sys instead applies eager aggregation~\cite{yan1995eager}: P2 first reduces every object to one row $(\mathit{obj}, \mathit{type}, \min t, \max t)$, after which the pair join touches exactly $|{\sim}|$ rows, and the interval classification is a constant-time CASE expression per pair:\par\fussy
 
 \begin{lstlisting}[caption={TOTeM temporal relations (P2+P3, abbreviated): lifetimes are aggregated before the pair join; the four CASE sums classify interval containment and overlap order.},label={lst:totem}]
 WITH lifetimes AS (
@@ -352,12 +355,12 @@ We use the three public \ocel logs of Table~\ref{tab:datasets}: a container logi
 \begin{table}
 \caption{Real \ocel logs and their storage footprint (MB) in the three \ocel serializations vs.\ the \sys database.}
 \label{tab:datasets}
-\small
-\setlength{\tabcolsep}{3.4pt}
+\footnotesize
+\setlength{\tabcolsep}{2.6pt}
 \begin{tabular}{lrrrr|rrrr}
 \toprule
  & & & & & \multicolumn{4}{c}{size [MB]} \\
-Log & $|E|$ & $|O|$ & $|R|$ & types & JSON & XML & SQLite & \sys \\
+Log & $|E|$ & $|O|$ & $|R|$ & types & JSON & XML & SQLite & ours \\
 \midrule
 Logistics & 35,372 & 13,882 & 74,272 & 7 & 10.0 & 13.4 & 23.0 & \textbf{2.4} \\
 P2P & 14,671 & 9,543 & 35,927 & 7 & 14.3 & 18.4 & 13.7 & \textbf{2.6} \\
@@ -412,9 +415,20 @@ Third, \emph{the in-memory architecture pays hidden costs that \sys avoids}. The
 
 Figure~\ref{fig:ablation} compares the optimized formulations against their naive counterparts on identical data (both produce identical models; enforced by tests). With short traces ($L{=}10$), the window-function OC-DFG is already $5.4\times$ faster than the self-join formulation at $3{\cdot}10^6$ events (2.8\,s vs.\ 14.9\,s) while using $6.6\times$ less memory (0.9\,GB vs.\ 6.1\,GB)---the quadratic candidate space materializes as memory pressure before it dominates runtime. Eager lifetime aggregation accelerates TOTeM by $1.8\times$ at this trace length.
 
-The decisive variable is trace length (Figure~\ref{fig:ablation-tracelen}): holding the event count fixed at $3{\cdot}10^5$ and growing $L$ from 10 to 300 leaves the optimized formulations essentially flat, while the naive intermediates grow as predicted by Table~\ref{tab:complexity}.
-% FILL:tracelen
-% FILL:RQ3
+The decisive variable is trace length (Figure~\ref{fig:ablation-tracelen}): holding the event count fixed at $3{\cdot}10^5$ and growing $L$ from 10 to 300 leaves the optimized formulations flat (OC-DFG 0.33--0.37\,s, TOTeM 0.28--0.37\,s---if anything, slightly faster, as fewer objects mean fewer groups), while the naive intermediates grow as predicted by Table~\ref{tab:complexity}: the self-join needs 49.5\,s at $L{=}100$ ($146\times$ the window plan, at $15\times$ the memory) and at $L{=}300$ fails after 181\,s, having exhausted 28\,GB of disk spill space; lazy aggregation grows linearly in $L$ to $13\times$ the eager plan at $L{=}300$. Long lifecycles are common (machines, containers, customer objects), so these rewrites are not micro-optimizations but the difference between feasible and infeasible---and they come for free once discovery is formulated relationally, since both exploit standard engine machinery.
+\subsection{RQ3: Incremental Maintenance}
+\label{sec:eval-inc}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_incremental.pdf}
+\caption{Keeping models fresh while the log grows: per-batch maintenance and model refresh vs.\ full recomputation (log scale).}
+\label{fig:incremental}
+\end{figure*}
+
+We replay each synthetic log as a base of 50\% of its events followed by ten appended batches of 5\% each, in timestamp order---emulating a system that ingests events continuously---and compare keeping the model fresh via the maintained summaries of Section~\ref{sec:incremental} against recomputing it (Figure~\ref{fig:incremental}).
+
+Two costs matter. \emph{Maintenance} is the extra work on append beyond storing the events: subtracting measured plain-ingestion time, it amounts to $2.6$--$4.6\,\mu$s per event for the OC-DFG and $6.8$--$10.6\,\mu$s per event for TOTeM, constant per event as the log grows from $3{\cdot}10^5$ to $3{\cdot}10^6$ events---confirming that per-batch cost depends on the batch, not the history. \emph{Refresh}---materializing the current model from the summaries---costs 8\,ms for the OC-DFG and 15--39\,ms for TOTeM, versus 0.40--3.30\,s for full recomputation at these sizes: $50$--$412\times$ ($28$--$82\times$ for TOTeM), with the factor growing linearly in log size since recomputation scans the full log while refresh reads only aggregates. After every batch, the maintained model is bit-identical to the recomputed one (Proposition~\ref{prop:equiv}, verified per batch in the test suite). In short, \sys turns "always-fresh process models" from a periodic batch job whose cost grows with history into a constant-time-per-event side effect of ingestion.
 \subsection{RQ4: Discovery under a Memory Budget}
 \label{sec:eval-mem}
 

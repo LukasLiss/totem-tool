@@ -199,7 +199,7 @@ def fig_incremental(out):
         sub = [r for r in rows if r["algo"] == algo]
         xs = range(len(sub))
         ax.bar([x - width for x in xs], [_f(r, "mean_append_s") for r in sub],
-               width, label="maintain (per batch)", color="#1b7837")
+               width, label="ingest+maintain (per batch)", color="#1b7837")
         ax.bar(list(xs), [_f(r, "mean_refresh_s") for r in sub],
                width, label="refresh model", color="#a6dba0")
         ax.bar([x + width for x in xs], [_f(r, "full_recompute_s") for r in sub],
