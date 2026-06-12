@@ -442,7 +442,29 @@ Algorithm & Engine & Budget & Time [s] & Peak RSS \\
 \end{table}
 
 Scalability in RQ1 was bounded by the machine's 15\,GB of RAM. Table~\ref{tab:memory} probes behavior when memory is scarce: we repeat the $10^7$-event experiment with the engine's memory limit set to 4\,GB, 1\,GB, and 500\,MB (with a disk spill directory), and give the in-memory baseline an equivalent 4\,GB address-space budget. \sys completes every configuration: constraining the budget by $8\times$ (4\,GB${\to}$500\,MB) slows OC-DFG discovery by only $1.5\times$ and TOTeM by $2.0\times$, the signature of out-of-core operators that degrade gracefully rather than fail. The in-memory implementations---which need 9.0--12.9\,GB for this log (Figure~\ref{fig:scaling-mem})---abort with out-of-memory errors three seconds into loading. Bounded-memory execution is not a corner case: it is precisely the situation of an analyst's laptop or a multi-tenant analysis service, and it is where the architectural difference is qualitative, not quantitative.
-% FILL:RQ5
+\subsection{RQ5: Real Logs, Import, and Storage}
+\label{sec:eval-real}
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.85\textwidth]{figures/fig_real.pdf}
+\caption{Discovery runtime on the three real \ocel logs (log scale).}
+\label{fig:real}
+\end{figure*}
+
+\paragraph{Discovery}
+Figure~\ref{fig:real} confirms the synthetic findings on real data: against pm4py, \sys discovers OC-DFGs $14$--$33\times$ faster (e.g., 0.17\,s vs.\ 5.6\,s on the logistics log); against the Polars implementations, TOTeM discovery is $2.3$--$5.2\times$ faster, while the OC-DFG aggregation is comparable. Variant analysis behaves as predicted in Section~\ref{sec:variants-sql}: where the exact-isomorphism step is tractable, the hybrid \sys pipeline matches or beats the in-memory implementation (logistics: 0.46\,s vs.\ 0.96\,s for 16 variants; P2P: 5.1\,s vs.\ 4.9\,s for 444 variants); on the order-management log, whose order-centered process executions form very large connected graphs, \emph{both} implementations exhaust memory in the exact-isomorphism step---the bottleneck is combinatorial, not data movement, and \sys's coarser relational grouping strategies (multiset signatures, WL hashing) remain available as approximations.
+
+\paragraph{Import and re-analysis}
+Parsing the JSON serialization costs 1.0--1.3\,s (Polars) and 1.4--2.8\,s (\sys, including index construction) on these logs---but the in-memory pipeline pays its cost on \emph{every} session, whereas the \sys database is the persistent store: re-opening it costs 25--30\,ms, after which discovery runs directly. For the recurring analyses that dominate practice (daily refreshes, dashboards, interactive exploration), the relational architecture eliminates the dominant fixed cost. At $10^7$ events this difference is 22\,s per session (RQ1).
+
+\paragraph{Storage}
+Table~\ref{tab:datasets} shows a further operational benefit: the typed, columnar \sys database is $4$--$11\times$ smaller than any \ocel interchange serialization of the same logs (e.g., logistics: 2.4\,MB vs.\ 10.0--23.0\,MB), making the database the cheapest representation to retain as well as the fastest to analyze.
+
+\subsection{Discussion and Limitations}
+\label{sec:eval-discussion}
+
+\sys's incremental layer assumes events arrive with their object links, and the OC-DFG maintainer additionally assumes per-object append order (violations are detected, and the state can be re-bootstrapped in one pass). Attribute pivoting assumes a bounded attribute vocabulary; logs with thousands of distinct attribute keys would need a hybrid layout. Our SQL relies only on standard window functions, grouped aggregation, and upserts and ports to other engines with minor dialect changes, but our measurements cover DuckDB; a cross-engine study (including a client--server setting where the log never leaves the operational warehouse) is future work. Finally, the isomorphism step of variant analysis remains outside the relational engine; its cost dominates exactly when process executions are large.
 
 \section{Conclusion}
 \label{sec:conclusion}
