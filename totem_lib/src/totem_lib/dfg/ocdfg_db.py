@@ -79,6 +79,16 @@ class OCDFGDb(OCDFG):
             GROUP BY obj_type, activity
         """)
 
+        return cls._build_graph(edges_df, node_freq_df, starts_df, ends_df)
+
+    @classmethod
+    def _build_graph(cls, edges_df, node_freq_df, starts_df, ends_df) -> "OCDFGDb":
+        """
+        Assemble an OC-DFG graph from the four aggregate DataFrames
+        (edges, node frequencies, start counts, end counts). Shared by the
+        window-function path, the naive self-join path, and the incremental
+        maintenance path, which all produce the same aggregates.
+        """
         graph = cls()
 
         # Determine the sorted object types present in the result

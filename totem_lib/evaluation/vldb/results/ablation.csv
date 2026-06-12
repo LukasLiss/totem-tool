@@ -1,0 +1,5 @@
+algo,variant,n_events,status,elapsed_s,peak_rss_mb,repeats
+ocdfg,window,30000,ok,0.0861827609996908,306.2,1
+ocdfg,selfjoin,30000,ok,0.18360478200020225,369.6,1
+totem,eager,30000,ok,0.0794244600001548,290.4,1
+totem,lazy,30000,ok,0.10298410399991553,295.7,1

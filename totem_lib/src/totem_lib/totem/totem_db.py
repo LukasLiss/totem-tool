@@ -39,6 +39,24 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
     """
     conn = ocel_db.conn
 
+    obj_typ_to_ev_type, all_event_types = _phase_act_types(conn)
+    type_relations = _phase_type_relations(conn)
+    h_event_cardinalities = _phase_event_cardinalities(conn)
+    h_log_cardinalities = _phase_log_cardinalities(conn)
+    h_temporal_relations = _phase_temporal_relations(conn)
+
+    return build_totem_from_counters(
+        type_relations,
+        all_event_types,
+        obj_typ_to_ev_type,
+        h_event_cardinalities,
+        h_log_cardinalities,
+        h_temporal_relations,
+        tau,
+    )
+
+
+def _phase_act_types(conn):
     # ------------------------------------------------------------------
     # Phase 1: Activity/type mappings
     # ------------------------------------------------------------------
@@ -55,6 +73,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         obj_typ_to_ev_type.setdefault(obj_type, set()).add(activity)
         all_event_types.add(activity)
 
+    return obj_typ_to_ev_type, all_event_types
+
+
+def _phase_type_relations(conn):
     # ------------------------------------------------------------------
     # Phase 2: Connected type pairs (type_relations)
     # ------------------------------------------------------------------
@@ -69,6 +91,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
 
     type_relations: set[frozenset[str]] = {frozenset({t1, t2}) for t1, t2 in type_pair_rows}
 
+    return type_relations
+
+
+def _phase_event_cardinalities(conn):
     # ------------------------------------------------------------------
     # Phase 3: Event cardinalities
     #
@@ -117,6 +143,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
             EC_ZERO_MANY: total,
         }
 
+    return h_event_cardinalities
+
+
+def _phase_log_cardinalities(conn):
     # ------------------------------------------------------------------
     # Phase 4: Log cardinalities
     #
@@ -189,6 +219,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
             LC_ZERO_MANY: total,
         }
 
+    return h_log_cardinalities
+
+
+def _phase_temporal_relations(conn):
     # ------------------------------------------------------------------
     # Phase 5: Temporal relations
     #
@@ -259,6 +293,18 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
             d[TR_INITIATING_REVERSE] = n_init_rev
         h_temporal_relations[key] = d
 
+    return h_temporal_relations
+
+
+def build_totem_from_counters(
+    type_relations,
+    all_event_types,
+    obj_typ_to_ev_type,
+    h_event_cardinalities,
+    h_log_cardinalities,
+    h_temporal_relations,
+    tau: float,
+) -> Totem:
     # ------------------------------------------------------------------
     # Phase 6: Build temporal graph (identical logic to totemDiscovery)
     # ------------------------------------------------------------------

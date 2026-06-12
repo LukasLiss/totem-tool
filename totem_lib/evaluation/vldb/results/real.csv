@@ -1,0 +1,11 @@
+log,algo,engine,status,elapsed_s,load_s,peak_rss_mb,n_variants,leading_type
+container_logistics,import,json->polars,ok,1.2325874909997765,,405.1,,
+container_logistics,import,json->duckdb,ok,1.3169105500001024,,414.0,,
+container_logistics,import,duckdb-open,ok,0.025059796000277856,,259.1,,
+container_logistics,ocdfg,duckdb,ok,0.18749921600010566,,324.4,,
+container_logistics,ocdfg,polars,ok,0.10009840600014286,0.23905093300027147,338.1,,
+container_logistics,ocdfg,pm4py,ok,5.560906851999789,0.1624281819999851,376.4,,
+container_logistics,totem,duckdb,ok,0.32427831199993307,,356.8,,
+container_logistics,totem,polars,ok,1.6543483730001753,0.2429830020000736,369.0,,
+container_logistics,variants,duckdb,oom,193.1370964050293,,,,
+container_logistics,variants,polars,oom,222.7246651649475,,,,
