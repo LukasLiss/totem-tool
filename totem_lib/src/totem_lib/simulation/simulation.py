@@ -761,7 +761,9 @@ class VariantPlayoutStrategy:
 
         # --- Main simulation loop ---
         ticks = list(range(0, sim_duration_s, tick_size_s))
-        ticks.append(sim_duration_s) # Append final tick to ensure all arrivals are spawned
+        ticks.append(
+            sim_duration_s
+        )  # Append final tick to ensure all arrivals are spawned
 
         for tick in ticks:
 
@@ -906,7 +908,12 @@ class VariantPlayoutStrategy:
                     ]
                     event_objects.extend(all_allocated_rids)
 
-                    abs_ts = int(start_datetime.timestamp()) + tick
+                    # Set Event Timestamp with slight random jitter within the tick to avoid Events being tied to tick boundaries
+                    jitter_window = min(tick_size_s, sim_duration_s - tick)
+                    jitter = (
+                        random.randint(0, jitter_window - 1) if jitter_window > 0 else 0
+                    )
+                    abs_ts = int(start_datetime.timestamp()) + tick + jitter
 
                     event_output.append(
                         {
@@ -933,7 +940,10 @@ class VariantPlayoutStrategy:
 
         # --- 3. Build output OCEL ---
         if event_output:
-            events_df = pl.DataFrame(event_output, schema=EVENTS_SCHEMA)
+            # Sort by timestamp: to regain order, resulting from the additional jitter
+            events_df = pl.DataFrame(event_output, schema=EVENTS_SCHEMA).sort(
+                "_timestampUnix"
+            )
         else:
             events_df = pl.DataFrame(schema=EVENTS_SCHEMA)
 
