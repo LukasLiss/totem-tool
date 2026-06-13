@@ -843,7 +843,9 @@ class VariantPlayoutStrategy:
                     resource_queues[res_type].append(res_id)
             blocked_resources -= freed
 
-            # Phase C: Try executing enabled activities for each active instance
+            # Phase C: Try executing enabled activities for each active instance.
+            # Reshuffle the queue every tick so resource grants not systematically favour earlier-spawned instances.
+            random.shuffle(active_executions)
             next_active = []
             for inst in active_executions:
                 graph = inst["event_object_graph"]
@@ -855,6 +857,10 @@ class VariantPlayoutStrategy:
                     if n not in inst["finished_nodes"]
                     and all(p in inst["finished_nodes"] for p in graph.predecessors(n))
                 ]
+                # Randomise the order of concurrently enabled nodes so
+                # no graph-iteration-order bias decides which one gets
+                # resources first.
+                random.shuffle(enabled)
 
                 for node in enabled:
                     activity = graph.nodes[node]["label"]
