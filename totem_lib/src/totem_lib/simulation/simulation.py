@@ -931,14 +931,13 @@ class VariantPlayoutStrategy:
                         }
                     )
 
-                    # Build event: collect process objects from incident edges + resources
+                    # Build event: collect process objects from incident edges.
                     node_objs = _get_node_objects(graph, node)
                     event_objects = [
                         inst["obj_map"][oid]
                         for oid in node_objs
                         if oid in inst["obj_map"]
                     ]
-                    event_objects.extend(all_allocated_rids)
 
                     # Set Event Timestamp with slight random jitter within the tick to avoid Events being tied to tick boundaries
                     jitter_window = min(tick_size_s, sim_duration_s - tick)
