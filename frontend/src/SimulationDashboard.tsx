@@ -1157,52 +1157,91 @@ export const SimulationDashboard: React.FC = () => {
   );
 };
 
-// --- Results sub-component ---
-const SimulationResults: React.FC<{ result: SimulationResult }> = ({ result }) => (
-  <div className="space-y-6">
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <Card>
-        <CardContent className="pt-6 text-center">
-          <p className="text-3xl font-bold">
-            {result.finished_instances}
-            {result.spawned_instances != null && (
-              <span className="text-xl text-muted-foreground">
-                {" "}/ {result.spawned_instances}
-              </span>
-            )}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Finished Instances
-            {result.completion_ratio != null &&
-              ` (${(result.completion_ratio * 100).toFixed(1)}%)`}
-          </p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="pt-6 text-center">
-          <p className="text-3xl font-bold">{result.simulated_events}</p>
-          <p className="text-sm text-muted-foreground">Simulated Events</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="pt-6 text-center">
-          <p className="text-3xl font-bold">{result.simulated_objects}</p>
-          <p className="text-sm text-muted-foreground">Simulated Objects</p>
-        </CardContent>
-      </Card>
-    </div>
+// Secondary line on a summary card comparing the simulated figure against the
+// matching value from the original (filtered) log.
+const OriginalComparison: React.FC<{ simulated: number; original?: number }> = ({
+  simulated,
+  original,
+}) => {
+  if (original == null) return null;
+  const diff = simulated - original;
+  const sign = diff > 0 ? "+" : "";
+  return (
+    <p className="text-xs text-muted-foreground mt-1">
+      Original: {original.toLocaleString()}
+      {diff !== 0 && (
+        <span className={diff > 0 ? "text-amber-600" : "text-sky-600"}>
+          {" "}({sign}
+          {diff.toLocaleString()})
+        </span>
+      )}
+    </p>
+  );
+};
 
-    {/* Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras) */}
-    {result.evaluation && <EvaluationMetricsCard metrics={result.evaluation} simRunId={result.sim_run_id} />}
-    {result.evaluation_error && (
-      <Card>
-        <CardContent className="pt-4 text-sm text-destructive">
-          Failed to compute evaluation metrics: {result.evaluation_error}
-        </CardContent>
-      </Card>
-    )}
-  </div>
-);
+// --- Results sub-component ---
+const SimulationResults: React.FC<{ result: SimulationResult }> = ({ result }) => {
+  // Comparison values from the original (filtered) log
+  const counts = result.evaluation?.counts ?? [];
+  const originalExecutions = counts.find((c) => c.metric === "n_executions")?.actual;
+  const originalEvents = counts.find((c) => c.metric === "n_events")?.actual;
+  const originalObjects = result.evaluation?.object_centric.object_counts.reduce(
+    (sum, o) => sum + o.actual,
+    0,
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-6 text-center">
+            <p className="text-3xl font-bold">
+              {result.finished_instances}
+              {result.spawned_instances != null && (
+                <span className="text-xl text-muted-foreground">
+                  {" "}/ {result.spawned_instances}
+                </span>
+              )}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Finished Instances
+              {result.completion_ratio != null &&
+                ` (${(result.completion_ratio * 100).toFixed(1)}%)`}
+            </p>
+            <OriginalComparison
+              simulated={result.finished_instances}
+              original={originalExecutions}
+            />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6 text-center">
+            <p className="text-3xl font-bold">{result.simulated_events}</p>
+            <p className="text-sm text-muted-foreground">Simulated Events</p>
+            <OriginalComparison simulated={result.simulated_events} original={originalEvents} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6 text-center">
+            <p className="text-3xl font-bold">{result.simulated_objects}</p>
+            <p className="text-sm text-muted-foreground">Simulated Objects</p>
+            <OriginalComparison simulated={result.simulated_objects} original={originalObjects} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras) */}
+      {result.evaluation && <EvaluationMetricsCard metrics={result.evaluation} simRunId={result.sim_run_id} />}
+      {result.evaluation_error && (
+        <Card>
+          <CardContent className="pt-4 text-sm text-destructive">
+            Failed to compute evaluation metrics: {result.evaluation_error}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
 
 // --- Evaluation metrics card ---
 
