@@ -183,18 +183,21 @@ def object_distribution_of_variants(ocel, variants):
     return result
 
 
-def resource_distribution_of_variants(ocel, variants):
+def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
     """
     For each variant and each activity within it, computes how many resources
     of each **type** are needed per activity invocation on average.
 
     Resources are read from _attributes JSON ("process_area_resources" key), which is
     populated by filter_by_process_area. Resource IDs are mapped to their type via
-    ocel.obj_type_map.
+    obj_type_map.
 
     Args:
         ocel: ObjectCentricEventLog
         variants: Variants object
+        obj_type_map: Optional mapping from object ID to object type. Must be
+            passed when ``ocel`` is a process-area-filtered log: such a log no
+            longer contains the resource objects
 
     Returns:
         dict: {
@@ -209,7 +212,7 @@ def resource_distribution_of_variants(ocel, variants):
             }
         }
     """
-    obj_type_map = ocel.obj_type_map
+    obj_type_map = obj_type_map if obj_type_map is not None else ocel.obj_type_map
 
     # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
     resource_lookup: dict[str, list] = {

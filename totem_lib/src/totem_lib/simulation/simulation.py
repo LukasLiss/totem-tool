@@ -568,9 +568,9 @@ class OCProcessAreaSimulationModel:
             filtered_ocel, resource_cooldown_dist, ocel.obj_type_map
         )
 
-        # Calculate needed resources per activity
+        # Calculate needed resources per activity.
         needed_resources_per_activity = resource_distribution_of_variants(
-            filtered_ocel, variants
+            filtered_ocel, variants, ocel.obj_type_map
         )
 
         return cls(
