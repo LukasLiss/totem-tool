@@ -114,20 +114,23 @@ def _estimate_constraint_slots(
     Estimate the number of constraint-relevant resource slots of a process instance.
     Used in the simple Simulation Model to set the per-instance violation budget.
 
-    Counts, for every activity that carries at least one resource constraint, the
-    rounded number of resources it needs of each type present in the pool(Upper Bound Approximation).
+    Sums, for every activity that carries at least one resource constraint, the
+    *expected* number of resources it needs of each type present in the pool.
 
     Args:
         variant_constraints: {activity: {other_activity: constraint_type}} dict for this variant.
-        variant_res_dist: {activity: {res_type: {"mean_count": float}}} dict for this variant.
+        variant_res_dist: {activity: {res_type: {"count_distribution": {count: float}}}} dict for this variant.
         resource_pool_expanded: Set of resource types actually available in the pool.
+
+    Returns:
+        Expected slot count as a float.
     """
-    total = 0
+    total = 0.0
     for activity in variant_constraints:
         activity_res_dist = variant_res_dist.get(activity, {})
         for res_type, stats in activity_res_dist.items():
             if res_type in resource_pool_expanded:
-                total += max(0, round(stats["mean_count"]))
+                total += max(0.0, _distribution_mean(stats["count_distribution"]))
     return total
 
 
@@ -147,8 +150,8 @@ def _estimate_expected_constraint_slots(
             activity before absorption in the state space.
         constrained_activities: Set/collection of activities that carry at least
             one discovered resource constraint (the indicator above).
-        expected_resource_demand: {activity: {res_type: {"mean_count": float}}}
-            — mean resource demand per occurrence.
+        expected_resource_demand: {activity: {res_type: {"count_distribution":
+            {count: float}}}} — empirical resource demand per occurrence.
         resource_pool_expanded: Resource types actually available in the pool.
 
     Returns:
@@ -163,7 +166,8 @@ def _estimate_expected_constraint_slots(
         demand = expected_resource_demand.get(activity, {})
         for res_type, stats in demand.items():
             if res_type in resource_pool_expanded:
-                total += expected_visits * max(0.0, stats.get("mean_count", 0.0))
+                mean = _distribution_mean(stats.get("count_distribution", {}))
+                total += expected_visits * max(0.0, mean)
     return total
 
 
@@ -188,6 +192,26 @@ def _make_violation_budget(total_slots, simulation_config):
         max(0, round(total_slots)),
         simulation_config.violation_cost_weights,
     )
+
+
+def _distribution_mean(count_distribution):
+    """Expected value E[count] of an empirical count distribution {count: prob}."""
+    return sum(count * prob for count, prob in count_distribution.items())
+
+
+def _sample_resource_count(stats):
+    """
+    Draw the number of resources of one type an activity needs this invocation.
+
+    Args:
+        stats: Per-(activity, resource_type) stats dict from
+            ``resource_distribution_of_variants``.
+
+    Returns:
+        A non-negative integer resource count.
+    """
+    dist = stats["count_distribution"]
+    return random.choices(list(dist.keys()), weights=list(dist.values()), k=1)[0]
 
 
 def _get_node_objects(graph, node):
@@ -841,13 +865,15 @@ class VariantPlayoutStrategy:
                         inst["variant"], {}
                     )
                     activity_res_dist = variant_res_dist.get(activity, {})
-                    # Round mean_count to get the needed count per type, only for types in the pool
-                    needed_res_types = {
-                        res_type: round(stats["mean_count"])
-                        for res_type, stats in activity_res_dist.items()
-                        if res_type in resource_pool_expanded
-                        and round(stats["mean_count"]) > 0
-                    }
+                    # Sample the needed count per type from the empirical
+                    # distribution
+                    needed_res_types = {}
+                    for res_type, stats in activity_res_dist.items():
+                        if res_type not in resource_pool_expanded:
+                            continue
+                        n = _sample_resource_count(stats)
+                        if n > 0:
+                            needed_res_types[res_type] = n
 
                     variant_constraints = resource_constraints.get(inst["variant"], {})
 

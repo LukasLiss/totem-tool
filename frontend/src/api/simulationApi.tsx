@@ -123,9 +123,7 @@ export type VariantArrivalDistribution = {
 };
 
 export type ResourceDistEntry = {
-  mean_count: number;
-  min_count: number;
-  max_count: number;
+  count_distribution: Record<string, number>;
 };
 
 export type VariantConstraints = Record<string, Record<string, string>>;

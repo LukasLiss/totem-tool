@@ -1027,23 +1027,32 @@ export const SimulationDashboard: React.FC = () => {
                             <th className="text-left py-1">Activity</th>
                             <th className="text-left py-1">Resource Type</th>
                             <th className="text-right py-1">Mean</th>
-                            <th className="text-right py-1">Min</th>
-                            <th className="text-right py-1">Max</th>
+                            <th className="text-left py-1">Count Distribution</th>
                           </tr>
                         </thead>
                         <tbody>
                           {Object.entries(variant.resource_distribution).map(([act, resTypes]) =>
-                            Object.entries(resTypes).map(([resType, stats], idx) => (
-                              <tr key={`${act}-${resType}`} className="border-b last:border-0">
-                                {idx === 0 && (
-                                  <td className="py-1 font-medium" rowSpan={Object.keys(resTypes).length}>{act}</td>
-                                )}
-                                <td className="py-1">{resType}</td>
-                                <td className="text-right py-1">{stats.mean_count.toFixed(2)}</td>
-                                <td className="text-right py-1">{stats.min_count}</td>
-                                <td className="text-right py-1">{stats.max_count}</td>
-                              </tr>
-                            ))
+                            Object.entries(resTypes).map(([resType, stats], idx) => {
+                              const dist = stats.count_distribution ?? {};
+                              const entries = Object.entries(dist)
+                                .map(([count, prob]) => [Number(count), prob] as [number, number])
+                                .sort((a, b) => a[0] - b[0]);
+                              const mean = entries.reduce((s, [count, prob]) => s + count * prob, 0);
+                              return (
+                                <tr key={`${act}-${resType}`} className="border-b last:border-0">
+                                  {idx === 0 && (
+                                    <td className="py-1 font-medium" rowSpan={Object.keys(resTypes).length}>{act}</td>
+                                  )}
+                                  <td className="py-1">{resType}</td>
+                                  <td className="text-right py-1">{mean.toFixed(2)}</td>
+                                  <td className="py-1">
+                                    {entries
+                                      .map(([count, prob]) => `${count}: ${(prob * 100).toFixed(0)}%`)
+                                      .join(" · ")}
+                                  </td>
+                                </tr>
+                              );
+                            })
                           )}
                         </tbody>
                       </table>

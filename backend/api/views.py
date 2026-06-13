@@ -2457,9 +2457,10 @@ def get_simulation_details(request):
             for act, type_stats in var_res_dist.items():
                 serialized_res_dist[act] = {
                     res_type: {
-                        "mean_count": stats["mean_count"],
-                        "min_count": stats["min_count"],
-                        "max_count": stats["max_count"],
+                        "count_distribution": {
+                            str(count): prob
+                            for count, prob in stats["count_distribution"].items()
+                        },
                     }
                     for res_type, stats in type_stats.items()
                 }

@@ -172,8 +172,8 @@ def test_expected_slots_weighs_occurrences_by_demand():
     # Activity "B" occurs ~1x, needs mean 2 -> 2.0 slots. Total 5.0.
     occurrences = {"A": 2.0, "B": 1.0}
     demand = {
-        "A": {"Truck": {"mean_count": 1.5}},
-        "B": {"Truck": {"mean_count": 2.0}},
+        "A": {"Truck": {"count_distribution": {1: 0.5, 2: 0.5}}},  # E[count] = 1.5
+        "B": {"Truck": {"count_distribution": {2: 1.0}}},  # E[count] = 2.0
     }
     slots = _estimate_expected_constraint_slots(
         occurrences, {"A", "B"}, demand, {"Truck": ["t1"]}
@@ -184,8 +184,8 @@ def test_expected_slots_weighs_occurrences_by_demand():
 def test_expected_slots_only_constrained_activities_count():
     occurrences = {"A": 2.0, "B": 5.0}
     demand = {
-        "A": {"Truck": {"mean_count": 1.0}},
-        "B": {"Truck": {"mean_count": 1.0}},
+        "A": {"Truck": {"count_distribution": {1: 1.0}}},
+        "B": {"Truck": {"count_distribution": {1: 1.0}}},
     }
     # Only A is constrained, so B's occurrences are ignored.
     slots = _estimate_expected_constraint_slots(
@@ -196,7 +196,7 @@ def test_expected_slots_only_constrained_activities_count():
 
 def test_expected_slots_res_types_outside_pool_are_ignored():
     occurrences = {"A": 3.0}
-    demand = {"A": {"Crane": {"mean_count": 4.0}}}
+    demand = {"A": {"Crane": {"count_distribution": {4: 1.0}}}}
     slots = _estimate_expected_constraint_slots(
         occurrences, {"A"}, demand, {"Truck": ["t1"]}
     )

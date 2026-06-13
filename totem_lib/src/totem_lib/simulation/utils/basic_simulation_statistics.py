@@ -185,11 +185,11 @@ def object_distribution_of_variants(ocel, variants):
 
 def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
     """
-    For each variant and each activity within it, computes how many resources
-    of each **type** are needed per activity invocation on average.
+    For each variant and each activity within it, computes the empirical
+    distribution of how many resources of each **type** are used per activity
+    invocation.
 
-    Resources are read from _attributes JSON ("process_area_resources" key), which is
-    populated by filter_by_process_area. Resource IDs are mapped to their type via
+    Resources are read from _attributes JSON ("process_area_resources" key). Resource IDs are mapped to their type via
     obj_type_map.
 
     Args:
@@ -204,9 +204,8 @@ def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
             variant: {
                 activity: {
                     resource_type: {
-                        "mean_count":  float,   # average number of resources of this type per invocation
-                        "min_count":   int,
-                        "max_count":   int,
+                        "count_distribution": {count: float},  # P(count) over all
+                            # invocations
                     }
                 }
             }
@@ -253,9 +252,10 @@ def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
             for res_type in all_types:
                 counts = [tc.get(res_type, 0) for tc in invocations]
                 type_stats[res_type] = {
-                    "mean_count": sum(counts) / num_invocations,
-                    "min_count": min(counts),
-                    "max_count": max(counts),
+                    "count_distribution": {
+                        cnt: freq / num_invocations
+                        for cnt, freq in Counter(counts).items()
+                    },
                 }
 
             activity_stats[activity] = type_stats
