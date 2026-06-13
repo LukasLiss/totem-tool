@@ -2115,7 +2115,8 @@ def run_simulation(request):
     activities = request.data.get("activities", [])
     resource_pool = request.data.get("resource_pool", {})
     sim_duration_days = request.data.get("sim_duration_days", 7)
-    tick_size_s = request.data.get("tick_size_s", 60)
+    tick_size_s = request.data.get("tick_size_s", 30)
+    sim_start_unix = request.data.get("sim_start_unix", None)
     violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
     lookback_length = request.data.get("constraint_lookback_length", None)
     mode = request.data.get("mode", "simple")  # "simple" or "advanced"
@@ -2162,6 +2163,13 @@ def run_simulation(request):
             constraint_lookback_length=lookback_length,
         )
 
+        # Convert sim_start_unix to datetime
+        start_datetime = (
+            dt.datetime.fromtimestamp(int(sim_start_unix), tz=dt.timezone.utc)
+            if sim_start_unix is not None
+            else None
+        )
+
         # Run simulation
         sim_duration_s = int(sim_duration_days * 24 * 3600)
         with EvalTimer() as sim_timer:
@@ -2169,6 +2177,7 @@ def run_simulation(request):
                 sim_duration_s=sim_duration_s,
                 resource_pool=resource_pool,
                 tick_size_s=tick_size_s,
+                start_datetime=start_datetime,
             )
 
         # Filter original OCEL by process area for comparison
@@ -2518,6 +2527,15 @@ def get_simulation_details(request):
             except Exception as e:
                 print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
 
+        # Time window of the *filtered* log
+        filtered_start_unix = None
+        filtered_duration_days = None
+        if filtered_ocel.events.height > 0:
+            ts = filtered_ocel.events.select("_timestampUnix").to_series()
+            filtered_start_unix = int(ts.min())
+            span_s = max(0, int(ts.max()) - filtered_start_unix)
+            filtered_duration_days = max(1, math.ceil(span_s / 86400))
+
         return Response({
             "variants": serialized_variants,
             "num_variants": len(variants),
@@ -2525,6 +2543,8 @@ def get_simulation_details(request):
             "allocation_strategy": allocation_strategy,
             "type_calendars": serialized_type_calendars,
             "resource_calendars": serialized_resource_calendars,
+            "log_start_unix": filtered_start_unix,
+            "log_duration_days": filtered_duration_days,
         }, status=status.HTTP_200_OK)
 
     except Exception as e:

@@ -106,6 +106,23 @@ const StepProgress: React.FC<{ steps: string[] }> = ({ steps }) => {
   );
 };
 
+// Render a unix timestamp (seconds, UTC) as a `yyyy-MM-ddTHH:mm` string 
+const unixToDatetimeLocal = (unix: number): string => {
+  const d = new Date(unix * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+    `T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  );
+};
+
+// Parse a datetime-local string as a UTC instant -> unix seconds.
+const datetimeLocalToUnix = (s: string): number | null => {
+  if (!s) return null;
+  const ms = Date.parse(`${s}:00Z`);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+};
+
 export const SimulationDashboard: React.FC = () => {
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   const fileId = selectedFile?.id;
@@ -127,6 +144,7 @@ export const SimulationDashboard: React.FC = () => {
   const [resourcePool, setResourcePool] = useState<Record<string, number>>({});
   const [simDurationDays, setSimDurationDays] = useState(7);
   const [tickSize, setTickSize] = useState(60);
+  const [simStartUnix, setSimStartUnix] = useState<number | null>(null);
   const [violationDegree, setViolationDegree] = useState(0.0);
   const [lookbackLength, setLookbackLength] = useState<number | null>(null);
 
@@ -212,13 +230,26 @@ export const SimulationDashboard: React.FC = () => {
     setPhase("configure");
   }, [fileId]);
 
-  // Default the simulation duration to the source log's time span so the
-  // simulated log is directly comparable to the original.
+  // Seed the simulation time window to the whole-log span as a baseline
   useEffect(() => {
     if (processAreasData?.log_duration_days) {
       setSimDurationDays(processAreasData.log_duration_days);
     }
+    if (processAreasData?.log_start_unix != null) {
+      setSimStartUnix(processAreasData.log_start_unix);
+    }
   }, [processAreasData]);
+
+  // Refine simulation start time & time window to the data from the filtered log
+  useEffect(() => {
+    if (!details) return;
+    if (details.log_duration_days != null) {
+      setSimDurationDays(details.log_duration_days);
+    }
+    if (details.log_start_unix != null) {
+      setSimStartUnix(details.log_start_unix);
+    }
+  }, [details]);
 
   // Compute which activities are relevant based on selected object types
   const relevantActivities = useMemo(() => {
@@ -446,6 +477,7 @@ export const SimulationDashboard: React.FC = () => {
       resource_pool: resourcePool,
       sim_duration_days: simDurationDays,
       tick_size_s: tickSize,
+      sim_start_unix: simStartUnix,
       resource_constraint_violation_degree: violationDegree,
       constraint_lookback_length: lookbackLength,
       mode,
@@ -726,26 +758,10 @@ export const SimulationDashboard: React.FC = () => {
             <Card>
               <CardHeader><CardTitle>Simulation Parameters</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="sim-duration">Duration (days)</Label>
-                    <Input id="sim-duration" type="number" min={1} value={simDurationDays}
-                      onChange={(e) => setSimDurationDays(parseInt(e.target.value) || 7)} />
-                    {processAreasData?.log_duration_days != null && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        Source log spans {processAreasData.log_duration_days} day
-                        {processAreasData.log_duration_days === 1 ? "" : "s"}
-                        {simDurationDays === processAreasData.log_duration_days
-                          ? " (matched)"
-                          : ""}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <Label htmlFor="tick-size">Tick size (seconds)</Label>
-                    <Input id="tick-size" type="number" min={1} value={tickSize}
-                      onChange={(e) => setTickSize(parseInt(e.target.value) || 60)} />
-                  </div>
+                <div>
+                  <Label htmlFor="tick-size">Tick size (seconds)</Label>
+                  <Input id="tick-size" type="number" min={1} value={tickSize}
+                    onChange={(e) => setTickSize(parseInt(e.target.value) || 60)} />
                 </div>
 
                 <div>
@@ -839,8 +855,8 @@ export const SimulationDashboard: React.FC = () => {
           </div>
 
           {/* Configuration Summary */}
-          <CollapsibleSection title="Configuration Summary" description={`${mode} mode, ${simDurationDays}d, ${selectedObjectTypes.length} types, ${selectedActivities.length} activities`} defaultOpen={false}>
             <Card>
+              <CardHeader><CardTitle>Configuration Summary</CardTitle></CardHeader>
               <CardContent className="pt-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
                   <div>
@@ -876,7 +892,46 @@ export const SimulationDashboard: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
-          </CollapsibleSection>
+
+          {/* Simulation Time */}
+          <Card>
+            <CardHeader><CardTitle>Simulation Time</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="sim-duration">Duration (days)</Label>
+                  <Input id="sim-duration" type="number" min={1} value={simDurationDays}
+                    onChange={(e) => setSimDurationDays(parseInt(e.target.value) || 7)} />
+                  {details.log_duration_days != null && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Process-area log spans {details.log_duration_days} day
+                      {details.log_duration_days === 1 ? "" : "s"}
+                      {simDurationDays === details.log_duration_days ? " (matched)" : ""}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <Label htmlFor="sim-start">Simulation start (UTC)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="sim-start" type="datetime-local"
+                      value={simStartUnix != null ? unixToDatetimeLocal(simStartUnix) : ""}
+                      onChange={(e) => setSimStartUnix(datetimeLocalToUnix(e.target.value))} />
+                    {details.log_start_unix != null && (
+                      <Button type="button" variant="outline" size="sm"
+                        onClick={() => setSimStartUnix(details.log_start_unix)}>
+                        Reset
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Both default to the filtered process-area log. Changing the start
+                shifts the simulated timeline; absolute-time comparison metrics only
+                stay meaningful when it overlaps the original log.
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Arrival Distribution Editor */}
           <CollapsibleSection title="Arrival Distribution" description={`${details.num_variants} variant(s), configure arrival rates`}>

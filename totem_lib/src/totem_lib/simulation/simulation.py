@@ -538,6 +538,7 @@ class OCProcessAreaSimulationModel:
         totem_model,
         needed_resources_per_activity,
         simulation_config,
+        source_log_start_unix,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
@@ -546,6 +547,7 @@ class OCProcessAreaSimulationModel:
         self.totem_model = totem_model
         self.needed_resources_per_activity = needed_resources_per_activity
         self.simulation_config = simulation_config
+        self.source_log_start_unix = source_log_start_unix
 
     def run(
         self,
@@ -597,6 +599,11 @@ class OCProcessAreaSimulationModel:
             filtered_ocel, variants, ocel.obj_type_map
         )
 
+        # First event of the filtered log — the default simulation start.
+        source_log_start_unix = (
+            filtered_ocel.events.select("_timestampUnix").to_series().min()
+        )
+
         return cls(
             playout_strategy,
             resource_constraints,
@@ -605,6 +612,7 @@ class OCProcessAreaSimulationModel:
             totem_model,
             needed_resources_per_activity,
             OCProcessAreaSimulationConfiguration(),
+            source_log_start_unix
         )
 
     @classmethod
@@ -737,7 +745,7 @@ class VariantPlayoutStrategy:
             sim_duration_s: Total simulation duration in seconds
             resource_pool: {resource_type: count} — e.g. {'Forklift': 3, 'Crane': 2}
             tick_size_s: Clock tick size in seconds
-            start_datetime: datetime of simulation start
+            start_datetime: datetime of simulation start. Defaults to the filtered source log's first event
 
         Returns:
             (ObjectCentricEventLog, finished_count, spawned_count)
@@ -745,8 +753,8 @@ class VariantPlayoutStrategy:
 
         # --- Initialize simulation parameters ---
         if start_datetime is None:
-            start_datetime = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-                seconds=sim_duration_s
+            start_datetime = dt.datetime.fromtimestamp(
+                    simulation_model.source_log_start_unix, tz=dt.timezone.utc
             )
 
         allocation_strategy = simulation_model.resource_allocation_strategy
