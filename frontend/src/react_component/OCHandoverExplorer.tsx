@@ -31,6 +31,9 @@ export type HandoverEdge = {
   businessobject_type: string;
   weight: number;
   raw_weight: number;
+  avg_time: number | null;
+  min_time: number | null;
+  max_time: number | null;
 };
 export type HandoverData = { nodes: HandoverNode[]; edges: HandoverEdge[] };
 
@@ -816,6 +819,9 @@ export default function OCHandoverExplorer({
                           </th>
                         );
                       })}
+                      <th className="px-3 py-2 text-left font-medium">Avg time</th>
+                      <th className="px-3 py-2 text-left font-medium">Min time</th>
+                      <th className="px-3 py-2 text-left font-medium">Max time</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -843,6 +849,9 @@ export default function OCHandoverExplorer({
                               <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
                             </div>
                           </td>
+                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.avg_time)}</td>
+                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.min_time)}</td>
+                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.max_time)}</td>
                         </tr>
                       );
                     })}
@@ -856,6 +865,17 @@ export default function OCHandoverExplorer({
       </CardContent>
     </Wrapper>
   );
+}
+
+/* ── Duration formatter ─────────────────────────────────────── */
+function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  const s = Math.round(Math.abs(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 /* ── TypeSelector ───────────────────────────────────────────── */

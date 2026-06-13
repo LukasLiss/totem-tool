@@ -217,6 +217,7 @@ class OCHANDOVER(nx.MultiDiGraph):
             .with_columns([
                 pl.col("_eventId").shift(-1).over("businessobject_id").alias("next_event_id"),
                 pl.col("position").shift(-1).over("businessobject_id").alias("next_position"),
+                pl.col("_timestampUnix").shift(-1).over("businessobject_id").alias("next_timestampUnix"),
             ])
             .filter(pl.col("next_event_id").is_not_null())
             .join(
@@ -224,9 +225,10 @@ class OCHANDOVER(nx.MultiDiGraph):
                 on="next_event_id",
                 how="inner",
             )
-            .with_columns(
-                (pl.col("next_position") - pl.col("position") - 1).alias("gap")
-            )
+            .with_columns([
+                (pl.col("next_position") - pl.col("position") - 1).alias("gap"),
+                (pl.col("next_timestampUnix") - pl.col("_timestampUnix")).alias("time_delta"),
+            ])
         )
 
         print("Consecutive resource pairs (with gap, per business object)")
@@ -298,14 +300,15 @@ class OCHANDOVER(nx.MultiDiGraph):
             print(all_bo_events_with_blocks.select(["businessobject_id", "_eventId", "_activity", "block_id"]))
 
             # Resource events annotated with their block ID, one row per resource.
+            # _timestampUnix is kept so each resource carries its own event timestamp.
             block_resource_events = (
                 all_bo_events_with_blocks
                 .join(event_resources, on="_eventId", how="inner")
                 .explode("resources")
-                .select(["businessobject_id", "businessobject_type", "block_id", "resources"])
+                .select(["businessobject_id", "businessobject_type", "block_id", "resources", "_timestampUnix"])
             )
 
-            # Unique resources present in each (business-object instance, block).
+            # Unique resources per block — used only for consecutive block pair discovery and gap check.
             block_resources_agg = (
                 block_resource_events
                 .group_by(["businessobject_id", "businessobject_type", "block_id"])
@@ -315,33 +318,41 @@ class OCHANDOVER(nx.MultiDiGraph):
             print("Block resources")
             print(block_resources_agg.sort(["businessobject_id", "block_id"]))
 
-            # Handover pairs = cross-product between consecutive resource-containing blocks.
-            # Empty blocks (no resources) are skipped automatically since block_resources_agg only
-            # contains blocks with at least one resource. A run of empty blocks (parallel section
-            # with no resources) counts as a gap of 1, regardless of how many events it spans.
-            # block_gap = next_block_id - block_id - 1: number of empty blocks between two resource blocks.
-            block_handovers_raw = (
+            # Find consecutive resource-containing block pairs and apply gap filter.
+            # block_gap = number of empty blocks between two resource-containing blocks.
+            block_pairs = (
                 block_resources_agg
                 .sort(["businessobject_id", "businessobject_type", "block_id"])
                 .with_columns([
-                    pl.col("block_resources").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("next_block_resources"),
                     pl.col("block_id").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("next_block_id"),
+                    pl.col("block_resources").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("_next_check"),
                 ])
-                .filter(pl.col("next_block_resources").is_not_null())
-                .with_columns(
-                    (pl.col("next_block_id") - pl.col("block_id") - 1).alias("block_gap")
-                )
+                .filter(pl.col("_next_check").is_not_null())
+                .with_columns((pl.col("next_block_id") - pl.col("block_id") - 1).alias("block_gap"))
+                .select(["businessobject_id", "businessobject_type", "block_id", "next_block_id", "block_gap"])
             )
 
             if max_gap is not None:
-                block_handovers_raw = block_handovers_raw.filter(pl.col("block_gap") <= max_gap)
+                block_pairs = block_pairs.filter(pl.col("block_gap") <= max_gap)
 
+            # For each valid block pair, cross-join source and target resource rows directly.
+            # Each source resource carries its own event timestamp, as does each target resource,
+            # so time_delta = target_ts - source_ts is per individual (source, target) pair.
             block_handovers = (
-                block_handovers_raw
-                .explode("block_resources")
-                .explode("next_block_resources")
-                .rename({"block_resources": "source", "next_block_resources": "target"})
-                .select(["source", "target", "businessobject_type"])
+                block_pairs
+                .join(
+                    block_resource_events.rename({"resources": "source", "_timestampUnix": "source_ts"}),
+                    on=["businessobject_id", "businessobject_type", "block_id"],
+                    how="inner",
+                )
+                .join(
+                    block_resource_events
+                    .rename({"resources": "target", "_timestampUnix": "target_ts", "block_id": "next_block_id"}),
+                    on=["businessobject_id", "businessobject_type", "next_block_id"],
+                    how="inner",
+                )
+                .with_columns((pl.col("target_ts") - pl.col("source_ts")).alias("time_delta"))
+                .select(["source", "target", "businessobject_type", "time_delta"])
             )
 
             print("Block handovers (parallel-aware)")
@@ -350,8 +361,12 @@ class OCHANDOVER(nx.MultiDiGraph):
             handover_edges = (
                 block_handovers
                 .group_by(["source", "target", "businessobject_type"])
-                .len()
-                .rename({"len": "weight"})
+                .agg([
+                    pl.len().alias("weight"),
+                    pl.col("time_delta").mean().alias("avg_time"),
+                    pl.col("time_delta").min().alias("min_time"),
+                    pl.col("time_delta").max().alias("max_time"),
+                ])
                 .sort("weight", descending=True)
             )
 
@@ -365,6 +380,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                     pl.col("next_resources").first().alias("target_resources"),
                     pl.col("businessobject_type").unique().alias("businessobject_types"),
                     pl.col("gap").min().alias("gap"),
+                    pl.col("time_delta").first().alias("time_delta"),
                 ])
             )
 
@@ -380,12 +396,16 @@ class OCHANDOVER(nx.MultiDiGraph):
                 .explode("target_resources")
                 .explode("businessobject_types")
                 .group_by(["source_resources", "target_resources", "businessobject_types"])
-                .len()
+                .agg([
+                    pl.len().alias("weight"),
+                    pl.col("time_delta").mean().alias("avg_time"),
+                    pl.col("time_delta").min().alias("min_time"),
+                    pl.col("time_delta").max().alias("max_time"),
+                ])
                 .rename({
                     "source_resources": "source",
                     "target_resources": "target",
                     "businessobject_types": "businessobject_type",
-                    "len": "weight",
                 })
                 .sort("weight", descending=True)
             )
@@ -482,6 +502,9 @@ class OCHANDOVER(nx.MultiDiGraph):
                 weight=row["norm_weight"],
                 raw_weight=row["weight"],
                 businessobject_type=bo_type,
+                avg_time=row.get("avg_time"),
+                min_time=row.get("min_time"),
+                max_time=row.get("max_time"),
             )
 
         return graph

@@ -987,6 +987,9 @@ def ochandover(request):
             "businessobject_type": data.get("businessobject_type", "unknown"),
             "weight": round(data.get("weight", 0), 6),
             "raw_weight": int(data.get("raw_weight", 0)),
+            "avg_time": data.get("avg_time"),
+            "min_time": data.get("min_time"),
+            "max_time": data.get("max_time"),
         }
         for u, v, data in graph.edges(data=True)
     ]
