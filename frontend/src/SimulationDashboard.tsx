@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -147,6 +148,7 @@ export const SimulationDashboard: React.FC = () => {
   const [simStartUnix, setSimStartUnix] = useState<number | null>(null);
   const [violationDegree, setViolationDegree] = useState(0.0);
   const [lookbackLength, setLookbackLength] = useState<number | null>(null);
+  const [modelActivityDurations, setModelActivityDurations] = useState(true);
 
   // Constraint mining config
   const [supportThreshold, setSupportThreshold] = useState(0.8);
@@ -478,6 +480,7 @@ export const SimulationDashboard: React.FC = () => {
       sim_duration_days: simDurationDays,
       tick_size_s: tickSize,
       sim_start_unix: simStartUnix,
+      model_activity_durations: modelActivityDurations,
       resource_constraint_violation_degree: violationDegree,
       constraint_lookback_length: lookbackLength,
       mode,
@@ -762,6 +765,20 @@ export const SimulationDashboard: React.FC = () => {
                   <Label htmlFor="tick-size">Tick size (seconds)</Label>
                   <Input id="tick-size" type="number" min={1} value={tickSize}
                     onChange={(e) => setTickSize(parseInt(e.target.value) || 60)} />
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <Switch id="model-durations" className="mt-1"
+                    checked={modelActivityDurations}
+                    onCheckedChange={setModelActivityDurations} />
+                  <div>
+                    <Label htmlFor="model-durations">Model activity durations</Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Delay each activity by inter-activity times learned from the log
+                      so cycle times are realistic. Disable to fire activities
+                      immediately (events collapse onto tick boundaries).
+                    </p>
+                  </div>
                 </div>
 
                 <div>

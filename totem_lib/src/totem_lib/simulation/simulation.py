@@ -10,6 +10,7 @@ from totem_lib import mlpaDiscovery, totemDiscovery
 from totem_lib.ocel.ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEventLog
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     WEEKDAY_NAMES,
+    activity_delay_distribution,
     resource_distribution_of_variants,
 )
 from totem_lib.simulation.utils.basic_simulation_statistics import (
@@ -35,6 +36,10 @@ VIOLATION_COST_WEIGHTS = {
     "disjoint": 1.0,
     "superset": 1.0,
 }
+# Whether to space successor activities additionally by sampled inter-event times
+# Needed when the only resource based steering of activity enablement is not enough
+# This might occur, when the log is sparse, or many resources are available
+MODEL_ACTIVITY_DURATIONS = True
 
 
 class _ViolationBudget:
@@ -212,6 +217,17 @@ def _sample_resource_count(stats):
     """
     dist = stats["count_distribution"]
     return random.choices(list(dist.keys()), weights=list(dist.values()), k=1)[0]
+
+
+def _sample_activity_delay(activity, activity_delays):
+    """
+    Sample the delay (seconds) before ``activity`` fires, from the
+    empirical pool learned by ``activity_delay_distribution``.
+    """
+    samples = activity_delays.get(activity)
+    if not samples:
+        return 0
+    return random.choice(samples)
 
 
 def _get_node_objects(graph, node):
@@ -502,6 +518,9 @@ class OCProcessAreaSimulationConfiguration:
     - Violation_Cost_Weights: Relative cost (in budget units) of violating each
       constraint type. A higher cost makes that violation type rarer for a given
       violation degree;
+    - Model_Activity_Durations: When True, successor activities are delayed by
+      inter-activity durations sampled from the log so simulated cycle times are
+      realistic. When False, activities fire on the next tick when enabled
     """
 
     def __init__(
@@ -509,10 +528,12 @@ class OCProcessAreaSimulationConfiguration:
         resource_constraint_violation_degree=RESOURCE_CONSTRAINT_VIOLATION_DEGREE,
         constraint_lookback_length=CONSTRAINT_LOOKBACK_LENGTH,
         violation_cost_weights=VIOLATION_COST_WEIGHTS,
+        model_activity_durations=MODEL_ACTIVITY_DURATIONS,
     ):
         self.resource_constraint_violation_degree = resource_constraint_violation_degree
         self.constraint_lookback_length = constraint_lookback_length
         self.violation_cost_weights = violation_cost_weights.copy()
+        self.model_activity_durations = model_activity_durations
 
 
 class OCProcessAreaSimulationModel:
@@ -539,6 +560,7 @@ class OCProcessAreaSimulationModel:
         needed_resources_per_activity,
         simulation_config,
         source_log_start_unix,
+        activity_delays=None,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
@@ -548,6 +570,7 @@ class OCProcessAreaSimulationModel:
         self.needed_resources_per_activity = needed_resources_per_activity
         self.simulation_config = simulation_config
         self.source_log_start_unix = source_log_start_unix
+        self.activity_delays = activity_delays or {}
 
     def run(
         self,
@@ -604,6 +627,9 @@ class OCProcessAreaSimulationModel:
             filtered_ocel.events.select("_timestampUnix").to_series().min()
         )
 
+        # Inter-activity delays (for the duration model)
+        activity_delays = activity_delay_distribution(filtered_ocel)
+
         return cls(
             playout_strategy,
             resource_constraints,
@@ -612,7 +638,8 @@ class OCProcessAreaSimulationModel:
             totem_model,
             needed_resources_per_activity,
             OCProcessAreaSimulationConfiguration(),
-            source_log_start_unix
+            source_log_start_unix,
+            activity_delays=activity_delays,
         )
 
     @classmethod
@@ -754,7 +781,7 @@ class VariantPlayoutStrategy:
         # --- Initialize simulation parameters ---
         if start_datetime is None:
             start_datetime = dt.datetime.fromtimestamp(
-                    simulation_model.source_log_start_unix, tz=dt.timezone.utc
+                simulation_model.source_log_start_unix, tz=dt.timezone.utc
             )
 
         allocation_strategy = simulation_model.resource_allocation_strategy
@@ -764,6 +791,11 @@ class VariantPlayoutStrategy:
             simulation_model.needed_resources_per_activity or {}
         )
         simulation_config = simulation_model.simulation_config
+
+        activity_delays = simulation_model.activity_delays or {}
+        model_durations = bool(
+            simulation_config.model_activity_durations and activity_delays
+        )
 
         schedule = self.generate_arrival_schedule(start_datetime, sim_duration_s)
 
@@ -837,6 +869,9 @@ class VariantPlayoutStrategy:
                         "variant": variant,
                         "obj_map": obj_map,
                         "violation_budget": violation_budget,
+                        "spawn_tick": tick,
+                        "finish_tick": {},
+                        "ready_at": {},
                     }
                 )
 
@@ -872,6 +907,22 @@ class VariantPlayoutStrategy:
 
                 for node in enabled:
                     activity = graph.nodes[node]["label"]
+
+                    # Duration model: hold a node back until its enabling time
+                    # + sampled inter-activity delay. Execution-start nodes (no predecessors) fire immediately;
+                    if model_durations:
+                        preds = list(graph.predecessors(node))
+                        if preds:
+                            if node not in inst["ready_at"]:
+                                enabling_tick = max(
+                                    inst["finish_tick"][p] for p in preds
+                                )
+                                inst["ready_at"][node] = (
+                                    enabling_tick
+                                    + _sample_activity_delay(activity, activity_delays)
+                                )
+                            if tick < inst["ready_at"][node]:
+                                continue  # not due yet
 
                     # TODO: Geht das nicht mir Random Int oder so deutlich einfacher?
                     # Determine how many resources of each type this activity needs
@@ -968,6 +1019,8 @@ class VariantPlayoutStrategy:
                     )
 
                     inst["finished_nodes"].add(node)
+                    # Record the fire tick so successors can compute their enabling time
+                    inst["finish_tick"][node] = tick
 
                 # Check completion
                 if len(inst["finished_nodes"]) == graph.number_of_nodes():

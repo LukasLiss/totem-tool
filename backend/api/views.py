@@ -2119,6 +2119,7 @@ def run_simulation(request):
     sim_start_unix = request.data.get("sim_start_unix", None)
     violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
     lookback_length = request.data.get("constraint_lookback_length", None)
+    model_activity_durations = request.data.get("model_activity_durations", True)
     mode = request.data.get("mode", "simple")  # "simple" or "advanced"
 
     if not file_id:
@@ -2161,6 +2162,7 @@ def run_simulation(request):
         simulation_model.simulation_config = OCProcessAreaSimulationConfiguration(
             resource_constraint_violation_degree=violation_degree,
             constraint_lookback_length=lookback_length,
+            model_activity_durations=bool(model_activity_durations),
         )
 
         # Convert sim_start_unix to datetime

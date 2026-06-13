@@ -263,3 +263,26 @@ def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
         result[variant] = activity_stats
 
     return result
+
+
+def activity_delay_distribution(ocel):
+    """
+    Per activity, the empirical pool of *delays* (in seconds) between an event
+    becoming enabled and actually occurring.
+
+    Args:
+        ocel: ObjectCentricEventLog (typically the process-area-filtered log, so
+            the EOG structure matches what the simulation reproduces).
+
+    Returns:
+        dict: {activity: [delay_s, ...]} — one bootstrap sample pool per activity.
+    """
+    eog = ocel.eog
+    delays: dict[str, list[int]] = defaultdict(list)
+    for node, data in eog.nodes(data=True):
+        preds = list(eog.predecessors(node))
+        if not preds:
+            continue
+        enabling_ts = max(eog.nodes[p]["timestamp"] for p in preds)
+        delays[data["label"]].append(max(0, data["timestamp"] - enabling_ts))
+    return dict(delays)

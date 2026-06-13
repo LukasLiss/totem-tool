@@ -31,6 +31,8 @@ export type SimulationConfig = {
   sim_start_unix: number | null;
   resource_constraint_violation_degree: number;
   constraint_lookback_length: number | null;
+  // When true, successor activities are delayed by inter-activity durations
+  model_activity_durations: boolean;
   mode: SimulationMode;
 };
 
