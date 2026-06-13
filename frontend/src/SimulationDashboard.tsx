@@ -1154,8 +1154,19 @@ const SimulationResults: React.FC<{ result: SimulationResult }> = ({ result }) =
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       <Card>
         <CardContent className="pt-6 text-center">
-          <p className="text-3xl font-bold">{result.finished_instances}</p>
-          <p className="text-sm text-muted-foreground">Finished Instances</p>
+          <p className="text-3xl font-bold">
+            {result.finished_instances}
+            {result.spawned_instances != null && (
+              <span className="text-xl text-muted-foreground">
+                {" "}/ {result.spawned_instances}
+              </span>
+            )}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Finished Instances
+            {result.completion_ratio != null &&
+              ` (${(result.completion_ratio * 100).toFixed(1)}%)`}
+          </p>
         </CardContent>
       </Card>
       <Card>

@@ -2165,7 +2165,7 @@ def run_simulation(request):
         # Run simulation
         sim_duration_s = int(sim_duration_days * 24 * 3600)
         with EvalTimer() as sim_timer:
-            sim_log, finished_count = simulation_model.run(
+            sim_log, finished_count, spawned_count = simulation_model.run(
                 sim_duration_s=sim_duration_s,
                 resource_pool=resource_pool,
                 tick_size_s=tick_size_s,
@@ -2215,6 +2215,8 @@ def run_simulation(request):
         # Build response
         response_data = {
             "finished_instances": finished_count,
+            "spawned_instances": spawned_count,
+            "completion_ratio": (finished_count / spawned_count) if spawned_count else 0.0,
             "simulated_events": sim_log.events.height if sim_log.events is not None else 0,
             "simulated_objects": sim_log.objects.height if sim_log.objects is not None else 0,
             "evaluation": evaluation,

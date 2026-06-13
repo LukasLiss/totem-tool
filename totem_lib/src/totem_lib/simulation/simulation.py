@@ -716,7 +716,7 @@ class VariantPlayoutStrategy:
             start_datetime: datetime of simulation start
 
         Returns:
-            (ObjectCentricEventLog, finished_count)
+            (ObjectCentricEventLog, finished_count, spawned_count)
         """
 
         # --- Initialize simulation parameters ---
@@ -760,7 +760,10 @@ class VariantPlayoutStrategy:
         schedule_idx = 0
 
         # --- Main simulation loop ---
-        for tick in range(0, sim_duration_s, tick_size_s):
+        ticks = list(range(0, sim_duration_s, tick_size_s))
+        ticks.append(sim_duration_s) # Append final tick to ensure all arrivals are spawned
+
+        for tick in ticks:
 
             # Phase A: Spawn new instances from arrival schedule
             while schedule_idx < len(schedule) and schedule[schedule_idx][0] <= tick:
@@ -950,7 +953,11 @@ class VariantPlayoutStrategy:
         else:
             objects_df = pl.DataFrame(schema=OBJECTS_SCHEMA)
 
-        return ObjectCentricEventLog(events_df, objects_df), finished_count
+        return (
+            ObjectCentricEventLog(events_df, objects_df),
+            finished_count,
+            instance_counter,
+        )
 
 
 class StateSpacePlayoutStrategy:
@@ -1115,10 +1122,13 @@ if __name__ == "__main__":
     # print(filtered_ocel)
     filtered_ocel = ocel.filter_by_process_area(mlpa, pa2)
     simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(ocel, pa2)
-    sim_log, finished_count = simulation_model.run(
+    sim_log, finished_count, spawned_count = simulation_model.run(
         sim_duration_s=3600 * 24 * 7 * 100,
         resource_pool={"Truck": 3, "Forklift": 5},
         tick_size_s=60,
     )
-    print(f"Finished {finished_count} instances in the simulation.")
+    print(
+        f"Finished {finished_count} of {spawned_count} spawned instances "
+        f"in the simulation."
+    )
     print(sim_log)

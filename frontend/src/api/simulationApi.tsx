@@ -104,6 +104,8 @@ export type SimulatedFileInfo = {
 
 export type SimulationResult = {
   finished_instances: number;
+  spawned_instances: number;
+  completion_ratio: number;
   simulated_events: number;
   simulated_objects: number;
   evaluation: PaperEvaluationResult | null;
