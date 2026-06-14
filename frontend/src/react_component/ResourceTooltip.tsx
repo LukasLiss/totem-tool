@@ -163,10 +163,11 @@ export default function TooltipBox({
   const activitySectionH   = slices.length > 0 ? 15 + PIE_R * 2 + 8 + slices.length * 20 : 0;
   const clusterHeaderH     = tooltip.isCluster ? 20 : 0;
   const tooltipPadding     = 20;
+  const clusterTypeBarH = tooltip.isCluster && hasMultiple ? 14 : 0;
   const estH = tooltipPadding + clusterHeaderH + activitySectionH
     + rowSectionH(coocRows) + rowSectionH(collabRows)
     + timeBinSectionH + weekdaySectionH + portfolioSectionH
-    + 34 + resourceListH;
+    + clusterTypeBarH + 34 + resourceListH;
 
   const sectionOrder = [
     cooccurringResources.length > 0  && "cooc",
@@ -369,6 +370,26 @@ export default function TooltipBox({
       )}
 
       <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" }}>
+        {hasMultiple && tooltip.isCluster && (() => {
+          const typeCounts: Record<string, number> = {};
+          tooltip.resources.forEach(r => {
+            const t = resourceObjectTypes[r] ?? "unknown";
+            typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+          });
+          const total = tooltip.resources.length;
+          const segments = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+          return (
+            <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", marginBottom: 8 }}>
+              {segments.map(([type, count]) => (
+                <div
+                  key={type}
+                  title={`${type}: ${((count / total) * 100).toFixed(0)}%`}
+                  style={{ width: `${(count / total) * 100}%`, background: typeColorMap[type] ?? "#94a3b8" }}
+                />
+              ))}
+            </div>
+          );
+        })()}
         {hasMultiple ? (
           <>
             <button onClick={() => setShowResources(r => !r)}

@@ -102,6 +102,7 @@ export default function OCHandoverExplorer({
   const [minParallelObsStr, setMinParallelObsStr] = useState("1");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const { clusterInfo } = useContext(ClusterContext);
   const [useClusters, setUseClusters] = useState(false);
   const [logData, setLogData] = useState<EventLogData | null>(null);
@@ -192,7 +193,7 @@ export default function OCHandoverExplorer({
   }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs]);
 
   // Reset selected node and locked height when data changes
-  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); }, [data]);
+  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); graphPositionsRef.current = {}; }, [data]);
 
   // Reset log data when fileId changes
   useEffect(() => {
@@ -786,6 +787,7 @@ export default function OCHandoverExplorer({
                   typeColorMap={typeColorMap}
                   onNodeClick={setSelectedNode}
                   clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                  positionsRef={graphPositionsRef}
                 />
               )
             )}
@@ -1015,12 +1017,14 @@ function HandoverGraph({
   typeColorMap,
   onNodeClick,
   clusterInfo,
+  positionsRef,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
   typeColorMap: Record<string, string>;
   onNodeClick?: (id: string) => void;
   clusterInfo?: ClusterInfo;
+  positionsRef?: { current: Record<string, { x: number; y: number }> };
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1054,9 +1058,22 @@ function HandoverGraph({
     setSize({ width: w, height: Math.max(400, w * 0.62) });
   }, []);
 
+  // Sync dragged positions back to the ref so they survive unmount
+  useEffect(() => {
+    if (positionsRef && Object.keys(positions).length > 0) positionsRef.current = positions;
+  }, [positions, positionsRef]);
+
   // Force simulation — re-run when nodes/edges/size change
   useEffect(() => {
     if (nodes.length === 0) return;
+
+    // Restore saved positions if they cover all current nodes (e.g. returning from ego view)
+    const saved = positionsRef?.current ?? {};
+    if (nodes.every(n => saved[n.id])) {
+      setPositions({ ...saved });
+      return;
+    }
+
     const { width, height } = size;
     const cx = width / 2, cy = height / 2;
 
@@ -1112,6 +1129,7 @@ function HandoverGraph({
         y: Math.max(NODE_R + 4, Math.min(height - NODE_R - 4, n.y ?? height / 2)),
       };
     });
+    if (positionsRef) positionsRef.current = pos;
     setPositions(pos);
     setViewBox({ x: 0, y: 0, w: size.width, h: size.height });
   }, [nodes, edges, size]);
