@@ -1028,6 +1028,7 @@ function HandoverGraph({
   const [size, setSize] = useState({ width: 700, height: 450 });
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 700, h: 450 });
   const [isLocked, setIsLocked] = useState(false);
+  const [minWeightStr, setMinWeightStr] = useState("0.00");
   const viewBoxRef = useRef(viewBox);
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -1115,24 +1116,27 @@ function HandoverGraph({
     setViewBox({ x: 0, y: 0, w: size.width, h: size.height });
   }, [nodes, edges, size]);
 
+  const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
+  const visibleEdges = useMemo(() => minWeightVal <= 0 ? edges : edges.filter(e => e.weight >= minWeightVal), [edges, minWeightVal]);
+
   // Detect which pairs have a reverse edge
   const reverseSet = useMemo(() => {
-    const s = new Set(edges.map(e => `${e.source}\x00${e.target}`));
+    const s = new Set(visibleEdges.map(e => `${e.source}\x00${e.target}`));
     return (u: string, v: string) => s.has(`${v}\x00${u}`);
-  }, [edges]);
+  }, [visibleEdges]);
 
   // Group edges by directed pair
   const edgeGroups = useMemo(() => {
     const g = new Map<string, HandoverEdge[]>();
-    edges.forEach(e => {
+    visibleEdges.forEach(e => {
       const key = `${e.source}\x00${e.target}`;
       if (!g.has(key)) g.set(key, []);
       g.get(key)!.push(e);
     });
     return g;
-  }, [edges]);
+  }, [visibleEdges]);
 
-  const maxWeight = useMemo(() => Math.max(...edges.map(e => e.weight), 0.0001), [edges]);
+  const maxWeight = useMemo(() => Math.max(...visibleEdges.map(e => e.weight), 0.0001), [visibleEdges]);
 
   const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
@@ -1464,6 +1468,43 @@ function HandoverGraph({
           padding: "6px 12px",
           boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
         }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            height: 36, padding: "0 12px",
+            border: "1px solid #E2E8F0", borderRadius: 9999,
+            background: "white",
+          }}>
+            <span style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>min weight</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={minWeightStr}
+              onChange={e => setMinWeightStr(e.target.value)}
+              onBlur={e => {
+                const n = Math.max(0, parseFloat(e.target.value.replace(",", ".")) || 0);
+                setMinWeightStr(n.toFixed(2));
+              }}
+              onKeyDown={e => {
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  const cur = Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0);
+                  const next = Math.max(0, Math.round((cur + (e.key === "ArrowUp" ? 0.01 : -0.01)) * 100) / 100);
+                  setMinWeightStr(next.toFixed(2));
+                }
+              }}
+              style={{ width: 44, border: "none", fontSize: 12, textAlign: "center", outline: "none", background: "transparent" }}
+            />
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <button type="button" tabIndex={-1}
+                onClick={() => setMinWeightStr(s => (Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) + 0.01) * 100) / 100).toFixed(2))}
+                style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+              >▲</button>
+              <button type="button" tabIndex={-1}
+                onClick={() => setMinWeightStr(s => (Math.max(0, Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) - 0.01) * 100) / 100)).toFixed(2))}
+                style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+              >▼</button>
+            </div>
+          </div>
           <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9">
             <PlusIcon className="h-4 w-4" />
           </Button>
