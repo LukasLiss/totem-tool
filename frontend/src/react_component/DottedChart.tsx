@@ -89,6 +89,10 @@ export default function DottedChart({
   const effectiveConfig = showControls ? config : defaultConfig;
   const [requestedViewport, setRequestedViewport] = useState<DottedChartViewport | undefined>(viewport);
   const [sampleSeed, setSampleSeed] = useState(0);
+  const [controlBrushRange, setControlBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
+  const [controlYBrushRange, setControlYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
+  const [framePoints, setFramePoints] = useState<ChartPoint[]>([]);
+  const [frameYTicks, setFrameYTicks] = useState<number[]>([]);
 
   useEffect(() => {
     setConfig(defaultConfig);
@@ -97,6 +101,10 @@ export default function DottedChart({
   useEffect(() => {
     setRequestedViewport(viewport);
     setSampleSeed(0);
+    setFramePoints([]);
+    setFrameYTicks([]);
+    setControlBrushRange({ startIndex: 0, endIndex: 0 });
+    setControlYBrushRange({ startIndex: 0, endIndex: 0 });
   }, [
     fileId,
     viewport,
@@ -154,6 +162,18 @@ export default function DottedChart({
   );
   const xDomain = useMemo(() => getDataDomain(visiblePointsByAxes.map((point) => point.chartX)), [visiblePointsByAxes]);
   const yDomain = useMemo(() => getRowDomain(visibleYTicks), [visibleYTicks]);
+  const effectiveFramePoints = framePoints.length ? framePoints : points;
+  const effectiveFrameYTicks = frameYTicks.length ? frameYTicks : yTicks;
+  const frameXLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "x"), [effectiveFramePoints]);
+  const frameYLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "y"), [effectiveFramePoints]);
+  const effectiveControlBrushRange = useMemo(
+    () => clampBrushRange(controlBrushRange, effectiveFramePoints.length),
+    [controlBrushRange, effectiveFramePoints.length]
+  );
+  const effectiveControlYBrushRange = useMemo(
+    () => clampBrushRange(controlYBrushRange, effectiveFrameYTicks.length),
+    [controlYBrushRange, effectiveFrameYTicks.length]
+  );
 
   useEffect(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
@@ -162,6 +182,18 @@ export default function DottedChart({
   useEffect(() => {
     setYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
   }, [yTicks.length]);
+
+  useEffect(() => {
+    if (requestedViewport || !points.length || framePoints.length) return;
+    setFramePoints(points);
+    setControlBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
+  }, [framePoints.length, points, requestedViewport]);
+
+  useEffect(() => {
+    if (requestedViewport || !yTicks.length || frameYTicks.length) return;
+    setFrameYTicks(yTicks);
+    setControlYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
+  }, [frameYTicks.length, requestedViewport, yTicks]);
 
   useEffect(() => {
     return () => {
@@ -197,50 +229,83 @@ export default function DottedChart({
   }, []);
 
   const handleResample = useCallback(() => {
-    const nextViewport = viewportFromVisiblePoints(visiblePointsByAxes);
+    const nextViewport = viewportFromFrameSelection(
+      effectiveFramePoints,
+      effectiveFrameYTicks,
+      effectiveControlBrushRange,
+      effectiveControlYBrushRange
+    );
     if (!nextViewport) return;
     setRequestedViewport(nextViewport);
     setSampleSeed((current) => current + 1);
-  }, [visiblePointsByAxes]);
+  }, [effectiveControlBrushRange, effectiveControlYBrushRange, effectiveFramePoints, effectiveFrameYTicks]);
 
   const handleXRangeCommit = useCallback(
     (nextRange: BrushRange) => {
-      applyZoomRange(nextRange);
-      if (
-        requestedViewport &&
-        isFullRange(nextRange, points.length) &&
-        isFullRange(effectiveYBrushRange, yTicks.length)
-      ) {
-        setRequestedViewport(viewport);
-        setSampleSeed((current) => current + 1);
+      setControlBrushRange(nextRange);
+
+      if (!requestedViewport) {
+        applyZoomRange(nextRange);
+        return;
       }
+
+      const nextViewport = viewportFromFrameSelection(
+        effectiveFramePoints,
+        effectiveFrameYTicks,
+        nextRange,
+        effectiveControlYBrushRange
+      );
+      if (!nextViewport) return;
+      setRequestedViewport(nextViewport);
+      setSampleSeed((current) => current + 1);
     },
-    [applyZoomRange, effectiveYBrushRange, points.length, requestedViewport, viewport, yTicks.length]
+    [
+      applyZoomRange,
+      effectiveControlYBrushRange,
+      effectiveFramePoints,
+      effectiveFrameYTicks,
+      requestedViewport,
+    ]
   );
 
   const handleYRangeCommit = useCallback(
     (nextRange: BrushRange) => {
-      applyYRange(nextRange);
-      if (
-        requestedViewport &&
-        isFullRange(effectiveBrushRange, points.length) &&
-        isFullRange(nextRange, yTicks.length)
-      ) {
-        setRequestedViewport(viewport);
-        setSampleSeed((current) => current + 1);
+      setControlYBrushRange(nextRange);
+
+      if (!requestedViewport) {
+        applyYRange(nextRange);
+        return;
       }
+
+      const nextViewport = viewportFromFrameSelection(
+        effectiveFramePoints,
+        effectiveFrameYTicks,
+        effectiveControlBrushRange,
+        nextRange
+      );
+      if (!nextViewport) return;
+      setRequestedViewport(nextViewport);
+      setSampleSeed((current) => current + 1);
     },
-    [applyYRange, effectiveBrushRange, points.length, requestedViewport, viewport, yTicks.length]
+    [
+      applyYRange,
+      effectiveControlBrushRange,
+      effectiveFramePoints,
+      effectiveFrameYTicks,
+      requestedViewport,
+    ]
   );
 
   const handleResetViewport = useCallback(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
     setYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
+    setControlBrushRange({ startIndex: 0, endIndex: Math.max(0, effectiveFramePoints.length - 1) });
+    setControlYBrushRange({ startIndex: 0, endIndex: Math.max(0, effectiveFrameYTicks.length - 1) });
     if (requestedViewport) {
       setRequestedViewport(viewport);
       setSampleSeed((current) => current + 1);
     }
-  }, [points.length, requestedViewport, viewport, yTicks.length]);
+  }, [effectiveFramePoints.length, effectiveFrameYTicks.length, points.length, requestedViewport, viewport, yTicks.length]);
 
   if (!fileId) {
     return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
@@ -276,7 +341,7 @@ export default function DottedChart({
             variant="outline"
             size="sm"
             onClick={handleResample}
-            disabled={loading || visiblePointsByAxes.length === 0}
+            disabled={loading || effectiveFramePoints.length === 0}
             className="h-7 px-2 text-xs"
           >
             Resample
@@ -294,14 +359,14 @@ export default function DottedChart({
       )}
 
       <DottedChartZoomControls
-        xRange={effectiveBrushRange}
-        yRange={effectiveYBrushRange}
-        points={points}
-        yTicks={yTicks}
+        xRange={effectiveControlBrushRange}
+        yRange={effectiveControlYBrushRange}
+        points={effectiveFramePoints}
+        yTicks={effectiveFrameYTicks}
         xAxis={effectiveConfig.xAxis}
         yAxis={effectiveConfig.yAxis}
-        xLabels={xLabels}
-        yLabels={yLabels}
+        xLabels={frameXLabels}
+        yLabels={frameYLabels}
         isApplying={isZoomApplying}
         onReset={handleResetViewport}
         onXCommit={handleXRangeCommit}
@@ -754,13 +819,26 @@ function findRangeForDateBounds(
   return { startIndex, endIndex };
 }
 
-function viewportFromVisiblePoints(points: ChartPoint[]): DottedChartViewport | undefined {
+function viewportFromFrameSelection(
+  points: ChartPoint[],
+  yTicks: number[],
+  xRange: BrushRange,
+  yRange: BrushRange
+): DottedChartViewport | undefined {
   if (!points.length) return undefined;
 
-  const times = points
+  const selectedYTicks = yTicks.slice(yRange.startIndex, yRange.endIndex + 1);
+  const selectedYTickSet = new Set(selectedYTicks);
+  const selectedPoints = points
+    .slice(xRange.startIndex, xRange.endIndex + 1)
+    .filter((point) => selectedYTickSet.has(point.chartY));
+
+  if (!selectedPoints.length) return undefined;
+
+  const times = selectedPoints
     .map((point) => point.timestamp_unix)
     .filter(Number.isFinite);
-  const rows = points
+  const rows = selectedPoints
     .map((point) => point.row_index)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 
