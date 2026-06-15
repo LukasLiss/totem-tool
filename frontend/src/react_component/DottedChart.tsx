@@ -229,6 +229,7 @@ export default function DottedChart({
         points={points}
         yTicks={yTicks}
         xAxis={effectiveConfig.xAxis}
+        yAxis={effectiveConfig.yAxis}
         xLabels={xLabels}
         yLabels={yLabels}
         isApplying={isZoomApplying}
@@ -304,6 +305,7 @@ function DottedChartZoomControls({
   points,
   yTicks,
   xAxis,
+  yAxis,
   xLabels,
   yLabels,
   isApplying,
@@ -316,6 +318,7 @@ function DottedChartZoomControls({
   points: ChartPoint[];
   yTicks: number[];
   xAxis: AxisOption;
+  yAxis: AxisOption;
   xLabels: Map<number, string>;
   yLabels: Map<number, string>;
   isApplying: boolean;
@@ -475,7 +478,7 @@ function DottedChartZoomControls({
     <div className="rounded-md border bg-background px-3 py-3">
       <div className="grid gap-3 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-start">
         <div className="relative w-full px-1">
-          <Label className="mb-2 block text-xs text-muted-foreground">Y Axis Range</Label>
+          <Label className="mb-2 block text-xs text-muted-foreground">{formatAxisLabel(yAxis)}</Label>
           <Slider
             min={0}
             max={Math.max(0, rowCount - 1)}
@@ -527,7 +530,7 @@ function DottedChartZoomControls({
 
       <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-start">
         <div className="relative w-full px-1">
-          <Label className="mb-2 block text-xs text-muted-foreground">X Axis Range</Label>
+          <Label className="mb-2 block text-xs text-muted-foreground">{formatAxisLabel(xAxis)}</Label>
           <Slider
             min={0}
             max={Math.max(0, pointCount - 1)}
@@ -800,12 +803,17 @@ function formatAxisLabel(axis: AxisOption): string {
     case "activity":
       return "Activity";
     case "event_attribute":
-      return axis.name;
+      return formatColumnLabel(axis.name);
     case "none":
       return "None";
     default:
       return "Value";
   }
+}
+
+function formatColumnLabel(name: string): string {
+  if (name.startsWith("object_type:")) return name.slice("object_type:".length);
+  return name;
 }
 
 function DottedChartState({ className, message }: { className?: string; message: string }) {
