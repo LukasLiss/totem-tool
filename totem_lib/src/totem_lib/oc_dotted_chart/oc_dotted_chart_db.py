@@ -26,6 +26,7 @@ def get_oc_dotted_chart_data(
     shape_by: str = "none",
     sort_by: str = "time",
     max_points: int = DEFAULT_MAX_POINTS,
+    sample_seed: int = 0,
 ) -> dict[str, Any]:
     """
     Return sampled event data for the object-centric dotted chart.
@@ -122,7 +123,7 @@ def get_oc_dotted_chart_data(
                 ) AS outlier_rank,
                 ROW_NUMBER() OVER (
                     PARTITION BY sample_bucket
-                    ORDER BY outlier_score DESC, hash(event_id, row_id) ASC
+                    ORDER BY outlier_score DESC, hash(event_id, row_id, ?) ASC
                 ) AS bucket_rank
             FROM scored
         ),
@@ -146,7 +147,7 @@ def get_oc_dotted_chart_data(
                     ORDER BY
                         bucket_rank ASC,
                         outlier_score DESC,
-                        hash(event_id, row_id) ASC
+                        hash(event_id, row_id, ?) ASC
                 ) AS fill_rank
             FROM budgeted
         ),
@@ -180,9 +181,11 @@ def get_oc_dotted_chart_data(
             bucket_count,
             bucket_count,
             bucket_count,
+            int(sample_seed),
             OUTLIER_SCORE_THRESHOLD,
             outlier_budget,
             point_limit,
+            int(sample_seed),
             point_limit,
         ],
     ).fetchall()

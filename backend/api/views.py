@@ -353,9 +353,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             row_min = _optional_int(request.query_params.get("row_min"))
             row_max = _optional_int(request.query_params.get("row_max"))
             max_points = int(request.query_params.get("max_points", 3000))
+            sample_seed = int(request.query_params.get("sample_seed", 0))
         except ValueError:
             return Response(
-                {"error": "row_min, row_max, and max_points must be integers"},
+                {"error": "row_min, row_max, max_points, and sample_seed must be integers"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -373,6 +374,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     shape_by=request.query_params.get("shape_by", "none"),
                     sort_by=request.query_params.get("sort_by", "time"),
                     max_points=max_points,
+                    sample_seed=sample_seed,
                 )
         except Exception as e:
             return Response(

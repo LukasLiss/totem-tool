@@ -19,6 +19,7 @@ interface UseDottedChartDataArgs {
   sortBy: SortOption | AxisOption;
   maxPoints?: number;
   viewport?: DottedChartViewport;
+  sampleSeed?: number;
   debounceMs?: number;
 }
 
@@ -31,6 +32,7 @@ export function useDottedChartData({
   sortBy,
   maxPoints = 20_000,
   viewport,
+  sampleSeed = 0,
   debounceMs = 300,
 }: UseDottedChartDataArgs) {
   const [data, setData] = useState<DottedChartResponse | null>(null);
@@ -48,8 +50,9 @@ export function useDottedChartData({
         sortBy,
         maxPoints,
         viewport,
+        sampleSeed,
       }),
-    [fileId, xAxis, yAxis, colorBy, shapeBy, sortBy, maxPoints, viewport]
+    [fileId, xAxis, yAxis, colorBy, shapeBy, sortBy, maxPoints, viewport, sampleSeed]
   );
 
   useEffect(() => {
@@ -77,6 +80,7 @@ export function useDottedChartData({
         addParam(params, "t_max", viewport?.t_max);
         addParam(params, "row_min", viewport?.row_min);
         addParam(params, "row_max", viewport?.row_max);
+        addParam(params, "sample_seed", sampleSeed);
 
         const response = await axios.get<DottedChartResponse>(
           `/api/files/${fileId}/oc_dotted_chart/?${params.toString()}`,

@@ -87,10 +87,26 @@ export default function DottedChart({
   );
   const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
   const effectiveConfig = showControls ? config : defaultConfig;
+  const [requestedViewport, setRequestedViewport] = useState<DottedChartViewport | undefined>(viewport);
+  const [sampleSeed, setSampleSeed] = useState(0);
 
   useEffect(() => {
     setConfig(defaultConfig);
   }, [defaultConfig]);
+
+  useEffect(() => {
+    setRequestedViewport(viewport);
+    setSampleSeed(0);
+  }, [
+    fileId,
+    viewport,
+    effectiveConfig.xAxis,
+    effectiveConfig.yAxis,
+    effectiveConfig.colorBy,
+    effectiveConfig.shapeBy,
+    effectiveConfig.sortBy,
+    effectiveConfig.maxPoints,
+  ]);
 
   const { data, loading, error } = useDottedChartData({
     fileId,
@@ -100,7 +116,8 @@ export default function DottedChart({
     shapeBy: effectiveConfig.shapeBy,
     sortBy: effectiveConfig.sortBy,
     maxPoints: effectiveConfig.maxPoints,
-    viewport,
+    viewport: requestedViewport,
+    sampleSeed,
   });
 
   const points = useMemo(() => toChartPoints(data?.events ?? []), [data?.events]);
@@ -179,10 +196,51 @@ export default function DottedChart({
     });
   }, []);
 
+  const handleResample = useCallback(() => {
+    const nextViewport = viewportFromVisiblePoints(visiblePointsByAxes);
+    if (!nextViewport) return;
+    setRequestedViewport(nextViewport);
+    setSampleSeed((current) => current + 1);
+  }, [visiblePointsByAxes]);
+
+  const handleXRangeCommit = useCallback(
+    (nextRange: BrushRange) => {
+      applyZoomRange(nextRange);
+      if (
+        requestedViewport &&
+        isFullRange(nextRange, points.length) &&
+        isFullRange(effectiveYBrushRange, yTicks.length)
+      ) {
+        setRequestedViewport(viewport);
+        setSampleSeed((current) => current + 1);
+      }
+    },
+    [applyZoomRange, effectiveYBrushRange, points.length, requestedViewport, viewport, yTicks.length]
+  );
+
+  const handleYRangeCommit = useCallback(
+    (nextRange: BrushRange) => {
+      applyYRange(nextRange);
+      if (
+        requestedViewport &&
+        isFullRange(effectiveBrushRange, points.length) &&
+        isFullRange(nextRange, yTicks.length)
+      ) {
+        setRequestedViewport(viewport);
+        setSampleSeed((current) => current + 1);
+      }
+    },
+    [applyYRange, effectiveBrushRange, points.length, requestedViewport, viewport, yTicks.length]
+  );
+
   const handleResetViewport = useCallback(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
     setYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
-  }, [points.length, yTicks.length]);
+    if (requestedViewport) {
+      setRequestedViewport(viewport);
+      setSampleSeed((current) => current + 1);
+    }
+  }, [points.length, requestedViewport, viewport, yTicks.length]);
 
   if (!fileId) {
     return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
@@ -208,10 +266,22 @@ export default function DottedChart({
   return (
     <div className={cn("relative flex min-h-[500px] flex-col gap-3", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
-        <span>
-          Showing {visiblePointsByAxes.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
-          {data?.sampled ? " (sampled)" : ""}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            Showing {visiblePointsByAxes.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
+            {data?.sampled ? " (sampled)" : ""}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleResample}
+            disabled={loading || visiblePointsByAxes.length === 0}
+            className="h-7 px-2 text-xs"
+          >
+            Resample
+          </Button>
+        </div>
         <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
       </div>
 
@@ -234,8 +304,8 @@ export default function DottedChart({
         yLabels={yLabels}
         isApplying={isZoomApplying}
         onReset={handleResetViewport}
-        onXCommit={applyZoomRange}
-        onYCommit={applyYRange}
+        onXCommit={handleXRangeCommit}
+        onYCommit={handleYRangeCommit}
       />
 
       <ChartContainer
@@ -682,6 +752,26 @@ function findRangeForDateBounds(
 
   if (startIndex === null || endIndex === null) return null;
   return { startIndex, endIndex };
+}
+
+function viewportFromVisiblePoints(points: ChartPoint[]): DottedChartViewport | undefined {
+  if (!points.length) return undefined;
+
+  const times = points
+    .map((point) => point.timestamp_unix)
+    .filter(Number.isFinite);
+  const rows = points
+    .map((point) => point.row_index)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  if (!times.length && !rows.length) return undefined;
+
+  return {
+    t_min: times.length ? Math.min(...times) : undefined,
+    t_max: times.length ? Math.max(...times) : undefined,
+    row_min: rows.length ? Math.min(...rows) : undefined,
+    row_max: rows.length ? Math.max(...rows) : undefined,
+  };
 }
 
 function toUnixMilliseconds(value: number): number {
