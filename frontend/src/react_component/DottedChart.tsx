@@ -575,7 +575,7 @@ function DottedChartZoomControls({
       const end = parseDateInput(endDateInput, "end");
 
       if (start.status === "invalid-format" || end.status === "invalid-format") {
-        setDateError("Use mm/dd/yyyy for both date bounds.");
+        setDateError("Use dd/mm/yyyy for both date bounds.");
         return;
       }
       if (start.status === "invalid-date" || end.status === "invalid-date") {
@@ -703,7 +703,7 @@ function DottedChartZoomControls({
           <Input
             value={startDateInput}
             onChange={handleDateInputChange(setStartDateInput)}
-            placeholder="mm/dd/yyyy"
+            placeholder="dd/mm/yyyy"
             disabled={!supportsDateBounds || pointCount <= 1}
             className="h-8 w-[116px] text-xs"
             aria-label="Start date"
@@ -711,7 +711,7 @@ function DottedChartZoomControls({
           <Input
             value={endDateInput}
             onChange={handleDateInputChange(setEndDateInput)}
-            placeholder="mm/dd/yyyy"
+            placeholder="dd/mm/yyyy"
             disabled={!supportsDateBounds || pointCount <= 1}
             className="h-8 w-[116px] text-xs"
             aria-label="End date"
@@ -771,7 +771,7 @@ function formatRangeDateInput(point: ChartPoint | undefined, axis: AxisOption): 
   if (!point || !isTimeAxis(axis)) return "";
   const date = new Date(toUnixMilliseconds(point.chartX));
   if (Number.isNaN(date.getTime())) return "";
-  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
+  return `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`;
 }
 
 type ParsedDateInput =
@@ -783,8 +783,8 @@ function parseDateInput(value: string, boundary: "start" | "end"): ParsedDateInp
   const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (!match) return { status: "invalid-format" };
 
-  const month = Number(match[1]);
-  const day = Number(match[2]);
+  const day = Number(match[1]);
+  const month = Number(match[2]);
   const year = Number(match[3]);
   const date = boundary === "start"
     ? new Date(year, month - 1, day, 0, 0, 0, 0)
@@ -950,7 +950,7 @@ function isTimeAxis(axis: AxisOption): boolean {
 
 function formatUnixDateTick(value: number): string {
   const milliseconds = Math.abs(value) >= 1_000_000_000_000 ? value : value * 1000;
-  return new Date(milliseconds).toLocaleDateString();
+  return new Date(milliseconds).toLocaleDateString("en-GB");
 }
 
 function formatAxisValue(axis: AxisOption, value: number | string | null, fallback: string): string {

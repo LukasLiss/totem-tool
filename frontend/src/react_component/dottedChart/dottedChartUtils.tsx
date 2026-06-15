@@ -133,14 +133,14 @@ export function makeAxisLabelLookup(points: ChartPoint[], axis: "x" | "y"): Map<
 export function formatAxisTick(value: number | string): string {
   if (typeof value === "string") return value;
   if (Math.abs(value) >= 1_000_000_000) {
-    return new Date(value * 1000).toLocaleDateString();
+    return new Date(value * 1000).toLocaleDateString("en-GB");
   }
   return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 export function formatTimestamp(timestamp: string | null, timestampUnix: number): string {
-  if (timestamp) return new Date(timestamp).toLocaleString();
-  return new Date(timestampUnix * 1000).toLocaleString();
+  if (timestamp) return new Date(timestamp).toLocaleString("en-GB");
+  return new Date(timestampUnix * 1000).toLocaleString("en-GB");
 }
 
 export function objectSummary(objects: Record<string, string[]>): string {
