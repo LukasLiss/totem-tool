@@ -110,7 +110,6 @@ export default function TooltipBox({
 
     const itemsByType: Record<string, { resource: string; val: number }[]> = {};
     resourceList.forEach((r, i) => {
-      if (selfSet.has(r)) return;
       const val = tooltip.profile[offset + i] ?? 0;
       if (val <= 0) return;
       const type = resourceObjectTypes[r] ?? r;
