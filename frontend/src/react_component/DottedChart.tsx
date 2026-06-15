@@ -162,6 +162,7 @@ export default function DottedChart({
   );
   const xDomain = useMemo(() => getDataDomain(visiblePointsByAxes.map((point) => point.chartX)), [visiblePointsByAxes]);
   const yDomain = useMemo(() => getRowDomain(visibleYTicks), [visibleYTicks]);
+  const datasetTotalCount = data?.dataset_total_count ?? data?.total_count ?? 0;
   const effectiveFramePoints = framePoints.length ? framePoints : points;
   const effectiveFrameYTicks = frameYTicks.length ? frameYTicks : yTicks;
   const frameXLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "x"), [effectiveFramePoints]);
@@ -333,7 +334,7 @@ export default function DottedChart({
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            Showing {visiblePointsByAxes.length.toLocaleString()} of {data?.total_count.toLocaleString() ?? 0} events
+            Showing {visiblePointsByAxes.length.toLocaleString()} of {datasetTotalCount.toLocaleString()} events
             {data?.sampled ? " (sampled)" : ""}
           </span>
           <Button

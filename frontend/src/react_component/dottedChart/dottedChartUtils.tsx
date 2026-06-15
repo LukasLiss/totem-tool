@@ -33,6 +33,7 @@ export interface OCEvent {
 export interface DottedChartResponse {
   events: OCEvent[];
   total_count: number;
+  dataset_total_count?: number;
   sampled: boolean;
   outlier_count: number;
 }

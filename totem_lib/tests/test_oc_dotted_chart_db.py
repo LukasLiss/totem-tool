@@ -44,6 +44,7 @@ def test_oc_dotted_chart_supports_row_viewport_filter():
     )
 
     assert result["total_count"] >= len(result["events"])
+    assert result["dataset_total_count"] >= result["total_count"]
     assert all(1 <= event["row_index"] <= 5 for event in result["events"])
 
 

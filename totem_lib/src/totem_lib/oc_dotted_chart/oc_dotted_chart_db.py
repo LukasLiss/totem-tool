@@ -76,11 +76,23 @@ def get_oc_dotted_chart_data(
         f"SELECT COUNT(*) FROM ({dimensioned_sql}) dimensioned {dimensioned_where_sql}",
         [*time_params, *row_params],
     ).fetchone()[0]
+    dataset_dimensioned_sql = _dimensioned_events_sql(
+        base_sql=base_sql,
+        base_where_sql="",
+        x_expr=x_expr,
+        y_expr=y_expr,
+        color_expr=color_expr,
+        shape_expr=shape_expr,
+    )
+    dataset_total_count = db.conn.execute(
+        f"SELECT COUNT(*) FROM ({dataset_dimensioned_sql}) dimensioned WHERE x IS NOT NULL AND y IS NOT NULL"
+    ).fetchone()[0]
 
     if total_count == 0:
         return {
             "events": [],
             "total_count": 0,
+            "dataset_total_count": int(dataset_total_count),
             "sampled": False,
             "outlier_count": 0,
         }
@@ -212,6 +224,7 @@ def get_oc_dotted_chart_data(
     return {
         "events": events,
         "total_count": int(total_count),
+        "dataset_total_count": int(dataset_total_count),
         "sampled": int(total_count) > len(events),
         "outlier_count": sum(1 for row in rows if float(row[10] or 0) >= 2.0),
     }
