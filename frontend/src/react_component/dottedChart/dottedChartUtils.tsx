@@ -51,6 +51,8 @@ export interface ChartPoint extends OCEvent {
   shapeKey: string;
 }
 
+export const OTHER_COLOR_KEY = "Other";
+
 const PALETTE = [
   "var(--chart-1)",
   "var(--chart-2)",
@@ -63,6 +65,8 @@ const PALETTE = [
   "#475569",
   "#65a30d",
 ];
+
+const EXPLICIT_COLOR_LIMIT = 9;
 
 const SHAPES = ["circle", "square", "triangle", "diamond", "cross"] as const;
 
@@ -107,18 +111,37 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
 
 export function makeColorScale(
   points: ChartPoint[],
-  previousScale: Map<string, string> = new Map()
-): Map<string, string> {
-  const scale = new Map(previousScale);
-  const values = uniqueValues(points.map((point) => point.colorKey));
+  previousKeys: string[] = []
+): { scale: Map<string, string>; keys: string[] } {
+  const counts = new Map<string, number>();
 
-  values.forEach((value) => {
-    if (!scale.has(value)) {
-      scale.set(value, PALETTE[scale.size % PALETTE.length]);
-    }
+  points.forEach((point) => {
+    if (isOtherColorKey(point.colorKey)) return;
+    counts.set(point.colorKey, (counts.get(point.colorKey) ?? 0) + 1);
   });
 
-  return scale;
+  const keys = previousKeys.slice(0, EXPLICIT_COLOR_LIMIT);
+  const candidates = Array.from(counts.entries())
+    .filter(([key]) => !keys.includes(key))
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) =>
+      rightCount - leftCount || leftKey.localeCompare(rightKey)
+    )
+    .map(([key]) => key);
+
+  for (const key of candidates) {
+    if (keys.length >= EXPLICIT_COLOR_LIMIT) break;
+    keys.push(key);
+  }
+
+  const scale = new Map(keys.map((key, index) => [key, PALETTE[index % PALETTE.length]]));
+  scale.set(OTHER_COLOR_KEY, PALETTE[EXPLICIT_COLOR_LIMIT]);
+
+  return { scale, keys };
+}
+
+export function colorGroupKey(colorKey: string, explicitKeys: string[]): string {
+  if (isOtherColorKey(colorKey)) return OTHER_COLOR_KEY;
+  return explicitKeys.includes(colorKey) ? colorKey : OTHER_COLOR_KEY;
 }
 
 export function makeShapeScale(points: ChartPoint[]): Map<string, ShapeName> {
@@ -198,6 +221,10 @@ function numericValue(value: number | string | null): number {
 function valueKey(value: number | string | null): string {
   if (value === null || value === undefined || value === "") return "None";
   return String(value);
+}
+
+function isOtherColorKey(value: string): boolean {
+  return value === "None" || value === OTHER_COLOR_KEY;
 }
 
 function uniqueValues(values: Array<number | string | null>): string[] {

@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ScanIcon } from "lucide-react";
 import {
+  colorGroupKey,
   formatAxisTick,
   makeAxisLabelLookup,
   makeColorScale,
@@ -100,7 +101,7 @@ export default function DottedChart({
   const previousFrameRowCountRef = useRef(0);
   const resetBrushOnNextPointsRef = useRef(false);
   const resetYBrushOnNextRowsRef = useRef(false);
-  const colorScaleRef = useRef<Map<string, string>>(new Map());
+  const colorKeysRef = useRef<string[]>([]);
   const colorByKeyRef = useRef("");
   const colorEventsRef = useRef<OCEvent[] | null>(null);
 
@@ -150,7 +151,7 @@ export default function DottedChart({
     [effectiveBrushRange, points]
   );
   const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
-  const colorScale = useMemo(() => {
+  const colorGrouping = useMemo(() => {
     const colorByChanged = colorByKeyRef.current !== colorByKey;
     const eventsChanged = colorEventsRef.current !== events;
 
@@ -160,14 +161,16 @@ export default function DottedChart({
       }
 
       colorByKeyRef.current = colorByKey;
-      colorScaleRef.current = new Map();
+      colorKeysRef.current = [];
     }
 
-    const nextScale = makeColorScale(points, colorScaleRef.current);
-    colorScaleRef.current = nextScale;
+    const nextColorGrouping = makeColorScale(points, colorKeysRef.current);
+    colorKeysRef.current = nextColorGrouping.keys;
     colorEventsRef.current = events;
-    return nextScale;
+    return nextColorGrouping;
   }, [colorByKey, events, points]);
+  const colorScale = colorGrouping.scale;
+  const colorKeys = colorGrouping.keys;
   const shapeScale = useMemo(() => makeShapeScale(points), [points]);
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
@@ -213,8 +216,8 @@ export default function DottedChart({
     [displayedYIndexByTick, visiblePointsByAxes]
   );
   const colorLegendEntries = useMemo(
-    () => buildColorLegendEntries(displayedPoints, colorScale),
-    [colorScale, displayedPoints]
+    () => buildColorLegendEntries(displayedPoints, colorScale, colorKeys),
+    [colorKeys, colorScale, displayedPoints]
   );
   const displayedYAxisTicks = useMemo(
     () => displayedYTicks.map((_, index) => index + 1),
@@ -518,7 +521,7 @@ export default function DottedChart({
             isAnimationActive={false}
             shape={(props: any) => {
               const point = props.payload as ChartPoint;
-              const color = colorScale.get(point.colorKey) ?? "var(--chart-1)";
+              const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
               const shape = shapeScale.get(point.shapeKey) ?? "circle";
               return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
             }}
@@ -861,9 +864,10 @@ type ColorLegendEntry = {
 
 function buildColorLegendEntries(
   points: ChartPoint[],
-  colorScale: Map<string, string>
+  colorScale: Map<string, string>,
+  colorKeys: string[]
 ): ColorLegendEntry[] {
-  const visibleKeys = new Set(points.map((point) => point.colorKey));
+  const visibleKeys = new Set(points.map((point) => colorGroupKey(point.colorKey, colorKeys)));
 
   return Array.from(colorScale.entries())
     .filter(([value]) => visibleKeys.has(value))
