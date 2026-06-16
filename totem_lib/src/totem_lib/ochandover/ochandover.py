@@ -178,62 +178,6 @@ class OCHANDOVER(nx.MultiDiGraph):
         print(eog_arcs_unique)
 
 
-        # Assign a sequential position to every event within each business object's
-        # lifecycle so that gaps can be measured as the count of intermediate
-        # non-resource EOG nodes between two consecutive resource events.
-
-        eog_with_positions = (
-            event_businessobjects
-            .select(["_eventId", "_timestampUnix", "businessobject_id", "businessobject_type"])
-            .sort(["businessobject_id", "_timestampUnix", "_eventId"])
-            .with_row_index("global_idx")
-            .with_columns(
-                (pl.col("global_idx") - pl.col("global_idx").min().over("businessobject_id")).alias("position")
-            )
-        )
-
-        print("EOG with positions")
-        print(eog_with_positions)
-        
-        # Resource events annotated with their position in the business object lifecycle
-        resource_eog_events = (
-            eog_with_positions
-            .join(event_resources, on="_eventId", how="inner")
-        )
-
-        print("Resource EOG events (with position)")
-        print(resource_eog_events)
-
-        # For each resource event find the NEXT resource event in the same business
-        # object lifecycle by shifting the scalar _eventId column (safe with .over()),
-        # then join back to retrieve the next event's resource list.
-        # gap = next_position - current_position - 1
-        #     = number of intermediate EOG nodes that carry no selected resource
-        # gap = 0 means directly adjacent resource events (equivalent to original behavior)
-
-        consecutive_resource_pairs = (
-            resource_eog_events
-            .sort(["businessobject_id", "_timestampUnix", "_eventId"])
-            .with_columns([
-                pl.col("_eventId").shift(-1).over("businessobject_id").alias("next_event_id"),
-                pl.col("position").shift(-1).over("businessobject_id").alias("next_position"),
-                pl.col("_timestampUnix").shift(-1).over("businessobject_id").alias("next_timestampUnix"),
-            ])
-            .filter(pl.col("next_event_id").is_not_null())
-            .join(
-                event_resources.rename({"_eventId": "next_event_id", "resources": "next_resources"}),
-                on="next_event_id",
-                how="inner",
-            )
-            .with_columns([
-                (pl.col("next_position") - pl.col("position") - 1).alias("gap"),
-                (pl.col("next_timestampUnix") - pl.col("_timestampUnix")).alias("time_delta"),
-            ])
-        )
-
-        print("Consecutive resource pairs (with gap, per business object)")
-        print(consecutive_resource_pairs)
-
         eog_arc_count = eog_arcs_unique.height
 
         if parallel_threshold is not None:
@@ -348,87 +292,31 @@ class OCHANDOVER(nx.MultiDiGraph):
             )
             eog_arc_count = eog_arcs_unique.height
 
-            # Per-event timestamps for time_delta computation.
-            _event_ts = (
-                event_businessobjects
-                .select(["_eventId", "_timestampUnix"])
-                .unique("_eventId")
-            )
+        # Per-event timestamps shared by both branches.
+        _event_ts = (
+            event_businessobjects
+            .select(["_eventId", "_timestampUnix"])
+            .unique("_eventId")
+        )
 
-            # For each modified arc, cross-join source and target resource lists.
-            # The split node A→B and A→C naturally yields R(A)→R(B) and R(A)→R(C)
-            # without merging parallel branches into a single block.
-            _raw_handovers = (
-                modified_eog_arcs
-                .join(event_resources, left_on="source_event", right_on="_eventId", how="inner")
-                .rename({"resources": "source_resources"})
-                .join(event_resources, left_on="target_event", right_on="_eventId", how="inner")
-                .rename({"resources": "target_resources"})
-                .join(_event_ts, left_on="source_event", right_on="_eventId", how="left")
-                .rename({"_timestampUnix": "source_ts"})
-                .join(_event_ts, left_on="target_event", right_on="_eventId", how="left")
-                .rename({"_timestampUnix": "target_ts"})
-                .with_columns((pl.col("target_ts") - pl.col("source_ts")).alias("time_delta"))
-                .explode("source_resources")
-                .explode("target_resources")
-                .select(["source_resources", "target_resources", "businessobject_type", "time_delta"])
-                .rename({"source_resources": "source", "target_resources": "target"})
-            )
+        # Unified handover computation for both the parallel and non-parallel cases.
+        # BFS over the (possibly modified) EOG finds consecutive resource-event pairs,
+        # counting non-resource intermediate events as gap and respecting max_gap.
+        _raw_handovers = cls._resource_pairs_from_eog(
+            eog_arcs, event_resources, _event_ts, max_gap
+        )
 
-            print("Raw handovers (parallel-aware EOG)")
-            print(_raw_handovers.sort(["source", "target"]))
-
-            handover_edges = (
-                _raw_handovers
-                .group_by(["source", "target", "businessobject_type"])
-                .agg([
-                    pl.len().alias("weight"),
-                    pl.col("time_delta").mean().alias("avg_time"),
-                    pl.col("time_delta").min().alias("min_time"),
-                    pl.col("time_delta").max().alias("max_time"),
-                ])
-                .sort("weight", descending=True)
-            )
-
-        else:
-            # Original approach: consecutive adjacent resource pairs in the EOG.
-            arcs_with_resources = (
-                consecutive_resource_pairs
-                .group_by(["_eventId", "next_event_id"])
-                .agg([
-                    pl.col("resources").first().alias("source_resources"),
-                    pl.col("next_resources").first().alias("target_resources"),
-                    pl.col("businessobject_type").unique().alias("businessobject_types"),
-                    pl.col("gap").min().alias("gap"),
-                    pl.col("time_delta").first().alias("time_delta"),
-                ])
-            )
-
-            print("Arcs with Resources (unique, with gap)")
-            print(arcs_with_resources)
-
-            if max_gap is not None:
-                arcs_with_resources = arcs_with_resources.filter(pl.col("gap") <= max_gap)
-
-            handover_edges = (
-                arcs_with_resources
-                .explode("source_resources")
-                .explode("target_resources")
-                .explode("businessobject_types")
-                .group_by(["source_resources", "target_resources", "businessobject_types"])
-                .agg([
-                    pl.len().alias("weight"),
-                    pl.col("time_delta").mean().alias("avg_time"),
-                    pl.col("time_delta").min().alias("min_time"),
-                    pl.col("time_delta").max().alias("max_time"),
-                ])
-                .rename({
-                    "source_resources": "source",
-                    "target_resources": "target",
-                    "businessobject_types": "businessobject_type",
-                })
-                .sort("weight", descending=True)
-            )
+        handover_edges = (
+            _raw_handovers
+            .group_by(["source", "target", "businessobject_type"])
+            .agg([
+                pl.len().alias("weight"),
+                pl.col("time_delta").mean().alias("avg_time"),
+                pl.col("time_delta").min().alias("min_time"),
+                pl.col("time_delta").max().alias("max_time"),
+            ])
+            .sort("weight", descending=True)
+        )
 
         print("Handover edges")
         print(handover_edges)
@@ -528,7 +416,93 @@ class OCHANDOVER(nx.MultiDiGraph):
             )
 
         return graph
-    
+
+    @staticmethod
+    def _resource_pairs_from_eog(
+        eog_arcs: pl.DataFrame,
+        event_resources: pl.DataFrame,
+        event_ts: pl.DataFrame,
+        max_gap: int | None,
+    ) -> pl.DataFrame:
+        """
+        Given EOG arcs (source_event, target_event, businessobject_id, businessobject_type),
+        find all consecutive resource-event pairs reachable through the graph.
+
+        Traverses forward from each resource event, stopping when the next resource
+        event is reached and counting non-resource intermediate events as gap.
+        Only pairs with gap <= max_gap are kept (all pairs if max_gap is None).
+
+        Returns a DataFrame with columns:
+            source, target, businessobject_type, time_delta
+        """
+        from collections import deque
+
+        # Per-BO-type adjacency map using sets to deduplicate arcs across BO instances.
+        # Keying by type (not instance) ensures that when two BO instances (e.g. i1, i2)
+        # share the same event arc (e1→e2), it is counted as one handover, not two.
+        _btype_adj: dict[str, dict[str, set[str]]] = {}
+        _btype_all_events: dict[str, set[str]] = {}
+        for _arc in eog_arcs.to_dicts():
+            _btype = _arc["businessobject_type"]
+            if _btype not in _btype_adj:
+                _btype_adj[_btype] = {}
+                _btype_all_events[_btype] = set()
+            _btype_adj[_btype].setdefault(_arc["source_event"], set()).add(_arc["target_event"])
+            _btype_all_events[_btype].add(_arc["source_event"])
+            _btype_all_events[_btype].add(_arc["target_event"])
+
+        _resource_event_set: set[str] = set(event_resources.get_column("_eventId").to_list())
+        _event_resources_dict: dict[str, list] = {
+            r["_eventId"]: r["resources"] for r in event_resources.to_dicts()
+        }
+        _event_ts_dict: dict[str, int] = {
+            r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()
+        }
+
+        _rows: list[dict] = []
+
+        for _btype, _adj_map in _btype_adj.items():
+            _btype_resource_eids = _btype_all_events[_btype] & _resource_event_set
+
+            for _r1 in _btype_resource_eids:
+                # BFS forward from _r1.
+                # Non-resource events increment gap; resource events are recorded as
+                # handover targets and the traversal stops there.
+                _queue: deque = deque([(_r1, 0)])
+                _visited: set[str] = {_r1}
+
+                while _queue:
+                    _eid, _gap = _queue.popleft()
+                    for _neid in _adj_map.get(_eid, set()):
+                        if _neid in _visited:
+                            continue
+                        if _neid in _resource_event_set:
+                            if max_gap is None or _gap <= max_gap:
+                                _src_ts = _event_ts_dict.get(_r1, 0)
+                                _tgt_ts = _event_ts_dict.get(_neid, 0)
+                                for _src in _event_resources_dict.get(_r1, []):
+                                    for _tgt in _event_resources_dict.get(_neid, []):
+                                        _rows.append({
+                                            "source": _src,
+                                            "target": _tgt,
+                                            "businessobject_type": _btype,
+                                            "time_delta": _tgt_ts - _src_ts,
+                                        })
+                            _visited.add(_neid)
+                        else:
+                            _next_gap = _gap + 1
+                            if max_gap is None or _next_gap <= max_gap:
+                                _visited.add(_neid)
+                                _queue.append((_neid, _next_gap))
+
+        if _rows:
+            return pl.DataFrame(_rows)
+        return pl.DataFrame(schema={
+            "source": pl.Utf8,
+            "target": pl.Utf8,
+            "businessobject_type": pl.Utf8,
+            "time_delta": pl.Int64,
+        })
 
 
     @classmethod
