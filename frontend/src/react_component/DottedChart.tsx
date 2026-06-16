@@ -163,8 +163,38 @@ export default function DottedChart({
     () => visiblePoints.filter((point) => visibleYTickSet.has(point.chartY)),
     [visiblePoints, visibleYTickSet]
   );
-  const xDomain = useMemo(() => getDataDomain(visiblePointsByAxes.map((point) => point.chartX)), [visiblePointsByAxes]);
-  const yDomain = useMemo(() => getRowDomain(visibleYTicks), [visibleYTicks]);
+  const displayedYTicks = useMemo(
+    () => orderDisplayedYTicks(visiblePointsByAxes, effectiveConfig.rowOrder),
+    [effectiveConfig.rowOrder, visiblePointsByAxes]
+  );
+  const displayedYIndexByTick = useMemo(
+    () => new Map(displayedYTicks.map((tick, index) => [tick, index + 1])),
+    [displayedYTicks]
+  );
+  const displayedYLabels = useMemo(
+    () =>
+      new Map(
+        displayedYTicks.map((tick, index) => [
+          index + 1,
+          yLabels.get(tick) ?? formatAxisTick(tick),
+        ])
+      ),
+    [displayedYTicks, yLabels]
+  );
+  const displayedPoints = useMemo(
+    () =>
+      visiblePointsByAxes.map((point) => ({
+        ...point,
+        chartY: displayedYIndexByTick.get(point.chartY) ?? point.chartY,
+      })),
+    [displayedYIndexByTick, visiblePointsByAxes]
+  );
+  const displayedYAxisTicks = useMemo(
+    () => displayedYTicks.map((_, index) => index + 1),
+    [displayedYTicks]
+  );
+  const xDomain = useMemo(() => getDataDomain(displayedPoints.map((point) => point.chartX)), [displayedPoints]);
+  const yDomain = useMemo(() => getRowDomain(displayedYAxisTicks), [displayedYAxisTicks]);
   const datasetTotalCount = data?.dataset_total_count ?? data?.total_count ?? 0;
   const effectiveFramePoints = framePoints.length ? framePoints : points;
   const effectiveFrameYTicks = frameYTicks.length ? frameYTicks : yTicks;
@@ -406,7 +436,7 @@ export default function DottedChart({
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            Showing {visiblePointsByAxes.length.toLocaleString()} of {datasetTotalCount.toLocaleString()} events
+            Showing {displayedPoints.length.toLocaleString()} of {datasetTotalCount.toLocaleString()} events
             {data?.sampled ? " (sampled)" : ""}
           </span>
           <Button
@@ -451,7 +481,7 @@ export default function DottedChart({
         className="aspect-auto shrink-0 rounded-md border bg-background p-2"
         style={{ height: CHART_HEIGHT }}
       >
-        <ScatterChart data={visiblePointsByAxes} margin={CHART_MARGIN}>
+        <ScatterChart data={displayedPoints} margin={CHART_MARGIN}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="chartX"
@@ -467,10 +497,10 @@ export default function DottedChart({
             name="y"
             type="number"
             domain={yDomain}
-            ticks={visibleYTicks}
+            ticks={displayedYAxisTicks}
             interval={0}
             allowDecimals={false}
-            tick={(props) => <DottedChartYAxisTick {...props} labels={yLabels} />}
+            tick={(props) => <DottedChartYAxisTick {...props} labels={displayedYLabels} />}
             tickMargin={8}
             width={Y_AXIS_WIDTH}
           />
@@ -486,7 +516,7 @@ export default function DottedChart({
           />
           <Scatter
             name="Events"
-            data={visiblePointsByAxes}
+            data={displayedPoints}
             isAnimationActive={false}
             shape={(props: any) => {
               const point = props.payload as ChartPoint;
@@ -947,6 +977,32 @@ function getRowDomain(values: number[]): [number, number] {
 
 function getUniqueSortedValues(values: number[]): number[] {
   return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b);
+}
+
+function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): number[] {
+  const rowTimes = new Map<number, { first: number; last: number }>();
+
+  points.forEach((point) => {
+    const current = rowTimes.get(point.chartY);
+    if (!current) {
+      rowTimes.set(point.chartY, {
+        first: point.timestamp_unix,
+        last: point.timestamp_unix,
+      });
+      return;
+    }
+
+    current.first = Math.min(current.first, point.timestamp_unix);
+    current.last = Math.max(current.last, point.timestamp_unix);
+  });
+
+  return Array.from(rowTimes.entries())
+    .sort(([leftTick, left], [rightTick, right]) => {
+      const leftValue = rowOrder === "last_occurrence" ? left.last : left.first;
+      const rightValue = rowOrder === "last_occurrence" ? right.last : right.first;
+      return leftValue - rightValue || leftTick - rightTick;
+    })
+    .map(([tick]) => tick);
 }
 
 type BrushRange = {
