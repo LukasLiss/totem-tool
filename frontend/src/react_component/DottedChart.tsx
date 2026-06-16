@@ -212,6 +212,10 @@ export default function DottedChart({
       })),
     [displayedYIndexByTick, visiblePointsByAxes]
   );
+  const colorLegendEntries = useMemo(
+    () => buildColorLegendEntries(displayedPoints, colorScale),
+    [colorScale, displayedPoints]
+  );
   const displayedYAxisTicks = useMemo(
     () => displayedYTicks.map((_, index) => index + 1),
     [displayedYTicks]
@@ -469,6 +473,13 @@ export default function DottedChart({
         onReset={handleResetViewport}
         onApply={handleRangeApply}
       />
+
+      {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
+        <DottedChartColorLegend
+          label={formatAxisLabel(effectiveConfig.colorBy)}
+          entries={colorLegendEntries}
+        />
+      )}
 
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
@@ -811,6 +822,52 @@ function ZoomApplyingSpinner() {
       title="Applying zoom"
     />
   );
+}
+
+function DottedChartColorLegend({
+  label,
+  entries,
+}: {
+  label: string;
+  entries: ColorLegendEntry[];
+}) {
+  return (
+    <div className="rounded-md border bg-background px-3 py-2">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">
+        Color: {label}
+      </div>
+      <div className="flex max-h-24 flex-wrap gap-x-4 gap-y-2 overflow-y-auto pr-1">
+        {entries.map((entry) => (
+          <div key={entry.value} className="flex min-w-0 items-center gap-2 text-xs">
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full border bg-transparent"
+              style={{ borderColor: entry.color }}
+              aria-hidden="true"
+            />
+            <span className="max-w-[180px] truncate text-muted-foreground" title={entry.value}>
+              {entry.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type ColorLegendEntry = {
+  value: string;
+  color: string;
+};
+
+function buildColorLegendEntries(
+  points: ChartPoint[],
+  colorScale: Map<string, string>
+): ColorLegendEntry[] {
+  const visibleKeys = new Set(points.map((point) => point.colorKey));
+
+  return Array.from(colorScale.entries())
+    .filter(([value]) => visibleKeys.has(value))
+    .map(([value, color]) => ({ value, color }));
 }
 
 function indexToPercent(index: number, pointCount: number): number {
