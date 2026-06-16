@@ -97,6 +97,8 @@ export default function DottedChart({
   const previousRowCountRef = useRef(0);
   const previousFramePointCountRef = useRef(0);
   const previousFrameRowCountRef = useRef(0);
+  const resetBrushOnNextPointsRef = useRef(false);
+  const resetYBrushOnNextRowsRef = useRef(false);
 
   useEffect(() => {
     setConfig(defaultConfig);
@@ -113,6 +115,8 @@ export default function DottedChart({
     previousRowCountRef.current = 0;
     previousFramePointCountRef.current = 0;
     previousFrameRowCountRef.current = 0;
+    resetBrushOnNextPointsRef.current = false;
+    resetYBrushOnNextRowsRef.current = false;
   }, [fileId, viewport]);
 
   const { data, loading, error } = useDottedChartData({
@@ -177,21 +181,25 @@ export default function DottedChart({
 
   useEffect(() => {
     const previousLength = previousPointCountRef.current;
+    const shouldReset = resetBrushOnNextPointsRef.current;
     setBrushRange((current) =>
-      previousLength === 0
+      previousLength === 0 || shouldReset
         ? fullBrushRange(points.length)
         : clampBrushRange(current, points.length)
     );
+    resetBrushOnNextPointsRef.current = false;
     previousPointCountRef.current = points.length;
   }, [points]);
 
   useEffect(() => {
     const previousLength = previousRowCountRef.current;
+    const shouldReset = resetYBrushOnNextRowsRef.current;
     setYBrushRange((current) =>
-      previousLength === 0
+      previousLength === 0 || shouldReset
         ? fullBrushRange(yTicks.length)
         : clampBrushRange(current, yTicks.length)
     );
+    resetYBrushOnNextRowsRef.current = false;
     previousRowCountRef.current = yTicks.length;
   }, [yTicks.length]);
 
@@ -260,6 +268,8 @@ export default function DottedChart({
       effectiveControlYBrushRange
     );
     if (!nextViewport) return;
+    resetBrushOnNextPointsRef.current = true;
+    resetYBrushOnNextRowsRef.current = true;
     setRequestedViewport(nextViewport);
     setSampleSeed((current) => current + 1);
   }, [effectiveControlBrushRange, effectiveControlYBrushRange, effectiveFramePoints, effectiveFrameYTicks]);
@@ -280,6 +290,8 @@ export default function DottedChart({
         effectiveControlYBrushRange
       );
       if (!nextViewport) return;
+      resetBrushOnNextPointsRef.current = true;
+      resetYBrushOnNextRowsRef.current = true;
       setRequestedViewport(nextViewport);
       setSampleSeed((current) => current + 1);
     },
@@ -308,6 +320,8 @@ export default function DottedChart({
         nextRange
       );
       if (!nextViewport) return;
+      resetBrushOnNextPointsRef.current = true;
+      resetYBrushOnNextRowsRef.current = true;
       setRequestedViewport(nextViewport);
       setSampleSeed((current) => current + 1);
     },
@@ -326,6 +340,8 @@ export default function DottedChart({
     setControlBrushRange({ startIndex: 0, endIndex: Math.max(0, effectiveFramePoints.length - 1) });
     setControlYBrushRange({ startIndex: 0, endIndex: Math.max(0, effectiveFrameYTicks.length - 1) });
     if (requestedViewport) {
+      resetBrushOnNextPointsRef.current = true;
+      resetYBrushOnNextRowsRef.current = true;
       setRequestedViewport(viewport);
       setSampleSeed((current) => current + 1);
     }
@@ -346,6 +362,8 @@ export default function DottedChart({
           effectiveControlYBrushRange
         );
         if (nextViewport) {
+          resetBrushOnNextPointsRef.current = true;
+          resetYBrushOnNextRowsRef.current = true;
           setRequestedViewport(nextViewport);
           setSampleSeed((current) => current + 1);
         }
