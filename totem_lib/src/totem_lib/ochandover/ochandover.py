@@ -241,125 +241,145 @@ class OCHANDOVER(nx.MultiDiGraph):
 
             print("footprint", footprint)
 
-            # Activities where both A→B and B→A appear (||), the dependency is
-            # balanced enough (abs(dependency) <= parallel_threshold), and the
-            # total observations meet the minimum count.
-            parallel_transitions = (
-                footprint
-                .filter(
-                    (pl.col("relation") == "||") &
-                    (pl.col("dependency").abs() <= parallel_threshold) &
-                    ((pl.col("count_ab") + pl.col("count_ba")) >= min_parallel_observations)
-                )
-                .select(["businessobject_type", "activity_a", "activity_b"])
-                .with_columns(pl.lit(True).alias("_is_parallel"))
-            )
+            # Build a set of parallel activity pairs (both directions) from the footprint.
+            parallel_set: set[tuple[str, str, str]] = set()
+            for _row in footprint.filter(
+                (pl.col("relation") == "||") &
+                (pl.col("dependency").abs() <= parallel_threshold) &
+                ((pl.col("count_ab") + pl.col("count_ba")) >= min_parallel_observations)
+            ).to_dicts():
+                _bo_type = _row["businessobject_type"]
+                _a, _b = _row["activity_a"], _row["activity_b"]
+                parallel_set.add((_bo_type, _a, _b))
+                parallel_set.add((_bo_type, _b, _a))
 
-            # All business object events in lifecycle order.
-            all_bo_events = (
+            print("parallel pairs", parallel_set)
+
+            # Build per-BO ordered event sequences.
+            _bo_seqs: dict = {}
+            for _row in (
                 event_businessobjects
-                .select(["_eventId", "_activity", "_timestampUnix", "businessobject_id", "businessobject_type"])
                 .sort(["businessobject_id", "_timestampUnix", "_eventId"])
-            )
+                .to_dicts()
+            ):
+                _bo_id = _row["businessobject_id"]
+                if _bo_id not in _bo_seqs:
+                    _bo_seqs[_bo_id] = {"type": _row["businessobject_type"], "events": []}
+                _bo_seqs[_bo_id]["events"].append((_row["_eventId"], _row["_activity"]))
 
-            # Label every transition (event_i → event_{i+1}) as parallel or sequential.
-            all_bo_events_labeled = (
-                all_bo_events
-                .with_columns(
-                    pl.col("_activity").shift(-1).over("businessobject_id").alias("_next_activity")
+            # Modify EOG arcs to correctly represent parallelism:
+            #
+            # For each consecutive pair (u, v) in a BO's lifecycle:
+            #   - Sequential pair: keep the arc u→v as-is.
+            #   - Parallel pair (footprint "||"): remove u→v and add two repair arcs:
+            #       Dead-end repair: u → first event after u with a sequential relation to u.
+            #       Orphan repair:   last event before v with a sequential relation to v → v.
+            #
+            # This replaces the flat block abstraction and correctly handles sequential
+            # sub-chains inside parallel branches, e.g. A→{B || (C→D)}→E.
+            _new_arcs: list[dict] = []
+            for _bo_id, _bo_data in _bo_seqs.items():
+                _bo_type = _bo_data["type"]
+                _events = _bo_data["events"]
+                _n = len(_events)
+
+                for _i in range(_n - 1):
+                    _eid_i, _act_i = _events[_i]
+                    _eid_next, _act_next = _events[_i + 1]
+
+                    if (_bo_type, _act_i, _act_next) not in parallel_set:
+                        # Sequential arc: keep.
+                        _new_arcs.append({
+                            "source_event": _eid_i,
+                            "target_event": _eid_next,
+                            "businessobject_id": _bo_id,
+                            "businessobject_type": _bo_type,
+                        })
+                    else:
+                        # Dead-end repair: connect _eid_i to its first sequential successor.
+                        for _j in range(_i + 1, _n):
+                            _eid_j, _act_j = _events[_j]
+                            if (_bo_type, _act_i, _act_j) not in parallel_set:
+                                _new_arcs.append({
+                                    "source_event": _eid_i,
+                                    "target_event": _eid_j,
+                                    "businessobject_id": _bo_id,
+                                    "businessobject_type": _bo_type,
+                                })
+                                break
+
+                        # Orphan repair: connect the last sequential predecessor to _eid_next.
+                        for _j in range(_i, -1, -1):
+                            _eid_j, _act_j = _events[_j]
+                            if (_bo_type, _act_j, _act_next) not in parallel_set:
+                                _new_arcs.append({
+                                    "source_event": _eid_j,
+                                    "target_event": _eid_next,
+                                    "businessobject_id": _bo_id,
+                                    "businessobject_type": _bo_type,
+                                })
+                                break
+
+            if _new_arcs:
+                modified_eog_arcs = (
+                    pl.DataFrame(_new_arcs)
+                    .unique(subset=["source_event", "target_event", "businessobject_id"])
                 )
-                .join(
-                    parallel_transitions,
-                    left_on=["businessobject_type", "_activity", "_next_activity"],
-                    right_on=["businessobject_type", "activity_a", "activity_b"],
-                    how="left",
-                )
-                .with_columns(pl.col("_is_parallel").fill_null(False))
-            )
+            else:
+                modified_eog_arcs = pl.DataFrame(schema={
+                    "source_event": pl.Utf8,
+                    "target_event": pl.Utf8,
+                    "businessobject_id": pl.Utf8,
+                    "businessobject_type": pl.Utf8,
+                })
 
-            # Assign block IDs: a sequential transition opens a new block for the following event.
-            # starts_new_block[i] = NOT is_parallel[i-1]
-            # → shift ~is_parallel forward by 1, fill null (first event of each group) with False, cumsum.
-            all_bo_events_with_blocks = (
-                all_bo_events_labeled
-                .sort(["businessobject_id", "_timestampUnix", "_eventId"])
-                .with_columns(
-                    (
-                        (~pl.col("_is_parallel"))
-                        .shift(1)
-                        .over("businessobject_id")
-                        .fill_null(False)
-                        .cast(pl.UInt32)
-                        .cum_sum()
-                        .over("businessobject_id")
-                    ).alias("block_id")
-                )
-            )
+            print("Modified EOG arcs")
+            print(modified_eog_arcs)
 
-            print("Events with block IDs")
-            print(all_bo_events_with_blocks.select(["businessobject_id", "_eventId", "_activity", "block_id"]))
-
-            # Resource events annotated with their block ID, one row per resource.
-            # _timestampUnix is kept so each resource carries its own event timestamp.
-            block_resource_events = (
-                all_bo_events_with_blocks
-                .join(event_resources, on="_eventId", how="inner")
-                .explode("resources")
-                .select(["businessobject_id", "businessobject_type", "block_id", "resources", "_timestampUnix"])
-            )
-
-            # Unique resources per block — used only for consecutive block pair discovery and gap check.
-            block_resources_agg = (
-                block_resource_events
-                .group_by(["businessobject_id", "businessobject_type", "block_id"])
-                .agg(pl.col("resources").unique().alias("block_resources"))
-            )
-
-            print("Block resources")
-            print(block_resources_agg.sort(["businessobject_id", "block_id"]))
-
-            # Find consecutive resource-containing block pairs and apply gap filter.
-            # block_gap = number of empty blocks between two resource-containing blocks.
-            block_pairs = (
-                block_resources_agg
-                .sort(["businessobject_id", "businessobject_type", "block_id"])
-                .with_columns([
-                    pl.col("block_id").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("next_block_id"),
-                    pl.col("block_resources").shift(-1).over(["businessobject_id", "businessobject_type"]).alias("_next_check"),
+            # Update eog_arcs and derived counts for downstream normalisation.
+            eog_arcs = modified_eog_arcs
+            eog_arcs_unique = (
+                modified_eog_arcs
+                .group_by(["source_event", "target_event"])
+                .agg([
+                    pl.col("businessobject_id").unique().alias("businessobjects"),
+                    pl.col("businessobject_type").unique().alias("businessobject_types"),
                 ])
-                .filter(pl.col("_next_check").is_not_null())
-                .with_columns((pl.col("next_block_id") - pl.col("block_id") - 1).alias("block_gap"))
-                .select(["businessobject_id", "businessobject_type", "block_id", "next_block_id", "block_gap"])
+            )
+            eog_arc_count = eog_arcs_unique.height
+
+            # Per-event timestamps for time_delta computation.
+            _event_ts = (
+                event_businessobjects
+                .select(["_eventId", "_timestampUnix"])
+                .unique("_eventId")
             )
 
-            if max_gap is not None:
-                block_pairs = block_pairs.filter(pl.col("block_gap") <= max_gap)
-
-            # For each valid block pair, cross-join source and target resource rows directly.
-            # Each source resource carries its own event timestamp, as does each target resource,
-            # so time_delta = target_ts - source_ts is per individual (source, target) pair.
-            block_handovers = (
-                block_pairs
-                .join(
-                    block_resource_events.rename({"resources": "source", "_timestampUnix": "source_ts"}),
-                    on=["businessobject_id", "businessobject_type", "block_id"],
-                    how="inner",
-                )
-                .join(
-                    block_resource_events
-                    .rename({"resources": "target", "_timestampUnix": "target_ts", "block_id": "next_block_id"}),
-                    on=["businessobject_id", "businessobject_type", "next_block_id"],
-                    how="inner",
-                )
+            # For each modified arc, cross-join source and target resource lists.
+            # The split node A→B and A→C naturally yields R(A)→R(B) and R(A)→R(C)
+            # without merging parallel branches into a single block.
+            _raw_handovers = (
+                modified_eog_arcs
+                .join(event_resources, left_on="source_event", right_on="_eventId", how="inner")
+                .rename({"resources": "source_resources"})
+                .join(event_resources, left_on="target_event", right_on="_eventId", how="inner")
+                .rename({"resources": "target_resources"})
+                .join(_event_ts, left_on="source_event", right_on="_eventId", how="left")
+                .rename({"_timestampUnix": "source_ts"})
+                .join(_event_ts, left_on="target_event", right_on="_eventId", how="left")
+                .rename({"_timestampUnix": "target_ts"})
                 .with_columns((pl.col("target_ts") - pl.col("source_ts")).alias("time_delta"))
-                .select(["source", "target", "businessobject_type", "time_delta"])
+                .explode("source_resources")
+                .explode("target_resources")
+                .select(["source_resources", "target_resources", "businessobject_type", "time_delta"])
+                .rename({"source_resources": "source", "target_resources": "target"})
             )
 
-            print("Block handovers (parallel-aware)")
-            print(block_handovers.sort(["source", "target"]))
+            print("Raw handovers (parallel-aware EOG)")
+            print(_raw_handovers.sort(["source", "target"]))
 
             handover_edges = (
-                block_handovers
+                _raw_handovers
                 .group_by(["source", "target", "businessobject_type"])
                 .agg([
                     pl.len().alias("weight"),
