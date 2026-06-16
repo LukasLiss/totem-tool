@@ -60,6 +60,7 @@ const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
 const Y_AXIS_WIDTH = 180;
 const CHART_HEIGHT = 500;
 const MAX_Y_TICK_LABEL_LENGTH = 24;
+const EMPTY_EVENTS: OCEvent[] = [];
 
 export default function DottedChart({
   fileId,
@@ -99,6 +100,9 @@ export default function DottedChart({
   const previousFrameRowCountRef = useRef(0);
   const resetBrushOnNextPointsRef = useRef(false);
   const resetYBrushOnNextRowsRef = useRef(false);
+  const colorScaleRef = useRef<Map<string, string>>(new Map());
+  const colorByKeyRef = useRef("");
+  const colorEventsRef = useRef<OCEvent[] | null>(null);
 
   useEffect(() => {
     setConfig(defaultConfig);
@@ -131,7 +135,8 @@ export default function DottedChart({
     sampleSeed,
   });
 
-  const points = useMemo(() => toChartPoints(data?.events ?? []), [data?.events]);
+  const events = data?.events ?? EMPTY_EVENTS;
+  const points = useMemo(() => toChartPoints(events), [events]);
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [isZoomApplying, setIsZoomApplying] = useState(false);
   const zoomFrameRef = useRef<number | null>(null);
@@ -144,7 +149,25 @@ export default function DottedChart({
     () => points.slice(effectiveBrushRange.startIndex, effectiveBrushRange.endIndex + 1),
     [effectiveBrushRange, points]
   );
-  const colorScale = useMemo(() => makeColorScale(points), [points]);
+  const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
+  const colorScale = useMemo(() => {
+    const colorByChanged = colorByKeyRef.current !== colorByKey;
+    const eventsChanged = colorEventsRef.current !== events;
+
+    if (colorByChanged) {
+      if (!eventsChanged && colorEventsRef.current !== null) {
+        return makeColorScale(points);
+      }
+
+      colorByKeyRef.current = colorByKey;
+      colorScaleRef.current = new Map();
+    }
+
+    const nextScale = makeColorScale(points, colorScaleRef.current);
+    colorScaleRef.current = nextScale;
+    colorEventsRef.current = events;
+    return nextScale;
+  }, [colorByKey, events, points]);
   const shapeScale = useMemo(() => makeShapeScale(points), [points]);
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
@@ -1052,6 +1075,10 @@ function formatAxisLabel(axis: AxisOption): string {
     default:
       return "Value";
   }
+}
+
+function axisOptionKey(axis: AxisOption): string {
+  return axis.type === "event_attribute" ? `${axis.type}:${axis.name}` : axis.type;
 }
 
 function formatColumnLabel(name: string): string {

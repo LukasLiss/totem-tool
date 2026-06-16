@@ -105,9 +105,20 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
     .filter((event) => Number.isFinite(event.chartX) && Number.isFinite(event.chartY));
 }
 
-export function makeColorScale(points: ChartPoint[]): Map<string, string> {
+export function makeColorScale(
+  points: ChartPoint[],
+  previousScale: Map<string, string> = new Map()
+): Map<string, string> {
+  const scale = new Map(previousScale);
   const values = uniqueValues(points.map((point) => point.colorKey));
-  return new Map(values.map((value, index) => [value, PALETTE[index % PALETTE.length]]));
+
+  values.forEach((value) => {
+    if (!scale.has(value)) {
+      scale.set(value, PALETTE[scale.size % PALETTE.length]);
+    }
+  });
+
+  return scale;
 }
 
 export function makeShapeScale(points: ChartPoint[]): Map<string, ShapeName> {
