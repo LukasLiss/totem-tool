@@ -100,11 +100,12 @@ def test_oc_dotted_chart_exposes_object_dimensions_for_configuration():
     y_values = {option["value"] for option in columns["y_axis"]}
     x_values = {option["value"] for option in columns["x_axis"]}
 
-    assert {"object_id", "object_type:Container", "object_type:Customer Order", "qualifier", "object_attr:Status"} <= y_values
-    assert "object_attr:DepartureDate" not in y_values
-    assert "object_attr:DepartureDate" in x_values
+    assert {"object_id", "object_type:Container", "object_type:Customer Order", "qualifier", "object_attr:Container:Status"} <= y_values
+    assert "object_attr:Vehicle:DepartureDate" not in y_values
+    assert "object_attr:Vehicle:DepartureDate" in x_values
+    assert "object_attr:Transport Document:AmountofContainers" not in y_values
 
-    result = get_oc_dotted_chart_data(db, y_axis="object_type:Container", color_by="object_attr:Status", max_points=250)
+    result = get_oc_dotted_chart_data(db, y_axis="object_type:Container", color_by="object_attr:Container:Status", max_points=250)
     container_ids = {
         row[0]
         for row in db.conn.execute("SELECT obj_id FROM objects WHERE obj_type = 'Container'").fetchall()

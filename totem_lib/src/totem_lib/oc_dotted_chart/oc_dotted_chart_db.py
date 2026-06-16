@@ -237,6 +237,7 @@ def get_oc_dotted_chart_data(
 def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]]]:
     event_attr_columns = _event_attr_columns(db)
     object_attr_columns = _object_attr_columns(db)
+    object_attr_types = _object_attr_column_types(db)
     object_types = _object_types(db)
     attr_options = [
         {
@@ -254,18 +255,11 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         }
         for object_type in object_types
     ]
+    object_attr_options = _object_attr_options_by_type(db, object_attr_columns, object_attr_types)
     object_options = [
         {"value": "object_id", "label": "Object ID", "kind": "categorical"},
         {"value": "object_type", "label": "Object Type", "kind": "categorical"},
         {"value": "qualifier", "label": "Qualifier", "kind": "categorical"},
-        *[
-            {
-                "value": f"object_attr:{column}",
-                "label": f"Object {_humanize_column_name(column)}",
-                "kind": "time" if _is_time_related_column(column) else "categorical",
-            }
-            for column in object_attr_columns
-        ],
     ]
     time_options = [
         {"value": "time", "label": "Time", "kind": "time"},
@@ -274,11 +268,13 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         {"value": "since_start", "label": "Since Start", "kind": "time"},
         *[option for option in attr_options if option["kind"] == "time"],
         *[option for option in object_options if option["kind"] == "time"],
+        *[option for option in object_attr_options if option["kind"] == "time"],
     ]
     categorical_options = [
         {"value": "activity", "label": "Activity", "kind": "categorical"},
         *[option for option in attr_options if option["kind"] == "categorical"],
         *[option for option in object_options if option["kind"] == "categorical"],
+        *[option for option in object_attr_options if option["kind"] == "categorical"],
         *object_type_row_options,
     ]
     y_axis_options = [
@@ -287,7 +283,7 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         *object_type_row_options,
         {"value": "object_id", "label": "All Objects", "kind": "categorical"},
         {"value": "qualifier", "label": "Qualifier", "kind": "categorical"},
-        *[option for option in object_options if option["kind"] == "categorical" and option["value"].startswith("object_attr:")],
+        *[option for option in object_attr_options if option["kind"] == "categorical"],
     ]
 
     return {
@@ -462,9 +458,18 @@ def _axis_expr(axis: str | None, event_attr_columns: list[str], object_attr_colu
     if axis == "qualifier":
         return "qualifier"
     if axis and axis.startswith("object_attr:"):
-        column = axis.split(":", 1)[1]
-        if column in object_attr_columns:
-            return _quote_identifier(_object_attr_alias(column))
+        parts = axis.split(":", 2)
+        if len(parts) == 3:
+            object_type, column = parts[1], parts[2]
+            if column in object_attr_columns:
+                return (
+                    f"CASE WHEN object_type = {_quote_literal(object_type)} "
+                    f"THEN {_quote_identifier(_object_attr_alias(column))} ELSE NULL END"
+                )
+        elif len(parts) == 2:
+            column = parts[1]
+            if column in object_attr_columns:
+                return _quote_identifier(_object_attr_alias(column))
     if axis in event_attr_columns:
         return _quote_identifier(axis)
     return "NULL"
@@ -480,6 +485,44 @@ def _object_attr_columns(db: OcelDuckDB) -> list[str]:
     fixed_columns = {"obj_id", "obj_type"}
     rows = db.conn.execute("PRAGMA table_info('objects')").fetchall()
     return [row[1] for row in rows if row[1] not in fixed_columns]
+
+
+def _object_attr_column_types(db: OcelDuckDB) -> dict[str, str]:
+    fixed_columns = {"obj_id", "obj_type"}
+    rows = db.conn.execute("PRAGMA table_info('objects')").fetchall()
+    return {row[1]: row[2] for row in rows if row[1] not in fixed_columns}
+
+
+def _object_attr_options_by_type(
+    db: OcelDuckDB,
+    columns: list[str],
+    column_types: dict[str, str],
+) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+
+    for column in columns:
+        kind = _object_attr_kind(db, column, column_types.get(column, ""))
+        if kind == "numeric":
+            continue
+
+        rows = db.conn.execute(
+            f"""
+            SELECT DISTINCT obj_type
+            FROM objects
+            WHERE {_quote_identifier(column)} IS NOT NULL
+            ORDER BY obj_type
+            """
+        ).fetchall()
+        for (object_type,) in rows:
+            options.append(
+                {
+                    "value": f"object_attr:{object_type}:{column}",
+                    "label": f"{object_type}.{column}",
+                    "kind": kind,
+                }
+            )
+
+    return options
 
 
 def _object_types(db: OcelDuckDB) -> list[str]:
@@ -510,6 +553,35 @@ def _is_time_related_column(column: str) -> bool:
     return any(token in normalized for token in ("time", "timestamp", "date", "datetime"))
 
 
+def _object_attr_kind(db: OcelDuckDB, column: str, duckdb_type: str) -> str:
+    if _is_time_related_column(column):
+        return "time"
+    normalized_type = duckdb_type.upper()
+    if any(
+        token in normalized_type
+        for token in ("INT", "DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC")
+    ):
+        return "numeric"
+    if _object_attr_values_are_numeric(db, column):
+        return "numeric"
+    return "categorical"
+
+
+def _object_attr_values_are_numeric(db: OcelDuckDB, column: str) -> bool:
+    row = db.conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total_count,
+            COUNT(TRY_CAST({_quote_identifier(column)} AS DOUBLE)) AS numeric_count
+        FROM objects
+        WHERE {_quote_identifier(column)} IS NOT NULL
+        """
+    ).fetchone()
+    total_count = int(row[0] or 0)
+    numeric_count = int(row[1] or 0)
+    return total_count > 0 and total_count == numeric_count
+
+
 def _humanize_column_name(column: str) -> str:
     return column.replace("_", " ").strip().title() or column
 
@@ -524,7 +596,8 @@ def _axis_uses_object_columns(axis: str | None, object_attr_columns: list[str]) 
     if axis and axis.startswith("object_type:"):
         return True
     if axis and axis.startswith("object_attr:"):
-        return axis.split(":", 1)[1] in object_attr_columns
+        parts = axis.split(":", 2)
+        return parts[-1] in object_attr_columns
     return False
 
 
