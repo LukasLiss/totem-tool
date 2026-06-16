@@ -52,6 +52,7 @@ export interface ChartPoint extends OCEvent {
 }
 
 export const OTHER_COLOR_KEY = "Other";
+const OTHER_COLOR = "#d4d4d8";
 
 const PALETTE = [
   "var(--chart-1)",
@@ -134,7 +135,7 @@ export function makeColorScale(
   }
 
   const scale = new Map(keys.map((key, index) => [key, PALETTE[index % PALETTE.length]]));
-  scale.set(OTHER_COLOR_KEY, PALETTE[EXPLICIT_COLOR_LIMIT]);
+  scale.set(OTHER_COLOR_KEY, OTHER_COLOR);
 
   return { scale, keys };
 }
