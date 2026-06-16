@@ -98,7 +98,7 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
         chartY,
         xLabel: valueKey(event.x),
         yLabel: valueKey(event.y),
-        colorKey: valueKey(event.color_value ?? event.activity),
+        colorKey: valueKey(event.color_value),
         shapeKey: valueKey(event.shape_value ?? "circle"),
       };
     })

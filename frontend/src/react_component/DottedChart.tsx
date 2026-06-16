@@ -252,7 +252,7 @@ export default function DottedChart({
     const previousLength = previousRowCountRef.current;
     const shouldReset = resetYBrushOnNextRowsRef.current;
     setYBrushRange((current) =>
-      previousLength === 0 || shouldReset
+      previousLength === 0 || shouldReset || isFullRange(current, previousLength)
         ? fullBrushRange(yTicks.length)
         : clampBrushRange(current, yTicks.length)
     );
@@ -277,7 +277,7 @@ export default function DottedChart({
     const previousLength = previousFrameRowCountRef.current;
     setFrameYTicks(yTicks);
     setControlYBrushRange((current) =>
-      previousLength === 0
+      previousLength === 0 || isFullRange(current, previousLength)
         ? fullBrushRange(yTicks.length)
         : clampBrushRange(current, yTicks.length)
     );
@@ -474,13 +474,6 @@ export default function DottedChart({
         onApply={handleRangeApply}
       />
 
-      {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
-        <DottedChartColorLegend
-          label={formatAxisLabel(effectiveConfig.colorBy)}
-          entries={colorLegendEntries}
-        />
-      )}
-
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
         className="aspect-auto shrink-0 rounded-md border bg-background p-2"
@@ -532,6 +525,13 @@ export default function DottedChart({
           />
         </ScatterChart>
       </ChartContainer>
+
+      {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
+        <DottedChartColorLegend
+          label={formatAxisLabel(effectiveConfig.colorBy)}
+          entries={colorLegendEntries}
+        />
+      )}
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 text-sm text-muted-foreground">
