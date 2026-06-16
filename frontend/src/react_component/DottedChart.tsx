@@ -148,7 +148,10 @@ export default function DottedChart({
   const shapeScale = useMemo(() => makeShapeScale(points), [points]);
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
-  const yTicks = useMemo(() => getUniqueSortedValues(points.map((point) => point.chartY)), [points]);
+  const yTicks = useMemo(
+    () => orderDisplayedYTicks(visiblePoints, effectiveConfig.rowOrder),
+    [effectiveConfig.rowOrder, visiblePoints]
+  );
   const [yBrushRange, setYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const effectiveYBrushRange = useMemo(
     () => clampBrushRange(yBrushRange, yTicks.length),
@@ -163,10 +166,7 @@ export default function DottedChart({
     () => visiblePoints.filter((point) => visibleYTickSet.has(point.chartY)),
     [visiblePoints, visibleYTickSet]
   );
-  const displayedYTicks = useMemo(
-    () => orderDisplayedYTicks(visiblePointsByAxes, effectiveConfig.rowOrder),
-    [effectiveConfig.rowOrder, visiblePointsByAxes]
-  );
+  const displayedYTicks = visibleYTicks;
   const displayedYIndexByTick = useMemo(
     () => new Map(displayedYTicks.map((tick, index) => [tick, index + 1])),
     [displayedYTicks]
@@ -919,10 +919,6 @@ function getDataDomain(values: number[]): [number, number] {
 function getRowDomain(values: number[]): [number, number] {
   const [min, max] = getDataDomain(values);
   return [min - 0.5, max + 0.5];
-}
-
-function getUniqueSortedValues(values: number[]): number[] {
-  return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b);
 }
 
 function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): number[] {
