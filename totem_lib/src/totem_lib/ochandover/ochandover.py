@@ -437,19 +437,21 @@ class OCHANDOVER(nx.MultiDiGraph):
         """
         from collections import deque
 
-        # Per-BO-type adjacency map using sets to deduplicate arcs across BO instances.
-        # Keying by type (not instance) ensures that when two BO instances (e.g. i1, i2)
-        # share the same event arc (e1→e2), it is counted as one handover, not two.
-        _btype_adj: dict[str, dict[str, set[str]]] = {}
-        _btype_all_events: dict[str, set[str]] = {}
+        # Per-BO-instance adjacency preserves correct graph connectivity so that
+        # non-resource events shared across BO instances cannot create phantom paths
+        # between unrelated resource events.
+        _bo_adj: dict[str, dict[str, list[str]]] = {}
+        _bo_type_map: dict[str, str] = {}
+        _bo_all_events: dict[str, set[str]] = {}
         for _arc in eog_arcs.to_dicts():
-            _btype = _arc["businessobject_type"]
-            if _btype not in _btype_adj:
-                _btype_adj[_btype] = {}
-                _btype_all_events[_btype] = set()
-            _btype_adj[_btype].setdefault(_arc["source_event"], set()).add(_arc["target_event"])
-            _btype_all_events[_btype].add(_arc["source_event"])
-            _btype_all_events[_btype].add(_arc["target_event"])
+            _bid = _arc["businessobject_id"]
+            if _bid not in _bo_adj:
+                _bo_adj[_bid] = {}
+                _bo_type_map[_bid] = _arc["businessobject_type"]
+                _bo_all_events[_bid] = set()
+            _bo_adj[_bid].setdefault(_arc["source_event"], []).append(_arc["target_event"])
+            _bo_all_events[_bid].add(_arc["source_event"])
+            _bo_all_events[_bid].add(_arc["target_event"])
 
         _resource_event_set: set[str] = set(event_resources.get_column("_eventId").to_list())
         _event_resources_dict: dict[str, list] = {
@@ -459,41 +461,57 @@ class OCHANDOVER(nx.MultiDiGraph):
             r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()
         }
 
-        _rows: list[dict] = []
+        # Bridge arcs: keyed by (source_event, target_event, bo_type).
+        # Multiple BO instances that produce the same bridge share one entry here —
+        # the arc is a shared artifact, not duplicated per instance.
+        # Value is the minimum gap seen across all BO instances for that bridge.
+        _bridge_arcs: dict[tuple[str, str, str], int] = {}
 
-        for _btype, _adj_map in _btype_adj.items():
-            _btype_resource_eids = _btype_all_events[_btype] & _resource_event_set
+        for _bid, _adj_map in _bo_adj.items():
+            _btype = _bo_type_map[_bid]
+            _bo_resource_eids = _bo_all_events[_bid] & _resource_event_set
 
-            for _r1 in _btype_resource_eids:
-                # BFS forward from _r1.
-                # Non-resource events increment gap; resource events are recorded as
-                # handover targets and the traversal stops there.
+            for _r1 in _bo_resource_eids:
+                # BFS forward from _r1 within this BO instance's subgraph.
+                # Non-resource events increment gap; BFS stops and records a bridge
+                # when the next resource event is reached.
                 _queue: deque = deque([(_r1, 0)])
                 _visited: set[str] = {_r1}
 
                 while _queue:
                     _eid, _gap = _queue.popleft()
-                    for _neid in _adj_map.get(_eid, set()):
+                    for _neid in _adj_map.get(_eid, []):
                         if _neid in _visited:
                             continue
                         if _neid in _resource_event_set:
                             if max_gap is None or _gap <= max_gap:
-                                _src_ts = _event_ts_dict.get(_r1, 0)
-                                _tgt_ts = _event_ts_dict.get(_neid, 0)
-                                for _src in _event_resources_dict.get(_r1, []):
-                                    for _tgt in _event_resources_dict.get(_neid, []):
-                                        _rows.append({
-                                            "source": _src,
-                                            "target": _tgt,
-                                            "businessobject_type": _btype,
-                                            "time_delta": _tgt_ts - _src_ts,
-                                        })
+                                _key = (_r1, _neid, _btype)
+                                if _key not in _bridge_arcs:
+                                    _bridge_arcs[_key] = _gap
+                                else:
+                                    _bridge_arcs[_key] = min(_bridge_arcs[_key], _gap)
                             _visited.add(_neid)
                         else:
                             _next_gap = _gap + 1
                             if max_gap is None or _next_gap <= max_gap:
                                 _visited.add(_neid)
                                 _queue.append((_neid, _next_gap))
+
+        # Resource expansion happens once after all bridges are collected and
+        # deduplicated, so each unique event-level transition yields exactly one
+        # handover regardless of how many BO instances share it.
+        _rows: list[dict] = []
+        for (_src_eid, _tgt_eid, _btype) in _bridge_arcs:
+            _src_ts = _event_ts_dict.get(_src_eid, 0)
+            _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
+            for _src in _event_resources_dict.get(_src_eid, []):
+                for _tgt in _event_resources_dict.get(_tgt_eid, []):
+                    _rows.append({
+                        "source": _src,
+                        "target": _tgt,
+                        "businessobject_type": _btype,
+                        "time_delta": _tgt_ts - _src_ts,
+                    })
 
         if _rows:
             return pl.DataFrame(_rows)
