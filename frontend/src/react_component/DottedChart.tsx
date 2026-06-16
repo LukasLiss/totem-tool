@@ -93,6 +93,10 @@ export default function DottedChart({
   const [controlYBrushRange, setControlYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [framePoints, setFramePoints] = useState<ChartPoint[]>([]);
   const [frameYTicks, setFrameYTicks] = useState<number[]>([]);
+  const previousPointCountRef = useRef(0);
+  const previousRowCountRef = useRef(0);
+  const previousFramePointCountRef = useRef(0);
+  const previousFrameRowCountRef = useRef(0);
 
   useEffect(() => {
     setConfig(defaultConfig);
@@ -105,16 +109,11 @@ export default function DottedChart({
     setFrameYTicks([]);
     setControlBrushRange({ startIndex: 0, endIndex: 0 });
     setControlYBrushRange({ startIndex: 0, endIndex: 0 });
-  }, [
-    fileId,
-    viewport,
-    effectiveConfig.xAxis,
-    effectiveConfig.yAxis,
-    effectiveConfig.colorBy,
-    effectiveConfig.shapeBy,
-    effectiveConfig.rowOrder,
-    effectiveConfig.maxPoints,
-  ]);
+    previousPointCountRef.current = 0;
+    previousRowCountRef.current = 0;
+    previousFramePointCountRef.current = 0;
+    previousFrameRowCountRef.current = 0;
+  }, [fileId, viewport]);
 
   const { data, loading, error } = useDottedChartData({
     fileId,
@@ -177,24 +176,48 @@ export default function DottedChart({
   );
 
   useEffect(() => {
-    setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
+    const previousLength = previousPointCountRef.current;
+    setBrushRange((current) =>
+      previousLength === 0
+        ? fullBrushRange(points.length)
+        : clampBrushRange(current, points.length)
+    );
+    previousPointCountRef.current = points.length;
   }, [points]);
 
   useEffect(() => {
-    setYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
+    const previousLength = previousRowCountRef.current;
+    setYBrushRange((current) =>
+      previousLength === 0
+        ? fullBrushRange(yTicks.length)
+        : clampBrushRange(current, yTicks.length)
+    );
+    previousRowCountRef.current = yTicks.length;
   }, [yTicks.length]);
 
   useEffect(() => {
-    if (requestedViewport || !points.length || framePoints.length) return;
+    if (requestedViewport || !points.length) return;
+    const previousLength = previousFramePointCountRef.current;
     setFramePoints(points);
-    setControlBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
-  }, [framePoints.length, points, requestedViewport]);
+    setControlBrushRange((current) =>
+      previousLength === 0
+        ? fullBrushRange(points.length)
+        : clampBrushRange(current, points.length)
+    );
+    previousFramePointCountRef.current = points.length;
+  }, [points, requestedViewport]);
 
   useEffect(() => {
-    if (requestedViewport || !yTicks.length || frameYTicks.length) return;
+    if (requestedViewport || !yTicks.length) return;
+    const previousLength = previousFrameRowCountRef.current;
     setFrameYTicks(yTicks);
-    setControlYBrushRange({ startIndex: 0, endIndex: Math.max(0, yTicks.length - 1) });
-  }, [frameYTicks.length, requestedViewport, yTicks]);
+    setControlYBrushRange((current) =>
+      previousLength === 0
+        ? fullBrushRange(yTicks.length)
+        : clampBrushRange(current, yTicks.length)
+    );
+    previousFrameRowCountRef.current = yTicks.length;
+  }, [requestedViewport, yTicks]);
 
   useEffect(() => {
     return () => {
@@ -888,6 +911,10 @@ function clampBrushRange(range: BrushRange, pointCount: number): BrushRange {
   const startIndex = Math.max(0, Math.min(maxIndex, Math.floor(range.startIndex)));
   const endIndex = Math.max(startIndex, Math.min(maxIndex, Math.floor(range.endIndex)));
   return { startIndex, endIndex };
+}
+
+function fullBrushRange(pointCount: number): BrushRange {
+  return { startIndex: 0, endIndex: Math.max(0, pointCount - 1) };
 }
 
 function isFullRange(range: BrushRange, pointCount: number): boolean {
