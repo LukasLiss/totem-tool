@@ -331,6 +331,37 @@ export default function DottedChart({
     }
   }, [effectiveFramePoints.length, effectiveFrameYTicks.length, points.length, requestedViewport, viewport, yTicks.length]);
 
+  const handleConfigChange = useCallback(
+    (nextConfig: DottedChartConfig) => {
+      const rowOrderChanged = nextConfig.rowOrder !== effectiveConfig.rowOrder;
+      const hasZoomedFrame =
+        !isFullRange(effectiveControlBrushRange, effectiveFramePoints.length) ||
+        !isFullRange(effectiveControlYBrushRange, effectiveFrameYTicks.length);
+
+      if (rowOrderChanged && hasZoomedFrame) {
+        const nextViewport = viewportFromFrameSelection(
+          effectiveFramePoints,
+          effectiveFrameYTicks,
+          effectiveControlBrushRange,
+          effectiveControlYBrushRange
+        );
+        if (nextViewport) {
+          setRequestedViewport(nextViewport);
+          setSampleSeed((current) => current + 1);
+        }
+      }
+
+      setConfig(nextConfig);
+    },
+    [
+      effectiveConfig.rowOrder,
+      effectiveControlBrushRange,
+      effectiveControlYBrushRange,
+      effectiveFramePoints,
+      effectiveFrameYTicks,
+    ]
+  );
+
   if (!fileId) {
     return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
   }
@@ -378,7 +409,7 @@ export default function DottedChart({
         <DottedChartControls
           fileId={fileId}
           config={effectiveConfig}
-          onConfigChange={setConfig}
+          onConfigChange={handleConfigChange}
         />
       )}
 
