@@ -3,11 +3,10 @@ import axios from "axios";
 
 import {
   axisOptionToParam,
-  sortOptionToParam,
   type AxisOption,
   type DottedChartResponse,
   type DottedChartViewport,
-  type SortOption,
+  type RowOrderOption,
 } from "./dottedChartUtils";
 
 interface UseDottedChartDataArgs {
@@ -16,7 +15,7 @@ interface UseDottedChartDataArgs {
   yAxis: AxisOption;
   colorBy: AxisOption;
   shapeBy: AxisOption;
-  sortBy: SortOption | AxisOption;
+  rowOrder: RowOrderOption;
   maxPoints?: number;
   viewport?: DottedChartViewport;
   sampleSeed?: number;
@@ -29,7 +28,7 @@ export function useDottedChartData({
   yAxis,
   colorBy,
   shapeBy,
-  sortBy,
+  rowOrder,
   maxPoints = 20_000,
   viewport,
   sampleSeed = 0,
@@ -47,12 +46,12 @@ export function useDottedChartData({
         yAxis,
         colorBy,
         shapeBy,
-        sortBy,
+        rowOrder,
         maxPoints,
         viewport,
         sampleSeed,
       }),
-    [fileId, xAxis, yAxis, colorBy, shapeBy, sortBy, maxPoints, viewport, sampleSeed]
+    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed]
   );
 
   useEffect(() => {
@@ -74,7 +73,7 @@ export function useDottedChartData({
         addParam(params, "y_axis", axisOptionToParam(yAxis));
         addParam(params, "color_by", axisOptionToParam(colorBy));
         addParam(params, "shape_by", axisOptionToParam(shapeBy));
-        addParam(params, "sort_by", sortOptionToParam(sortBy));
+        addParam(params, "row_order", rowOrder);
         addParam(params, "max_points", String(maxPoints));
         addParam(params, "t_min", viewport?.t_min);
         addParam(params, "t_max", viewport?.t_max);

@@ -25,6 +25,7 @@ def get_oc_dotted_chart_data(
     color_by: str = "activity",
     shape_by: str = "none",
     sort_by: str = "time",
+    row_order: str = "first_occurrence",
     max_points: int = DEFAULT_MAX_POINTS,
     sample_seed: int = 0,
 ) -> dict[str, Any]:
@@ -40,6 +41,7 @@ def get_oc_dotted_chart_data(
     """
     point_limit = _clamp_max_points(max_points)
     effective_y_axis = y_axis or "activity"
+    row_order_expr = "MAX(timestamp_unix)" if row_order == "last_occurrence" else "MIN(timestamp_unix)"
     event_attr_columns = _event_attr_columns(db)
     object_attr_columns = _object_attr_columns(db)
     include_objects = any(
@@ -70,6 +72,7 @@ def get_oc_dotted_chart_data(
         y_expr=y_expr,
         color_expr=color_expr,
         shape_expr=shape_expr,
+        row_order_expr=row_order_expr,
     )
 
     total_count = db.conn.execute(
@@ -83,6 +86,7 @@ def get_oc_dotted_chart_data(
         y_expr=y_expr,
         color_expr=color_expr,
         shape_expr=shape_expr,
+        row_order_expr=row_order_expr,
     )
     dataset_total_count = db.conn.execute(
         f"SELECT COUNT(*) FROM ({dataset_dimensioned_sql}) dimensioned WHERE x IS NOT NULL AND y IS NOT NULL"
@@ -358,6 +362,7 @@ def _dimensioned_events_sql(
     y_expr: str,
     color_expr: str,
     shape_expr: str,
+    row_order_expr: str,
 ) -> str:
     return f"""
         WITH base AS ({base_sql.format(base_where_sql=base_where_sql)}),
@@ -374,7 +379,7 @@ def _dimensioned_events_sql(
             SELECT
                 *,
                 CAST(y AS VARCHAR) AS row_id,
-                MIN(timestamp_unix) OVER (PARTITION BY y) AS row_first_timestamp
+                {row_order_expr} OVER (PARTITION BY y) AS row_sort_timestamp
             FROM selected
         )
         SELECT
@@ -388,7 +393,7 @@ def _dimensioned_events_sql(
             timestamp_unix,
             row_id,
             DENSE_RANK() OVER (
-                ORDER BY row_first_timestamp, row_id
+                ORDER BY row_sort_timestamp, row_id
             ) AS row_index,
             ROW_NUMBER() OVER (
                 PARTITION BY row_id

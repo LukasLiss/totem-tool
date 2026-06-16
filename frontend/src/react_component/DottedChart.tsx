@@ -27,7 +27,7 @@ import {
   type ChartPoint,
   type DottedChartViewport,
   type OCEvent,
-  type SortOption,
+  type RowOrderOption,
 } from "./dottedChart/dottedChartUtils";
 import {
   DottedChartControls,
@@ -41,7 +41,7 @@ interface DottedChartProps {
   yAxis?: AxisOption;
   colorBy?: AxisOption;
   shapeBy?: AxisOption;
-  sortBy?: SortOption | AxisOption;
+  rowOrder?: RowOrderOption;
   maxPoints?: number;
   viewport?: DottedChartViewport;
   showControls?: boolean;
@@ -53,7 +53,7 @@ const DEFAULT_X_AXIS: AxisOption = { type: "time" };
 const DEFAULT_Y_AXIS: AxisOption = { type: "activity" };
 const DEFAULT_COLOR_BY: AxisOption = { type: "activity" };
 const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
-const DEFAULT_SORT_BY: AxisOption = { type: "time" };
+const DEFAULT_ROW_ORDER: RowOrderOption = "first_occurrence";
 const MIN_BRUSH_POINTS = 10;
 const MIN_VISIBLE_ROWS = 1;
 const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
@@ -67,7 +67,7 @@ export default function DottedChart({
   yAxis = DEFAULT_Y_AXIS,
   colorBy = DEFAULT_COLOR_BY,
   shapeBy = DEFAULT_SHAPE_BY,
-  sortBy = DEFAULT_SORT_BY,
+  rowOrder = DEFAULT_ROW_ORDER,
   maxPoints = 20_000,
   viewport,
   showControls = false,
@@ -80,10 +80,10 @@ export default function DottedChart({
       yAxis,
       colorBy,
       shapeBy,
-      sortBy,
+      rowOrder,
       maxPoints,
     }),
-    [colorBy, maxPoints, shapeBy, sortBy, xAxis, yAxis]
+    [colorBy, maxPoints, rowOrder, shapeBy, xAxis, yAxis]
   );
   const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
   const effectiveConfig = showControls ? config : defaultConfig;
@@ -112,7 +112,7 @@ export default function DottedChart({
     effectiveConfig.yAxis,
     effectiveConfig.colorBy,
     effectiveConfig.shapeBy,
-    effectiveConfig.sortBy,
+    effectiveConfig.rowOrder,
     effectiveConfig.maxPoints,
   ]);
 
@@ -122,7 +122,7 @@ export default function DottedChart({
     yAxis: effectiveConfig.yAxis,
     colorBy: effectiveConfig.colorBy,
     shapeBy: effectiveConfig.shapeBy,
-    sortBy: effectiveConfig.sortBy,
+    rowOrder: effectiveConfig.rowOrder,
     maxPoints: effectiveConfig.maxPoints,
     viewport: requestedViewport,
     sampleSeed,
@@ -1040,4 +1040,4 @@ function valueLabel(value: number | string | null | undefined): string {
   return String(value);
 }
 
-export type { AxisOption, DottedChartViewport, OCEvent, SortOption };
+export type { AxisOption, DottedChartViewport, OCEvent, RowOrderOption };

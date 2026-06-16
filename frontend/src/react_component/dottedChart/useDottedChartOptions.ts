@@ -14,7 +14,6 @@ export type DottedChartOptions = {
   y_axis: DottedChartOption[];
   color_by: DottedChartOption[];
   shape_by: DottedChartOption[];
-  sort_by: DottedChartOption[];
 };
 
 export const DEFAULT_DOTTED_CHART_OPTIONS: DottedChartOptions = {
@@ -31,13 +30,6 @@ export const DEFAULT_DOTTED_CHART_OPTIONS: DottedChartOptions = {
   ],
   shape_by: [
     { label: "None", value: "none", kind: "none" },
-    { label: "Activity", value: "activity", kind: "categorical" },
-  ],
-  sort_by: [
-    { label: "Time", value: "time", kind: "time" },
-    { label: "Timestamp", value: "timestamp", kind: "time" },
-    { label: "Timestamp (Unix)", value: "timestamp_unix", kind: "time" },
-    { label: "Since Start", value: "since_start", kind: "time" },
     { label: "Activity", value: "activity", kind: "categorical" },
   ],
 };

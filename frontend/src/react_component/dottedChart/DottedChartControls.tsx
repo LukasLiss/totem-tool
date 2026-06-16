@@ -10,7 +10,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
-import type { AxisOption, SortOption } from "./dottedChartUtils";
+import type { AxisOption, RowOrderOption } from "./dottedChartUtils";
 import {
   DEFAULT_DOTTED_CHART_OPTIONS,
   useDottedChartOptions,
@@ -22,7 +22,7 @@ export type DottedChartConfig = {
   yAxis: AxisOption;
   colorBy: AxisOption;
   shapeBy: AxisOption;
-  sortBy: SortOption | AxisOption;
+  rowOrder: RowOrderOption;
   maxPoints: number;
 };
 
@@ -35,6 +35,10 @@ type DottedChartControlsProps = {
 
 type AxisControlValue = string;
 const OBJECT_TYPE_CONTROL_VALUE = "__object_type__";
+const ROW_ORDER_OPTIONS: Array<{ label: string; value: RowOrderOption }> = [
+  { label: "First occurrence", value: "first_occurrence" },
+  { label: "Last occurrence", value: "last_occurrence" },
+];
 
 export function DottedChartControls({
   fileId,
@@ -44,8 +48,6 @@ export function DottedChartControls({
 }: DottedChartControlsProps) {
   const { options, loading: loadingOptions, error: optionsError } = useDottedChartOptions(fileId);
   const [draftConfig, setDraftConfig] = useState<DottedChartConfig>(config);
-  const sortAxis = "type" in draftConfig.sortBy ? draftConfig.sortBy : draftConfig.sortBy.field;
-  const sortDirection = "type" in draftConfig.sortBy ? "asc" : draftConfig.sortBy.direction ?? "asc";
   const hasPendingChanges = useMemo(
     () => JSON.stringify(draftConfig) !== JSON.stringify(config),
     [config, draftConfig]
@@ -55,17 +57,12 @@ export function DottedChartControls({
     [options.y_axis]
   );
   const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
-  const sortOptions = useMemo(
-    () => buildSortOptions(draftConfig.xAxis, draftConfig.yAxis, options),
-    [draftConfig.xAxis, draftConfig.yAxis, options]
-  );
   const selectOptions = useMemo(
     () => ({
       x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
       y_axis: withCurrentOption(collapseObjectTypeOptions(options.y_axis), draftConfig.yAxis),
       color_by: withCurrentOption(options.color_by, draftConfig.colorBy),
       shape_by: withCurrentOption(options.shape_by, draftConfig.shapeBy),
-      sort_by: sortOptions,
     }),
     [
       draftConfig.colorBy,
@@ -73,8 +70,6 @@ export function DottedChartControls({
       draftConfig.xAxis,
       draftConfig.yAxis,
       options,
-      sortAxis,
-      sortOptions,
     ]
   );
 
@@ -85,26 +80,8 @@ export function DottedChartControls({
   const updateDraftConfig = (patch: Partial<DottedChartConfig>) => {
     setDraftConfig((current) => ({ ...current, ...patch }));
   };
-  const updateConfigWithAxisChange = (
-    axisKey: "xAxis" | "yAxis",
-    axis: AxisOption,
-    direction: "asc" | "desc"
-  ) => {
-    setDraftConfig((current) => {
-      const nextConfig = { ...current, [axisKey]: axis };
-      const currentSortAxis = "type" in current.sortBy ? current.sortBy : current.sortBy.field;
-      const allowedSortAxes = [nextConfig.xAxis, nextConfig.yAxis];
-      const nextSortAxis = allowedSortAxes.some((allowedAxis) =>
-        areAxisOptionsEqual(allowedAxis, currentSortAxis)
-      )
-        ? currentSortAxis
-        : axis;
-
-      return {
-        ...nextConfig,
-        sortBy: { field: nextSortAxis, direction },
-      };
-    });
+  const updateConfigWithAxisChange = (axisKey: "xAxis" | "yAxis", axis: AxisOption) => {
+    setDraftConfig((current) => ({ ...current, [axisKey]: axis }));
   };
 
   return (
@@ -128,9 +105,7 @@ export function DottedChartControls({
             label="X Axis"
             value={axisToControlValue(draftConfig.xAxis)}
             options={selectOptions.x_axis}
-            onChange={(value) =>
-              updateConfigWithAxisChange("xAxis", controlValueToAxis(value), sortDirection)
-            }
+            onChange={(value) => updateConfigWithAxisChange("xAxis", controlValueToAxis(value))}
           />
           <AxisSelect
             label="Y Axis"
@@ -143,8 +118,7 @@ export function DottedChartControls({
                   value === OBJECT_TYPE_CONTROL_VALUE
                     ? objectTypeOptions[0]?.value ?? "object_id"
                     : value
-                ),
-                sortDirection
+                )
               )
             }
           />
@@ -154,7 +128,7 @@ export function DottedChartControls({
               value={selectedYObjectType}
               options={objectTypeOptions}
               onChange={(value) =>
-                updateConfigWithAxisChange("yAxis", controlValueToAxis(value), sortDirection)
+                updateConfigWithAxisChange("yAxis", controlValueToAxis(value))
               }
             />
           )}
@@ -170,29 +144,22 @@ export function DottedChartControls({
             options={selectOptions.shape_by}
             onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
           />
-          <AxisSelect
-            label="Sort By"
-            value={axisToControlValue(sortAxis)}
-            options={selectOptions.sort_by}
-            onChange={(value) =>
-              updateDraftConfig({
-                sortBy: { field: controlValueToAxis(value), direction: sortDirection },
-              })
-            }
-          />
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Sort Direction</Label>
+            <Label className="text-xs text-muted-foreground">Y Axis Order</Label>
             <select
-              value={sortDirection}
+              value={draftConfig.rowOrder}
               onChange={(event) =>
                 updateDraftConfig({
-                  sortBy: { field: sortAxis, direction: event.target.value as "asc" | "desc" },
+                  rowOrder: event.target.value as RowOrderOption,
                 })
               }
               className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
-              <option value="asc">Ascending</option>
-              <option value="desc">Descending</option>
+              {ROW_ORDER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </div>
           <div className="space-y-2 md:col-span-3 xl:col-span-6">
@@ -339,56 +306,6 @@ function getObjectTypeValue(axis: AxisOption, options: DottedChartOption[]): Axi
   const value = axisToControlValue(axis);
   if (value.startsWith("object_type:")) return value;
   return options[0]?.value ?? "";
-}
-
-function buildSortOptions(
-  xAxis: AxisOption,
-  yAxis: AxisOption,
-  options: {
-    x_axis: DottedChartOption[];
-    y_axis: DottedChartOption[];
-  }
-): DottedChartOption[] {
-  const axes = [xAxis, yAxis];
-  const sortOptions: DottedChartOption[] = [];
-
-  axes.forEach((axis) => {
-    const value = axisToControlValue(axis);
-    if (sortOptions.some((option) => option.value === value)) return;
-    sortOptions.push(findOptionForAxis(axis, options) ?? fallbackOptionForAxis(axis));
-  });
-
-  return sortOptions;
-}
-
-function findOptionForAxis(
-  axis: AxisOption,
-  options: {
-    x_axis: DottedChartOption[];
-    y_axis: DottedChartOption[];
-  }
-): DottedChartOption | undefined {
-  const value = axisToControlValue(axis);
-  return [...options.x_axis, ...options.y_axis].find((option) => option.value === value);
-}
-
-function fallbackOptionForAxis(axis: AxisOption): DottedChartOption {
-  const value = axisToControlValue(axis);
-  const fallback = findDefaultOption(value);
-  if (fallback) return fallback;
-  return {
-    label: value,
-    value,
-    kind: "categorical",
-  };
-}
-
-function areAxisOptionsEqual(left: AxisOption, right: AxisOption): boolean {
-  if (left.type !== right.type) return false;
-  if (left.type === "event_attribute" && right.type === "event_attribute") {
-    return left.name === right.name;
-  }
-  return true;
 }
 
 function findDefaultOption(value: string): DottedChartOption | undefined {

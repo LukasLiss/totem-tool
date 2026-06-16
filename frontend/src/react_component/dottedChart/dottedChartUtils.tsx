@@ -10,10 +10,7 @@ export type AxisOption =
   | { type: "event_attribute"; name: string }
   | { type: "none" };
 
-export type SortOption = {
-  field: AxisOption;
-  direction?: "asc" | "desc";
-};
+export type RowOrderOption = "first_occurrence" | "last_occurrence";
 
 export interface OCEvent {
   id: string;
@@ -77,12 +74,6 @@ export function axisOptionToParam(axis?: AxisOption | null): string | undefined 
   return axis.type;
 }
 
-export function sortOptionToParam(sortBy?: SortOption | AxisOption | null): string | undefined {
-  if (!sortBy) return undefined;
-  if ("type" in sortBy) return axisOptionToParam(sortBy);
-  return axisOptionToParam(sortBy.field);
-}
-
 export function toChartPoints(events: OCEvent[]): ChartPoint[] {
   const xValues = uniqueValues(events.map((event) => event.x));
   const yValues = uniqueValues(events.map((event) => event.y));
@@ -95,10 +86,11 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
         typeof event.x === "number"
           ? event.x
           : xIndexes.get(valueKey(event.x)) ?? Number.NaN;
-      const chartY =
+      const chartY = event.row_index ?? (
         typeof event.y === "number"
           ? event.y
-          : yIndexes.get(valueKey(event.y)) ?? Number.NaN;
+          : yIndexes.get(valueKey(event.y)) ?? Number.NaN
+      );
 
       return {
         ...event,

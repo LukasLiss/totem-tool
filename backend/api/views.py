@@ -373,6 +373,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     color_by=request.query_params.get("color_by", "activity"),
                     shape_by=request.query_params.get("shape_by", "none"),
                     sort_by=request.query_params.get("sort_by", "time"),
+                    row_order=request.query_params.get("row_order", "first_occurrence"),
                     max_points=max_points,
                     sample_seed=sample_seed,
                 )
