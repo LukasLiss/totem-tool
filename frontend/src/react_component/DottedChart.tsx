@@ -304,50 +304,22 @@ export default function DottedChart({
     setSampleSeed((current) => current + 1);
   }, [effectiveControlBrushRange, effectiveControlYBrushRange, effectiveFramePoints, effectiveFrameYTicks]);
 
-  const handleXRangeCommit = useCallback(
-    (nextRange: BrushRange) => {
-      setControlBrushRange(nextRange);
+  const handleRangeApply = useCallback(
+    (nextXRange: BrushRange, nextYRange: BrushRange) => {
+      setControlBrushRange(nextXRange);
+      setControlYBrushRange(nextYRange);
 
       if (!requestedViewport) {
-        applyZoomRange(nextRange);
+        applyZoomRange(nextXRange);
+        applyYRange(nextYRange);
         return;
       }
 
       const nextViewport = viewportFromFrameSelection(
         effectiveFramePoints,
         effectiveFrameYTicks,
-        nextRange,
-        effectiveControlYBrushRange
-      );
-      if (!nextViewport) return;
-      resetBrushOnNextPointsRef.current = true;
-      resetYBrushOnNextRowsRef.current = true;
-      setRequestedViewport(nextViewport);
-      setSampleSeed((current) => current + 1);
-    },
-    [
-      applyZoomRange,
-      effectiveControlYBrushRange,
-      effectiveFramePoints,
-      effectiveFrameYTicks,
-      requestedViewport,
-    ]
-  );
-
-  const handleYRangeCommit = useCallback(
-    (nextRange: BrushRange) => {
-      setControlYBrushRange(nextRange);
-
-      if (!requestedViewport) {
-        applyYRange(nextRange);
-        return;
-      }
-
-      const nextViewport = viewportFromFrameSelection(
-        effectiveFramePoints,
-        effectiveFrameYTicks,
-        effectiveControlBrushRange,
-        nextRange
+        nextXRange,
+        nextYRange
       );
       if (!nextViewport) return;
       resetBrushOnNextPointsRef.current = true;
@@ -357,7 +329,7 @@ export default function DottedChart({
     },
     [
       applyYRange,
-      effectiveControlBrushRange,
+      applyZoomRange,
       effectiveFramePoints,
       effectiveFrameYTicks,
       requestedViewport,
@@ -472,8 +444,7 @@ export default function DottedChart({
         yLabels={frameYLabels}
         isApplying={isZoomApplying}
         onReset={handleResetViewport}
-        onXCommit={handleXRangeCommit}
-        onYCommit={handleYRangeCommit}
+        onApply={handleRangeApply}
       />
 
       <ChartContainer
@@ -548,8 +519,7 @@ function DottedChartZoomControls({
   yLabels,
   isApplying,
   onReset,
-  onXCommit,
-  onYCommit,
+  onApply,
 }: {
   xRange: BrushRange;
   yRange: BrushRange;
@@ -561,8 +531,7 @@ function DottedChartZoomControls({
   yLabels: Map<number, string>;
   isApplying: boolean;
   onReset: () => void;
-  onXCommit: (range: BrushRange) => void;
-  onYCommit: (range: BrushRange) => void;
+  onApply: (xRange: BrushRange, yRange: BrushRange) => void;
 }) {
   const pointCount = points.length;
   const rowCount = yTicks.length;
@@ -604,21 +573,6 @@ function DottedChartZoomControls({
 
   const handleXRangeChange = useCallback(
     (values: number[]) => {
-      setDraftXRange(
-        clampBrushRange(
-          {
-            startIndex: values[0] ?? xRange.startIndex,
-            endIndex: values[1] ?? xRange.endIndex,
-          },
-          pointCount
-        )
-      );
-    },
-    [pointCount, xRange]
-  );
-
-  const handleXRangeCommit = useCallback(
-    (values: number[]) => {
       const nextRange = clampBrushRange(
         {
           startIndex: values[0] ?? xRange.startIndex,
@@ -626,12 +580,12 @@ function DottedChartZoomControls({
         },
         pointCount
       );
+      setDraftXRange(nextRange);
       setStartDateInput(formatRangeDateInput(points[nextRange.startIndex], xAxis));
       setEndDateInput(formatRangeDateInput(points[nextRange.endIndex], xAxis));
       setDateError(null);
-      onXCommit(nextRange);
     },
-    [onXCommit, pointCount, points, xRange, xAxis]
+    [pointCount, points, xRange, xAxis]
   );
 
   const handleYRangeChange = useCallback(
@@ -649,58 +603,52 @@ function DottedChartZoomControls({
     [rowCount, yRange]
   );
 
-  const handleYRangeCommit = useCallback(
-    (values: number[]) => {
-      onYCommit(
-        clampBrushRange(
-          {
-            startIndex: values[0] ?? yRange.startIndex,
-            endIndex: values[1] ?? yRange.endIndex,
-          },
-          rowCount
-        )
-      );
-    },
-    [onYCommit, rowCount, yRange]
-  );
-
-  const handleDateSubmit = useCallback(
+  const handleApplySubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
 
-      if (!supportsDateBounds) {
-        setDateError("Date bounds are only available for time-based x axes.");
-        return;
-      }
+      let nextXRange = effectiveDraftXRange;
 
-      const start = parseDateInput(startDateInput, "start");
-      const end = parseDateInput(endDateInput, "end");
+      if (supportsDateBounds) {
+        const start = parseDateInput(startDateInput, "start");
+        const end = parseDateInput(endDateInput, "end");
 
-      if (start.status === "invalid-format" || end.status === "invalid-format") {
-        setDateError("Use dd/mm/yyyy for both date bounds.");
-        return;
-      }
-      if (start.status === "invalid-date" || end.status === "invalid-date") {
-        setDateError("Enter a valid calendar date.");
-        return;
-      }
-      if (start.value > end.value) {
-        setDateError("Start date must be before end date.");
-        return;
-      }
+        if (start.status === "invalid-format" || end.status === "invalid-format") {
+          setDateError("Use dd/mm/yyyy for both date bounds.");
+          return;
+        }
+        if (start.status === "invalid-date" || end.status === "invalid-date") {
+          setDateError("Enter a valid calendar date.");
+          return;
+        }
+        if (start.value > end.value) {
+          setDateError("Start date must be before end date.");
+          return;
+        }
 
-      const nextRange = findRangeForDateBounds(points, start.value, end.value);
+        const dateRange = findRangeForDateBounds(points, start.value, end.value);
 
-      if (!nextRange) {
-        setDateError("No events found inside those dates.");
-        return;
+        if (!dateRange) {
+          setDateError("No events found inside those dates.");
+          return;
+        }
+
+        nextXRange = dateRange;
       }
 
       setDateError(null);
-      setDraftXRange(nextRange);
-      onXCommit(nextRange);
+      setDraftXRange(nextXRange);
+      onApply(nextXRange, effectiveDraftYRange);
     },
-    [endDateInput, onXCommit, points, startDateInput, supportsDateBounds]
+    [
+      effectiveDraftXRange,
+      effectiveDraftYRange,
+      endDateInput,
+      onApply,
+      points,
+      startDateInput,
+      supportsDateBounds,
+    ]
   );
 
   const handleDateInputChange = useCallback(
@@ -724,7 +672,6 @@ function DottedChartZoomControls({
             minStepsBetweenThumbs={minRowStepsBetweenThumbs}
             value={[effectiveDraftYRange.startIndex, effectiveDraftYRange.endIndex]}
             onValueChange={handleYRangeChange}
-            onValueCommit={handleYRangeCommit}
             disabled={rowCount <= 1}
             className="w-full"
           />
@@ -776,7 +723,6 @@ function DottedChartZoomControls({
             minStepsBetweenThumbs={minStepsBetweenThumbs}
             value={[effectiveDraftXRange.startIndex, effectiveDraftXRange.endIndex]}
             onValueChange={handleXRangeChange}
-            onValueCommit={handleXRangeCommit}
             disabled={pointCount <= 1}
             className="w-full"
           />
@@ -801,7 +747,7 @@ function DottedChartZoomControls({
           </div>
         </div>
 
-        <form className="flex flex-wrap items-start gap-2" onSubmit={handleDateSubmit}>
+        <form className="flex flex-wrap items-start gap-2" onSubmit={handleApplySubmit}>
           <Input
             value={startDateInput}
             onChange={handleDateInputChange(setStartDateInput)}
@@ -822,7 +768,7 @@ function DottedChartZoomControls({
             type="submit"
             variant="outline"
             size="sm"
-            disabled={!supportsDateBounds || pointCount <= 1}
+            disabled={pointCount <= 1 && rowCount <= 1}
             className="h-8"
           >
             Apply
