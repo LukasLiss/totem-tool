@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
+  ReferenceArea,
   Scatter,
   ScatterChart,
   Tooltip,
@@ -141,6 +142,7 @@ export default function DottedChart({
   const points = useMemo(() => toChartPoints(events), [events]);
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [isZoomApplying, setIsZoomApplying] = useState(false);
+  const [dragSelection, setDragSelection] = useState<DragSelection | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
   const zoomFinishFrameRef = useRef<number | null>(null);
   const effectiveBrushRange = useMemo(
@@ -356,6 +358,70 @@ export default function DottedChart({
       requestedViewport,
     ]
   );
+  const handleChartMouseDown = useCallback((event: any) => {
+    const point = chartPointFromMouseEvent(event);
+    if (!point) return;
+
+    setDragSelection({
+      startX: point.chartX,
+      endX: point.chartX,
+      startY: point.chartY,
+      endY: point.chartY,
+      isDragging: true,
+    });
+  }, []);
+  const handleChartMouseMove = useCallback((event: any) => {
+    const point = chartPointFromMouseEvent(event);
+    if (!point) return;
+
+    setDragSelection((current) =>
+      current?.isDragging
+        ? {
+            ...current,
+            endX: point.chartX,
+            endY: point.chartY,
+          }
+        : current
+    );
+  }, []);
+  const handleChartMouseUp = useCallback((event: any) => {
+    const releasePoint = chartPointFromMouseEvent(event);
+    const currentSelection = releasePoint && dragSelection
+      ? {
+          ...dragSelection,
+          endX: releasePoint.chartX,
+          endY: releasePoint.chartY,
+        }
+      : dragSelection;
+    setDragSelection(null);
+    if (!currentSelection?.isDragging) return;
+    if (currentSelection.startX === currentSelection.endX && currentSelection.startY === currentSelection.endY) return;
+
+    const xRange = brushRangeForChartXBounds(effectiveFramePoints, currentSelection);
+    const yRange = brushRangeForDisplayedYBounds(effectiveFrameYTicks, displayedYTicks, currentSelection);
+    if (!xRange || !yRange) return;
+    if (
+      xRange.startIndex === effectiveControlBrushRange.startIndex &&
+      xRange.endIndex === effectiveControlBrushRange.endIndex &&
+      yRange.startIndex === effectiveControlYBrushRange.startIndex &&
+      yRange.endIndex === effectiveControlYBrushRange.endIndex
+    ) {
+      return;
+    }
+
+    handleRangeApply(xRange, yRange);
+  }, [
+    displayedYTicks,
+    dragSelection,
+    effectiveControlBrushRange,
+    effectiveControlYBrushRange,
+    effectiveFramePoints,
+    effectiveFrameYTicks,
+    handleRangeApply,
+  ]);
+  const handleChartMouseLeave = useCallback(() => {
+    setDragSelection(null);
+  }, []);
 
   const handleResetViewport = useCallback(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
@@ -473,7 +539,14 @@ export default function DottedChart({
         className="aspect-auto shrink-0 rounded-md border bg-background p-2"
         style={{ height: CHART_HEIGHT }}
       >
-        <ScatterChart data={displayedPoints} margin={CHART_MARGIN}>
+        <ScatterChart
+          data={displayedPoints}
+          margin={CHART_MARGIN}
+          onMouseDown={handleChartMouseDown}
+          onMouseMove={handleChartMouseMove}
+          onMouseUp={handleChartMouseUp}
+          onMouseLeave={handleChartMouseLeave}
+        >
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="chartX"
@@ -506,6 +579,18 @@ export default function DottedChart({
               />
             }
           />
+          {dragSelection?.isDragging && (
+            <ReferenceArea
+              x1={Math.min(dragSelection.startX, dragSelection.endX)}
+              x2={Math.max(dragSelection.startX, dragSelection.endX)}
+              y1={Math.min(dragSelection.startY, dragSelection.endY)}
+              y2={Math.max(dragSelection.startY, dragSelection.endY)}
+              stroke="var(--ring)"
+              fill="var(--ring)"
+              fillOpacity={0.12}
+              ifOverflow="visible"
+            />
+          )}
           <Scatter
             name="Events"
             data={displayedPoints}
@@ -943,6 +1028,57 @@ function findRangeForDateBounds(
   return { startIndex, endIndex };
 }
 
+function chartPointFromMouseEvent(event: any): ChartPoint | null {
+  const payload = event?.activePayload?.[0]?.payload;
+  if (!payload || !Number.isFinite(payload.chartX) || !Number.isFinite(payload.chartY)) {
+    return null;
+  }
+  return payload as ChartPoint;
+}
+
+function brushRangeForChartXBounds(
+  points: ChartPoint[],
+  selection: DragSelection
+): BrushRange | null {
+  const minX = Math.min(selection.startX, selection.endX);
+  const maxX = Math.max(selection.startX, selection.endX);
+  let startIndex: number | null = null;
+  let endIndex: number | null = null;
+
+  points.forEach((point, index) => {
+    if (point.chartX < minX || point.chartX > maxX) return;
+    if (startIndex === null) startIndex = index;
+    endIndex = index;
+  });
+
+  if (startIndex === null || endIndex === null) return null;
+  return { startIndex, endIndex };
+}
+
+function brushRangeForDisplayedYBounds(
+  frameYTicks: number[],
+  displayedYTicks: number[],
+  selection: DragSelection
+): BrushRange | null {
+  const minDisplayedY = Math.min(selection.startY, selection.endY);
+  const maxDisplayedY = Math.max(selection.startY, selection.endY);
+  const startDisplayedIndex = Math.max(0, Math.ceil(minDisplayedY) - 1);
+  const endDisplayedIndex = Math.min(displayedYTicks.length - 1, Math.floor(maxDisplayedY) - 1);
+  const selectedTicks = displayedYTicks.slice(startDisplayedIndex, endDisplayedIndex + 1);
+  if (!selectedTicks.length) return null;
+
+  const frameIndexByTick = new Map(frameYTicks.map((tick, index) => [tick, index]));
+  const frameIndexes = selectedTicks
+    .map((tick) => frameIndexByTick.get(tick))
+    .filter((index): index is number => typeof index === "number");
+
+  if (!frameIndexes.length) return null;
+  return {
+    startIndex: Math.min(...frameIndexes),
+    endIndex: Math.max(...frameIndexes),
+  };
+}
+
 function viewportFromFrameSelection(
   points: ChartPoint[],
   yTicks: number[],
@@ -1040,6 +1176,14 @@ function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): n
 type BrushRange = {
   startIndex: number;
   endIndex: number;
+};
+
+type DragSelection = {
+  startX: number;
+  endX: number;
+  startY: number;
+  endY: number;
+  isDragging: boolean;
 };
 
 function clampBrushRange(range: BrushRange, pointCount: number): BrushRange {
