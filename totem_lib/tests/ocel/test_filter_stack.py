@@ -43,9 +43,13 @@ def test_activity_filter(ocel_db: OcelDuckDB) -> None:
     assert 0.0 < stats["object_percentage"] < 1.0
 
 def test_dict_empty_filters(ocel_db: OcelDuckDB) -> None:
-    _, stats = apply_filter_stack(ocel_db, {"filters": []})
+    filtered, stats = apply_filter_stack(ocel_db, {"filters": []})
     assert stats["event_count_after"] == TOTAL_EVENTS
     assert stats["object_count_after"] == TOTAL_OBJECTS
+    for table in ("object_attribute_history", "object_relations"):
+        orig = ocel_db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        filt = filtered.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert filt == orig
 
 def test_filterstack_no_args(ocel_db: OcelDuckDB) -> None:
     _, stats = apply_filter_stack(ocel_db, FilterStack())

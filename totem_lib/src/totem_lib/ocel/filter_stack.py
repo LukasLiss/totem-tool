@@ -116,8 +116,9 @@ def apply_filter_stack(
         A tuple ``(filtered_ocel, stats)`` where:
 
         filtered_ocel
-            A fresh in-memory OcelDuckDB containing only the surviving events and objects.  
-            If no rules are active the *original* ocel is returned unchanged.
+            A fresh in-memory OcelDuckDB containing only the surviving events,
+            objects, event-object links, object attribute history, and
+            object-to-object relations.
 
         stats
             A dict with keys:
@@ -134,7 +135,7 @@ def apply_filter_stack(
     active = [r for r in filter_stack.filters if r.enabled]
 
     # ------------------------------------------------------------------
-    # one flat WHERE clause across all filter types.
+    # One flat WHERE clause across all filter types.
     # Event conditions use the "e." prefix, object conditions use "o.".
     # ------------------------------------------------------------------
     conditions: list[str] = []
@@ -169,55 +170,73 @@ def apply_filter_stack(
                 params.append(list(include))
 
     # ------------------------------------------------------------------
-    # join events + objects through event_object and apply all conditions at once. The JOIN enforces cascade naturally — only
-    # events with a surviving object (and vice versa) appear in the result.
+    # Get before-counts, then materialise surviving IDs into a temp table
+    # so downstream copies reference it without re-binding large lists.
     # ------------------------------------------------------------------
-    if empty:
-        n_events, n_objects = ocel.conn.execute(
-            "SELECT (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM objects)"
-        ).fetchone()
-        final_event_ids: list[str] = []
-        final_obj_ids:   list[str] = []
-    else:
-        where = " AND ".join(conditions) if conditions else "TRUE"
-        row = ocel.conn.execute(
-            f"""
-            SELECT
-              (SELECT COUNT(*) FROM events)  AS before_events,
-              (SELECT COUNT(*) FROM objects) AS before_objects,
-              list(DISTINCT e.event_id)       AS final_event_ids,
-              list(DISTINCT o.obj_id)         AS final_obj_ids
-            FROM   events       e
-            JOIN   event_object eo ON e.event_id = eo.event_id
-            JOIN   objects      o  ON eo.obj_id  = o.obj_id
-            WHERE  {where}
-            """,
-            params,
-        ).fetchone()
-        n_events        = row[0]
-        n_objects       = row[1]
-        final_event_ids = row[2] or []
-        final_obj_ids   = row[3] or []
+    n_events, n_objects = ocel.conn.execute(
+        "SELECT (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM objects)"
+    ).fetchone()
 
-    # ------------------------------------------------------------------
-    # Build a new in-memory OcelDuckDB with the filtered data.
-    # ------------------------------------------------------------------
     new_conn = duckdb.connect(":memory:")
     create_ocel_schema(new_conn, ocel._event_attr_cols, ocel._obj_attr_cols)
 
-    if final_event_ids:
-        for sql, qparams, table in [
-            ("SELECT * FROM events WHERE event_id = ANY(?)",
-             [final_event_ids], "events"),
-            ("SELECT * FROM event_object WHERE event_id = ANY(?) AND obj_id = ANY(?)",
-             [final_event_ids, final_obj_ids], "event_object"),
-            ("SELECT * FROM objects WHERE obj_id = ANY(?)",
-             [final_obj_ids], "objects"),
-        ]:
-            df = ocel.conn.execute(sql, qparams).pl()
-            new_conn.register("temp", df)
-            new_conn.execute(f"INSERT INTO {table} SELECT * FROM temp")
-            new_conn.unregister("temp")
+    if empty:
+        n_after_events = 0
+        n_after_objects = 0
+    else:
+        where = " AND ".join(conditions) if conditions else "TRUE"
+        try:
+            ocel.conn.execute(
+                f"""
+                CREATE TEMP TABLE surviving AS
+                SELECT DISTINCT e.event_id, o.obj_id
+                FROM   events       e
+                JOIN   event_object eo ON e.event_id = eo.event_id
+                JOIN   objects      o  ON eo.obj_id  = o.obj_id
+                WHERE  {where}
+                """,
+                params,
+            )
+
+            n_after_events, n_after_objects = ocel.conn.execute(
+                "SELECT COUNT(DISTINCT event_id), COUNT(DISTINCT obj_id) FROM surviving"
+            ).fetchone()
+
+            for sql, table in [
+                (
+                    "SELECT * FROM events"
+                    " WHERE event_id IN (SELECT event_id FROM surviving)",
+                    "events",
+                ),
+                (
+                    "SELECT * FROM objects"
+                    " WHERE obj_id IN (SELECT obj_id FROM surviving)",
+                    "objects",
+                ),
+                (
+                    "SELECT eo.* FROM event_object eo"
+                    " WHERE eo.event_id IN (SELECT event_id FROM surviving)"
+                    "   AND eo.obj_id   IN (SELECT obj_id   FROM surviving)",
+                    "event_object",
+                ),
+                (
+                    "SELECT * FROM object_attribute_history"
+                    " WHERE obj_id IN (SELECT obj_id FROM surviving)",
+                    "object_attribute_history",
+                ),
+                (
+                    "SELECT * FROM object_relations"
+                    " WHERE source_obj_id IN (SELECT obj_id FROM surviving)"
+                    "   AND target_obj_id IN (SELECT obj_id FROM surviving)",
+                    "object_relations",
+                ),
+            ]:
+                df = ocel.conn.execute(sql).pl()
+                new_conn.register("temp", df)
+                new_conn.execute(f"INSERT INTO {table} SELECT * FROM temp")
+                new_conn.unregister("temp")
+        finally:
+            ocel.conn.execute("DROP TABLE IF EXISTS surviving")
 
     filtered_ocel = OcelDuckDB._from_prepared_connection(
         new_conn, ocel._event_attr_cols, ocel._obj_attr_cols
@@ -225,11 +244,11 @@ def apply_filter_stack(
 
     stats = {
         "event_count_before":  n_events,
-        "event_count_after":   len(final_event_ids),
-        "event_percentage":    len(final_event_ids) / n_events  if n_events  > 0 else 0.0,
+        "event_count_after":   n_after_events,
+        "event_percentage":    n_after_events  / n_events  if n_events  > 0 else 0.0,
         "object_count_before": n_objects,
-        "object_count_after":  len(final_obj_ids),
-        "object_percentage":   len(final_obj_ids)  / n_objects if n_objects > 0 else 0.0,
+        "object_count_after":  n_after_objects,
+        "object_percentage":   n_after_objects / n_objects if n_objects > 0 else 0.0,
     }
 
     return filtered_ocel, stats
