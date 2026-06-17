@@ -61,6 +61,7 @@ const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
 const Y_AXIS_WIDTH = 180;
 const CHART_HEIGHT = 500;
 const MAX_Y_TICK_LABEL_LENGTH = 24;
+const MAX_VISIBLE_Y_AXIS_LABELS = 20;
 const EMPTY_EVENTS: OCEvent[] = [];
 
 export default function DottedChart({
@@ -222,6 +223,10 @@ export default function DottedChart({
   const displayedYAxisTicks = useMemo(
     () => displayedYTicks.map((_, index) => index + 1),
     [displayedYTicks]
+  );
+  const displayedYAxisLabelTicks = useMemo(
+    () => sampleAxisTicks(displayedYAxisTicks, MAX_VISIBLE_Y_AXIS_LABELS),
+    [displayedYAxisTicks]
   );
   const xDomain = useMemo(() => getDataDomain(displayedPoints.map((point) => point.chartX)), [displayedPoints]);
   const yDomain = useMemo(() => getRowDomain(displayedYAxisTicks), [displayedYAxisTicks]);
@@ -498,7 +503,7 @@ export default function DottedChart({
             name="y"
             type="number"
             domain={yDomain}
-            ticks={displayedYAxisTicks}
+            ticks={displayedYAxisLabelTicks}
             interval={0}
             allowDecimals={false}
             tick={(props) => <DottedChartYAxisTick {...props} labels={displayedYLabels} />}
@@ -1003,6 +1008,21 @@ function getDataDomain(values: number[]): [number, number] {
 function getRowDomain(values: number[]): [number, number] {
   const [min, max] = getDataDomain(values);
   return [min - 0.5, max + 0.5];
+}
+
+function sampleAxisTicks(ticks: number[], maxLabels: number): number[] {
+  if (ticks.length <= maxLabels) return ticks;
+  if (maxLabels <= 0) return [];
+  if (maxLabels === 1) return [ticks[0]];
+
+  const lastIndex = ticks.length - 1;
+  const sampled = new Set<number>();
+
+  for (let index = 0; index < maxLabels; index += 1) {
+    sampled.add(ticks[Math.round((index * lastIndex) / (maxLabels - 1))]);
+  }
+
+  return ticks.filter((tick) => sampled.has(tick));
 }
 
 function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): number[] {
