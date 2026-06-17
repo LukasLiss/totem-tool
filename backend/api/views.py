@@ -900,6 +900,8 @@ def ochandover(request):
         if isinstance(raw, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
             cluster_map = raw
 
+    cluster_by_ot = p.get("cluster_by_ot", "false").lower() in ("true", "1", "yes")
+
     try:
         EventLog.objects.get(pk=file_id, project__users=request.user)
     except EventLog.DoesNotExist:
@@ -970,7 +972,7 @@ def ochandover(request):
                         return Response({"error": "min_parallel_observations must be at least 1"}, status=status.HTTP_400_BAD_REQUEST)
                 except ValueError:
                     return Response({"error": "Invalid min_parallel_observations value"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map, cluster_by_ot=cluster_by_ot)
     except Exception as e:
         import traceback
         traceback.print_exc()

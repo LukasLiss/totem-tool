@@ -104,6 +104,7 @@ export default function OCHandoverExplorer({
   const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const { clusterInfo } = useContext(ClusterContext);
   const [useClusters, setUseClusters] = useState(false);
+  const [clusterByOt, setClusterByOt] = useState(false);
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [logError, setLogError] = useState("");
@@ -189,7 +190,7 @@ export default function OCHandoverExplorer({
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
     setErrorMsg("");
-  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs]);
+  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs, clusterByOt]);
 
   // Reset selected node and locked height when data changes
   useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); graphPositionsRef.current = {}; }, [data]);
@@ -296,6 +297,7 @@ export default function OCHandoverExplorer({
         params.parallel_threshold = String(parallelThreshold);
         params.min_parallel_observations = String(minParallelObs);
       }
+      if (clusterByOt) params.cluster_by_ot = "true";
     } else {
       params.case_type = caseType;
       params.resource_type = flatResourceType;
@@ -659,7 +661,7 @@ export default function OCHandoverExplorer({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={selectedMlpaLevel === null}
+                disabled={selectedMlpaLevel === null || (useClusters && !!clusterInfo)}
                 onClick={() => {
                   if (selectedMlpaLevel === null) return;
                   const boSet = new Set(
@@ -704,7 +706,7 @@ export default function OCHandoverExplorer({
               <Switch
                 id="use-clusters"
                 checked={useClusters && !!clusterInfo}
-                onCheckedChange={v => setUseClusters(v)}
+                onCheckedChange={v => { setUseClusters(v); if (v) setClusterByOt(false); }}
                 disabled={!clusterInfo}
               />
               <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
@@ -722,6 +724,16 @@ export default function OCHandoverExplorer({
                 Compute clusters in Resource-Activity Matrix first.
               </p>
             )}
+            <div className="flex items-center gap-2 mt-2">
+              <Switch
+                id="cluster-by-ot"
+                checked={clusterByOt}
+                onCheckedChange={v => { setClusterByOt(v); if (v) setUseClusters(false); }}
+              />
+              <Label htmlFor="cluster-by-ot" className="text-sm cursor-pointer">
+                Cluster by Object Type
+              </Label>
+            </div>
           </div>
         )}
 
@@ -1314,8 +1326,12 @@ function HandoverGraph({
     const pad = NODE_R + 20;
     const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
     const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
-    const w = (maxX - minX) * 1.15, h = (maxY - minY) * 1.15;
-    setViewBox({ x: minX - (w - (maxX - minX)) / 2, y: minY - (h - (maxY - minY)) / 2, w, h });
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    // Minimum size ensures self-loops (which arch ~NODE_R*2.4 above the node) remain visible.
+    const MIN_VB = NODE_R * 10;
+    const w = Math.max((maxX - minX) * 1.15, MIN_VB);
+    const h = Math.max((maxY - minY) * 1.15, MIN_VB);
+    setViewBox({ x: cx - w / 2, y: cy - h / 2, w, h });
   };
 
   // Node drag handlers
