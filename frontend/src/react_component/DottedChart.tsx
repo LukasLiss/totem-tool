@@ -359,6 +359,7 @@ export default function DottedChart({
     ]
   );
   const handleChartMouseDown = useCallback((event: any) => {
+    preventDefaultMouseAction(event);
     const point = chartPointFromMouseEvent(event);
     if (!point) return;
 
@@ -371,6 +372,7 @@ export default function DottedChart({
     });
   }, []);
   const handleChartMouseMove = useCallback((event: any) => {
+    preventDefaultMouseAction(event);
     const point = chartPointFromMouseEvent(event);
     if (!point) return;
 
@@ -385,6 +387,7 @@ export default function DottedChart({
     );
   }, []);
   const handleChartMouseUp = useCallback((event: any) => {
+    preventDefaultMouseAction(event);
     const releasePoint = chartPointFromMouseEvent(event);
     const currentSelection = releasePoint && dragSelection
       ? {
@@ -536,8 +539,9 @@ export default function DottedChart({
 
       <ChartContainer
         config={{ events: { label: "Events", color: "var(--chart-1)" } }}
-        className="aspect-auto shrink-0 rounded-md border bg-background p-2"
+        className="aspect-auto shrink-0 select-none rounded-md border bg-background p-2"
         style={{ height: CHART_HEIGHT }}
+        onMouseDownCapture={(event) => event.preventDefault()}
       >
         <ScatterChart
           data={displayedPoints}
@@ -1034,6 +1038,11 @@ function chartPointFromMouseEvent(event: any): ChartPoint | null {
     return null;
   }
   return payload as ChartPoint;
+}
+
+function preventDefaultMouseAction(event: any) {
+  event?.preventDefault?.();
+  event?.event?.preventDefault?.();
 }
 
 function brushRangeForChartXBounds(
