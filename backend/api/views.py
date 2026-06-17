@@ -2082,6 +2082,35 @@ def OCDFGViewSet(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+def _sim_tmp_dir() -> str:
+    """Directory holding simulated logs that have not (yet) been kept by the user.
+
+    These files back a finished simulation run (graph edit distance, download,
+    and the optional "keep as event log" step) without creating an EventLog
+    row, so trial runs don't clutter the user's file list.
+    """
+    d = os.path.join(settings.MEDIA_ROOT, "sim_tmp")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _cleanup_sim_tmp(max_age_s: int = 7200) -> None:
+    """Delete unsaved simulation temp files older than ``max_age_s``.
+
+    Runs opportunistically on each simulation so logs the user never kept (and
+    whose cache entry has long expired) don't accumulate on disk.
+    """
+    d = _sim_tmp_dir()
+    now = dt.datetime.now().timestamp()
+    for name in os.listdir(d):
+        path = os.path.join(d, name)
+        try:
+            if os.path.isfile(path) and now - os.path.getmtime(path) > max_age_s:
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def _export_ocel_to_json(ocel) -> str:
     """Export an ObjectCentricEventLog to an OCEL 2.0 JSON string.
 
@@ -2202,24 +2231,35 @@ def run_simulation(request):
             traceback.print_exc()
             evaluation_error = str(eval_err)
 
-        # Save simulated OCEL as a new EventLog entry (standard OCEL 2.0 JSON).
+        # Persist the simulated OCEL (standard OCEL 2.0 JSON) to a temporary file
+        # only -- NOT as an EventLog. It is integrated into the user's event log
+        # collection lazily, when the user explicitly chooses to keep it (see
+        # simulation_save_log). Keeping it out of the EventLog table avoids
+        # cluttering the file list with every trial run.
+        _cleanup_sim_tmp()
         original_log = EventLog.objects.get(pk=file_id)
         original_name = os.path.splitext(os.path.basename(original_log.file.name))[0]
         timestamp_str = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         sim_filename = f"{original_name}_sim_{timestamp_str}.json"
 
         json_content = _export_ocel_to_json(sim_log)
-        sim_log_entry = EventLog(project=original_log.project)
-        sim_log_entry.file.save(sim_filename, ContentFile(json_content.encode("utf-8")), save=True)
-
-        # Cache only the actual (filtered) OCEL plus a reference to the persisted
-        # simulated log, so the expensive graph edit distance can be computed
-        # lazily by reloading the simulated log from its EventLog file instead of
-        # holding a second full copy of the whole log in memory.
         sim_run_id = uuid.uuid4().hex
+        tmp_path = os.path.join(_sim_tmp_dir(), f"{sim_run_id}.json")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(json_content)
+
+        # Cache the actual (filtered) OCEL plus the path to the simulated log's
+        # temp file, so the expensive graph edit distance can be computed lazily
+        # by reloading the simulated log from disk instead of holding a second
+        # full copy of the whole log in memory.
         cache.set(
             f"sim_run_{sim_run_id}",
-            {"actual_ocel": filtered_ocel, "simulated_file_id": sim_log_entry.id},
+            {
+                "actual_ocel": filtered_ocel,
+                "simulated_tmp_path": tmp_path,
+                "sim_filename": sim_filename,
+                "project_id": original_log.project_id,
+            },
             timeout=3600,
         )
 
@@ -2233,12 +2273,8 @@ def run_simulation(request):
             "evaluation": evaluation,
             "evaluation_error": evaluation_error,
             "sim_run_id": sim_run_id,
-            "simulated_file": {
-                "id": sim_log_entry.id,
-                "project": sim_log_entry.project_id,
-                "file": sim_log_entry.file.name,
-                "uploaded_at": sim_log_entry.uploaded_at.isoformat(),
-            },
+            "simulated_filename": sim_filename,
+            "simulated_saved": False,
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
@@ -2259,7 +2295,7 @@ def simulation_graph_edit_distance(request):
     The frontend calls this after the cheap metrics are already shown, using
     the ``sim_run_id`` returned by ``run_simulation``. The actual (filtered)
     OCEL is looked up from the server-side cache, while the simulated log is
-    reloaded from its persisted EventLog file rather than kept fully in memory.
+    reloaded from its temp file rather than kept fully in memory.
     """
     sim_run_id = request.data.get("sim_run_id")
     if not sim_run_id:
@@ -2273,24 +2309,125 @@ def simulation_graph_edit_distance(request):
         )
 
     filtered_ocel = cached["actual_ocel"]
-    simulated_file_id = cached["simulated_file_id"]
+    tmp_path = cached.get("simulated_tmp_path")
 
-    try:
-        sim_file = EventLog.objects.get(pk=simulated_file_id, project__users=request.user)
-    except EventLog.DoesNotExist:
+    if not tmp_path or not os.path.exists(tmp_path):
         return Response(
             {"error": "Simulated event log no longer available. Re-run the simulation."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
     try:
-        sim_log = _build_ocel_from_path(sim_file.file.path)
+        sim_log = _build_ocel_from_path(tmp_path)
         value = compute_graph_edit_distance(filtered_ocel, sim_log, timeout_s=1.0)
         return Response({"graph_edit_distance": value}, status=status.HTTP_200_OK)
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({"error": f"Graph edit distance computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def simulation_save_log(request):
+    """Keep a finished simulation run as an EventLog in the user's collection.
+
+    A simulated log is only persisted (and thus shown in the file list) when the
+    user explicitly chooses to keep it. Until then it lives only as a temporary
+    file referenced by the cached simulation run. Idempotent: calling it twice
+    for the same ``sim_run_id`` returns the already-saved entry.
+    """
+    sim_run_id = request.data.get("sim_run_id")
+    if not sim_run_id:
+        return Response({"error": "Missing sim_run_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    cached = cache.get(f"sim_run_{sim_run_id}")
+    if cached is None:
+        return Response(
+            {"error": "Simulation result expired. Re-run the simulation to keep the log."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    existing_id = cached.get("saved_file_id")
+    if existing_id:
+        try:
+            existing = EventLog.objects.get(pk=existing_id, project__users=request.user)
+            return Response(
+                {
+                    "id": existing.id,
+                    "project": existing.project_id,
+                    "file": existing.file.name,
+                    "uploaded_at": existing.uploaded_at.isoformat(),
+                },
+                status=status.HTTP_200_OK,
+            )
+        except EventLog.DoesNotExist:
+            pass
+
+    tmp_path = cached.get("simulated_tmp_path")
+    if not tmp_path or not os.path.exists(tmp_path):
+        return Response(
+            {"error": "Simulated event log no longer available. Re-run the simulation."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        project = Project.objects.get(pk=cached["project_id"], users=request.user)
+    except Project.DoesNotExist:
+        return Response({"error": "Project not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    with open(tmp_path, "r", encoding="utf-8") as fh:
+        json_content = fh.read()
+
+    sim_log_entry = EventLog(project=project)
+    sim_log_entry.file.save(cached["sim_filename"], ContentFile(json_content.encode("utf-8")), save=True)
+
+    cached["saved_file_id"] = sim_log_entry.id
+    cache.set(f"sim_run_{sim_run_id}", cached, timeout=3600)
+
+    return Response(
+        {
+            "id": sim_log_entry.id,
+            "project": sim_log_entry.project_id,
+            "file": sim_log_entry.file.name,
+            "uploaded_at": sim_log_entry.uploaded_at.isoformat(),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def simulation_download_log(request):
+    """Stream a finished simulation run's log for download without persisting it.
+
+    Lets the user export the simulated OCEL 2.0 JSON straight from the temp file,
+    so they can download a trial run without adding it to their event logs.
+    """
+    sim_run_id = request.query_params.get("sim_run_id")
+    if not sim_run_id:
+        return Response({"error": "Missing sim_run_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    cached = cache.get(f"sim_run_{sim_run_id}")
+    if cached is None:
+        return Response(
+            {"error": "Simulation result expired. Re-run the simulation to download the log."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    tmp_path = cached.get("simulated_tmp_path")
+    if not tmp_path or not os.path.exists(tmp_path):
+        return Response(
+            {"error": "Simulated event log no longer available. Re-run the simulation."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    with open(tmp_path, "r", encoding="utf-8") as fh:
+        json_content = fh.read()
+
+    response = HttpResponse(json_content, content_type="application/json")
+    response["Content-Disposition"] = f'attachment; filename="{cached["sim_filename"]}"'
+    return response
 
 
 @api_view(['GET'])

@@ -114,7 +114,8 @@ export type SimulationResult = {
   evaluation: PaperEvaluationResult | null;
   evaluation_error?: string | null;
   sim_run_id?: string;
-  simulated_file?: SimulatedFileInfo;
+  simulated_filename?: string;
+  simulated_saved?: boolean;
 };
 
 export type VariantArrivalDistribution = {
@@ -206,6 +207,45 @@ export async function runSimulation(config: SimulationConfig): Promise<Simulatio
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// Keep a simulated run as an event log in the user's collection. Only call this
+// when the user explicitly chooses to keep the log; until then the simulated
+// log lives only as a temporary file on the server.
+export async function saveSimulatedLog(simRunId: string): Promise<SimulatedFileInfo> {
+  const res = await authFetch(`${BASE_URL}/simulation/save-log/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sim_run_id: simRunId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// Download a simulated run's OCEL 2.0 JSON without persisting it as an event log.
+export async function downloadSimulatedLog(
+  simRunId: string,
+  filename = "simulated_log.json",
+): Promise<void> {
+  const res = await authFetch(
+    `${BASE_URL}/simulation/download-log/?sim_run_id=${encodeURIComponent(simRunId)}`,
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Download failed: ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export async function fetchGraphEditDistance(simRunId: string): Promise<number | null> {

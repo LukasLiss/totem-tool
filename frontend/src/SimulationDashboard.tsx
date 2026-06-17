@@ -13,6 +13,8 @@ import {
   fetchSimulationDetails,
   runSimulation,
   fetchGraphEditDistance,
+  saveSimulatedLog,
+  downloadSimulatedLog,
   ProcessAreaInfo,
   ProcessAreasResponse,
   SimulationConfig,
@@ -25,7 +27,6 @@ import {
   AllocationStrategy,
   PaperEvaluationResult,
 } from "@/api/simulationApi";
-import { downloadOcelExport } from "@/api/fileApi";
 import { toast } from "sonner";
 import { ArrivalDistributionEditor } from "@/components/simulation/ArrivalDistributionEditor";
 import { ResourceCalendarEditor } from "@/components/simulation/ResourceCalendarEditor";
@@ -125,7 +126,7 @@ const datetimeLocalToUnix = (s: string): number | null => {
 };
 
 export const SimulationDashboard: React.FC = () => {
-  const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
+  const { selectedFile } = useContext(SelectedFileContext);
   const fileId = selectedFile?.id;
 
   // Phase management
@@ -1162,7 +1163,7 @@ export const SimulationDashboard: React.FC = () => {
             "Generating arrival schedule",
             "Allocating resources and simulating events",
             "Computing evaluation metrics",
-            "Saving simulated event log",
+            "Preparing simulated event log",
           ]} />
         </div>
       )}
@@ -1182,50 +1183,84 @@ export const SimulationDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Switch to simulated event log */}
-          {result.simulated_file && (
-            <Card>
-              <CardContent className="py-3 flex items-center justify-between">
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Simulated event log saved: </span>
-                  <span className="font-medium">{result.simulated_file.file.split("/").pop()}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const simFile = result.simulated_file!;
-                      const name = simFile.file.split("/").pop() || "simulated_log.json";
-                      try {
-                        await downloadOcelExport(simFile.id, name);
-                      } catch (err) {
-                        toast.error("Export failed", {
-                          description: err instanceof Error ? err.message : String(err),
-                        });
-                      }
-                    }}
-                  >
-                    Download OCEL 2.0 JSON
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setSelectedFile(result.simulated_file);
-                    }}
-                  >
-                    Open as Event Log
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Keep / download the simulated event log */}
+          <SimulatedLogCard simRunId={result.sim_run_id} filename={result.simulated_filename} />
 
           <SimulationResults result={result} />
         </>
       )}
     </div>
+  );
+};
+
+// Lets the user download the simulated log or keep it as an event log. The
+// simulated run is held server-side as a temp file and only persisted into the
+// user's event log collection when they explicitly keep it here.
+const SimulatedLogCard: React.FC<{ simRunId?: string; filename?: string }> = ({
+  simRunId,
+  filename,
+}) => {
+  const { setSelectedFile } = useContext(SelectedFileContext);
+  const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  if (!simRunId) return null;
+  const displayName = filename || "simulated_log.json";
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      await downloadSimulatedLog(simRunId, displayName);
+    } catch (err) {
+      toast.error("Download failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleKeep = async () => {
+    setSaving(true);
+    try {
+      const savedFile = await saveSimulatedLog(simRunId);
+      setSaved(true);
+      setSelectedFile(savedFile);
+      toast.success("Simulated log added to your event logs", {
+        description: savedFile.file.split("/").pop(),
+      });
+    } catch (err) {
+      toast.error("Could not keep simulated log", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="py-3 flex items-center justify-between">
+        <div className="text-sm">
+          <span className="text-muted-foreground">Simulated event log: </span>
+          <span className="font-medium">{displayName}</span>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {saved
+              ? "Added to your event logs."
+              : "Not added to your event logs yet — keep it to use it for further analysis."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={downloading} onClick={handleDownload}>
+            Download OCEL 2.0 JSON
+          </Button>
+          <Button size="sm" disabled={saving || saved} onClick={handleKeep}>
+            {saved ? "Kept as Event Log" : saving ? "Saving…" : "Keep as Event Log"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 };
 
