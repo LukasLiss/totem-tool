@@ -103,7 +103,7 @@ def test_oc_dotted_chart_exposes_object_dimensions_for_configuration():
     assert {"object_id", "object_type:Container", "object_type:Customer Order", "qualifier", "object_attr:Container:Status"} <= y_values
     assert "object_attr:Vehicle:DepartureDate" not in y_values
     assert "object_attr:Vehicle:DepartureDate" in x_values
-    assert "object_attr:Transport Document:AmountofContainers" not in y_values
+    assert "object_attr:Transport Document:AmountofContainers" in y_values
 
     result = get_oc_dotted_chart_data(db, y_axis="object_type:Container", color_by="object_attr:Container:Status", max_points=250)
     container_ids = {

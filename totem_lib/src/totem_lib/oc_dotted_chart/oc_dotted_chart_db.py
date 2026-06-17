@@ -237,7 +237,6 @@ def get_oc_dotted_chart_data(
 def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]]]:
     event_attr_columns = _event_attr_columns(db)
     object_attr_columns = _object_attr_columns(db)
-    object_attr_types = _object_attr_column_types(db)
     object_types = _object_types(db)
     attr_options = [
         {
@@ -255,7 +254,7 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         }
         for object_type in object_types
     ]
-    object_attr_options = _object_attr_options_by_type(db, object_attr_columns, object_attr_types)
+    object_attr_options = _object_attr_options_by_type(db, object_attr_columns)
     object_options = [
         {"value": "object_id", "label": "Object ID", "kind": "categorical"},
         {"value": "object_type", "label": "Object Type", "kind": "categorical"},
@@ -487,23 +486,14 @@ def _object_attr_columns(db: OcelDuckDB) -> list[str]:
     return [row[1] for row in rows if row[1] not in fixed_columns]
 
 
-def _object_attr_column_types(db: OcelDuckDB) -> dict[str, str]:
-    fixed_columns = {"obj_id", "obj_type"}
-    rows = db.conn.execute("PRAGMA table_info('objects')").fetchall()
-    return {row[1]: row[2] for row in rows if row[1] not in fixed_columns}
-
-
 def _object_attr_options_by_type(
     db: OcelDuckDB,
     columns: list[str],
-    column_types: dict[str, str],
 ) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
 
     for column in columns:
-        kind = _object_attr_kind(db, column, column_types.get(column, ""))
-        if kind == "numeric":
-            continue
+        kind = "time" if _is_time_related_column(column) else "categorical"
 
         rows = db.conn.execute(
             f"""
@@ -551,35 +541,6 @@ def _quote_literal(value: str) -> str:
 def _is_time_related_column(column: str) -> bool:
     normalized = column.lower()
     return any(token in normalized for token in ("time", "timestamp", "date", "datetime"))
-
-
-def _object_attr_kind(db: OcelDuckDB, column: str, duckdb_type: str) -> str:
-    if _is_time_related_column(column):
-        return "time"
-    normalized_type = duckdb_type.upper()
-    if any(
-        token in normalized_type
-        for token in ("INT", "DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC")
-    ):
-        return "numeric"
-    if _object_attr_values_are_numeric(db, column):
-        return "numeric"
-    return "categorical"
-
-
-def _object_attr_values_are_numeric(db: OcelDuckDB, column: str) -> bool:
-    row = db.conn.execute(
-        f"""
-        SELECT
-            COUNT(*) AS total_count,
-            COUNT(TRY_CAST({_quote_identifier(column)} AS DOUBLE)) AS numeric_count
-        FROM objects
-        WHERE {_quote_identifier(column)} IS NOT NULL
-        """
-    ).fetchone()
-    total_count = int(row[0] or 0)
-    numeric_count = int(row[1] or 0)
-    return total_count > 0 and total_count == numeric_count
 
 
 def _humanize_column_name(column: str) -> str:
