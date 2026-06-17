@@ -299,26 +299,14 @@ export default function DottedChart({
     };
   }, []);
 
-  const applyZoomRange = useCallback((nextRange: BrushRange) => {
+  const applyRanges = useCallback((nextXRange: BrushRange, nextYRange: BrushRange) => {
     if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current);
     if (zoomFinishFrameRef.current !== null) window.cancelAnimationFrame(zoomFinishFrameRef.current);
 
     setIsZoomApplying(true);
     zoomFrameRef.current = window.requestAnimationFrame(() => {
-      setBrushRange(nextRange);
-      zoomFinishFrameRef.current = window.requestAnimationFrame(() => {
-        setIsZoomApplying(false);
-      });
-    });
-  }, []);
-
-  const applyYRange = useCallback((nextRange: BrushRange) => {
-    if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current);
-    if (zoomFinishFrameRef.current !== null) window.cancelAnimationFrame(zoomFinishFrameRef.current);
-
-    setIsZoomApplying(true);
-    zoomFrameRef.current = window.requestAnimationFrame(() => {
-      setYBrushRange(nextRange);
+      setBrushRange(nextXRange);
+      setYBrushRange(nextYRange);
       zoomFinishFrameRef.current = window.requestAnimationFrame(() => {
         setIsZoomApplying(false);
       });
@@ -345,8 +333,7 @@ export default function DottedChart({
       setControlYBrushRange(nextYRange);
 
       if (!requestedViewport) {
-        applyZoomRange(nextXRange);
-        applyYRange(nextYRange);
+        applyRanges(nextXRange, nextYRange);
         return;
       }
 
@@ -363,8 +350,7 @@ export default function DottedChart({
       setSampleSeed((current) => current + 1);
     },
     [
-      applyYRange,
-      applyZoomRange,
+      applyRanges,
       effectiveFramePoints,
       effectiveFrameYTicks,
       requestedViewport,
