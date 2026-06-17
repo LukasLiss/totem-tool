@@ -242,6 +242,40 @@ def _get_node_objects(graph, node):
     return objects
 
 
+def _next_resource_free(blocked_resources, tick):
+    """
+    Earliest tick at which a currently blocked resource frees again, or None if
+    none are blocked. A resource-blocked instance cannot make progress before
+    this time
+    """
+    future = [cd for _, cd in blocked_resources if cd > tick]
+    return min(future) if future else None
+
+
+def _earliest_future_ready(inst, tick, activity_delays):
+    """
+    Earliest future ``ready_at`` among the instance's currently enabled nodes
+    (duration model), or None if every enabled node is already due.
+    """
+    ready_at = inst["ready_at"]
+    preds_map = inst["preds_map"]
+    finish_tick = inst["finish_tick"]
+    node_labels = inst["node_labels"]
+    earliest = None
+    for n in inst["enabled_set"]:
+        preds = preds_map[n]
+        if not preds:
+            continue  # start node: due now, not a future wake
+        ra = ready_at.get(n)
+        if ra is None:
+            enabling_tick = max(finish_tick[p] for p in preds)
+            ra = enabling_tick + _sample_activity_delay(node_labels[n], activity_delays)
+            ready_at[n] = ra
+        if ra > tick and (earliest is None or ra < earliest):
+            earliest = ra
+    return earliest
+
+
 def _select_by_strategy(available_rids, strategy):
     """Pick a resource ID from available list based on allocation strategy."""
     if not available_rids:
@@ -365,11 +399,12 @@ def _allocate_single_type(n, free, constraints, vb, strategy):
         return None
 
     # --- remaining slots: pick by summed inclusion cost ---
+    # Inclusion cost
+    costs = {r: _inclusion_cost(r, restrictive, weights) for r in free_pool}
     for _ in range(n - len(selected)):
         if not free_pool:
             return None
 
-        costs = {r: _inclusion_cost(r, restrictive, weights) for r in free_pool}
         compliant = [r for r in free_pool if costs[r] == 0]
         violating = [r for r in free_pool if costs[r] > 0]
 
@@ -407,6 +442,7 @@ def _allocate_resources(
     needed_res_types,
     simulation_config,
     violation_budget,
+    prior_assignments_full=None,
 ):
     """
     Allocate resources for an activity, respecting the given constraints.
@@ -441,6 +477,10 @@ def _allocate_resources(
         needed_res_types: Dict {res_type: count} — how many of each type this activity needs.
         simulation_config: Config of the Simulation Model.
         violation_budget: The instance's _ViolationBudget (spent on a working copy).
+        prior_assignments_full: Optional pre-built {activity: {res_type: [res_id, ...]}}
+            covering the instance's full history (maintained incrementally by the
+            caller). Used directly when no lookback window is configured to avoid
+            rescanning ``simulated_events`` on every allocation.
 
     Returns:
         (assignment, budget) where assignment is {res_type: [res_id, ...]} and
@@ -466,16 +506,20 @@ def _allocate_resources(
             assignment[res_type] = selected
         return assignment, violation_budget
 
-    # Apply lookback limit to simulated events
+    # Resolve the prior resource assignments to check constraints against.
     lookback = simulation_config.constraint_lookback_length
-    previous_events_limited = simulated_events
     if lookback is not None:
-        previous_events_limited = simulated_events[-lookback:]
+        prior_assignments = _get_resources_by_activity(
+            simulated_events[-lookback:], resource_id_type_map
+        )
+    elif prior_assignments_full is not None:
+        prior_assignments = prior_assignments_full
+    else:
+        prior_assignments = _get_resources_by_activity(
+            simulated_events, resource_id_type_map
+        )
 
     constraints_for_activity = variant_constraints.get(activity, {})
-    prior_assignments = _get_resources_by_activity(
-        previous_events_limited, resource_id_type_map
-    )
 
     # ── Phase 1: Collect the raw constraints per resource type ──
     constraints_by_type = defaultdict(list)  # res_type -> [(ctype, frozenset), ...]
@@ -783,7 +827,7 @@ class VariantPlayoutStrategy:
             start_datetime = dt.datetime.fromtimestamp(
                 simulation_model.source_log_start_unix, tz=dt.timezone.utc
             )
-
+        print("Started Simulation")
         allocation_strategy = simulation_model.resource_allocation_strategy
         cooldown_dist = simulation_model.resource_cooldown_distribution
         resource_constraints = simulation_model.resource_constraints or {}
@@ -824,13 +868,10 @@ class VariantPlayoutStrategy:
         schedule_idx = 0
 
         # --- Main simulation loop ---
-        ticks = list(range(0, sim_duration_s, tick_size_s))
-        ticks.append(
-            sim_duration_s
-        )  # Append final tick to ensure all arrivals are spawned
-
-        for tick in ticks:
-
+        # Event-aware ticking: step tick-by-tick while instances are active, but
+        # fast-forward over empty stretches straight to the next arrival's tick.
+        tick = 0
+        while True:
             # Phase A: Spawn new instances from arrival schedule
             while schedule_idx < len(schedule) and schedule[schedule_idx][0] <= tick:
                 _, variant = schedule[schedule_idx]
@@ -860,10 +901,24 @@ class VariantPlayoutStrategy:
                     total_slots, simulation_config
                 )
 
+                # Precompute the static graph structure
+                nodes = list(inst_graph.nodes())
+                preds_map = {n: tuple(inst_graph.predecessors(n)) for n in nodes}
+                node_objects = {n: _get_node_objects(inst_graph, n) for n in nodes}
+                node_labels = {n: inst_graph.nodes[n]["label"] for n in nodes}
+                pending_preds = {n: len(preds_map[n]) for n in nodes}
+                enabled_set = {n for n in nodes if pending_preds[n] == 0}
+
                 active_executions.append(
                     {
                         "id": instance_counter,
-                        "event_object_graph": inst_graph,
+                        "succ_map": {n: tuple(inst_graph.successors(n)) for n in nodes},
+                        "preds_map": preds_map,
+                        "node_objects": node_objects,
+                        "node_labels": node_labels,
+                        "pending_preds": pending_preds,
+                        "enabled_set": enabled_set,
+                        "total_nodes": len(nodes),
                         "finished_nodes": set(),
                         "simulated_events": [],
                         "variant": variant,
@@ -872,6 +927,9 @@ class VariantPlayoutStrategy:
                         "spawn_tick": tick,
                         "finish_tick": {},
                         "ready_at": {},
+                        "needed_res": {},
+                        "resources_by_activity": {},
+                        "next_wake": tick,
                     }
                 )
 
@@ -887,60 +945,74 @@ class VariantPlayoutStrategy:
             blocked_resources -= freed
 
             # Phase C: Try executing enabled activities for each active instance.
-            # Reshuffle the queue every tick so resource grants not systematically favour earlier-spawned instances.
-            random.shuffle(active_executions)
+            # Only instances that are due this tick are examined; 
             next_active = []
+            due_instances = []
             for inst in active_executions:
-                graph = inst["event_object_graph"]
-
-                # Find enabled nodes: all predecessors already done
-                enabled = [
-                    n
-                    for n in graph.nodes()
-                    if n not in inst["finished_nodes"]
-                    and all(p in inst["finished_nodes"] for p in graph.predecessors(n))
-                ]
-                # Randomise the order of concurrently enabled nodes so
-                # no graph-iteration-order bias decides which one gets
-                # resources first.
+                if inst["next_wake"] <= tick:
+                    due_instances.append(inst)
+                else:
+                    next_active.append(inst)  
+            # Reshuffle instances to avoid FIFO bias
+            random.shuffle(due_instances)
+            for inst in due_instances:
+                finished_nodes = inst["finished_nodes"]
+                preds_map = inst["preds_map"]
+                node_labels = inst["node_labels"]
+                ready_at = inst["ready_at"]
+                finish_tick = inst["finish_tick"]
+                needed_res_cache = inst["needed_res"]
+                enabled = list(inst["enabled_set"])
+                # Randomise the order of concurrently enabled nodes
                 random.shuffle(enabled)
 
+                # Track whether the instance made progress or was held back by
+                # resource availability, to schedule its next examination
+                fired_any = False
+                resource_blocked = False
+
+                variant_res_dist = resource_distribution_of_variants.get(
+                    inst["variant"], {}
+                )
+                variant_constraints = resource_constraints.get(inst["variant"], {})
+
                 for node in enabled:
-                    activity = graph.nodes[node]["label"]
+                    activity = node_labels[node]
 
                     # Duration model: hold a node back until its enabling time
                     # + sampled inter-activity delay. Execution-start nodes (no predecessors) fire immediately;
                     if model_durations:
-                        preds = list(graph.predecessors(node))
+                        preds = preds_map[node]
                         if preds:
-                            if node not in inst["ready_at"]:
-                                enabling_tick = max(
-                                    inst["finish_tick"][p] for p in preds
+                            if node not in ready_at:
+                                enabling_tick = max(finish_tick[p] for p in preds)
+                                ready_at[node] = enabling_tick + _sample_activity_delay(
+                                    activity, activity_delays
                                 )
-                                inst["ready_at"][node] = (
-                                    enabling_tick
-                                    + _sample_activity_delay(activity, activity_delays)
-                                )
-                            if tick < inst["ready_at"][node]:
+                            if tick < ready_at[node]:
                                 continue  # not due yet
 
-                    # TODO: Geht das nicht mir Random Int oder so deutlich einfacher?
                     # Determine how many resources of each type this activity needs
-                    variant_res_dist = resource_distribution_of_variants.get(
-                        inst["variant"], {}
-                    )
-                    activity_res_dist = variant_res_dist.get(activity, {})
-                    # Sample the needed count per type from the empirical
-                    # distribution
-                    needed_res_types = {}
-                    for res_type, stats in activity_res_dist.items():
-                        if res_type not in resource_pool_expanded:
-                            continue
-                        n = _sample_resource_count(stats)
-                        if n > 0:
-                            needed_res_types[res_type] = n
+                    needed_res_types = needed_res_cache.get(node)
+                    if needed_res_types is None:
+                        activity_res_dist = variant_res_dist.get(activity, {})
+                        needed_res_types = {}
+                        for res_type, stats in activity_res_dist.items():
+                            if res_type not in resource_pool_expanded:
+                                continue
+                            n = _sample_resource_count(stats)
+                            if n > 0:
+                                needed_res_types[res_type] = n
+                        needed_res_cache[node] = needed_res_types
 
-                    variant_constraints = resource_constraints.get(inst["variant"], {})
+                    # Cheap availability pre-check: skip the full constraint
+                    # allocation when a needed type plainly lacks free units
+                    if any(
+                        len(resource_queues.get(t, ())) < cnt
+                        for t, cnt in needed_res_types.items()
+                    ):
+                        resource_blocked = True
+                        continue
 
                     # Allocate resources respecting constraints
                     allocated, new_budget = _allocate_resources(
@@ -953,14 +1025,18 @@ class VariantPlayoutStrategy:
                         needed_res_types,
                         simulation_config,
                         inst["violation_budget"],
+                        prior_assignments_full=inst["resources_by_activity"],
                     )
 
                     if allocated is None:
-                        # Cannot fire this activity, as no resource allocation is possible
+                        # Due now but no resource allocation possible: held back
+                        # until a resource frees.
+                        resource_blocked = True
                         continue
 
                     # Commit the budget only now that the activity actually fires.
                     inst["violation_budget"] = new_budget
+                    fired_any = True
 
                     # --- Execute the activity ---
 
@@ -989,13 +1065,21 @@ class VariantPlayoutStrategy:
                             "process_area_resources": all_allocated_rids,
                         }
                     )
+                    # Keep the incremental constraint cache in sync
+                    act_resources = inst["resources_by_activity"].setdefault(
+                        activity, {}
+                    )
+                    for rid in all_allocated_rids:
+                        rtype = resource_id_type_map.get(rid)
+                        if rtype:
+                            act_resources.setdefault(rtype, []).append(rid)
 
-                    # Build event: collect process objects from incident edges.
-                    node_objs = _get_node_objects(graph, node)
+                    # Build event from the precomputed incident objects (#A).
+                    obj_map = inst["obj_map"]
                     event_objects = [
-                        inst["obj_map"][oid]
-                        for oid in node_objs
-                        if oid in inst["obj_map"]
+                        obj_map[oid]
+                        for oid in inst["node_objects"][node]
+                        if oid in obj_map
                     ]
 
                     # Set Event Timestamp with slight random jitter within the tick to avoid Events being tied to tick boundaries
@@ -1018,17 +1102,65 @@ class VariantPlayoutStrategy:
                         }
                     )
 
-                    inst["finished_nodes"].add(node)
+                    finished_nodes.add(node)
+                    inst["enabled_set"].discard(node)
                     # Record the fire tick so successors can compute their enabling time
-                    inst["finish_tick"][node] = tick
+                    finish_tick[node] = tick
+                    # Incrementally advance the enabled
+                    pending_preds = inst["pending_preds"]
+                    enabled_set = inst["enabled_set"]
+                    for succ in inst["succ_map"][node]:
+                        pending_preds[succ] -= 1
+                        if pending_preds[succ] == 0:
+                            enabled_set.add(succ)
 
                 # Check completion
-                if len(inst["finished_nodes"]) == graph.number_of_nodes():
+                if len(finished_nodes) == inst["total_nodes"]:
                     finished_count += 1
                 else:
+                    # Schedule the next examination of this instance:
+                    #   - just fired   → revisit next tick (successors may follow)
+                    #   - else sleep until the earliest of its next future
+                    #     ready_at and, if a due node was resource-blocked, the
+                    #     next time a resource frees.
+                    if fired_any:
+                        inst["next_wake"] = tick + tick_size_s
+                    else:
+                        wake = (
+                            _earliest_future_ready(inst, tick, activity_delays)
+                            if model_durations
+                            else None
+                        )
+                        if resource_blocked:
+                            nf = _next_resource_free(blocked_resources, tick)
+                            cand = (
+                                nf if nf is not None else sim_duration_s + tick_size_s
+                            )
+                            wake = cand if wake is None else min(wake, cand)
+                        inst["next_wake"] = (
+                            wake if wake is not None else tick + tick_size_s
+                        )
                     next_active.append(inst)
 
             active_executions = next_active
+
+            # --- Advance the clock ---
+            # Jump to the earliest tick where something can actually happen: 
+            if tick >= sim_duration_s:
+                break
+            candidates = []
+            if active_executions:
+                candidates.append(min(inst["next_wake"] for inst in active_executions))
+            if schedule_idx < len(schedule):
+                candidates.append(schedule[schedule_idx][0])
+            if not candidates:
+                break  # nothing active and no arrivals left
+
+            target = min(candidates)
+            next_tick = ((target + tick_size_s - 1) // tick_size_s) * tick_size_s
+            if next_tick <= tick:
+                next_tick = tick + tick_size_s
+            tick = min(next_tick, sim_duration_s)
 
         # --- 3. Build output OCEL ---
         if event_output:

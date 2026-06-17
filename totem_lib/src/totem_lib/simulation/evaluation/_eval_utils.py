@@ -2,6 +2,7 @@
 Shared utilities used by the evaluation metrics.
 """
 
+import weakref
 from collections import Counter, defaultdict
 
 from scipy.stats import wasserstein_distance
@@ -12,6 +13,7 @@ from totem_lib.variants.ocvariants import (
 )
 
 # ────────────────────────── OCEL extraction ──────────────────────────
+_VARIANTS_CACHE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
 def event_timestamps(ocel) -> list[int]:
@@ -20,8 +22,20 @@ def event_timestamps(ocel) -> list[int]:
 
 
 def get_variants(ocel) -> Variants:
-    """Discover the object-centric variants (connected components) of an OCEL."""
-    return find_object_variants_connected_component(ocel)
+    """
+    Discover the object-centric variants (connected components) of an OCEL,
+    memoised per log object (see ``_VARIANTS_CACHE``).
+    """
+    cached = _VARIANTS_CACHE.get(ocel)
+    if cached is not None:
+        return cached
+    variants = find_object_variants_connected_component(ocel)
+    try:
+        _VARIANTS_CACHE[ocel] = variants
+    except TypeError:
+        # Log object is not weak-referenceable/hashable: skip caching.
+        pass
+    return variants
 
 
 def execution_arrivals_and_cycles(
