@@ -23,12 +23,23 @@ import networkx as nx
 
 from collections import defaultdict
 
-from django.core.cache import cache
+from .cache_utils import get_cached_result, set_cached_result
 
 import os
 from hashlib import sha1
 import json
 from rest_framework.parsers import MultiPartParser, FormParser
+
+
+def _should_use_cache(request) -> bool:
+    """Check if the request should use cache (default: True).
+
+    Pass ``?bypass_cache=1`` or ``?bypass_cache=true`` to skip reading
+    from the cache.  Results are **always stored** even on bypass so
+    the next normal request benefits.
+    """
+    val = request.query_params.get("bypass_cache", "").lower()
+    return val not in ("1", "true", "yes")
 
 
 TOTEM_MOCK = {
@@ -231,12 +242,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file.pk, "noe")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
+
         try:
             with _with_ocel_db(user_file) as db:
                 processed = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         except Exception as e:
             return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        set_cached_result(user_file.pk, "noe", processed)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -247,12 +264,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file.pk, "object_types")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
+
         try:
             with _with_ocel_db(user_file) as db:
                 types = _object_types(db)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        set_cached_result(user_file.pk, "object_types", types)
         return Response(types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -263,16 +286,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"totem_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            if _should_use_cache(request):
+                cached = get_cached_result(user_file.pk, "discover_totem")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
             serialized = _serialize_totem(totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            set_cached_result(user_file.pk, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -287,10 +310,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"mlpa_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            if _should_use_cache(request):
+                cached = get_cached_result(user_file.pk, "discover_mlpa")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
@@ -299,7 +322,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            set_cached_result(user_file.pk, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -311,6 +334,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file.pk, "statistics")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
 
         try:
             with _with_ocel_db(user_file) as db:
@@ -329,14 +357,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 ).fetchone()
             earliest_timestamp, newest_timestamp = ts_row if ts_row else (None, None)
 
-            return Response({
+            result = {
                 "num_events": num_events,
                 "num_unique_activities": num_unique_activities,
                 "num_objects": num_objects,
                 "num_object_types": num_object_types,
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
-            }, status=status.HTTP_200_OK)
+            }
+            set_cached_result(user_file.pk, "statistics", result)
+            return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -905,6 +935,19 @@ def variants(request):
     except (TypeError, ValueError):
         timeout_s = 10.0
 
+    # --- Cache lookup (#72 / #74) ---
+    leading_object_type = request.query_params.get("leading_type")
+    cache_params = {
+        "leading_type": leading_object_type or "",
+        "extraction": extraction,
+        "iso": iso,
+        "timeout_s": timeout_s,
+    }
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file.pk, "variants", cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
     try:
         with _with_ocel_db(user_file) as db:
             obj_types = _object_types(db)
@@ -912,7 +955,6 @@ def variants(request):
             # Leading type is only needed for the leading_* extractions.
             # For "connected" we skip the default-to-first-alphabetical
             # fallback entirely — the param is ignored downstream anyway.
-            leading_object_type = request.query_params.get("leading_type")
             if extraction.startswith("leading"):
                 if not leading_object_type or leading_object_type not in obj_types:
                     if not obj_types:
@@ -993,10 +1035,14 @@ def variants(request):
             },
         })
 
-    return Response({
+    result = {
         "variants": out,
         "object_types": obj_types,
-    }, status=status.HTTP_200_OK)
+    }
+    # Update cache_params with the resolved leading_type
+    cache_params["leading_type"] = leading_object_type or ""
+    set_cached_result(user_file.pk, "variants", result, cache_params)
+    return Response(result, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -2106,6 +2152,15 @@ def OCDFGViewSet(request):
     except EventLog.DoesNotExist:
         return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    # --- Cache lookup (#72 / #74) ---
+    ocdfg_cache_params = {
+        "object_types": sorted(object_type_filter) if object_type_filter else [],
+    }
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file.pk, "ocdfg", ocdfg_cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
     try:
         with _with_ocel_db(user_file) as db:
             # Full OCDFG (unfiltered) for register.
@@ -2167,6 +2222,7 @@ def OCDFGViewSet(request):
         if trace_variants:
             response_payload["trace_variants"] = trace_variants
 
+        set_cached_result(user_file.pk, "ocdfg", response_payload, ocdfg_cache_params)
         return Response(response_payload, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2191,3 +2247,24 @@ def delete_user_data(request):
         {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
         status=status.HTTP_200_OK
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache management endpoints  (#76)
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def cache_stats(request):
+    """Return current cache statistics."""
+    from .cache_utils import get_cache_stats
+    return Response(get_cache_stats())
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cache_clear(request):
+    """Clear the entire results cache."""
+    from .cache_utils import clear_all_cache
+    clear_all_cache()
+    return Response({"status": "cleared"})
