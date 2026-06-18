@@ -18,7 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
-from totem_lib.oc_dotted_chart import get_oc_dotted_chart_data
+from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 import networkx as nx
 
@@ -353,9 +353,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             row_min = _optional_int(request.query_params.get("row_min"))
             row_max = _optional_int(request.query_params.get("row_max"))
             max_points = int(request.query_params.get("max_points", 3000))
+            sample_seed = int(request.query_params.get("sample_seed", 0))
         except ValueError:
             return Response(
-                {"error": "row_min, row_max, and max_points must be integers"},
+                {"error": "row_min, row_max, max_points, and sample_seed must be integers"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -372,11 +373,32 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     color_by=request.query_params.get("color_by", "activity"),
                     shape_by=request.query_params.get("shape_by", "none"),
                     sort_by=request.query_params.get("sort_by", "time"),
+                    row_order=request.query_params.get("row_order", "first_occurrence"),
                     max_points=max_points,
+                    sample_seed=sample_seed,
                 )
         except Exception as e:
             return Response(
                 {"error": f"Failed to load OC dotted chart data: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def oc_dotted_chart_columns(self, request, pk=None):
+        """Returns configurable dimensions for the object-centric dotted chart."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = get_oc_dotted_chart_columns(db)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to load OC dotted chart columns: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

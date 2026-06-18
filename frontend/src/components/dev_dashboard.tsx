@@ -6,17 +6,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { ReactFlowProvider } from "@xyflow/react";
+import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
 import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
-import DottedChart from "@/react_component/DottedChart";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
 
   return (
     <div>
@@ -61,16 +63,15 @@ export function DevDashboard() {
               Object-centric event distribution
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <DottedChart
-              fileId={selectedFile?.id}
-              xAxis={{ type: "time" }}
-              yAxis={{ type: "activity" }}
-              colorBy={{ type: "activity" }}
-              shapeBy={{ type: "none" }}
-              sortBy={{ type: "time" }}
-              maxPoints={10000}
-            />
+          <CardContent className="flex justify-center pb-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setViewMode({ type: "analysis", component: "dottedChart" })}
+              disabled={!selectedFile?.id}
+            >
+              Open OC Dotted Chart
+            </Button>
           </CardContent>
         </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />

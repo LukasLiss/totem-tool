@@ -81,9 +81,10 @@ export function AnalysisView() {
                   yAxis={{ type: "activity" }}
                   colorBy={{ type: "activity" }}
                   shapeBy={{ type: "none" }}
-                  sortBy={{ type: "time" }}
+                  rowOrder="first_occurrence"
                   maxPoints={10000}
-                  className="h-[700px]"
+                  showControls={true}
+                  className="min-h-[700px]"
                 />
               </CardContent>
             </Card>

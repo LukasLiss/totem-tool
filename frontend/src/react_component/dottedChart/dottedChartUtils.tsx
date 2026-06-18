@@ -10,10 +10,7 @@ export type AxisOption =
   | { type: "event_attribute"; name: string }
   | { type: "none" };
 
-export type SortOption = {
-  field: AxisOption;
-  direction?: "asc" | "desc";
-};
+export type RowOrderOption = "first_occurrence" | "last_occurrence";
 
 export interface OCEvent {
   id: string;
@@ -33,6 +30,7 @@ export interface OCEvent {
 export interface DottedChartResponse {
   events: OCEvent[];
   total_count: number;
+  dataset_total_count?: number;
   sampled: boolean;
   outlier_count: number;
 }
@@ -53,6 +51,9 @@ export interface ChartPoint extends OCEvent {
   shapeKey: string;
 }
 
+export const OTHER_COLOR_KEY = "Other";
+const OTHER_COLOR = "#d4d4d8";
+
 const PALETTE = [
   "var(--chart-1)",
   "var(--chart-2)",
@@ -66,6 +67,8 @@ const PALETTE = [
   "#65a30d",
 ];
 
+const EXPLICIT_COLOR_LIMIT = 9;
+
 const SHAPES = ["circle", "square", "triangle", "diamond", "cross"] as const;
 
 type ShapeName = (typeof SHAPES)[number];
@@ -74,12 +77,6 @@ export function axisOptionToParam(axis?: AxisOption | null): string | undefined 
   if (!axis || axis.type === "none") return undefined;
   if (axis.type === "event_attribute") return axis.name;
   return axis.type;
-}
-
-export function sortOptionToParam(sortBy?: SortOption | AxisOption | null): string | undefined {
-  if (!sortBy) return undefined;
-  if ("type" in sortBy) return axisOptionToParam(sortBy);
-  return axisOptionToParam(sortBy.field);
 }
 
 export function toChartPoints(events: OCEvent[]): ChartPoint[] {
@@ -94,10 +91,11 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
         typeof event.x === "number"
           ? event.x
           : xIndexes.get(valueKey(event.x)) ?? Number.NaN;
-      const chartY =
+      const chartY = event.row_index ?? (
         typeof event.y === "number"
           ? event.y
-          : yIndexes.get(valueKey(event.y)) ?? Number.NaN;
+          : yIndexes.get(valueKey(event.y)) ?? Number.NaN
+      );
 
       return {
         ...event,
@@ -105,16 +103,46 @@ export function toChartPoints(events: OCEvent[]): ChartPoint[] {
         chartY,
         xLabel: valueKey(event.x),
         yLabel: valueKey(event.y),
-        colorKey: valueKey(event.color_value ?? event.activity),
+        colorKey: valueKey(event.color_value),
         shapeKey: valueKey(event.shape_value ?? "circle"),
       };
     })
     .filter((event) => Number.isFinite(event.chartX) && Number.isFinite(event.chartY));
 }
 
-export function makeColorScale(points: ChartPoint[]): Map<string, string> {
-  const values = uniqueValues(points.map((point) => point.colorKey));
-  return new Map(values.map((value, index) => [value, PALETTE[index % PALETTE.length]]));
+export function makeColorScale(
+  points: ChartPoint[],
+  previousKeys: string[] = []
+): { scale: Map<string, string>; keys: string[] } {
+  const counts = new Map<string, number>();
+
+  points.forEach((point) => {
+    if (isOtherColorKey(point.colorKey)) return;
+    counts.set(point.colorKey, (counts.get(point.colorKey) ?? 0) + 1);
+  });
+
+  const keys = previousKeys.slice(0, EXPLICIT_COLOR_LIMIT);
+  const candidates = Array.from(counts.entries())
+    .filter(([key]) => !keys.includes(key))
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) =>
+      rightCount - leftCount || leftKey.localeCompare(rightKey)
+    )
+    .map(([key]) => key);
+
+  for (const key of candidates) {
+    if (keys.length >= EXPLICIT_COLOR_LIMIT) break;
+    keys.push(key);
+  }
+
+  const scale = new Map(keys.map((key, index) => [key, PALETTE[index % PALETTE.length]]));
+  scale.set(OTHER_COLOR_KEY, OTHER_COLOR);
+
+  return { scale, keys };
+}
+
+export function colorGroupKey(colorKey: string, explicitKeys: string[]): string {
+  if (isOtherColorKey(colorKey)) return OTHER_COLOR_KEY;
+  return explicitKeys.includes(colorKey) ? colorKey : OTHER_COLOR_KEY;
 }
 
 export function makeShapeScale(points: ChartPoint[]): Map<string, ShapeName> {
@@ -132,14 +160,14 @@ export function makeAxisLabelLookup(points: ChartPoint[], axis: "x" | "y"): Map<
 export function formatAxisTick(value: number | string): string {
   if (typeof value === "string") return value;
   if (Math.abs(value) >= 1_000_000_000) {
-    return new Date(value * 1000).toLocaleDateString();
+    return new Date(value * 1000).toLocaleDateString("en-GB");
   }
   return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 export function formatTimestamp(timestamp: string | null, timestampUnix: number): string {
-  if (timestamp) return new Date(timestamp).toLocaleString();
-  return new Date(timestampUnix * 1000).toLocaleString();
+  if (timestamp) return new Date(timestamp).toLocaleString("en-GB");
+  return new Date(timestampUnix * 1000).toLocaleString("en-GB");
 }
 
 export function objectSummary(objects: Record<string, string[]>): string {
@@ -194,6 +222,10 @@ function numericValue(value: number | string | null): number {
 function valueKey(value: number | string | null): string {
   if (value === null || value === undefined || value === "") return "None";
   return String(value);
+}
+
+function isOtherColorKey(value: string): boolean {
+  return value === "None" || value === OTHER_COLOR_KEY;
 }
 
 function uniqueValues(values: Array<number | string | null>): string[] {

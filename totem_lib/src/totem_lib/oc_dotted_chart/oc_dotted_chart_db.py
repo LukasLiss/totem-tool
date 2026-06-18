@@ -25,7 +25,9 @@ def get_oc_dotted_chart_data(
     color_by: str = "activity",
     shape_by: str = "none",
     sort_by: str = "time",
+    row_order: str = "first_occurrence",
     max_points: int = DEFAULT_MAX_POINTS,
+    sample_seed: int = 0,
 ) -> dict[str, Any]:
     """
     Return sampled event data for the object-centric dotted chart.
@@ -39,7 +41,13 @@ def get_oc_dotted_chart_data(
     """
     point_limit = _clamp_max_points(max_points)
     effective_y_axis = y_axis or "activity"
+    row_order_expr = "MAX(timestamp_unix)" if row_order == "last_occurrence" else "MIN(timestamp_unix)"
     event_attr_columns = _event_attr_columns(db)
+    object_attr_columns = _object_attr_columns(db)
+    include_objects = any(
+        _axis_uses_object_columns(axis, object_attr_columns)
+        for axis in (x_axis, effective_y_axis, color_by, shape_by, sort_by)
+    )
 
     time_filters, time_params = _time_filters(t_min=t_min, t_max=t_max)
     row_filters, row_params = _row_filters(row_min=row_min, row_max=row_max)
@@ -47,12 +55,16 @@ def get_oc_dotted_chart_data(
     dimensioned_where = ["x IS NOT NULL", "y IS NOT NULL", *row_filters]
     dimensioned_where_sql = f"WHERE {' AND '.join(dimensioned_where)}"
 
-    base_sql = _base_events_sql(event_attr_columns=event_attr_columns)
-    x_expr = _axis_expr(x_axis, event_attr_columns)
-    y_expr = _axis_expr(effective_y_axis, event_attr_columns)
-    color_expr = _axis_expr(color_by, event_attr_columns)
-    shape_expr = _axis_expr(shape_by, event_attr_columns)
-    sort_expr = _axis_expr(sort_by, event_attr_columns)
+    base_sql = _base_events_sql(
+        event_attr_columns=event_attr_columns,
+        object_attr_columns=object_attr_columns,
+        include_objects=include_objects,
+    )
+    x_expr = _axis_expr(x_axis, event_attr_columns, object_attr_columns)
+    y_expr = _axis_expr(effective_y_axis, event_attr_columns, object_attr_columns)
+    color_expr = _axis_expr(color_by, event_attr_columns, object_attr_columns)
+    shape_expr = _axis_expr(shape_by, event_attr_columns, object_attr_columns)
+    sort_expr = _axis_expr(sort_by, event_attr_columns, object_attr_columns)
     dimensioned_sql = _dimensioned_events_sql(
         base_sql=base_sql,
         base_where_sql=base_where_sql,
@@ -60,17 +72,31 @@ def get_oc_dotted_chart_data(
         y_expr=y_expr,
         color_expr=color_expr,
         shape_expr=shape_expr,
+        row_order_expr=row_order_expr,
     )
 
     total_count = db.conn.execute(
         f"SELECT COUNT(*) FROM ({dimensioned_sql}) dimensioned {dimensioned_where_sql}",
         [*time_params, *row_params],
     ).fetchone()[0]
+    dataset_dimensioned_sql = _dimensioned_events_sql(
+        base_sql=base_sql,
+        base_where_sql="",
+        x_expr=x_expr,
+        y_expr=y_expr,
+        color_expr=color_expr,
+        shape_expr=shape_expr,
+        row_order_expr=row_order_expr,
+    )
+    dataset_total_count = db.conn.execute(
+        f"SELECT COUNT(*) FROM ({dataset_dimensioned_sql}) dimensioned WHERE x IS NOT NULL AND y IS NOT NULL"
+    ).fetchone()[0]
 
     if total_count == 0:
         return {
             "events": [],
             "total_count": 0,
+            "dataset_total_count": int(dataset_total_count),
             "sampled": False,
             "outlier_count": 0,
         }
@@ -113,7 +139,7 @@ def get_oc_dotted_chart_data(
                 ) AS outlier_rank,
                 ROW_NUMBER() OVER (
                     PARTITION BY sample_bucket
-                    ORDER BY outlier_score DESC, hash(event_id, row_id) ASC
+                    ORDER BY outlier_score DESC, hash(event_id, row_id, ?) ASC
                 ) AS bucket_rank
             FROM scored
         ),
@@ -137,7 +163,7 @@ def get_oc_dotted_chart_data(
                     ORDER BY
                         bucket_rank ASC,
                         outlier_score DESC,
-                        hash(event_id, row_id) ASC
+                        hash(event_id, row_id, ?) ASC
                 ) AS fill_rank
             FROM budgeted
         ),
@@ -171,9 +197,11 @@ def get_oc_dotted_chart_data(
             bucket_count,
             bucket_count,
             bucket_count,
+            int(sample_seed),
             OUTLIER_SCORE_THRESHOLD,
             outlier_budget,
             point_limit,
+            int(sample_seed),
             point_limit,
         ],
     ).fetchall()
@@ -200,24 +228,125 @@ def get_oc_dotted_chart_data(
     return {
         "events": events,
         "total_count": int(total_count),
+        "dataset_total_count": int(dataset_total_count),
         "sampled": int(total_count) > len(events),
         "outlier_count": sum(1 for row in rows if float(row[10] or 0) >= 2.0),
     }
 
 
-def _base_events_sql(*, event_attr_columns: list[str]) -> str:
-    event_attr_selects = _event_attr_selects(event_attr_columns, table_alias=None)
+def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]]]:
+    event_attr_columns = _event_attr_columns(db)
+    object_attr_columns = _object_attr_columns(db)
+    object_types = _object_types(db)
+    attr_options = [
+        {
+            "value": column,
+            "label": _humanize_column_name(column),
+            "kind": "time" if _is_time_related_column(column) else "categorical",
+        }
+        for column in event_attr_columns
+    ]
+    object_type_row_options = [
+        {
+            "value": f"object_type:{object_type}",
+            "label": _humanize_column_name(object_type),
+            "kind": "categorical",
+        }
+        for object_type in object_types
+    ]
+    object_attr_options = _object_attr_options_by_type(db, object_attr_columns)
+    object_options = [
+        {"value": "object_id", "label": "Object ID", "kind": "categorical"},
+        {"value": "object_type", "label": "Object Type", "kind": "categorical"},
+        {"value": "qualifier", "label": "Qualifier", "kind": "categorical"},
+    ]
+    time_options = [
+        {"value": "time", "label": "Time", "kind": "time"},
+        {"value": "timestamp", "label": "Timestamp", "kind": "time"},
+        {"value": "timestamp_unix", "label": "Timestamp (Unix)", "kind": "time"},
+        {"value": "since_start", "label": "Since Start", "kind": "time"},
+        *[option for option in attr_options if option["kind"] == "time"],
+        *[option for option in object_options if option["kind"] == "time"],
+        *[option for option in object_attr_options if option["kind"] == "time"],
+    ]
+    categorical_options = [
+        {"value": "activity", "label": "Activity", "kind": "categorical"},
+        *[option for option in attr_options if option["kind"] == "categorical"],
+        *[option for option in object_options if option["kind"] == "categorical"],
+        *[option for option in object_attr_options if option["kind"] == "categorical"],
+        *object_type_row_options,
+    ]
+    y_axis_options = [
+        {"value": "activity", "label": "Activity", "kind": "categorical"},
+        *[option for option in attr_options if option["kind"] == "categorical"],
+        *object_type_row_options,
+        {"value": "object_id", "label": "All Objects", "kind": "categorical"},
+        {"value": "qualifier", "label": "Qualifier", "kind": "categorical"},
+        *[option for option in object_attr_options if option["kind"] == "categorical"],
+    ]
+
+    return {
+        "x_axis": time_options,
+        "y_axis": y_axis_options,
+        "color_by": [
+            {"value": "none", "label": "None", "kind": "none"},
+            *categorical_options,
+        ],
+        "shape_by": [
+            {"value": "none", "label": "None", "kind": "none"},
+            *categorical_options,
+        ],
+        "sort_by": [*time_options, *categorical_options],
+    }
+
+
+def _base_events_sql(
+    *,
+    event_attr_columns: list[str],
+    object_attr_columns: list[str],
+    include_objects: bool,
+) -> str:
+    event_attr_selects = _column_selects(event_attr_columns, table_alias="e")
+    if include_objects:
+        object_selects = "".join(
+            f",\n            o.{_quote_identifier(column)} AS {_quote_identifier(_object_attr_alias(column))}"
+            for column in object_attr_columns
+        )
+        object_join_sql = """
+        LEFT JOIN event_object eo ON eo.event_id = e.event_id
+        LEFT JOIN objects o ON o.obj_id = eo.obj_id
+        """
+        object_columns_sql = f""",
+            eo.obj_id AS object_id,
+            o.obj_type AS object_type,
+            eo.qualifier AS qualifier,
+            eo.obj_id AS source_object_id
+            {object_selects}
+        """
+    else:
+        object_join_sql = ""
+        object_columns_sql = """,
+            NULL AS source_object_id
+        """
+
     return """
         SELECT
-            event_id,
-            activity,
-            timestamp_unix,
-            timestamp_unix - log_start_ts AS since_start
+            e.event_id,
+            e.activity,
+            e.timestamp_unix,
+            e.timestamp_unix - log_start_ts AS since_start
             {event_attr_selects}
-        FROM events
+            {object_columns_sql}
+        FROM events e
+        {object_join_sql}
         CROSS JOIN (SELECT MIN(timestamp_unix) AS log_start_ts FROM events) log_bounds
         {base_where_sql}
-    """.format(event_attr_selects=event_attr_selects, base_where_sql="{base_where_sql}")
+    """.format(
+        event_attr_selects=event_attr_selects,
+        object_columns_sql=object_columns_sql,
+        object_join_sql=object_join_sql,
+        base_where_sql="{base_where_sql}",
+    )
 
 
 def _dimensioned_events_sql(
@@ -228,6 +357,7 @@ def _dimensioned_events_sql(
     y_expr: str,
     color_expr: str,
     shape_expr: str,
+    row_order_expr: str,
 ) -> str:
     return f"""
         WITH base AS ({base_sql.format(base_where_sql=base_where_sql)}),
@@ -244,11 +374,12 @@ def _dimensioned_events_sql(
             SELECT
                 *,
                 CAST(y AS VARCHAR) AS row_id,
-                MIN(timestamp_unix) OVER (PARTITION BY y) AS row_first_timestamp
+                {row_order_expr} OVER (PARTITION BY y) AS row_sort_timestamp
             FROM selected
         )
         SELECT
             event_id,
+            source_object_id,
             x,
             y,
             color_value,
@@ -257,11 +388,11 @@ def _dimensioned_events_sql(
             timestamp_unix,
             row_id,
             DENSE_RANK() OVER (
-                ORDER BY row_first_timestamp, row_id
+                ORDER BY row_sort_timestamp, row_id
             ) AS row_index,
             ROW_NUMBER() OVER (
                 PARTITION BY row_id
-                ORDER BY timestamp_unix, event_id
+                ORDER BY timestamp_unix, event_id, source_object_id
             ) AS event_index_in_row,
             AVG(timestamp_unix) OVER (
                 PARTITION BY row_id
@@ -309,34 +440,126 @@ def _row_filters(
     return filters, params
 
 
-def _axis_expr(axis: str | None, event_attr_columns: list[str]) -> str:
+def _axis_expr(axis: str | None, event_attr_columns: list[str], object_attr_columns: list[str]) -> str:
     if axis in ("time", "timestamp", "timestamp_unix"):
         return "timestamp_unix"
     if axis == "since_start":
         return "since_start"
     if axis == "activity":
         return "activity"
+    if axis == "object_id":
+        return "object_id"
+    if axis == "object_type":
+        return "object_type"
+    if axis and axis.startswith("object_type:"):
+        object_type = axis.split(":", 1)[1]
+        return f"CASE WHEN object_type = {_quote_literal(object_type)} THEN object_id ELSE NULL END"
+    if axis == "qualifier":
+        return "qualifier"
+    if axis and axis.startswith("object_attr:"):
+        parts = axis.split(":", 2)
+        if len(parts) == 3:
+            object_type, column = parts[1], parts[2]
+            if column in object_attr_columns:
+                return (
+                    f"CASE WHEN object_type = {_quote_literal(object_type)} "
+                    f"THEN {_quote_identifier(_object_attr_alias(column))} ELSE NULL END"
+                )
+        elif len(parts) == 2:
+            column = parts[1]
+            if column in object_attr_columns:
+                return _quote_identifier(_object_attr_alias(column))
     if axis in event_attr_columns:
         return _quote_identifier(axis)
     return "NULL"
 
 
 def _event_attr_columns(db: OcelDuckDB) -> list[str]:
-    fixed_columns = {"event_id", "activity", "timestamp_unix"}
+    fixed_columns = {"event_id", "activity", "timestamp", "timestamp_unix"}
     rows = db.conn.execute("PRAGMA table_info('events')").fetchall()
     return [row[1] for row in rows if row[1] not in fixed_columns]
 
 
-def _event_attr_selects(event_attr_columns: list[str], table_alias: str | None) -> str:
+def _object_attr_columns(db: OcelDuckDB) -> list[str]:
+    fixed_columns = {"obj_id", "obj_type"}
+    rows = db.conn.execute("PRAGMA table_info('objects')").fetchall()
+    return [row[1] for row in rows if row[1] not in fixed_columns]
+
+
+def _object_attr_options_by_type(
+    db: OcelDuckDB,
+    columns: list[str],
+) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+
+    for column in columns:
+        kind = "time" if _is_time_related_column(column) else "categorical"
+
+        rows = db.conn.execute(
+            f"""
+            SELECT DISTINCT obj_type
+            FROM objects
+            WHERE {_quote_identifier(column)} IS NOT NULL
+            ORDER BY obj_type
+            """
+        ).fetchall()
+        for (object_type,) in rows:
+            options.append(
+                {
+                    "value": f"object_attr:{object_type}:{column}",
+                    "label": f"{object_type}.{column}",
+                    "kind": kind,
+                }
+            )
+
+    return options
+
+
+def _object_types(db: OcelDuckDB) -> list[str]:
+    rows = db.conn.execute(
+        "SELECT DISTINCT obj_type FROM objects WHERE obj_type IS NOT NULL ORDER BY obj_type"
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def _column_selects(columns: list[str], table_alias: str | None) -> str:
     prefix = f"{table_alias}." if table_alias else ""
     return "".join(
         f",\n            {prefix}{_quote_identifier(column)} AS {_quote_identifier(column)}"
-        for column in event_attr_columns
+        for column in columns
     )
 
 
 def _quote_identifier(identifier: str) -> str:
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _quote_literal(value: str) -> str:
+    return f"'{value.replace(chr(39), chr(39) * 2)}'"
+
+
+def _is_time_related_column(column: str) -> bool:
+    normalized = column.lower()
+    return any(token in normalized for token in ("time", "timestamp", "date", "datetime"))
+
+
+def _humanize_column_name(column: str) -> str:
+    return column.replace("_", " ").strip().title() or column
+
+
+def _object_attr_alias(column: str) -> str:
+    return f"object_attr__{column}"
+
+
+def _axis_uses_object_columns(axis: str | None, object_attr_columns: list[str]) -> bool:
+    if axis in {"object_id", "object_type", "qualifier"}:
+        return True
+    if axis and axis.startswith("object_type:"):
+        return True
+    if axis and axis.startswith("object_attr:"):
+        parts = axis.split(":", 2)
+        return parts[-1] in object_attr_columns
+    return False
 
 
 def _objects_for_events(db: OcelDuckDB, event_ids: list[str]) -> dict[str, dict[str, list[str]]]:
