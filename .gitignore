@@ -74,6 +74,7 @@ backend/user_files/*
 .env/
 
 # Django specific
+backend/cache/
 backend/db.sqlite3
 backend/db.sqlite3-journal
 backend/media/
