@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
-  ReferenceArea,
   Scatter,
   ScatterChart,
   Tooltip,
@@ -16,7 +15,6 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { ScanIcon } from "lucide-react";
 import {
   colorGroupKey,
   formatAxisTick,
@@ -106,6 +104,8 @@ export default function DottedChart({
   const colorKeysRef = useRef<string[]>([]);
   const colorByKeyRef = useRef("");
   const colorEventsRef = useRef<OCEvent[] | null>(null);
+  const chartWrapperRef = useRef<HTMLDivElement | null>(null);
+  const chartInteractionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setConfig(defaultConfig);
@@ -142,9 +142,11 @@ export default function DottedChart({
   const points = useMemo(() => toChartPoints(events), [events]);
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [isZoomApplying, setIsZoomApplying] = useState(false);
-  const [dragSelection, setDragSelection] = useState<DragSelection | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
   const zoomFinishFrameRef = useRef<number | null>(null);
+  const dragSelectionRef = useRef<DragSelection | null>(null);
+  const dragOverlayRef = useRef<HTMLDivElement | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
   const effectiveBrushRange = useMemo(
     () => clampBrushRange(brushRange, points.length),
     [brushRange, points.length]
@@ -178,8 +180,8 @@ export default function DottedChart({
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
   const yTicks = useMemo(
-    () => orderDisplayedYTicks(visiblePoints, effectiveConfig.rowOrder),
-    [effectiveConfig.rowOrder, visiblePoints]
+    () => orderDisplayedYTicks(points, effectiveConfig.rowOrder),
+    [effectiveConfig.rowOrder, points]
   );
   const [yBrushRange, setYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const effectiveYBrushRange = useMemo(
@@ -245,6 +247,9 @@ export default function DottedChart({
     () => clampBrushRange(controlYBrushRange, effectiveFrameYTicks.length),
     [controlYBrushRange, effectiveFrameYTicks.length]
   );
+  const isViewportZoomed = Boolean(requestedViewport) ||
+    !isFullRange(effectiveControlBrushRange, effectiveFramePoints.length) ||
+    !isFullRange(effectiveControlYBrushRange, effectiveFrameYTicks.length);
 
   useEffect(() => {
     const previousLength = previousPointCountRef.current;
@@ -298,6 +303,7 @@ export default function DottedChart({
     return () => {
       if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current);
       if (zoomFinishFrameRef.current !== null) window.cancelAnimationFrame(zoomFinishFrameRef.current);
+      if (dragFrameRef.current !== null) window.cancelAnimationFrame(dragFrameRef.current);
     };
   }, []);
 
@@ -358,50 +364,73 @@ export default function DottedChart({
       requestedViewport,
     ]
   );
-  const handleChartMouseDown = useCallback((event: any) => {
-    preventDefaultMouseAction(event);
-    const point = chartPointFromMouseEvent(event);
+  const handleChartMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const point = chartPointFromMousePosition(event, chartWrapperRef.current, xDomain, yDomain);
     if (!point) return;
 
-    setDragSelection({
+    const nextSelection = {
       startX: point.chartX,
       endX: point.chartX,
       startY: point.chartY,
       endY: point.chartY,
+      startClientX: point.clientX,
+      endClientX: point.clientX,
+      startClientY: point.clientY,
+      endClientY: point.clientY,
       isDragging: true,
-    });
-  }, []);
-  const handleChartMouseMove = useCallback((event: any) => {
-    preventDefaultMouseAction(event);
-    const point = chartPointFromMouseEvent(event);
+    };
+    dragSelectionRef.current = nextSelection;
+    setChartInteractionEnabled(chartInteractionRef.current, false);
+    updateDragOverlay(dragOverlayRef.current, nextSelection);
+  }, [xDomain, yDomain]);
+  const handleChartMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const currentSelection = dragSelectionRef.current;
+    if (!currentSelection?.isDragging) return;
+    event.preventDefault();
+    const point = chartPointFromMousePosition(event, chartWrapperRef.current, xDomain, yDomain);
     if (!point) return;
 
-    setDragSelection((current) =>
-      current?.isDragging
-        ? {
-            ...current,
-            endX: point.chartX,
-            endY: point.chartY,
-          }
-        : current
-    );
-  }, []);
-  const handleChartMouseUp = useCallback((event: any) => {
-    preventDefaultMouseAction(event);
-    const releasePoint = chartPointFromMouseEvent(event);
-    const currentSelection = releasePoint && dragSelection
+    dragSelectionRef.current = {
+      ...currentSelection,
+      endX: point.chartX,
+      endY: point.chartY,
+      endClientX: point.clientX,
+      endClientY: point.clientY,
+    };
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = window.requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      updateDragOverlay(dragOverlayRef.current, dragSelectionRef.current);
+    });
+  }, [xDomain, yDomain]);
+  const handleChartMouseUp = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const releasePoint = chartPointFromMousePosition(event, chartWrapperRef.current, xDomain, yDomain);
+    const activeSelection = dragSelectionRef.current;
+    const currentSelection = releasePoint && activeSelection
       ? {
-          ...dragSelection,
+          ...activeSelection,
           endX: releasePoint.chartX,
           endY: releasePoint.chartY,
+          endClientX: releasePoint.clientX,
+          endClientY: releasePoint.clientY,
         }
-      : dragSelection;
-    setDragSelection(null);
+      : activeSelection;
+    dragSelectionRef.current = null;
+    setChartInteractionEnabled(chartInteractionRef.current, true);
+    hideDragOverlay(dragOverlayRef.current);
     if (!currentSelection?.isDragging) return;
-    if (currentSelection.startX === currentSelection.endX && currentSelection.startY === currentSelection.endY) return;
+    if (Math.abs(currentSelection.startClientX - currentSelection.endClientX) < 6) return;
+    if (Math.abs(currentSelection.startClientY - currentSelection.endClientY) < 6) return;
 
     const xRange = brushRangeForChartXBounds(effectiveFramePoints, currentSelection);
-    const yRange = brushRangeForDisplayedYBounds(effectiveFrameYTicks, displayedYTicks, currentSelection);
+    const yRange = brushRangeForDisplayedYBounds(
+      effectiveFrameYTicks,
+      displayedYTicks,
+      currentSelection,
+      getChartPlotBounds(chartWrapperRef.current)
+    );
     if (!xRange || !yRange) return;
     if (
       xRange.startIndex === effectiveControlBrushRange.startIndex &&
@@ -415,15 +444,18 @@ export default function DottedChart({
     handleRangeApply(xRange, yRange);
   }, [
     displayedYTicks,
-    dragSelection,
     effectiveControlBrushRange,
     effectiveControlYBrushRange,
     effectiveFramePoints,
     effectiveFrameYTicks,
     handleRangeApply,
+    xDomain,
+    yDomain,
   ]);
   const handleChartMouseLeave = useCallback(() => {
-    setDragSelection(null);
+    dragSelectionRef.current = null;
+    setChartInteractionEnabled(chartInteractionRef.current, true);
+    hideDragOverlay(dragOverlayRef.current);
   }, []);
 
   const handleResetViewport = useCallback(() => {
@@ -533,81 +565,77 @@ export default function DottedChart({
         xLabels={frameXLabels}
         yLabels={frameYLabels}
         isApplying={isZoomApplying}
+        isZoomed={isViewportZoomed}
         onReset={handleResetViewport}
         onApply={handleRangeApply}
       />
 
-      <ChartContainer
-        config={{ events: { label: "Events", color: "var(--chart-1)" } }}
-        className="aspect-auto shrink-0 select-none rounded-md border bg-background p-2"
-        style={{ height: CHART_HEIGHT }}
-        onMouseDownCapture={(event) => event.preventDefault()}
+      <div
+        ref={chartWrapperRef}
+        className="relative shrink-0 select-none"
+        onMouseDown={handleChartMouseDown}
+        onMouseMove={handleChartMouseMove}
+        onMouseUp={handleChartMouseUp}
+        onMouseLeave={handleChartMouseLeave}
       >
-        <ScatterChart
-          data={displayedPoints}
-          margin={CHART_MARGIN}
-          onMouseDown={handleChartMouseDown}
-          onMouseMove={handleChartMouseMove}
-          onMouseUp={handleChartMouseUp}
-          onMouseLeave={handleChartMouseLeave}
-        >
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis
-            dataKey="chartX"
-            name="x"
-            type="number"
-            domain={xDomain}
-            tickFormatter={(value) => formatXAxisTick(value, effectiveConfig.xAxis, xLabels)}
-            tickMargin={8}
-            minTickGap={28}
-          />
-          <YAxis
-            dataKey="chartY"
-            name="y"
-            type="number"
-            domain={yDomain}
-            ticks={displayedYAxisLabelTicks}
-            interval={0}
-            allowDecimals={false}
-            tick={(props) => <DottedChartYAxisTick {...props} labels={displayedYLabels} />}
-            tickMargin={8}
-            width={Y_AXIS_WIDTH}
-          />
-          <Tooltip
-            cursor={{ strokeDasharray: "3 3" }}
-            content={
-              <DottedChartTooltip
-                xAxis={effectiveConfig.xAxis}
-                yAxis={effectiveConfig.yAxis}
-                colorBy={effectiveConfig.colorBy}
+        <div ref={chartInteractionRef}>
+          <ChartContainer
+            config={{ events: { label: "Events", color: "var(--chart-1)" } }}
+            className="aspect-auto shrink-0 rounded-md border bg-background p-2"
+            style={{ height: CHART_HEIGHT }}
+          >
+            <ScatterChart data={displayedPoints} margin={CHART_MARGIN}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="chartX"
+                name="x"
+                type="number"
+                domain={xDomain}
+                tickFormatter={(value) => formatXAxisTick(value, effectiveConfig.xAxis, xLabels)}
+                tickMargin={8}
+                minTickGap={28}
               />
-            }
-          />
-          {dragSelection?.isDragging && (
-            <ReferenceArea
-              x1={Math.min(dragSelection.startX, dragSelection.endX)}
-              x2={Math.max(dragSelection.startX, dragSelection.endX)}
-              y1={Math.min(dragSelection.startY, dragSelection.endY)}
-              y2={Math.max(dragSelection.startY, dragSelection.endY)}
-              stroke="var(--ring)"
-              fill="var(--ring)"
-              fillOpacity={0.12}
-              ifOverflow="visible"
-            />
-          )}
-          <Scatter
-            name="Events"
-            data={displayedPoints}
-            isAnimationActive={false}
-            shape={(props: any) => {
-              const point = props.payload as ChartPoint;
-              const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
-              const shape = shapeScale.get(point.shapeKey) ?? "circle";
-              return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
-            }}
-          />
-        </ScatterChart>
-      </ChartContainer>
+              <YAxis
+                dataKey="chartY"
+                name="y"
+                type="number"
+                domain={yDomain}
+                ticks={displayedYAxisLabelTicks}
+                interval={0}
+                allowDecimals={false}
+                tick={(props) => <DottedChartYAxisTick {...props} labels={displayedYLabels} />}
+                tickMargin={8}
+                width={Y_AXIS_WIDTH}
+              />
+              <Tooltip
+                cursor={{ strokeDasharray: "3 3" }}
+                content={
+                  <DottedChartTooltip
+                    xAxis={effectiveConfig.xAxis}
+                    yAxis={effectiveConfig.yAxis}
+                    colorBy={effectiveConfig.colorBy}
+                  />
+                }
+              />
+              <Scatter
+                name="Events"
+                data={displayedPoints}
+                isAnimationActive={false}
+                shape={(props: any) => {
+                  const point = props.payload as ChartPoint;
+                  const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
+                  const shape = shapeScale.get(point.shapeKey) ?? "circle";
+                  return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
+                }}
+              />
+            </ScatterChart>
+          </ChartContainer>
+        </div>
+        <div
+          ref={dragOverlayRef}
+          className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
+        />
+      </div>
 
       {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
         <DottedChartColorLegend
@@ -635,6 +663,7 @@ function DottedChartZoomControls({
   xLabels,
   yLabels,
   isApplying,
+  isZoomed,
   onReset,
   onApply,
 }: {
@@ -647,6 +676,7 @@ function DottedChartZoomControls({
   xLabels: Map<number, string>;
   yLabels: Map<number, string>;
   isApplying: boolean;
+  isZoomed: boolean;
   onReset: () => void;
   onApply: (xRange: BrushRange, yRange: BrushRange) => void;
 }) {
@@ -676,6 +706,10 @@ function DottedChartZoomControls({
   const yEndPercent = indexToPercent(effectiveDraftYRange.endIndex, rowCount);
   const yStartLabelPlacement = getRangeLabelPlacement(yStartPercent);
   const yEndLabelPlacement = getRangeLabelPlacement(yEndPercent);
+  const isDraftZoomed =
+    !isFullRange(effectiveDraftXRange, pointCount) ||
+    !isFullRange(effectiveDraftYRange, rowCount);
+  const canReset = isZoomed || isDraftZoomed;
 
   useEffect(() => {
     setDraftXRange(xRange);
@@ -777,10 +811,21 @@ function DottedChartZoomControls({
     []
   );
 
+  const handleResetZoom = useCallback(() => {
+    const nextXRange = fullBrushRange(pointCount);
+    const nextYRange = fullBrushRange(rowCount);
+    setDraftXRange(nextXRange);
+    setDraftYRange(nextYRange);
+    setStartDateInput(formatRangeDateInput(points[nextXRange.startIndex], xAxis));
+    setEndDateInput(formatRangeDateInput(points[nextXRange.endIndex], xAxis));
+    setDateError(null);
+    onReset();
+  }, [onReset, pointCount, points, rowCount, xAxis]);
+
   return (
     <div className="rounded-md border bg-background px-3 py-3">
-      <div className="grid gap-3 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-start">
-        <div className="relative w-full px-1">
+      <div className="flex items-start gap-3">
+        <div className="relative min-w-0 flex-1 px-1">
           <Label className="mb-2 block text-xs text-muted-foreground">{formatAxisLabel(yAxis)}</Label>
           <Slider
             min={0}
@@ -817,16 +862,12 @@ function DottedChartZoomControls({
         <Button
           type="button"
           variant="outline"
-          size="icon"
-          onClick={onReset}
-          disabled={
-            (pointCount <= 1 && rowCount <= 1) ||
-            (isFullRange(effectiveDraftXRange, pointCount) && isFullRange(effectiveDraftYRange, rowCount))
-          }
-          className="h-8 w-8 rounded-full"
-          title="Reset dotted chart viewport"
+          size="sm"
+          onClick={handleResetZoom}
+          disabled={!canReset || (pointCount <= 1 && rowCount <= 1)}
+          className="mt-5 h-8 shrink-0"
         >
-          <ScanIcon className="h-4 w-4" />
+          Reset
         </Button>
       </div>
 
@@ -1032,17 +1073,118 @@ function findRangeForDateBounds(
   return { startIndex, endIndex };
 }
 
-function chartPointFromMouseEvent(event: any): ChartPoint | null {
-  const payload = event?.activePayload?.[0]?.payload;
-  if (!payload || !Number.isFinite(payload.chartX) || !Number.isFinite(payload.chartY)) {
-    return null;
-  }
-  return payload as ChartPoint;
+function chartPointFromMousePosition(
+  event: React.MouseEvent<HTMLElement>,
+  wrapper: HTMLDivElement | null,
+  xDomain: [number, number],
+  yDomain: [number, number]
+): DragPoint | null {
+  const plotBounds = getChartPlotBounds(wrapper);
+  if (!plotBounds) return null;
+
+  const clientX = clampNumber(event.clientX, plotBounds.left, plotBounds.right);
+  const clientY = clampNumber(event.clientY, plotBounds.top, plotBounds.bottom);
+  const xPercent = (clientX - plotBounds.left) / (plotBounds.right - plotBounds.left);
+  const yPercent = (clientY - plotBounds.top) / (plotBounds.bottom - plotBounds.top);
+
+  return {
+    chartX: xDomain[0] + xPercent * (xDomain[1] - xDomain[0]),
+    chartY: yDomain[1] - yPercent * (yDomain[1] - yDomain[0]),
+    clientX,
+    clientY,
+  };
 }
 
-function preventDefaultMouseAction(event: any) {
-  event?.preventDefault?.();
-  event?.event?.preventDefault?.();
+function getChartPlotBounds(wrapper: HTMLDivElement | null): PlotBounds | null {
+  const svg = wrapper?.querySelector("svg");
+  if (!wrapper || !svg) return null;
+
+  const gridBounds = getRenderedGridBounds(wrapper, svg);
+  if (gridBounds) return gridBounds;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const svgRect = svg.getBoundingClientRect();
+  const left = svgRect.left + Y_AXIS_WIDTH + CHART_MARGIN.left;
+  const right = svgRect.right - CHART_MARGIN.right;
+  const top = svgRect.top + CHART_MARGIN.top;
+  const bottom = svgRect.bottom - CHART_MARGIN.bottom;
+
+  if (right <= left || bottom <= top) return null;
+  return {
+    left: clampNumber(left, wrapperRect.left, wrapperRect.right),
+    right: clampNumber(right, wrapperRect.left, wrapperRect.right),
+    top: clampNumber(top, wrapperRect.top, wrapperRect.bottom),
+    bottom: clampNumber(bottom, wrapperRect.top, wrapperRect.bottom),
+  };
+}
+
+function getRenderedGridBounds(wrapper: HTMLDivElement, svg: SVGSVGElement): PlotBounds | null {
+  const gridLines = Array.from(
+    wrapper.querySelectorAll<SVGLineElement>(
+      ".recharts-cartesian-grid-horizontal line, .recharts-cartesian-grid-vertical line"
+    )
+  );
+  if (!gridLines.length) return null;
+
+  const points = gridLines.flatMap((line) => {
+    const x1 = Number(line.getAttribute("x1"));
+    const y1 = Number(line.getAttribute("y1"));
+    const x2 = Number(line.getAttribute("x2"));
+    const y2 = Number(line.getAttribute("y2"));
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return [];
+    return [svgPointToClient(svg, x1, y1), svgPointToClient(svg, x2, y2)];
+  });
+  if (!points.length) return null;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const left = Math.min(...points.map((point) => point.x));
+  const right = Math.max(...points.map((point) => point.x));
+  const top = Math.min(...points.map((point) => point.y));
+  const bottom = Math.max(...points.map((point) => point.y));
+
+  if (right <= left || bottom <= top) return null;
+  return {
+    left: clampNumber(left, wrapperRect.left, wrapperRect.right),
+    right: clampNumber(right, wrapperRect.left, wrapperRect.right),
+    top: clampNumber(top, wrapperRect.top, wrapperRect.bottom),
+    bottom: clampNumber(bottom, wrapperRect.top, wrapperRect.bottom),
+  };
+}
+
+function svgPointToClient(svg: SVGSVGElement, x: number, y: number): { x: number; y: number } {
+  const point = svg.createSVGPoint();
+  point.x = x;
+  point.y = y;
+  const screenPoint = point.matrixTransform(svg.getScreenCTM() ?? new DOMMatrix());
+  return { x: screenPoint.x, y: screenPoint.y };
+}
+
+function updateDragOverlay(overlay: HTMLDivElement | null, selection: DragSelection | null) {
+  if (!overlay || !selection?.isDragging) return;
+  const left = Math.min(selection.startClientX, selection.endClientX);
+  const top = Math.min(selection.startClientY, selection.endClientY);
+
+  overlay.classList.remove("hidden");
+  overlay.style.left = `${left}px`;
+  overlay.style.top = `${top}px`;
+  overlay.style.width = `${Math.abs(selection.startClientX - selection.endClientX)}px`;
+  overlay.style.height = `${Math.abs(selection.startClientY - selection.endClientY)}px`;
+}
+
+function hideDragOverlay(overlay: HTMLDivElement | null) {
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+  overlay.style.width = "0px";
+  overlay.style.height = "0px";
+}
+
+function setChartInteractionEnabled(container: HTMLDivElement | null, enabled: boolean) {
+  if (!container) return;
+  container.style.pointerEvents = enabled ? "" : "none";
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function brushRangeForChartXBounds(
@@ -1067,13 +1209,20 @@ function brushRangeForChartXBounds(
 function brushRangeForDisplayedYBounds(
   frameYTicks: number[],
   displayedYTicks: number[],
-  selection: DragSelection
+  selection: DragSelection,
+  plotBounds: PlotBounds | null
 ): BrushRange | null {
-  const minDisplayedY = Math.min(selection.startY, selection.endY);
-  const maxDisplayedY = Math.max(selection.startY, selection.endY);
-  const startDisplayedIndex = Math.max(0, Math.ceil(minDisplayedY) - 1);
-  const endDisplayedIndex = Math.min(displayedYTicks.length - 1, Math.floor(maxDisplayedY) - 1);
-  const selectedTicks = displayedYTicks.slice(startDisplayedIndex, endDisplayedIndex + 1);
+  if (!plotBounds || !displayedYTicks.length) return null;
+
+  const minClientY = Math.min(selection.startClientY, selection.endClientY);
+  const maxClientY = Math.max(selection.startClientY, selection.endClientY);
+  const plotHeight = plotBounds.bottom - plotBounds.top;
+  if (plotHeight <= 0) return null;
+
+  const selectedTicks = displayedYTicks.filter((_, index) => {
+    const rowCenterY = plotBounds.bottom - ((index + 0.5) / displayedYTicks.length) * plotHeight;
+    return rowCenterY >= minClientY && rowCenterY <= maxClientY;
+  });
   if (!selectedTicks.length) return null;
 
   const frameIndexByTick = new Map(frameYTicks.map((tick, index) => [tick, index]));
@@ -1192,7 +1341,25 @@ type DragSelection = {
   endX: number;
   startY: number;
   endY: number;
+  startClientX: number;
+  endClientX: number;
+  startClientY: number;
+  endClientY: number;
   isDragging: boolean;
+};
+
+type DragPoint = {
+  chartX: number;
+  chartY: number;
+  clientX: number;
+  clientY: number;
+};
+
+type PlotBounds = {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 };
 
 function clampBrushRange(range: BrushRange, pointCount: number): BrushRange {
