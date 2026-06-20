@@ -65,6 +65,7 @@ export type DfgLink = {
   key?: string;
   objtype?: string;
   weight?: number;
+  variant_rank?: number;
 };
 
 export type OcdfgGraph = {
@@ -72,20 +73,10 @@ export type OcdfgGraph = {
   links: DfgLink[];
 };
 
-interface TraceVariantEntry {
-  trace: string[];
-  count: number;
-  objects?: string[];
-}
-interface TraceVariantsForType {
-  variants: TraceVariantEntry[];
-  total_objects: number;
-}
-export type TraceVariantsMap = Record<string, TraceVariantsForType>;
-
 interface DfgData {
   dfg: OcdfgGraph;
-  trace_variants?: TraceVariantsMap;
+  /** Per-type total variant count — used to seed slider maxima. */
+  variant_counts?: Record<string, number>;
 }
 
 interface NewOCDFGVariantsVisualizerProps {
@@ -202,77 +193,7 @@ function measureGraphSize(
   };
 }
 
-function transformLayoutDirection(
-  nodes: Node[],
-  edges: Edge[],
-  direction: LayoutDirection,
-): { nodes: Node[]; edges: Edge[] } {
-  if (direction !== 'LR') {
-    return { nodes, edges };
-  }
 
-  const positions = nodes
-    .map((node) => {
-      const x = coerceNumeric(node.position?.x) ?? 0;
-      const y = coerceNumeric(node.position?.y) ?? 0;
-      return { x, y };
-    })
-    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-
-  const minX = positions.length > 0 ? Math.min(...positions.map((p) => p.x)) : 0;
-  const minY = positions.length > 0 ? Math.min(...positions.map((p) => p.y)) : 0;
-
-  const swapPoint = (point?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(point?.x) ?? 0;
-    const y = coerceNumeric(point?.y) ?? 0;
-    return {
-      x: y - minY,
-      y: x - minX,
-    };
-  };
-
-  const swapVector = (vector?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(vector?.x) ?? 0;
-    const y = coerceNumeric(vector?.y) ?? 0;
-    return { x: y, y: x };
-  };
-
-  const transformedNodes = nodes.map((node) => {
-    const pos = swapPoint(node.position ?? { x: 0, y: 0 });
-    return {
-      ...node,
-      position: pos,
-    };
-  });
-
-  const transformedEdges = edges.map((edge) => {
-    const data = edge.data as {
-      polyline?: Array<{ x: number; y: number }>;
-      sourceAnchorOffset?: { x?: number; y?: number };
-      targetAnchorOffset?: { x?: number; y?: number };
-    } | undefined;
-    const swappedPolyline = data?.polyline?.map((pt) => swapPoint(pt));
-    const swappedSourceOffset = data?.sourceAnchorOffset
-      ? swapVector(data.sourceAnchorOffset)
-      : data?.sourceAnchorOffset;
-    const swappedTargetOffset = data?.targetAnchorOffset
-      ? swapVector(data.targetAnchorOffset)
-      : data?.targetAnchorOffset;
-    const nextData =
-      swappedPolyline || swappedSourceOffset || swappedTargetOffset
-        ? {
-          ...data,
-          polyline: swappedPolyline ?? data?.polyline,
-          sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
-          targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
-        }
-        : data;
-
-    return nextData ? { ...edge, data: nextData } : edge;
-  });
-
-  return { nodes: transformedNodes, edges: transformedEdges };
-}
 
 function extractElkPolyline(elkEdge: any): Array<{ x: number; y: number }> | undefined {
   if (!elkEdge.sections || elkEdge.sections.length === 0) return undefined;
@@ -322,13 +243,9 @@ function NewOCDFGVariantsVisualizer({
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
   const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
 
-  // Trace-count slider state
+  // Variant-rank slider state (client-side filtering — no backend refetch)
   const [traceMax, setTraceMax]   = useState<Record<string, number>>({});
   const [traceLimit, setTraceLimit] = useState<Record<string, number>>({});
-  // Debounce ref: cleared/reset on each slider interaction
-  const traceLimitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Tracks whether we are currently re-fetching after a slider settle
-  const [traceFetching, setTraceFetching] = useState(false);
 
   const [animateEdges, setAnimateEdges] = useState(false);
   const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
@@ -362,6 +279,38 @@ function NewOCDFGVariantsVisualizer({
   const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER;
 
   const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
+  const dragStartRef = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
+
+  const handleLegendPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: legendPosition.x,
+      startY: legendPosition.y,
+    };
+  }, [legendPosition]);
+
+  const handleLegendPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setLegendPosition({
+      x: dragStartRef.current.startX + dx,
+      y: dragStartRef.current.startY + dy,
+    });
+  }, []);
+
+  const handleLegendPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragStartRef.current = null;
+  }, []);
+
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
 
@@ -395,13 +344,6 @@ function NewOCDFGVariantsVisualizer({
     return keysA.every(k => Boolean(a[k]) === Boolean(b[k]));
   };
 
-  const resolveOwnerTypes = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
-    const values = entry?.ownerTypes && entry.ownerTypes.length > 0
-      ? entry.ownerTypes
-      : entry?.owners ?? [];
-    return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
-  };
-
   function computeTypeAvailability(layoutNodes: Node[], layoutEdges: Edge[], allTypes: string[]) {
     const presence = Object.fromEntries(allTypes.map(t => [t, false])) as Record<string, boolean>;
     const visibleNodeIds = new Set(
@@ -412,14 +354,10 @@ function NewOCDFGVariantsVisualizer({
       if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) {
         return;
       }
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
-      );
-      ownerTypes.forEach((t) => {
-        if (t in presence) {
-          presence[t] = true;
-        }
-      });
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && objtype in presence) {
+        presence[objtype] = true;
+      }
     });
 
     return presence;
@@ -561,19 +499,6 @@ function NewOCDFGVariantsVisualizer({
     autoFitView,
   ]);
 
-  // Build the URL for the OCDFG endpoint, injecting trace limits when set.
-  const buildFetchUrl = useCallback(
-    (limits: Record<string, number>) => {
-      let url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
-      const limitParts = Object.entries(limits)
-        .map(([t, n]) => `${encodeURIComponent(t)}:${n}`)
-        .join(',');
-      if (limitParts) url += `&trace_limits=${limitParts}`;
-      return url;
-    },
-    [fileId],
-  );
-
   useEffect(() => {
     if (data) {
       setDfgData(data);
@@ -586,8 +511,7 @@ function NewOCDFGVariantsVisualizer({
     }
 
     let cancelled = false;
-    // On initial load always use current traceLimit (empty == unfiltered)
-    const url = buildFetchUrl(traceLimit);
+    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {
@@ -596,20 +520,22 @@ function NewOCDFGVariantsVisualizer({
         if (graph) setDfgData(graph);
         else        setDfgData({ nodes: [], links: [] });
 
-        // Seed trace variant state from the initial response
-        const tv = payload?.trace_variants;
-        if (tv) {
+        // Seed slider maxima from variant_counts returned by the backend.
+        // The backend now annotates every edge with variant_rank so the
+        // frontend can filter entirely client-side — no re-fetch needed.
+        const vc = payload?.variant_counts;
+        if (vc) {
           setTraceMax(prev => {
             const next: Record<string, number> = { ...prev };
-            Object.entries(tv).forEach(([t, entry]) => {
-              if (!(t in next)) next[t] = entry.variants.length;
+            Object.entries(vc).forEach(([t, count]) => {
+              if (!(t in next)) next[t] = count;
             });
             return next;
           });
           setTraceLimit(prev => {
             const next: Record<string, number> = { ...prev };
-            Object.entries(tv).forEach(([t, entry]) => {
-              if (!(t in next)) next[t] = entry.variants.length;
+            Object.entries(vc).forEach(([t, count]) => {
+              if (!(t in next)) next[t] = count;
             });
             return next;
           });
@@ -617,7 +543,7 @@ function NewOCDFGVariantsVisualizer({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('[NewOCDFGVisualizer] Failed to load new OCDFG data', err);
+          console.error('[NewOCDFGVariantsVisualizer] Failed to load new OCDFG data', err);
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -626,37 +552,14 @@ function NewOCDFGVariantsVisualizer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, fileId]);
 
-  // Debounced re-fetch when slider values settle (1.5 s after last change)
-  const refetchWithLimits = useCallback(
-    (limits: Record<string, number>) => {
-      if (!fileId || data) return;  // data-prop mode: no fetching
-      const url = buildFetchUrl(limits);
-      setTraceFetching(true);
-      axios.get<DfgData>(url)
-        .then(({ data: payload }) => {
-          const graph = payload?.dfg;
-          if (graph) setDfgData(graph);
-          else        setDfgData({ nodes: [], links: [] });
-        })
-        .catch(err => console.error('[NewOCDFGVisualizer] Trace-limit re-fetch failed', err))
-        .finally(() => setTraceFetching(false));
-    },
-    [fileId, data, buildFetchUrl],
-  );
-
+  // Slider change: pure client-side — just update traceLimit state.
+  // The layout effect has traceLimit in its dependency array so it will
+  // re-run and filter rawEdges by variant_rank without any network request.
   const handleTraceLimitChange = useCallback(
     (otype: string, value: number) => {
       setTraceLimit(prev => ({ ...prev, [otype]: value }));
-      // Reset debounce timer
-      if (traceLimitDebounceRef.current) clearTimeout(traceLimitDebounceRef.current);
-      traceLimitDebounceRef.current = setTimeout(() => {
-        setTraceLimit(current => {
-          refetchWithLimits(current);
-          return current;
-        });
-      }, 1500);
     },
-    [refetchWithLimits],
+    [],
   );
 
   useEffect(() => {
@@ -849,8 +752,9 @@ function NewOCDFGVariantsVisualizer({
         animated: true,
         data: {
           objtype: typeKey,
-          owners: [typeKey],
-          ownerTypes: [typeKey],
+          // variant_rank: 0 = start/end connector (always show)
+          //               N = only show when slider >= N
+          variant_rank: link.variant_rank ?? 0,
           colors,
           parallelIndex: currentIndex,
           parallelCount: groupCounts[key],
@@ -882,28 +786,43 @@ function NewOCDFGVariantsVisualizer({
       return;
     }
 
-    const filteredNodes = rawNodes.filter(node => {
-      const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
-      return nodeTypes.length === 0 ? true : nodeTypes.some(t => typeVisibility[t] !== false);
+    const filteredEdges = rawEdges.filter(edge => {
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      // Visibility toggle
+      if (objtype && typeVisibility[objtype] === false) return false;
+      // Variant-rank client-side filter
+      // variant_rank 0 = start/end connector edges — always visible
+      const variantRank = (edge.data as { variant_rank?: number } | undefined)?.variant_rank ?? 0;
+      if (variantRank === 0) return true;
+      const limit = traceLimit[objtype ?? ''] ?? (traceMax[objtype ?? ''] ?? Infinity);
+      return variantRank <= limit;
     });
 
-    const filteredEdges = rawEdges.filter(edge => {
-      const ownerTypes = (edge.data as { ownerTypes?: string[] } | undefined)?.ownerTypes ?? [];
-      return ownerTypes.some(t => typeVisibility[t] !== false);
+    // Find which nodes are actually connected to visible edges
+    const connectedNodeIds = new Set<string>();
+    filteredEdges.forEach(e => {
+      connectedNodeIds.add(e.source);
+      connectedNodeIds.add(e.target);
     });
+
+    const filteredNodes = rawNodes.filter(node => {
+      const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
+      const visibleByType = nodeTypes.length === 0 ? true : nodeTypes.some(t => typeVisibility[t] !== false);
+      return visibleByType && connectedNodeIds.has(node.id);
+    });
+
 
     const naiveNodes = dfgData.nodes;
     const naiveLinks = dfgData.links.map(l => ({
       source: l.source,
       target: l.target,
       weight: l.weight,
-      owners: l.owners ?? [l.key ?? l.objtype],
-      ownerTypes: l.ownerTypes ?? [l.key ?? l.objtype]
+      objtypes: [l.key ?? l.objtype],
     }));
 
     const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
 
-    getLayoutedElements(filteredNodes, filteredEdges, ranks).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);
         return {
@@ -915,11 +834,8 @@ function NewOCDFGVariantsVisualizer({
         };
       });
 
-      const { nodes: directedNodes, edges: directedEdges } = transformLayoutDirection(
-        layoutedNodes,
-        processedEdges,
-        layoutDirection,
-      );
+      const directedNodes = layoutedNodes;
+      const directedEdges = processedEdges;
 
       const shifted = shiftForLegend(directedNodes, directedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
@@ -954,6 +870,8 @@ function NewOCDFGVariantsVisualizer({
     }).catch(console.error);
   }, [
     typeVisibility,
+    traceLimit,
+    traceMax,
     rawNodes,
     rawEdges,
     dfgData,
@@ -989,11 +907,8 @@ function NewOCDFGVariantsVisualizer({
 
     const visibleNodeIds = new Set(resolvedNodes.filter(n => !n.hidden).map(n => n.id));
     const filteredEdges = baseEdges.filter(edge => {
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
-      );
-      const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
-      if (blockedByType) return false;
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && typeVisibility[objtype] === false) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
     }).map(edge => ({
       ...edge,
@@ -1083,8 +998,8 @@ function NewOCDFGVariantsVisualizer({
           onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: 16,
-            left: 16,
+            top: 16 + legendPosition.y,
+            left: 16 + legendPosition.x,
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
@@ -1106,22 +1021,6 @@ function NewOCDFGVariantsVisualizer({
               Object-Centric DFG (Variants)
             </div>
           </div>
-          {/* Loading indicator while debounced re-fetch is in progress */}
-          {traceFetching && (
-            <div
-              style={{
-                background: 'rgba(255,255,255,0.92)',
-                border: '1px solid #E5E7EB',
-                borderRadius: 10,
-                padding: '8px 14px',
-                fontSize: 12,
-                color: '#64748B',
-                fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              }}
-            >
-              Updating graphΓÇª
-            </div>
-          )}
 
           {Object.keys(typeColors).length > 0 && (
             <div
@@ -1149,7 +1048,15 @@ function NewOCDFGVariantsVisualizer({
                   color: '#0F172A',
                 }}
               >
-                <span>Object Types</span>
+                <span
+                  style={{ cursor: 'grab' }}
+                  onPointerDown={handleLegendPointerDown}
+                  onPointerMove={handleLegendPointerMove}
+                  onPointerUp={handleLegendPointerUp}
+                  onPointerCancel={handleLegendPointerUp}
+                >
+                  Object Types
+                </span>
                 <button
                   type="button"
                   onClick={() => setLegendCollapsed((prev) => !prev)}
@@ -1161,7 +1068,7 @@ function NewOCDFGVariantsVisualizer({
                     cursor: 'pointer',
                   }}
                 >
-                  {legendCollapsed ? 'Show' : 'Hide'}
+                  {legendCollapsed ? 'Expand' : 'Collapse'}
                 </button>
               </div>
               {!legendCollapsed && (

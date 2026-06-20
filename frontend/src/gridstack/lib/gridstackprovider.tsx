@@ -254,6 +254,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'TB',
         };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
@@ -373,6 +374,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            layout_direction: item.layout_direction,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -400,6 +402,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              (node as any).layout_direction = item.layout_direction;
             }
           }
           // Set data attribute for persistence

@@ -11,8 +11,9 @@ export interface DfgLink {
   source: string;
   target: string;
   weight?: number;
-  owners?: string[];
-  ownerTypes?: string[];
+  objtypes?: string[];
+  key?: string;
+  objtype?: string;
   weights?: Record<string, number>;
 }
 
@@ -88,11 +89,12 @@ export function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
   ranks: Map<string, number>,
+  layoutDirection: 'TB' | 'LR' = 'TB'
 ) {
-  // Configure ELK for a layered, top-to-bottom layout
+  // Configure ELK for a layered layout
   const elkOptions = {
     'elk.algorithm': 'layered',
-    'elk.direction': 'DOWN',
+    'elk.direction': layoutDirection === 'LR' ? 'RIGHT' : 'DOWN',
     'elk.layered.spacing.nodeNodeBetweenLayers': '120',
     'elk.spacing.nodeNode': '100',
   };
@@ -104,8 +106,6 @@ export function getLayoutedElements(
       ...node,
       width: node.width ?? 150,
       height: node.height ?? 50,
-      // This is the key: assign each node to a horizontal "partition" based on its rank
-      'elk.partition': ranks.get(node.id) || 0,
     })),
     edges,
   };

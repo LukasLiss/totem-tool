@@ -21,7 +21,7 @@ from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from types import SimpleNamespace
 import networkx as nx
 
-from collections import defaultdict
+
 
 from django.core.cache import cache
 
@@ -517,6 +517,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    layout_direction=item.get('layout_direction', 'TB'),
                 )
             # Add more as needed
 
@@ -681,131 +682,10 @@ def _layout_shim(db: OcelDuckDB):
     return SimpleNamespace(obj_type_map=obj_type_map)
 
 
-def _extract_trace_variants_per_type(
-    db: OcelDuckDB, object_types: set[str]
-) -> dict:
-    """
-    Per-object-type activity-sequence variants — pushed entirely into SQL.
-
-    For each object of the requested types, builds a `'|'`-joined activity
-    sequence (the trace) ordered by event timestamp, then groups by
-    `(obj_type, trace)` to count instances. The shape of the returned dict
-    matches what this helper produced in its previous polars implementation:
-
-        {obj_type: {
-            "variants": [
-                {"trace": ["a", "b", ...], "count": N, "objects": ["o1", ...]},
-                ...
-            ],
-            "total_objects": M,
-        }}
-    """
-    if not object_types:
-        return {}
-
-    types_list = list(object_types)
-    placeholders = ", ".join(["?"] * len(types_list))
-
-    # total_objects per type (including objects with no events).
-    totals = {
-        t: n
-        for t, n in db.conn.execute(
-            f"SELECT obj_type, COUNT(*) FROM objects "
-            f"WHERE obj_type IN ({placeholders}) GROUP BY obj_type",
-            types_list,
-        ).fetchall()
-    }
-
-    variants_by_type: dict[str, list[dict]] = defaultdict(list)
-    rows = db.conn.execute(
-        f"""
-        WITH per_obj_traces AS (
-            SELECT
-                o.obj_id,
-                o.obj_type,
-                STRING_AGG(e.activity, '|'
-                           ORDER BY e.timestamp_unix, e.event_id) AS trace
-            FROM objects o
-            JOIN event_object eo ON eo.obj_id   = o.obj_id
-            JOIN events       e  ON eo.event_id = e.event_id
-            WHERE o.obj_type IN ({placeholders})
-            GROUP BY o.obj_id, o.obj_type
-        )
-        SELECT
-            obj_type,
-            trace,
-            COUNT(*)                 AS cnt,
-            LIST(obj_id ORDER BY obj_id) AS objects
-        FROM per_obj_traces
-        GROUP BY obj_type, trace
-        ORDER BY obj_type, cnt DESC
-        """,
-        types_list,
-    ).fetchall()
-
-    for obj_type, trace, cnt, objects in rows:
-        variants_by_type[obj_type].append({
-            "trace": trace.split("|") if trace else [],
-            "count": int(cnt),
-            "objects": list(objects),
-        })
-
-    result: dict = {}
-    for t in object_types:
-        result[t] = {
-            "variants": variants_by_type.get(t, []),
-            "total_objects": int(totals.get(t, 0)),
-        }
-    return result
-
-
-def _apply_trace_limits(
-    graph: "nx.MultiDiGraph",
-    trace_variants: dict,
-    trace_limits: dict,
-) -> "nx.MultiDiGraph":
-    """
-    Return a copy of *graph* filtered by per-type trace-count limits.
-
-    *trace_limits*  –  {obj_type: N}  keep only edges that appear in the
-                        top-N trace variants for that type.  Types absent
-                        from the dict are left untouched.
-
-    Start and end connector edges (role == 'start' or 'end') are always
-    preserved so the graph stays structurally complete.
-    """
-    # Build allowed (src, tgt) sets per restricted type
-    allowed: dict[str, set[tuple] | None] = {}
-    for otype, entry in trace_variants.items():
-        limit = trace_limits.get(otype)
-        if limit is None:
-            allowed[otype] = None          # unrestricted
-            continue
-        top_variants = entry.get("variants", [])[:limit]
-        pairs: set[tuple] = set()
-        for v in top_variants:
-            activities = v.get("trace", [])
-            for i in range(len(activities) - 1):
-                pairs.add((activities[i], activities[i + 1]))
-        allowed[otype] = pairs
-
-    filtered = nx.MultiDiGraph()
-    filtered.graph.update(graph.graph)
-    for node, data in graph.nodes(data=True):
-        filtered.add_node(node, **data)
-
-    for u, v, key, data in graph.edges(keys=True, data=True):
-        otype = data.get("objtype", key)
-        role = data.get("role")
-        # Always keep structural start/end edges
-        if role in ("start", "end"):
-            filtered.add_edge(u, v, key=key, **data)
-            continue
-        pair_set = allowed.get(otype)
-        if pair_set is None or (u, v) in pair_set:
-            filtered.add_edge(u, v, key=key, **data)
-
-    return filtered
+# NOTE: _extract_trace_variants_per_type and _apply_trace_limits have been
+# removed from this file. That logic now lives in totem-lib:
+#   NewOCDFGDb.compute_variants()               (variant extraction)
+#   NewOCDFGDb.from_ocel_db_with_variant_ranks() (full annotated graph)
 
 
 
@@ -2206,7 +2086,7 @@ def OCDFGViewSet(request):
                         dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
 
                     # Per-object-type trace variants for the filtered types.
-                    trace_variants = _extract_trace_variants_per_type(db, object_type_filter)
+                    trace_variants = NewOCDFGDb.compute_variants(db, object_types=list(object_type_filter))
                 except Exception as e:
                     # Gracefully fall back to unfiltered graph to avoid
                     # frontend breakage, but surface warning.
@@ -2219,9 +2099,9 @@ def OCDFGViewSet(request):
             # all object types from the OCEL when no filter is specified.
             if trace_variants is None:
                 try:
-                    all_object_types = set(_object_types(db))
+                    all_object_types = _object_types(db)
                     if all_object_types:
-                        trace_variants = _extract_trace_variants_per_type(db, all_object_types)
+                        trace_variants = NewOCDFGDb.compute_variants(db, object_types=all_object_types)
                 except Exception as e:
                     print(f"[OCDFG] Failed to compute trace variants: {e}")
 
@@ -2239,6 +2119,20 @@ def OCDFGViewSet(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def NewOCDFGViewSet(request):
+    """
+    Thin routing layer for the New OC-DFG endpoint.
+
+    Delegates all computation to ``NewOCDFGDb.from_ocel_db_with_variant_ranks``
+    in totem-lib.  The only Django-layer responsibilities are:
+      1. Parse / validate query params.
+      2. Resolve the EventLog → open OcelDuckDB.
+      3. Call the lib method.
+      4. Serialize the NetworkX graph to JSON and return.
+
+    Variant filtering is now done **entirely on the frontend** using the
+    ``variant_rank`` attribute annotated on every edge by the lib.  No
+    ``trace_limits`` query parameter is accepted or processed here.
+    """
     file_id = request.query_params.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
@@ -2247,20 +2141,9 @@ def NewOCDFGViewSet(request):
     raw_object_types = request.query_params.get("object_types")
     object_type_filter = None
     if raw_object_types:
-        object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
-
-    # Optional per-type trace-count limits  e.g. "Container:10,Forklift:5"
-    raw_trace_limits = request.query_params.get("trace_limits")
-    trace_limits: dict[str, int] = {}
-    if raw_trace_limits:
-        for part in raw_trace_limits.split(","):
-            part = part.strip()
-            if ":" in part:
-                otype, _, n_str = part.partition(":")
-                try:
-                    trace_limits[otype.strip()] = max(0, int(n_str.strip()))
-                except ValueError:
-                    pass  # ignore malformed entries
+        object_type_filter = sorted(
+            t.strip() for t in raw_object_types.split(",") if t.strip()
+        ) or None
 
     try:
         user_file = EventLog.objects.get(id=file_id)
@@ -2269,36 +2152,19 @@ def NewOCDFGViewSet(request):
 
     try:
         with _with_ocel_db(user_file) as db:
-            # Build full multigraph
-            ocdfg_full = NewOCDFGDb.from_ocel_db(
-                db, object_types=sorted(object_type_filter) if object_type_filter else None
+            # Delegate all process-mining logic to totem-lib.
+            # Returns the annotated graph and per-type variant counts for sliders.
+            ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
+                db, object_types=object_type_filter
             )
 
-            # Compute trace variants (needed both for the response and for
-            # applying trace-count limits, so always run it once).
-            filter_error = None
-            trace_variants = None
-            try:
-                types_for_variants = object_type_filter or set(_object_types(db))
-                if types_for_variants:
-                    trace_variants = _extract_trace_variants_per_type(db, types_for_variants)
-            except Exception as e:
-                print(f"[NewOCDFG] Failed to compute trace variants: {e}")
-
-            # Apply per-type trace-count limits if requested
-            if trace_limits and trace_variants:
-                try:
-                    ocdfg_full = _apply_trace_limits(ocdfg_full, trace_variants, trace_limits)
-                except Exception as e:
-                    filter_error = f"Failed to apply trace limits: {e}"
-
-            if len(ocdfg_full.nodes) == 0:
+            if len(ocdfg.nodes) == 0:
                 dfg_json = {
                     "directed": True, "multigraph": True,
                     "graph": {"kind": "new_ocdfg"}, "nodes": [], "links": [],
                 }
             else:
-                dfg_json = nx.node_link_data(ocdfg_full, edges="links")
+                dfg_json = nx.node_link_data(ocdfg, edges="links")
 
             all_nodes = [
                 {
@@ -2310,15 +2176,18 @@ def NewOCDFGViewSet(request):
                 for n in dfg_json.get("nodes", [])
             ]
 
-        response_payload = {"dfg": dfg_json, "all_nodes": all_nodes}
-        if filter_error:
-            response_payload["filter_error"] = filter_error
-        if trace_variants:
-            response_payload["trace_variants"] = trace_variants
-
-        return Response(response_payload, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "dfg": dfg_json,
+                "all_nodes": all_nodes,
+                "variant_counts": variant_counts,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

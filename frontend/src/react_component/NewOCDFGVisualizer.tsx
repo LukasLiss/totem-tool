@@ -65,6 +65,7 @@ export type DfgLink = {
   key?: string;
   objtype?: string;
   weight?: number;
+  variant_rank?: number;
 };
 
 export type OcdfgGraph = {
@@ -202,77 +203,7 @@ function measureGraphSize(
   };
 }
 
-function transformLayoutDirection(
-  nodes: Node[],
-  edges: Edge[],
-  direction: LayoutDirection,
-): { nodes: Node[]; edges: Edge[] } {
-  if (direction !== 'LR') {
-    return { nodes, edges };
-  }
 
-  const positions = nodes
-    .map((node) => {
-      const x = coerceNumeric(node.position?.x) ?? 0;
-      const y = coerceNumeric(node.position?.y) ?? 0;
-      return { x, y };
-    })
-    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-
-  const minX = positions.length > 0 ? Math.min(...positions.map((p) => p.x)) : 0;
-  const minY = positions.length > 0 ? Math.min(...positions.map((p) => p.y)) : 0;
-
-  const swapPoint = (point?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(point?.x) ?? 0;
-    const y = coerceNumeric(point?.y) ?? 0;
-    return {
-      x: y - minY,
-      y: x - minX,
-    };
-  };
-
-  const swapVector = (vector?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(vector?.x) ?? 0;
-    const y = coerceNumeric(vector?.y) ?? 0;
-    return { x: y, y: x };
-  };
-
-  const transformedNodes = nodes.map((node) => {
-    const pos = swapPoint(node.position ?? { x: 0, y: 0 });
-    return {
-      ...node,
-      position: pos,
-    };
-  });
-
-  const transformedEdges = edges.map((edge) => {
-    const data = edge.data as {
-      polyline?: Array<{ x: number; y: number }>;
-      sourceAnchorOffset?: { x?: number; y?: number };
-      targetAnchorOffset?: { x?: number; y?: number };
-    } | undefined;
-    const swappedPolyline = data?.polyline?.map((pt) => swapPoint(pt));
-    const swappedSourceOffset = data?.sourceAnchorOffset
-      ? swapVector(data.sourceAnchorOffset)
-      : data?.sourceAnchorOffset;
-    const swappedTargetOffset = data?.targetAnchorOffset
-      ? swapVector(data.targetAnchorOffset)
-      : data?.targetAnchorOffset;
-    const nextData =
-      swappedPolyline || swappedSourceOffset || swappedTargetOffset
-        ? {
-          ...data,
-          polyline: swappedPolyline ?? data?.polyline,
-          sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
-          targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
-        }
-        : data;
-
-    return nextData ? { ...edge, data: nextData } : edge;
-  });
-
-  return { nodes: transformedNodes, edges: transformedEdges };
-}
 
 function extractElkPolyline(elkEdge: any): Array<{ x: number; y: number }> | undefined {
   if (!elkEdge.sections || elkEdge.sections.length === 0) return undefined;
@@ -358,6 +289,38 @@ function NewOCDFGVisualizer({
   const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER;
 
   const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
+  const dragStartRef = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
+
+  const handleLegendPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: legendPosition.x,
+      startY: legendPosition.y,
+    };
+  }, [legendPosition]);
+
+  const handleLegendPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setLegendPosition({
+      x: dragStartRef.current.startX + dx,
+      y: dragStartRef.current.startY + dy,
+    });
+  }, []);
+
+  const handleLegendPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragStartRef.current = null;
+  }, []);
+
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
 
@@ -391,12 +354,6 @@ function NewOCDFGVisualizer({
     return keysA.every(k => Boolean(a[k]) === Boolean(b[k]));
   };
 
-  const resolveOwnerTypes = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
-    const values = entry?.ownerTypes && entry.ownerTypes.length > 0
-      ? entry.ownerTypes
-      : entry?.owners ?? [];
-    return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
-  };
 
   function computeTypeAvailability(layoutNodes: Node[], layoutEdges: Edge[], allTypes: string[]) {
     const presence = Object.fromEntries(allTypes.map(t => [t, false])) as Record<string, boolean>;
@@ -408,14 +365,10 @@ function NewOCDFGVisualizer({
       if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) {
         return;
       }
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
-      );
-      ownerTypes.forEach((t) => {
-        if (t in presence) {
-          presence[t] = true;
-        }
-      });
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && objtype in presence) {
+        presence[objtype] = true;
+      }
     });
 
     return presence;
@@ -808,8 +761,6 @@ function NewOCDFGVisualizer({
         animated: true,
         data: {
           objtype: typeKey,
-          owners: [typeKey],
-          ownerTypes: [typeKey],
           colors,
           parallelIndex: currentIndex,
           parallelCount: groupCounts[key],
@@ -848,13 +799,12 @@ function NewOCDFGVisualizer({
     });
 
     const filteredEdges = rawEdges.filter(edge => {
-      const ownerTypes = (edge.data as { ownerTypes?: string[] } | undefined)?.ownerTypes ?? [];
-      const isVisible = ownerTypes.some(t => typeVisibility[t] !== false);
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      const isVisible = objtype ? typeVisibility[objtype] !== false : true;
       if (!isVisible) return false;
 
-      const objtype = (edge.data as any)?.objtype;
       const weight = (edge.data as any)?.weight ?? 0;
-      const threshold = weightLimit[objtype] ?? 0;
+      const threshold = weightLimit[objtype ?? ''] ?? 0;
       return weight >= threshold;
     });
 
@@ -863,13 +813,12 @@ function NewOCDFGVisualizer({
       source: l.source,
       target: l.target,
       weight: l.weight,
-      owners: l.owners ?? [l.key ?? l.objtype],
-      ownerTypes: l.ownerTypes ?? [l.key ?? l.objtype]
+      objtypes: [l.key ?? l.objtype],
     }));
 
     const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
 
-    getLayoutedElements(filteredNodes, filteredEdges, ranks).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);
         return {
@@ -881,11 +830,8 @@ function NewOCDFGVisualizer({
         };
       });
 
-      const { nodes: directedNodes, edges: directedEdges } = transformLayoutDirection(
-        layoutedNodes,
-        processedEdges,
-        layoutDirection,
-      );
+      const directedNodes = layoutedNodes;
+      const directedEdges = processedEdges;
 
       const shifted = shiftForLegend(directedNodes, directedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
@@ -956,11 +902,8 @@ function NewOCDFGVisualizer({
 
     const visibleNodeIds = new Set(resolvedNodes.filter(n => !n.hidden).map(n => n.id));
     const filteredEdges = baseEdges.filter(edge => {
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
-      );
-      const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
-      if (blockedByType) return false;
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && typeVisibility[objtype] === false) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
     }).map(edge => ({
       ...edge,
@@ -1051,8 +994,8 @@ function NewOCDFGVisualizer({
           onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: 16,
-            left: 16,
+            top: 16 + legendPosition.y,
+            left: 16 + legendPosition.x,
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
@@ -1102,7 +1045,15 @@ function NewOCDFGVisualizer({
                   color: '#0F172A',
                 }}
               >
-                <span>Object Types</span>
+                <span
+                  style={{ cursor: 'grab' }}
+                  onPointerDown={handleLegendPointerDown}
+                  onPointerMove={handleLegendPointerMove}
+                  onPointerUp={handleLegendPointerUp}
+                  onPointerCancel={handleLegendPointerUp}
+                >
+                  Object Types
+                </span>
                 <button
                   type="button"
                   onClick={() => setLegendCollapsed((prev) => !prev)}
@@ -1114,7 +1065,7 @@ function NewOCDFGVisualizer({
                     cursor: 'pointer',
                   }}
                 >
-                  {legendCollapsed ? 'Show' : 'Hide'}
+                  {legendCollapsed ? 'Expand' : 'Collapse'}
                 </button>
               </div>
               {!legendCollapsed && (

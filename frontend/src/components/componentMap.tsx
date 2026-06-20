@@ -38,6 +38,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ChevronDown } from 'lucide-react';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -739,11 +740,13 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 }) => {
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
@@ -753,6 +756,11 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
     onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
   };
 
   if (isEditMode) {
@@ -782,6 +790,23 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
               onCheckedChange={handleInitialInteractionLockedChange}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </CardContent>
       </Card>
     );
@@ -796,6 +821,7 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
           fileId={selectedFile?.id}
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
         />
       </ReactFlowProvider>
     </div>
@@ -803,7 +829,6 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 };
 
 
-// NewOCDFGVariantsComponent: Dashboard wrapper for the Object-Centric Directly Follows Graph (Variants)
 const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
@@ -812,11 +837,13 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 }) => {
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
@@ -826,6 +853,11 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
     onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
   };
 
   if (isEditMode) {
@@ -855,6 +887,23 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
               onCheckedChange={handleInitialInteractionLockedChange}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </CardContent>
       </Card>
     );
@@ -869,6 +918,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
           fileId={selectedFile?.id}
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
         />
       </ReactFlowProvider>
     </div>

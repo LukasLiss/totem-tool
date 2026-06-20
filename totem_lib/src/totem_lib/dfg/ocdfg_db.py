@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import List, Optional
 import networkx as nx
 
@@ -160,6 +161,7 @@ class OCDFGDb(OCDFG):
 
         return graph
 
+
 class NewOCDFGDb(nx.MultiDiGraph):
     """
     DuckDB-backed Object-Centric Directly-Follows MultiGraph (OCDFG).
@@ -175,6 +177,107 @@ class NewOCDFGDb(nx.MultiDiGraph):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.graph['kind'] = 'new_ocdfg'
+
+    # ------------------------------------------------------------------
+    # Helper: per-type trace-variant computation (moved from views.py)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def compute_variants(
+        cls,
+        ocel_db: OcelDuckDB,
+        object_types: Optional[List[str]] = None,
+    ) -> dict:
+        """
+        Compute per-object-type activity-sequence variants entirely in SQL.
+
+        For each object of the requested types, builds a ``'|'``-joined activity
+        sequence (the trace) ordered by event timestamp, then groups by
+        ``(obj_type, trace)`` to count instances.
+
+        Args:
+            ocel_db: DuckDB-backed event log.
+            object_types: If provided, only these types are processed. When
+                ``None`` all types present in the log are used.
+
+        Returns:
+            A dict shaped as::
+
+                {obj_type: {
+                    "variants": [
+                        {"trace": ["a", "b", ...], "count": N, "objects": ["o1", ...]},
+                        ...   # sorted most-frequent first
+                    ],
+                    "total_objects": M,
+                }}
+        """
+        if object_types is None:
+            rows = ocel_db.conn.execute(
+                "SELECT DISTINCT obj_type FROM objects"
+            ).fetchall()
+            object_types = [r[0] for r in rows]
+
+        if not object_types:
+            return {}
+
+        types_list = list(object_types)
+        placeholders = ", ".join(["?"] * len(types_list))
+
+        # total_objects per type (including objects with no events)
+        totals = {
+            t: n
+            for t, n in ocel_db.conn.execute(
+                f"SELECT obj_type, COUNT(*) FROM objects "
+                f"WHERE obj_type IN ({placeholders}) GROUP BY obj_type",
+                types_list,
+            ).fetchall()
+        }
+
+        variants_by_type: dict[str, list[dict]] = defaultdict(list)
+        rows = ocel_db.conn.execute(
+            f"""
+            WITH per_obj_traces AS (
+                SELECT
+                    o.obj_id,
+                    o.obj_type,
+                    STRING_AGG(e.activity, '|'
+                               ORDER BY e.timestamp_unix, e.event_id) AS trace
+                FROM objects o
+                JOIN event_object eo ON eo.obj_id   = o.obj_id
+                JOIN events       e  ON eo.event_id = e.event_id
+                WHERE o.obj_type IN ({placeholders})
+                GROUP BY o.obj_id, o.obj_type
+            )
+            SELECT
+                obj_type,
+                trace,
+                COUNT(*)                 AS cnt,
+                LIST(obj_id ORDER BY obj_id) AS objects
+            FROM per_obj_traces
+            GROUP BY obj_type, trace
+            ORDER BY obj_type, cnt DESC
+            """,
+            types_list,
+        ).fetchall()
+
+        for obj_type, trace, cnt, objects in rows:
+            variants_by_type[obj_type].append({
+                "trace": trace.split("|") if trace else [],
+                "count": int(cnt),
+                "objects": list(objects),
+            })
+
+        result: dict = {}
+        for t in object_types:
+            result[t] = {
+                "variants": variants_by_type.get(t, []),
+                "total_objects": int(totals.get(t, 0)),
+            }
+        return result
+
+    # ------------------------------------------------------------------
+    # Core builder: full OC-DFG (no filtering)
+    # ------------------------------------------------------------------
 
     @classmethod
     def from_ocel_db(
@@ -333,3 +436,111 @@ class NewOCDFGDb(nx.MultiDiGraph):
             graph.add_edge(u, v, key=otype, objtype=otype, weight=w)
 
         return graph
+
+    # ------------------------------------------------------------------
+    # New algorithm: precomputed variant ranks (Task 3)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_ocel_db_with_variant_ranks(
+        cls,
+        ocel_db: OcelDuckDB,
+        object_types: Optional[List[str]] = None,
+    ) -> tuple["NewOCDFGDb", dict]:
+        """
+        Build the OC-DFG **and** annotate every edge with a ``variant_rank``.
+
+        The variant rank answers: "what is the highest-frequency variant (lowest
+        rank number) that contains this directly-follows arc?"
+
+        Algorithm
+        ---------
+        For each object type:
+          1. Compute all per-object trace variants, sorted by frequency
+             descending (rank 1 = most frequent, rank 2 = second most, …).
+          2. Iterate from rank 1 to rank N.  For each step in the variant
+             trace, if the edge ``(src → tgt, objtype)`` has **not yet** been
+             annotated, annotate it with the current rank.
+          3. Start / end connector edges are annotated with ``variant_rank = 0``
+             (always visible regardless of the slider value).
+
+        The frontend can then filter purely client-side:
+          - If the slider for type T is set to k, hide all T-edges whose
+            ``variant_rank > k``.
+
+        Args:
+            ocel_db: DuckDB-backed event log.
+            object_types: Restrict to these types; ``None`` → all types.
+
+        Returns:
+            A tuple ``(graph, variant_counts)`` where:
+              - ``graph`` is a ``NewOCDFGDb`` with ``variant_rank`` on every edge.
+              - ``variant_counts`` is ``{obj_type: total_variant_count}`` so the
+                frontend can initialize the sliders to the right maximum.
+        """
+        # Step 1: build the full unfiltered graph
+        graph = cls.from_ocel_db(ocel_db, object_types=object_types)
+
+        # Step 2: collect variants per type (sorted most-frequent first)
+        actual_types = list(set(
+            data.get("object_type", "")
+            for _, data in graph.nodes(data=True)
+            if data.get("role") == "start" and data.get("object_type")
+        ))
+        if not actual_types:
+            # No terminal nodes means no typed edges — nothing to rank
+            return graph, {}
+
+        variants_data = cls.compute_variants(ocel_db, object_types=actual_types)
+
+        # Step 3: annotate edges with variant ranks, including terminal edges
+        # For each type: iterate variants by rank, add DF pairs that are not yet annotated
+        for otype, type_data in variants_data.items():
+            variants = type_data.get("variants", [])
+            start_node = f"__start__:{otype}"
+            end_node = f"__end__:{otype}"
+            
+            for rank, variant in enumerate(variants, start=1):
+                trace = variant.get("trace", [])
+                if not trace:
+                    continue
+                    
+                # 1. Start edge to first activity
+                first_act = trace[0]
+                if graph.has_edge(start_node, first_act, key=otype):
+                    edge_data = graph.edges[start_node, first_act, otype]
+                    if "variant_rank" not in edge_data:
+                        edge_data["variant_rank"] = rank
+                        
+                # 2. Regular DF edges between activities
+                for i in range(len(trace) - 1):
+                    src_act = trace[i]
+                    tgt_act = trace[i + 1]
+                    if graph.has_edge(src_act, tgt_act, key=otype):
+                        edge_data = graph.edges[src_act, tgt_act, otype]
+                        if "variant_rank" not in edge_data:
+                            edge_data["variant_rank"] = rank
+                            
+                # 3. End edge from last activity
+                last_act = trace[-1]
+                if graph.has_edge(last_act, end_node, key=otype):
+                    edge_data = graph.edges[last_act, end_node, otype]
+                    if "variant_rank" not in edge_data:
+                        edge_data["variant_rank"] = rank
+
+        # Step 4: any edge (regular or terminal) still without a rank gets the max rank for its type
+        # (edge exists in the full DFG but doesn't appear in any variant trace — rare)
+        for otype, type_data in variants_data.items():
+            max_rank = len(type_data.get("variants", []))
+            fallback = max(max_rank, 1)
+            for u, v, key, data in graph.edges(keys=True, data=True):
+                if key == otype and "variant_rank" not in data:
+                    data["variant_rank"] = fallback
+
+        # Build variant_counts for the frontend slider max values
+        variant_counts = {
+            otype: len(type_data.get("variants", []))
+            for otype, type_data in variants_data.items()
+        }
+
+        return graph, variant_counts

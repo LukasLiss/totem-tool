@@ -105,3 +105,8 @@ class OCDFGComponent(DashboardComponent):
 class NewOCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
+    layout_direction = models.CharField(
+        max_length=2,
+        choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
+        default='TB',
+    )
