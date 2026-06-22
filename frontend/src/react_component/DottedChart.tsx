@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { Map as MapIcon } from "lucide-react";
 import {
   colorGroupKey,
   formatAxisTick,
@@ -33,6 +34,7 @@ import {
   DottedChartControls,
   type DottedChartConfig,
 } from "./dottedChart/DottedChartControls";
+import { DottedChartMinimap } from "./dottedChart/DottedChartMinimap";
 import { useDottedChartData } from "./dottedChart/useDottedChartData";
 
 interface DottedChartProps {
@@ -56,11 +58,12 @@ const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_ROW_ORDER: RowOrderOption = "first_occurrence";
 const MIN_BRUSH_POINTS = 10;
 const MIN_VISIBLE_ROWS = 1;
-const CHART_MARGIN = { top: 16, right: 20, bottom: 46, left: 12 };
-const Y_AXIS_WIDTH = 180;
-const CHART_HEIGHT = 500;
+const CHART_MARGIN = { top: 72, right: 8, bottom: 18, left: 0 };
+const Y_AXIS_WIDTH = 118;
+const CHART_HEIGHT = 560;
 const MAX_Y_TICK_LABEL_LENGTH = 24;
 const MAX_VISIBLE_Y_AXIS_LABELS = 20;
+const MINIMAP_MAX_POINTS = 2_000;
 const EMPTY_EVENTS: OCEvent[] = [];
 
 export default function DottedChart({
@@ -155,27 +158,6 @@ export default function DottedChart({
     () => points.slice(effectiveBrushRange.startIndex, effectiveBrushRange.endIndex + 1),
     [effectiveBrushRange, points]
   );
-  const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
-  const colorGrouping = useMemo(() => {
-    const colorByChanged = colorByKeyRef.current !== colorByKey;
-    const eventsChanged = colorEventsRef.current !== events;
-
-    if (colorByChanged) {
-      if (!eventsChanged && colorEventsRef.current !== null) {
-        return makeColorScale(points);
-      }
-
-      colorByKeyRef.current = colorByKey;
-      colorKeysRef.current = [];
-    }
-
-    const nextColorGrouping = makeColorScale(points, colorKeysRef.current);
-    colorKeysRef.current = nextColorGrouping.keys;
-    colorEventsRef.current = events;
-    return nextColorGrouping;
-  }, [colorByKey, events, points]);
-  const colorScale = colorGrouping.scale;
-  const colorKeys = colorGrouping.keys;
   const shapeScale = useMemo(() => makeShapeScale(points), [points]);
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
@@ -220,10 +202,6 @@ export default function DottedChart({
       })),
     [displayedYIndexByTick, visiblePointsByAxes]
   );
-  const colorLegendEntries = useMemo(
-    () => buildColorLegendEntries(displayedPoints, colorScale, colorKeys),
-    [colorKeys, colorScale, displayedPoints]
-  );
   const displayedYAxisTicks = useMemo(
     () => displayedYTicks.map((_, index) => index + 1),
     [displayedYTicks]
@@ -237,6 +215,35 @@ export default function DottedChart({
   const datasetTotalCount = data?.dataset_total_count ?? data?.total_count ?? 0;
   const effectiveFramePoints = framePoints.length ? framePoints : points;
   const effectiveFrameYTicks = frameYTicks.length ? frameYTicks : yTicks;
+  const minimapPoints = useMemo(
+    () => sampleMinimapPoints(effectiveFramePoints, MINIMAP_MAX_POINTS),
+    [effectiveFramePoints]
+  );
+  const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
+  const colorGrouping = useMemo(() => {
+    const colorByChanged = colorByKeyRef.current !== colorByKey;
+    const eventsChanged = colorEventsRef.current !== events;
+
+    if (colorByChanged) {
+      if (!eventsChanged && colorEventsRef.current !== null) {
+        return makeColorScale(effectiveFramePoints);
+      }
+
+      colorByKeyRef.current = colorByKey;
+      colorKeysRef.current = [];
+    }
+
+    const nextColorGrouping = makeColorScale(effectiveFramePoints, colorKeysRef.current);
+    colorKeysRef.current = nextColorGrouping.keys;
+    colorEventsRef.current = events;
+    return nextColorGrouping;
+  }, [colorByKey, effectiveFramePoints, events]);
+  const colorScale = colorGrouping.scale;
+  const colorKeys = colorGrouping.keys;
+  const colorLegendEntries = useMemo(
+    () => buildColorLegendEntries(effectiveFramePoints, colorScale, colorKeys),
+    [colorKeys, colorScale, effectiveFramePoints]
+  );
   const frameXLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "x"), [effectiveFramePoints]);
   const frameYLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "y"), [effectiveFramePoints]);
   const effectiveControlBrushRange = useMemo(
@@ -578,10 +585,10 @@ export default function DottedChart({
         onMouseUp={handleChartMouseUp}
         onMouseLeave={handleChartMouseLeave}
       >
-        <div ref={chartInteractionRef}>
+        <div ref={chartInteractionRef} className="pr-[96px]">
           <ChartContainer
             config={{ events: { label: "Events", color: "var(--chart-1)" } }}
-            className="aspect-auto shrink-0 rounded-md border bg-background p-2"
+            className="aspect-auto shrink-0 rounded-md border bg-background p-1"
             style={{ height: CHART_HEIGHT }}
           >
             <ScatterChart data={displayedPoints} margin={CHART_MARGIN}>
@@ -635,6 +642,16 @@ export default function DottedChart({
           ref={dragOverlayRef}
           className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
         />
+        <DottedChartMinimapOverlay
+          points={minimapPoints}
+          framePoints={effectiveFramePoints}
+          yTicks={effectiveFrameYTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={effectiveControlBrushRange}
+          yRange={effectiveControlYBrushRange}
+          onRangeChange={handleRangeApply}
+        />
       </div>
 
       {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
@@ -652,6 +669,65 @@ export default function DottedChart({
     </div>
   );
 }
+
+const DottedChartMinimapOverlay = React.memo(function DottedChartMinimapOverlay({
+  points,
+  framePoints,
+  yTicks,
+  colorScale,
+  colorKeys,
+  xRange,
+  yRange,
+  onRangeChange,
+}: {
+  points: ChartPoint[];
+  framePoints: ChartPoint[];
+  yTicks: number[];
+  colorScale: Map<string, string>;
+  colorKeys: string[];
+  xRange: BrushRange;
+  yRange: BrushRange;
+  onRangeChange: (xRange: BrushRange, yRange: BrushRange) => void;
+}) {
+  const [showMinimap, setShowMinimap] = useState(true);
+
+  return (
+    <div
+      className="absolute right-3 top-3 z-20 flex flex-col items-end gap-1.5"
+      onMouseDown={(event) => event.stopPropagation()}
+      onMouseMove={(event) => event.stopPropagation()}
+      onMouseUp={(event) => event.stopPropagation()}
+    >
+      <div className={cn(!showMinimap && "hidden")}>
+        <DottedChartMinimap
+          points={points}
+          framePoints={framePoints}
+          yTicks={yTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={xRange}
+          yRange={yRange}
+          onRangeChange={onRangeChange}
+        />
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rounded-full bg-background/90 shadow-sm"
+        onClick={() => setShowMinimap((current) => !current)}
+        title={showMinimap ? "Hide minimap" : "Show minimap"}
+      >
+        <span className="relative flex h-4 w-4 items-center justify-center">
+          <MapIcon className="h-4 w-4" />
+          {showMinimap && (
+            <span className="absolute h-0.5 w-5 rotate-45 rounded-full bg-current" />
+          )}
+        </span>
+      </Button>
+    </div>
+  );
+});
 
 function DottedChartZoomControls({
   xRange,
@@ -1329,6 +1405,15 @@ function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): n
       return leftValue - rightValue || leftTick - rightTick;
     })
     .map(([tick]) => tick);
+}
+
+function sampleMinimapPoints(points: ChartPoint[], maxPoints: number): ChartPoint[] {
+  if (points.length <= maxPoints) return points;
+
+  const step = points.length / maxPoints;
+  return Array.from({ length: maxPoints }, (_, index) => points[Math.floor(index * step)]).filter(
+    (point): point is ChartPoint => Boolean(point)
+  );
 }
 
 type BrushRange = {
