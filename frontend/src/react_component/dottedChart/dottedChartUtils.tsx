@@ -121,7 +121,9 @@ export function makeColorScale(
     counts.set(point.colorKey, (counts.get(point.colorKey) ?? 0) + 1);
   });
 
-  const keys = previousKeys.slice(0, EXPLICIT_COLOR_LIMIT);
+  const keys = previousKeys
+    .filter((key) => counts.has(key))
+    .slice(0, EXPLICIT_COLOR_LIMIT);
   const candidates = Array.from(counts.entries())
     .filter(([key]) => !keys.includes(key))
     .sort(([leftKey, leftCount], [rightKey, rightCount]) =>
