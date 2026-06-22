@@ -98,7 +98,6 @@ export default function DottedChart({
   const [controlYBrushRange, setControlYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [framePoints, setFramePoints] = useState<ChartPoint[]>([]);
   const [frameYTicks, setFrameYTicks] = useState<number[]>([]);
-  const [showMinimap, setShowMinimap] = useState(true);
   const previousPointCountRef = useRef(0);
   const previousRowCountRef = useRef(0);
   const previousFramePointCountRef = useRef(0);
@@ -141,23 +140,9 @@ export default function DottedChart({
     viewport: requestedViewport,
     sampleSeed,
   });
-  const { data: minimapData } = useDottedChartData({
-    fileId,
-    xAxis: effectiveConfig.xAxis,
-    yAxis: effectiveConfig.yAxis,
-    colorBy: effectiveConfig.colorBy,
-    shapeBy: effectiveConfig.shapeBy,
-    rowOrder: effectiveConfig.rowOrder,
-    maxPoints: MINIMAP_MAX_POINTS,
-    debounceMs: 0,
-  });
 
   const events = data?.events ?? EMPTY_EVENTS;
   const points = useMemo(() => toChartPoints(events), [events]);
-  const minimapPoints = useMemo(
-    () => toChartPoints(minimapData?.events ?? EMPTY_EVENTS),
-    [minimapData]
-  );
   const [brushRange, setBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const [isZoomApplying, setIsZoomApplying] = useState(false);
   const zoomFrameRef = useRef<number | null>(null);
@@ -230,6 +215,10 @@ export default function DottedChart({
   const datasetTotalCount = data?.dataset_total_count ?? data?.total_count ?? 0;
   const effectiveFramePoints = framePoints.length ? framePoints : points;
   const effectiveFrameYTicks = frameYTicks.length ? frameYTicks : yTicks;
+  const minimapPoints = useMemo(
+    () => sampleMinimapPoints(effectiveFramePoints, MINIMAP_MAX_POINTS),
+    [effectiveFramePoints]
+  );
   const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
   const colorGrouping = useMemo(() => {
     const colorByChanged = colorByKeyRef.current !== colorByKey;
@@ -653,40 +642,16 @@ export default function DottedChart({
           ref={dragOverlayRef}
           className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
         />
-        <div
-          className="absolute right-3 top-3 z-20 flex flex-col items-end gap-1.5"
-          onMouseDown={(event) => event.stopPropagation()}
-          onMouseMove={(event) => event.stopPropagation()}
-          onMouseUp={(event) => event.stopPropagation()}
-        >
-          {showMinimap && (
-            <DottedChartMinimap
-              points={minimapPoints}
-              framePoints={effectiveFramePoints}
-              yTicks={effectiveFrameYTicks}
-              colorScale={colorScale}
-              colorKeys={colorKeys}
-              xRange={effectiveControlBrushRange}
-              yRange={effectiveControlYBrushRange}
-              onRangeChange={handleRangeApply}
-            />
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="h-8 w-8 rounded-full bg-background/90 shadow-sm"
-            onClick={() => setShowMinimap((current) => !current)}
-            title={showMinimap ? "Hide minimap" : "Show minimap"}
-          >
-            <span className="relative flex h-4 w-4 items-center justify-center">
-              <MapIcon className="h-4 w-4" />
-              {showMinimap && (
-                <span className="absolute h-0.5 w-5 rotate-45 rounded-full bg-current" />
-              )}
-            </span>
-          </Button>
-        </div>
+        <DottedChartMinimapOverlay
+          points={minimapPoints}
+          framePoints={effectiveFramePoints}
+          yTicks={effectiveFrameYTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={effectiveControlBrushRange}
+          yRange={effectiveControlYBrushRange}
+          onRangeChange={handleRangeApply}
+        />
       </div>
 
       {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
@@ -704,6 +669,65 @@ export default function DottedChart({
     </div>
   );
 }
+
+const DottedChartMinimapOverlay = React.memo(function DottedChartMinimapOverlay({
+  points,
+  framePoints,
+  yTicks,
+  colorScale,
+  colorKeys,
+  xRange,
+  yRange,
+  onRangeChange,
+}: {
+  points: ChartPoint[];
+  framePoints: ChartPoint[];
+  yTicks: number[];
+  colorScale: Map<string, string>;
+  colorKeys: string[];
+  xRange: BrushRange;
+  yRange: BrushRange;
+  onRangeChange: (xRange: BrushRange, yRange: BrushRange) => void;
+}) {
+  const [showMinimap, setShowMinimap] = useState(true);
+
+  return (
+    <div
+      className="absolute right-3 top-3 z-20 flex flex-col items-end gap-1.5"
+      onMouseDown={(event) => event.stopPropagation()}
+      onMouseMove={(event) => event.stopPropagation()}
+      onMouseUp={(event) => event.stopPropagation()}
+    >
+      <div className={cn(!showMinimap && "hidden")}>
+        <DottedChartMinimap
+          points={points}
+          framePoints={framePoints}
+          yTicks={yTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={xRange}
+          yRange={yRange}
+          onRangeChange={onRangeChange}
+        />
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rounded-full bg-background/90 shadow-sm"
+        onClick={() => setShowMinimap((current) => !current)}
+        title={showMinimap ? "Hide minimap" : "Show minimap"}
+      >
+        <span className="relative flex h-4 w-4 items-center justify-center">
+          <MapIcon className="h-4 w-4" />
+          {showMinimap && (
+            <span className="absolute h-0.5 w-5 rotate-45 rounded-full bg-current" />
+          )}
+        </span>
+      </Button>
+    </div>
+  );
+});
 
 function DottedChartZoomControls({
   xRange,
@@ -1381,6 +1405,15 @@ function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): n
       return leftValue - rightValue || leftTick - rightTick;
     })
     .map(([tick]) => tick);
+}
+
+function sampleMinimapPoints(points: ChartPoint[], maxPoints: number): ChartPoint[] {
+  if (points.length <= maxPoints) return points;
+
+  const step = points.length / maxPoints;
+  return Array.from({ length: maxPoints }, (_, index) => points[Math.floor(index * step)]).filter(
+    (point): point is ChartPoint => Boolean(point)
+  );
 }
 
 type BrushRange = {

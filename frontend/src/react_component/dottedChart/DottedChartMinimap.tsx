@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { memo, useEffect, useState, type MouseEvent } from "react";
 
 import { colorGroupKey, type ChartPoint } from "./dottedChartUtils";
 
@@ -18,11 +18,25 @@ type DottedChartMinimapProps = {
   onRangeChange: (xRange: MinimapRange, yRange: MinimapRange) => void;
 };
 
+type ViewportRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type DraftViewport = {
+  rect: ViewportRect;
+  pointerOffsetX: number;
+  pointerOffsetY: number;
+  yTickCount: number;
+};
+
 const WIDTH = 180;
 const HEIGHT = 104;
 const PADDING = 8;
 
-export function DottedChartMinimap({
+export const DottedChartMinimap = memo(function DottedChartMinimap({
   points,
   framePoints,
   yTicks,
@@ -32,20 +46,19 @@ export function DottedChartMinimap({
   yRange,
   onRangeChange,
 }: DottedChartMinimapProps) {
-  const [draftRange, setDraftRange] = useState<{ xRange: MinimapRange; yRange: MinimapRange } | null>(null);
+  const [draftViewport, setDraftViewport] = useState<DraftViewport | null>(null);
 
   useEffect(() => {
-    setDraftRange(null);
+    setDraftViewport(null);
   }, [xRange, yRange]);
 
   if (!points.length || !yTicks.length) return null;
 
-  const xDomain = getDomain(points.map((point) => point.chartX));
+  const xDomain = getDomain(framePoints.map((point) => point.chartX));
   const yIndexByTick = new Map(yTicks.map((tick, index) => [tick, index]));
   const selectedPoints = points.filter((point) => yIndexByTick.has(point.chartY));
-  const activeXRange = draftRange?.xRange ?? xRange;
-  const activeYRange = draftRange?.yRange ?? yRange;
-  const viewport = getViewportRect(framePoints, yTicks, activeXRange, activeYRange, xDomain);
+  const viewport = getViewportRect(framePoints, yTicks, xRange, yRange, xDomain);
+  const displayedViewport = draftViewport?.rect ?? viewport;
 
   if (!selectedPoints.length) return null;
 
@@ -55,22 +68,29 @@ export function DottedChartMinimap({
       onMouseDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        setDraftRange(rangeFromMinimapPointer(event, framePoints, yTicks, xRange, yRange, xDomain));
+        if (!viewport) return;
+        setDraftViewport(startViewportDrag(event, viewport, yTicks.length));
       }}
       onMouseMove={(event) => {
-        if (event.buttons !== 1) return;
+        if (event.buttons !== 1 || !draftViewport) return;
         event.preventDefault();
         event.stopPropagation();
-        setDraftRange(rangeFromMinimapPointer(event, framePoints, yTicks, xRange, yRange, xDomain));
+        setDraftViewport({
+          ...draftViewport,
+          rect: moveViewportRect(event, draftViewport),
+        });
       }}
       onMouseUp={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        const nextRange = draftRange ?? rangeFromMinimapPointer(event, framePoints, yTicks, xRange, yRange, xDomain);
+        const finalRect = draftViewport?.rect ?? viewport;
+        const nextRange = finalRect
+          ? rangesFromViewportRect(finalRect, framePoints, yTicks, xRange, yRange, xDomain)
+          : null;
         if (nextRange) {
           onRangeChange(nextRange.xRange, nextRange.yRange);
         }
-        setDraftRange(null);
+        setDraftViewport(null);
       }}
       onMouseLeave={(event) => {
         event.stopPropagation();
@@ -107,12 +127,12 @@ export function DottedChartMinimap({
             />
           );
         })}
-        {viewport && (
+        {displayedViewport && (
           <rect
-            x={viewport.x}
-            y={viewport.y}
-            width={viewport.width}
-            height={viewport.height}
+            x={displayedViewport.x}
+            y={displayedViewport.y}
+            width={displayedViewport.width}
+            height={displayedViewport.height}
             fill="var(--ring)"
             fillOpacity={0.12}
             stroke="var(--ring)"
@@ -123,33 +143,7 @@ export function DottedChartMinimap({
       </svg>
     </div>
   );
-}
-
-function rangeFromMinimapPointer(
-  event: MouseEvent<HTMLDivElement>,
-  points: ChartPoint[],
-  yTicks: number[],
-  xRange: MinimapRange,
-  yRange: MinimapRange,
-  xDomain: [number, number]
-): { xRange: MinimapRange; yRange: MinimapRange } | null {
-  if (!points.length || !yTicks.length) return null;
-  const svg = event.currentTarget.querySelector("svg");
-  if (!svg) return null;
-
-  const rect = svg.getBoundingClientRect();
-  const localX = clampNumber(event.clientX - rect.left, PADDING, WIDTH - PADDING);
-  const localY = clampNumber(event.clientY - rect.top, PADDING, HEIGHT - PADDING);
-  const xValue = unscaleX(localX, xDomain);
-  const xCenterIndex = nearestPointIndex(points, xValue);
-  const yPercentFromTop = (localY - PADDING) / plotHeight();
-  const yCenterIndex = Math.round((1 - yPercentFromTop) * (yTicks.length - 1));
-
-  return {
-    xRange: moveRangeToCenter(xRange, xCenterIndex, points.length),
-    yRange: moveRangeToCenter(yRange, yCenterIndex, yTicks.length),
-  };
-}
+});
 
 function getViewportRect(
   points: ChartPoint[],
@@ -157,7 +151,7 @@ function getViewportRect(
   xRange: MinimapRange,
   yRange: MinimapRange,
   xDomain: [number, number]
-): { x: number; y: number; width: number; height: number } | null {
+): ViewportRect | null {
   const startPoint = points[xRange.startIndex];
   const endPoint = points[xRange.endIndex];
   if (!startPoint || !endPoint) return null;
@@ -175,6 +169,94 @@ function getViewportRect(
     width: Math.max(2, Math.abs(x2 - x1)),
     height: Math.max(2, Math.abs(y2 - y1)),
   };
+}
+
+function startViewportDrag(
+  event: MouseEvent<HTMLDivElement>,
+  viewport: ViewportRect,
+  yTickCount: number
+): DraftViewport {
+  const svg = event.currentTarget.querySelector("svg");
+  const rect = svg?.getBoundingClientRect();
+  const localX = rect ? event.clientX - rect.left : viewport.x + viewport.width / 2;
+  const localY = rect ? event.clientY - rect.top : viewport.y + viewport.height / 2;
+
+  return {
+    rect: viewport,
+    pointerOffsetX: clampNumber(localX - viewport.x, 0, viewport.width),
+    pointerOffsetY: clampNumber(localY - viewport.y, 0, viewport.height),
+    yTickCount,
+  };
+}
+
+function moveViewportRect(event: MouseEvent<HTMLDivElement>, draft: DraftViewport): ViewportRect {
+  const svg = event.currentTarget.querySelector("svg");
+  const rect = svg?.getBoundingClientRect();
+  if (!rect) return draft.rect;
+
+  const localX = event.clientX - rect.left;
+  const localY = event.clientY - rect.top;
+  const width = draft.rect.width;
+  const height = draft.rect.height;
+  const yOverflow = minimapRowOverflow(draft.yTickCount);
+  const x = clampNumber(localX - draft.pointerOffsetX, PADDING, WIDTH - PADDING - width);
+  const y = clampNumber(
+    localY - draft.pointerOffsetY,
+    PADDING - yOverflow,
+    HEIGHT - PADDING + yOverflow - height
+  );
+
+  return { x, y, width, height };
+}
+
+function rangesFromViewportRect(
+  rect: ViewportRect,
+  points: ChartPoint[],
+  yTicks: number[],
+  xRange: MinimapRange,
+  yRange: MinimapRange,
+  xDomain: [number, number]
+): { xRange: MinimapRange; yRange: MinimapRange } | null {
+  if (!points.length || !yTicks.length) return null;
+
+  const xStartValue = unscaleX(rect.x, xDomain);
+  const xEndValue = unscaleX(rect.x + rect.width, xDomain);
+  const xStartIndex = nearestPointIndex(points, Math.min(xStartValue, xEndValue));
+  const xEndIndex = nearestPointIndex(points, Math.max(xStartValue, xEndValue));
+  const yCenterIndex = Math.round(rawIndexFromMinimapY(rect.y + rect.height / 2, yTicks.length));
+  const nextYRange = edgeSnappedYRange(rect, yRange, yTicks.length) ?? moveRangeToCenter(yRange, yCenterIndex, yTicks.length);
+
+  return {
+    xRange: {
+      startIndex: Math.min(xStartIndex, xEndIndex),
+      endIndex: Math.max(xStartIndex, xEndIndex),
+    },
+    yRange: nextYRange,
+  };
+}
+
+function edgeSnappedYRange(rect: ViewportRect, range: MinimapRange, yTickCount: number): MinimapRange | null {
+  if (yTickCount <= 0) return { startIndex: 0, endIndex: 0 };
+
+  const width = Math.max(0, range.endIndex - range.startIndex);
+  const overflow = minimapRowOverflow(yTickCount);
+  const tolerance = 0.5;
+
+  if (rect.y + rect.height >= HEIGHT - PADDING + overflow - tolerance) {
+    return {
+      startIndex: 0,
+      endIndex: Math.min(yTickCount - 1, width),
+    };
+  }
+
+  if (rect.y <= PADDING - overflow + tolerance) {
+    return {
+      startIndex: Math.max(0, yTickCount - 1 - width),
+      endIndex: yTickCount - 1,
+    };
+  }
+
+  return null;
 }
 
 function getDomain(values: number[]): [number, number] {
@@ -201,6 +283,16 @@ function unscaleX(value: number, domain: [number, number]): number {
 function scaleY(index: number, count: number): number {
   if (count <= 1) return PADDING + plotHeight() / 2;
   return PADDING + plotHeight() - (index / (count - 1)) * plotHeight();
+}
+
+function minimapRowOverflow(count: number): number {
+  if (count <= 1) return 0;
+  return plotHeight() / (count - 1) / 2;
+}
+
+function rawIndexFromMinimapY(value: number, count: number): number {
+  const clampedY = clampNumber(value, PADDING, HEIGHT - PADDING);
+  return (1 - (clampedY - PADDING) / plotHeight()) * (count - 1);
 }
 
 function plotWidth(): number {
