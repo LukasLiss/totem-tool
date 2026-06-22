@@ -118,9 +118,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
-        const root = (item as any)._reactRoot;
-        const node = (item as any).gridstackNode;
-        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        const contentEl = item.querySelector('.grid-stack-item-content') || item;
+        const root = (contentEl as any)._reactRoot;
+        const node = (contentEl as any).gridstackNode;
+        const component_name = (node as any)?.component_name || (contentEl as HTMLElement).dataset.componentName || item.dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -249,6 +250,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'TB',
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -326,6 +333,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "NewOCDFGComponent") {
+          content = "Object-Centric DFG (Arc Weight)";
+        } else if (item.component_name === "NewOCDFGVariantsComponent") {
+          content = "Object-Centric DFG (Variants)";
         } else {
           content = "Unknown";
         }
@@ -363,6 +374,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            layout_direction: item.layout_direction,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -390,6 +402,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              (node as any).layout_direction = item.layout_direction;
             }
           }
           // Set data attribute for persistence

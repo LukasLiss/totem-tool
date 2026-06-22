@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import ProcessArea from "@/react_component/ProcessArea";
-import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 
 export function AnalysisView() {
@@ -39,7 +39,7 @@ export function AnalysisView() {
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
-                  <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
+                  <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
                 </ReactFlowProvider>
               </CardContent>
             </Card>

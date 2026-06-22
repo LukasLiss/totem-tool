@@ -88,6 +88,40 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Arc Weight)",
+        component_name: "NewOCDFGComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-variants-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Variants)",
+        component_name: "NewOCDFGVariantsComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -126,6 +160,16 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>OCDFG</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Arc Weight)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Variants)</div>
       </div>
     </div>
   );
