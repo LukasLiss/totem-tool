@@ -780,24 +780,27 @@ export default function OCHandoverExplorer({
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
             {viewMode === "graph" && (
-              selectedNode ? (
-                <NodeDetailView
-                  selectedNode={selectedNode}
-                  data={data}
-                  typeColorMap={typeColorMap}
-                  onBack={() => setSelectedNode(null)}
-                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
-                />
-              ) : (
-                <HandoverGraph
-                  nodes={data.nodes}
-                  edges={data.edges}
-                  typeColorMap={typeColorMap}
-                  onNodeClick={setSelectedNode}
-                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
-                  positionsRef={graphPositionsRef}
-                />
-              )
+              <>
+                <div style={selectedNode ? { display: "none" } : undefined}>
+                  <HandoverGraph
+                    nodes={data.nodes}
+                    edges={data.edges}
+                    typeColorMap={typeColorMap}
+                    onNodeClick={setSelectedNode}
+                    clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                    positionsRef={graphPositionsRef}
+                  />
+                </div>
+                {selectedNode && (
+                  <NodeDetailView
+                    selectedNode={selectedNode}
+                    data={data}
+                    typeColorMap={typeColorMap}
+                    onBack={() => setSelectedNode(null)}
+                    clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                  />
+                )}
+              </>
             )}
 
             {viewMode === "log" && (
