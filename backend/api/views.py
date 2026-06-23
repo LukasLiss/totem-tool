@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -457,6 +457,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCDottedChartComponent':
+                components.append(OCDottedChartComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -568,6 +570,24 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                )
+            elif component_name == 'OCDottedChartComponent':
+                OCDottedChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    file_id=item.get('file_id'),
+                    x_axis=item.get('x_axis') or 'time',
+                    y_axis=item.get('y_axis') or 'activity',
+                    color_by=item.get('color_by') or 'activity',
+                    shape_by=item.get('shape_by') or 'none',
+                    row_order=item.get('row_order') or 'first_occurrence',
+                    max_points=item.get('max_points', 10000),
+                    show_minimap=item.get('show_minimap', True),
+                    show_controls=item.get('show_controls', True),
                 )
             # Add more as needed
 

@@ -249,6 +249,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "OCDottedChartComponent") {
+        props = {
+          x_axis: (node as any).x_axis ?? "time",
+          y_axis: (node as any).y_axis ?? "activity",
+          color_by: (node as any).color_by ?? "activity",
+          shape_by: (node as any).shape_by ?? "none",
+          row_order: (node as any).row_order ?? "first_occurrence",
+          max_points: (node as any).max_points ?? 10000,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -326,6 +335,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "OCDottedChartComponent") {
+          content = "OC Dotted Chart";
         } else {
           content = "Unknown";
         }
@@ -363,6 +374,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // OCDottedChartComponent properties
+            x_axis: item.x_axis,
+            y_axis: item.y_axis,
+            color_by: item.color_by,
+            shape_by: item.shape_by,
+            row_order: item.row_order,
+            max_points: item.max_points,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -390,6 +408,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // OCDottedChartComponent properties
+              (node as any).x_axis = item.x_axis;
+              (node as any).y_axis = item.y_axis;
+              (node as any).color_by = item.color_by;
+              (node as any).shape_by = item.shape_by;
+              (node as any).row_order = item.row_order;
+              (node as any).max_points = item.max_points;
             }
           }
           // Set data attribute for persistence

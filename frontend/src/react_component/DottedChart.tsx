@@ -47,6 +47,7 @@ interface DottedChartProps {
   maxPoints?: number;
   viewport?: DottedChartViewport;
   showControls?: boolean;
+  showMinimap?: boolean;
   className?: string;
   onEventClick?: (event: OCEvent) => void;
 }
@@ -76,6 +77,7 @@ export default function DottedChart({
   maxPoints = 20_000,
   viewport,
   showControls = false,
+  showMinimap = true,
   className,
   onEventClick,
 }: DottedChartProps) {
@@ -642,16 +644,18 @@ export default function DottedChart({
           ref={dragOverlayRef}
           className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
         />
-        <DottedChartMinimapOverlay
-          points={minimapPoints}
-          framePoints={effectiveFramePoints}
-          yTicks={effectiveFrameYTicks}
-          colorScale={colorScale}
-          colorKeys={colorKeys}
-          xRange={effectiveControlBrushRange}
-          yRange={effectiveControlYBrushRange}
-          onRangeChange={handleRangeApply}
-        />
+        {showMinimap && (
+          <DottedChartMinimapOverlay
+            points={minimapPoints}
+            framePoints={effectiveFramePoints}
+            yTicks={effectiveFrameYTicks}
+            colorScale={colorScale}
+            colorKeys={colorKeys}
+            xRange={effectiveControlBrushRange}
+            yRange={effectiveControlYBrushRange}
+            onRangeChange={handleRangeApply}
+          />
+        )}
       </div>
 
       {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
