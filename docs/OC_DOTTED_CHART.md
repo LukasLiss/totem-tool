@@ -181,3 +181,165 @@ Rows can be ordered by:
 - `last_occurrence`: rows are sorted by the latest event timestamp in that row.
 
 This ordering is applied to the selected y-axis rows. It is not case sorting.
+
+## 4. Frontend Analysis View
+
+The analysis view entry is shown in the left sidebar under Analysis as `OC Dotted Chart`. It is intended to behave like the existing Process Area, OC-DFG, and Variants analysis views: the user selects one event log centrally, opens the analysis view, and then configures only the chart.
+
+The main frontend implementation lives in:
+
+- `frontend/src/react_component/DottedChart.tsx`
+- `frontend/src/react_component/dottedChart/DottedChartControls.tsx`
+- `frontend/src/react_component/dottedChart/useDottedChartData.ts`
+- `frontend/src/react_component/dottedChart/useDottedChartOptions.ts`
+
+`useDottedChartOptions.ts` loads the available axis and encoding options from:
+
+```text
+/api/files/<file_id>/oc_dotted_chart_columns/
+```
+
+`useDottedChartData.ts` loads the chart data from:
+
+```text
+/api/files/<file_id>/oc_dotted_chart/
+```
+
+The chart uses Recharts through the shadcn chart pattern. This is a deviation from the original canvas-oriented issue text and was chosen because the onboarding material pointed toward shadcn/Recharts for charting. The current implementation therefore uses Recharts scatter rendering and custom point shapes instead of canvas draw helpers.
+
+### Configuration
+
+The chart starts with these defaults:
+
+| Setting | Default |
+| --- | --- |
+| x-axis | `time` |
+| y-axis | `activity` |
+| color | `activity` |
+| shape | `none` |
+| row order | `first_occurrence` |
+
+Configuration changes are staged first and are only applied when the user presses Confirm. This avoids refetching and rerendering the chart after every dropdown or slider movement.
+
+The row order control only controls y-axis ordering. It can sort by first occurrence or last occurrence. If the user does not explicitly change the order, the chart still uses first occurrence as the default ordering so the y-axis ordering is always deterministic.
+
+### Zoom
+
+The analysis chart has two axis zoom controls:
+
+- one slider for the selected y-axis dimension
+- one slider for the selected x-axis dimension
+
+When the x-axis is time-based, the chart also exposes manual date bounds in European date format:
+
+```text
+dd/mm/yyyy
+```
+
+Slider movements and manual date edits are applied through the Apply button. This lets the user adjust both bounds first and then update the chart once.
+
+The chart also supports rectangle zoom inside the plot area. The user can click and drag inside the plot to draw a rectangle. On mouse release, the chart zooms to that rectangle and updates the axis sliders to match the selected region.
+
+The Reset button in the zoom tile resets the axis zoom to the full available range. It is disabled when the chart is already fully expanded.
+
+### Resampling
+
+The Resample button is shown next to the sample count. When the chart is fully expanded, it asks the backend for a new sample across the full event log. When the chart is zoomed, it asks the backend for a new sample inside the current zoom bounds.
+
+This means a zoom can first show a subset of the currently loaded sample, and then a resample can increase the density inside that zoomed region. If the user zooms back out after resampling a smaller region, the frontend refetches an appropriate larger frame again.
+
+The sample count is always displayed relative to the total number of events in the log, not only relative to the currently zoomed frame.
+
+### Tooltip And Legend
+
+The tooltip shows the currently relevant chart values:
+
+- activity
+- activity id
+- selected x-axis value
+- selected y-axis value
+- selected color value, when a color dimension is configured
+
+The tooltip intentionally does not yet show every possible object type and attribute. That richer detail view is tracked separately as a later extension.
+
+The color legend is shown below the chart. It reflects the currently selected color dimension only. For example, if the chart is colored by employees, activities do not appear in the legend.
+
+The chart uses up to nine explicit color categories plus `Other`. `Other` is always rendered in light grey. Empty or missing values are not considered candidates for the nine explicit colors and are grouped into `Other`.
+
+Color assignments stay stable across zooming and row-order changes. They can change when the user applies a different color dimension in the configuration.
+
+## 5. Minimap
+
+The minimap implementation lives in:
+
+```text
+frontend/src/react_component/dottedChart/DottedChartMinimap.tsx
+```
+
+The minimap is a compact overview of the same sampled frame used by the main chart. It does not make a separate backend request. The minimap down-samples client-side for rendering performance, but its coordinate system still represents the full loaded frame.
+
+The minimap uses the same color scale as the main chart. This keeps colors consistent between the detailed chart, the minimap, and the legend.
+
+### Viewport Rectangle
+
+The black rectangle in the minimap represents the current visible x/y viewport. Dragging this rectangle moves the viewport.
+
+While dragging, the minimap moves only the rectangle preview. The main chart is updated when the user releases the mouse. This keeps dragging responsive and avoids triggering expensive chart updates on every mouse movement.
+
+The rectangle keeps a fixed shape while dragging. It clamps to the minimap bounds without stretching when it reaches an edge. The y-axis bounds are edge-aware so the first and last visible rows can still be selected accurately.
+
+### Interaction Rules
+
+Minimap mouse events take precedence over rectangle zoom in the main chart. This prevents a minimap drag from also starting a rectangle zoom in the underlying plot.
+
+The minimap can be hidden or shown with the round map icon below it. When the minimap is visible, the icon indicates that the map can be put away. When it is hidden, the icon can restore it.
+
+Mouse-wheel zoom, pinch zoom, and double-click reset are not part of the current implementation. They were left out because the current chart update path has a noticeable delay after zoom updates, so scroll-driven zoom would feel less predictable than the explicit sliders, rectangle zoom, and minimap drag.
+
+## 6. Dashboard Widget
+
+The dashboard widget integrates the OC dotted chart into the existing GridStack dashboard system.
+
+The backend model and API integration are defined in:
+
+- `backend/api/models.py`
+- `backend/api/migrations/0011_ocdottedchartcomponent.py`
+- `backend/api/serializers.py`
+- `backend/api/views.py`
+
+The frontend dashboard integration is defined in:
+
+- `frontend/src/components/OCDottedChartComponent.tsx`
+- `frontend/src/components/componentMap.tsx`
+- `frontend/src/gridstack/lib/sidepanel.tsx`
+- `frontend/src/context/gridstackprovider.tsx`
+
+### Dashboard Behavior
+
+The dashboard widget uses the centrally selected event log. It does not expose a separate event-log selector inside the widget because the event log is an application-level selection.
+
+In dashboard edit mode, the user can configure:
+
+- x-axis
+- y-axis
+- color
+- shape
+- row order
+- max points
+
+The dashboard stores this configuration in the saved GridStack layout. When the dashboard is reopened, the widget reloads the saved configuration and requests the corresponding OC dotted chart data again.
+
+In dashboard view mode, the widget renders the chart itself. The full analysis configuration tile is not shown there because dashboard widgets are meant to be compact configured components. The chart still keeps the minimap toggle behavior available inside the widget.
+
+### Testing The Widget
+
+To test the dashboard integration:
+
+1. Select an event log centrally in the application.
+2. Open a dashboard.
+3. Enable dashboard edit mode.
+4. Drag the OC Dotted Chart widget from the side panel into the dashboard.
+5. Configure the axes, color, shape, row order, and max points.
+6. Save the dashboard layout.
+7. Leave edit mode and confirm that the chart renders with the saved configuration.
+8. Reload the dashboard and confirm that the saved OC dotted chart configuration is restored.
