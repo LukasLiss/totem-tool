@@ -343,3 +343,120 @@ To test the dashboard integration:
 6. Save the dashboard layout.
 7. Leave edit mode and confirm that the chart renders with the saved configuration.
 8. Reload the dashboard and confirm that the saved OC dotted chart configuration is restored.
+
+## 7. Local Validation
+
+The OC dotted chart touches backend data preparation, Django API actions, frontend rendering, and dashboard persistence. A useful local validation pass should cover all of those layers.
+
+### Backend Checks
+
+Run the OC dotted chart unit tests:
+
+```bash
+node scripts/run-python.js -m pytest totem_lib/tests/test_oc_dotted_chart_db.py
+```
+
+Run the Django project check:
+
+```bash
+node scripts/run-python.js backend/manage.py check
+```
+
+For a manual endpoint check, start the backend and call:
+
+```text
+GET /api/files/<file_id>/oc_dotted_chart/?x_axis=time&y_axis=activity&color_by=activity
+```
+
+The response should include sampled `events`, `total_count`, `dataset_total_count`, `sampled`, and `outlier_count`.
+
+Useful manual backend cases:
+
+- default activity chart: `x_axis=time`, `y_axis=activity`, `color_by=activity`
+- object instance rows: `y_axis=object_type:<object_type>`
+- object attribute rows: `y_axis=object_attr:<object_type>:<attribute_name>`
+- viewport sampling: include `t_min`, `t_max`, `row_min`, and `row_max`
+- resampling: repeat the same request with a different `sample_seed`
+
+### Frontend Checks
+
+Run the frontend build:
+
+```bash
+npm run build
+```
+
+Then start the application locally and verify the analysis view:
+
+1. Select an event log centrally.
+2. Open Analysis, then OC Dotted Chart.
+3. Confirm the default chart uses time on the x-axis, activity on the y-axis, and activity for color.
+4. Open the configuration panel and change axes, color, shape, row order, and max points.
+5. Confirm no chart update happens until Confirm is pressed.
+6. Use both axis sliders and manual date input, then press Apply.
+7. Draw a rectangle in the chart and confirm the chart zooms to that region.
+8. Press Reset and confirm both axis zooms fully expand.
+9. Press Resample while fully expanded and while zoomed.
+10. Confirm the legend reflects only the selected color dimension.
+11. Show, hide, and drag the minimap viewport.
+
+### Dashboard Checks
+
+The dashboard validation should confirm persistence:
+
+1. Open a dashboard.
+2. Enable edit mode.
+3. Add the OC Dotted Chart widget.
+4. Configure the widget.
+5. Save the dashboard.
+6. Reload the dashboard.
+7. Confirm the widget and its saved configuration are restored.
+
+## 8. Scope Decisions And Follow-Up Work
+
+Several implementation details intentionally differ from the original issue text. This section records those decisions so they do not look accidental later.
+
+### Naming
+
+The feature uses `oc_dotted_chart` consistently instead of `dotted_chart`. This includes API routes, backend helper naming, and database-oriented helper naming where applicable. The explicit prefix keeps the object-centric chart separate from a regular case-based dotted chart.
+
+### No Case Axis
+
+The chart does not create pseudo-cases. The y-axis is a configurable row dimension. It can be activity, an object type resolved to object instances, an event attribute, an object attribute, or another supported non-time dimension.
+
+This is different from a classical case-based dotted chart, but it fits the object-centric setting better because there is no single natural case id in an object-centric event log.
+
+### Recharts Instead Of Canvas
+
+The original issue text mentioned canvas draw helpers. The current implementation uses Recharts through the shadcn chart pattern instead.
+
+This means some interactions are implemented through React and SVG event handling rather than low-level canvas drawing. The tradeoff is easier integration with the existing frontend stack, at the cost of needing careful performance handling for large samples.
+
+### Zoom Semantics
+
+Regular zooming shows a subset of the currently loaded sampled frame. It does not automatically resample on every zoom movement.
+
+This is intentional. A zoom interaction should behave like zooming into what the user can already see. If zooming automatically requested a new backend sample every time, points could appear or disappear for reasons that are not visually obvious.
+
+The explicit Resample button is the point where the user asks for a new sample. When the user is zoomed in, resampling is scoped to that zoomed region.
+
+### Deferred Detail Tooltip
+
+The current tooltip shows the values needed to understand the visible dot in the current chart configuration. It does not yet expose every object type, object attribute, or event attribute.
+
+A richer expandable tooltip is tracked separately because it is more of a detail-inspection feature than a requirement for the first chart version.
+
+### Deferred Scroll And Pinch Interactions
+
+Mouse-wheel zoom, pinch zoom, and double-click reset are not implemented in the current version.
+
+The reason is performance and predictability. With the current rendering path, frequent scroll-driven updates can feel laggy. The implemented controls are therefore explicit: sliders, Apply, rectangle zoom, minimap drag, Reset, and Resample.
+
+### Remaining Follow-Up Areas
+
+The main follow-up areas are:
+
+- richer tooltip expansion with additional event and object context
+- performance comparison between Recharts/SVG and possible canvas-based rendering
+- deciding whether backend-resampled zoom should ever be offered as an optional mode
+- broader visual polish for dense categorical axes and very large object-attribute charts
