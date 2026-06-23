@@ -92,6 +92,19 @@ class OCHANDOVER(nx.MultiDiGraph):
                 )
             )
 
+        # Count distinct events per resource (after cluster mapping, so cluster IDs are counted correctly)
+        event_count_by_resource = (
+            event_resources
+            .explode("resources")
+            .group_by("resources")
+            .len()
+            .rename({"resources": "resource_id", "len": "event_count"})
+        )
+        event_count_dict: dict[str, int] = {
+            row["resource_id"]: row["event_count"]
+            for row in event_count_by_resource.to_dicts()
+        }
+
         # Get the type of the objects by their id
 
         businessobject_type_by_id = {}
@@ -411,11 +424,13 @@ class OCHANDOVER(nx.MultiDiGraph):
             graph.add_node(
                 source,
                 object_type=resource_type_by_id.get(source, "unknown"),
+                event_count=event_count_dict.get(source, 0),
             )
 
             graph.add_node(
                 target,
                 object_type=resource_type_by_id.get(target, "unknown"),
+                event_count=event_count_dict.get(target, 0),
             )
 
             graph.add_edge(

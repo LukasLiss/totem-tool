@@ -979,7 +979,7 @@ def ochandover(request):
         return Response({"error": f"Handover computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     nodes = [
-        {"id": node_id, "object_type": data.get("object_type", "unknown")}
+        {"id": node_id, "object_type": data.get("object_type", "unknown"), "event_count": data.get("event_count", 0)}
         for node_id, data in graph.nodes(data=True)
     ]
     edges = [

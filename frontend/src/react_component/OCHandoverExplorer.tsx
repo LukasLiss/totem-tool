@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, UnlockIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, Search, SlidersHorizontal, UnlockIcon, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -24,7 +24,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 
 /* ── Types ─────────────────────────────────────────────────── */
-export type HandoverNode = { id: string; object_type: string };
+export type HandoverNode = { id: string; object_type: string; event_count: number };
 export type HandoverEdge = {
   source: string;
   target: string;
@@ -373,11 +373,13 @@ export default function OCHandoverExplorer({
   const toggleResourceType = (t: string) => {
     setResourceTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
     setBoTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+    setSelectedMlpaLevel(null);
   };
 
   const toggleBoType = (t: string) => {
     setBoTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
     setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+    setSelectedMlpaLevel(null);
   };
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
@@ -639,8 +641,8 @@ export default function OCHandoverExplorer({
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
             <div className="flex items-center gap-2 flex-wrap">
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="min-w-[110px] justify-between">
+                <DropdownMenuTrigger asChild disabled={useClusters && !!clusterInfo}>
+                  <Button variant="outline" size="sm" className="min-w-[110px] justify-between" disabled={useClusters && !!clusterInfo}>
                     {selectedMlpaLevel !== null ? `Level ${selectedMlpaLevel}` : "Select level"}
                     <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
                   </Button>
@@ -648,7 +650,18 @@ export default function OCHandoverExplorer({
                 <DropdownMenuContent>
                   <DropdownMenuRadioGroup
                     value={selectedMlpaLevel !== null ? String(selectedMlpaLevel) : ""}
-                    onValueChange={v => setSelectedMlpaLevel(Number(v))}
+                    onValueChange={v => {
+                      const level = Number(v);
+                      setSelectedMlpaLevel(level);
+                      const boSet = new Set(
+                        mlpaLayers.filter(l => l.level === level).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                      );
+                      const resSet = new Set(
+                        mlpaLayers.filter(l => l.level > level).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                      );
+                      setBoTypes(boSet);
+                      setResourceTypes(resSet);
+                    }}
                   >
                     {mlpaLayers.map(l => (
                       <DropdownMenuRadioItem key={l.level} value={String(l.level)}>
@@ -658,30 +671,14 @@ export default function OCHandoverExplorer({
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={selectedMlpaLevel === null || (useClusters && !!clusterInfo)}
-                onClick={() => {
-                  if (selectedMlpaLevel === null) return;
-                  const boSet = new Set(
-                    mlpaLayers.filter(l => l.level === selectedMlpaLevel).flatMap(l => l.areas.flatMap(a => a.objectTypes))
-                  );
-                  const resSet = new Set(
-                    mlpaLayers.filter(l => l.level > selectedMlpaLevel).flatMap(l => l.areas.flatMap(a => a.objectTypes))
-                  );
-                  setBoTypes(boSet);
-                  setResourceTypes(resSet);
-                }}
-              >
-                Apply
-              </Button>
             </div>
-            {selectedMlpaLevel !== null && (
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Business objects: level {selectedMlpaLevel} · Resources: levels above
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground mt-1.5">
+              {useClusters && !!clusterInfo
+                ? "OrgaMining clusters are enabled"
+                : selectedMlpaLevel !== null
+                  ? `Business objects: level ${selectedMlpaLevel} · Resources: levels above`
+                  : "Select a level to pre-select object types"}
+            </p>
           </div>
         )}
 
@@ -706,7 +703,7 @@ export default function OCHandoverExplorer({
               <Switch
                 id="use-clusters"
                 checked={useClusters && !!clusterInfo}
-                onCheckedChange={v => { setUseClusters(v); if (v) setClusterByOt(false); }}
+                onCheckedChange={v => { setUseClusters(v); if (v) { setClusterByOt(false); setSelectedMlpaLevel(null); } }}
                 disabled={!clusterInfo}
               />
               <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
@@ -1056,8 +1053,60 @@ function HandoverGraph({
   const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
   const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
 
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
+  const [nodeSearch, setNodeSearch] = useState("");
+  const [checkedNodes, setCheckedNodes] = useState<Set<string>>(() => new Set(nodes.map(n => n.id)));
+  const [selectedTypeFilters, setSelectedTypeFilters] = useState<Set<string>>(new Set());
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNodeTooltip(null); };
+    setCheckedNodes(new Set(nodes.map(n => n.id)));
+    setTypePercentages({});
+    setSelectedTypeFilters(new Set());
+  }, [nodes]);
+
+  const percentagePassingIds = useMemo(() => {
+    const byType: Record<string, HandoverNode[]> = {};
+    for (const node of nodes) {
+      if (!byType[node.object_type]) byType[node.object_type] = [];
+      byType[node.object_type].push(node);
+    }
+    const passing = new Set<string>();
+    for (const [ot, typeNodes] of Object.entries(byType)) {
+      const pct = typePercentages[ot] ?? 100;
+      if (pct >= 100) { typeNodes.forEach(n => passing.add(n.id)); continue; }
+      const k = Math.max(0, Math.ceil(pct / 100 * typeNodes.length));
+      if (k === 0) continue;
+      const sorted = [...typeNodes].sort((a, b) => b.event_count - a.event_count);
+      const threshold = sorted[k - 1].event_count;
+      typeNodes.forEach(n => { if (n.event_count >= threshold) passing.add(n.id); });
+    }
+    return passing;
+  }, [nodes, typePercentages]);
+
+  const filteredNodeIds = useMemo(
+    () => new Set([...percentagePassingIds].filter(id => checkedNodes.has(id))),
+    [percentagePassingIds, checkedNodes],
+  );
+
+  const filterActive = filteredNodeIds.size < nodes.length;
+  const hiddenCount = nodes.length - filteredNodeIds.size;
+
+  const searchedNodes = useMemo(
+    () => nodes.filter(n =>
+      percentagePassingIds.has(n.id) &&
+      (selectedTypeFilters.size === 0 || selectedTypeFilters.has(n.object_type)) &&
+      (!nodeSearch.trim() || n.id.toLowerCase().includes(nodeSearch.toLowerCase()))
+    ),
+    [nodes, nodeSearch, percentagePassingIds, selectedTypeFilters],
+  );
+
+
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setNodeTooltip(null); setFilterOpen(false); }
+    };
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
   }, []);
@@ -1147,12 +1196,17 @@ function HandoverGraph({
     const fpad = NODE_R + 20;
     const fminX = Math.min(...fxs) - fpad, fmaxX = Math.max(...fxs) + fpad;
     const fminY = Math.min(...fys) - fpad, fmaxY = Math.max(...fys) + fpad;
-    const fw = (fmaxX - fminX) * 1.15, fh = (fmaxY - fminY) * 1.15;
+    const MIN_VB = NODE_R * 10;
+    const fw = Math.max((fmaxX - fminX) * 1.15, MIN_VB), fh = Math.max((fmaxY - fminY) * 1.15, MIN_VB);
     setViewBox({ x: fminX - (fw - (fmaxX - fminX)) / 2, y: fminY - (fh - (fmaxY - fminY)) / 2, w: fw, h: fh });
   }, [nodes, edges, size]);
 
   const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
-  const visibleEdges = useMemo(() => minWeightVal <= 0 ? edges : edges.filter(e => Math.round(e.weight * 10000) / 10000 >= minWeightVal), [edges, minWeightVal]);
+  const visibleEdges = useMemo(() => {
+    let result = minWeightVal <= 0 ? edges : edges.filter(e => Math.round(e.weight * 10000) / 10000 >= minWeightVal);
+    if (filteredNodeIds.size < nodes.length) result = result.filter(e => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target));
+    return result;
+  }, [edges, minWeightVal, filteredNodeIds, nodes.length]);
 
   // Detect which pairs have a reverse edge
   const reverseSet = useMemo(() => {
@@ -1438,7 +1492,7 @@ function HandoverGraph({
           ))}
 
           {/* Nodes */}
-          {nodes.map(node => {
+          {nodes.filter(n => filteredNodeIds.has(n.id)).map(node => {
             const pos = positions[node.id];
             if (!pos) return null;
             const color = typeColorMap[node.object_type] ?? "#94a3b8";
@@ -1566,7 +1620,185 @@ function HandoverGraph({
           >
             {isLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
           </Button>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
+              variant={filterActive ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => setFilterOpen(o => !o)}
+              className="rounded-full h-9 w-9"
+              title="Filter nodes"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+            </Button>
+            {filterActive && hiddenCount > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#ef4444", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }}>
+                {hiddenCount}
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* Filter panel */}
+        {filterOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, height: 420, zIndex: 20,
+              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+              display: "flex", flexDirection: "column",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Node Filter</span>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+
+            {/* Top % by type */}
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top % by type</span>
+                {Object.values(typePercentages).some(v => v < 100) && (
+                  <button
+                    type="button"
+                    onClick={() => setTypePercentages({})}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                  >
+                    Reset all
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {nodeTypes.map(ot => {
+                  const pct = typePercentages[ot] ?? 100;
+                  const color = typeColorMap[ot] ?? "#94a3b8";
+                  return (
+                    <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
+                      <Slider
+                        min={0} max={100} step={1}
+                        value={[pct]}
+                        onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
+                        className="w-20"
+                      />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Node search + checklist */}
+            <div style={{ padding: "10px 14px", flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ position: "relative", marginBottom: 8 }}>
+                <Search style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: 12, height: 12, color: "#94a3b8", pointerEvents: "none" }} />
+                <input
+                  type="text"
+                  placeholder="Search nodes…"
+                  value={nodeSearch}
+                  onChange={e => setNodeSearch(e.target.value)}
+                  style={{
+                    width: "100%", boxSizing: "border-box", paddingLeft: 26, paddingRight: 8,
+                    height: 30, border: "1px solid #E2E8F0", borderRadius: 6,
+                    fontSize: 12, outline: "none", background: "#F8FAFC",
+                  }}
+                />
+              </div>
+              {/* Object type chips */}
+              <div style={{ display: "flex", gap: 4, overflowX: "auto", marginBottom: 8, paddingBottom: 2, scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}>
+                {nodeTypes
+                  .filter(ot => nodes.some(n => n.object_type === ot && percentagePassingIds.has(n.id)))
+                  .map(ot => {
+                    const color = typeColorMap[ot] ?? "#94a3b8";
+                    const active = selectedTypeFilters.has(ot);
+                    return (
+                      <div
+                        key={ot}
+                        onClick={() => setSelectedTypeFilters(prev => { const next = new Set(prev); active ? next.delete(ot) : next.add(ot); return next; })}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 3,
+                          padding: active ? "2px 4px 2px 8px" : "2px 8px",
+                          borderRadius: 9999, flexShrink: 0, cursor: "pointer", userSelect: "none",
+                          border: `1.5px solid ${color}`,
+                          background: active ? color : "white",
+                          color: active ? "white" : "#64748b",
+                          fontSize: 11, fontWeight: active ? 600 : 400,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {ot}
+                        {active && (
+                          <span
+                            onClick={e => { e.stopPropagation(); setSelectedTypeFilters(prev => { const next = new Set(prev); next.delete(ot); return next; }); }}
+                            style={{ display: "flex", alignItems: "center", opacity: 0.8, cursor: "pointer" }}
+                          >
+                            <X style={{ width: 10, height: 10 }} />
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setCheckedNodes(prev => { const next = new Set(prev); searchedNodes.forEach(n => next.add(n.id)); return next; })}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCheckedNodes(prev => { const next = new Set(prev); searchedNodes.forEach(n => next.delete(n.id)); return next; })}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                >
+                  None
+                </button>
+              </div>
+              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                {searchedNodes.map(n => {
+                  const checked = checkedNodes.has(n.id);
+                  const color = typeColorMap[n.object_type] ?? "#94a3b8";
+                  return (
+                    <label key={n.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "2px 4px", borderRadius: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setCheckedNodes(prev => {
+                          const next = new Set(prev);
+                          checked ? next.delete(n.id) : next.add(n.id);
+                          return next;
+                        })}
+                        style={{ width: 13, height: 13, accentColor: color, flexShrink: 0 }}
+                      />
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.id}</span>
+                    </label>
+                  );
+                })}
+                {searchedNodes.length === 0 && (
+                  <span style={{ fontSize: 11, color: "#94a3b8", padding: "4px 0" }}>No nodes match.</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {tooltip && (
           <div style={{
@@ -1630,12 +1862,14 @@ function HandoverGraph({
               />
             );
           }
-          const TW = 180, TH = 32;
+          const node = nodes.find(n => n.id === nId);
+          const TW = 180, TH = 52;
           const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
           const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
           return (
-            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
-              {nId}
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
+              <div style={{ fontWeight: 600 }}>{nId}</div>
+              {node != null && <div style={{ color: "#64748b", marginTop: 2 }}>Events: {node.event_count}</div>}
             </div>
           );
         })()}
