@@ -101,6 +101,10 @@ export default function OCHandoverExplorer({
   const [minParallelObsStr, setMinParallelObsStr] = useState("1");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const [visibleGraphNodes, setVisibleGraphNodes] = useState<HandoverNode[]>([]);
+  const [nodeSearch, setNodeSearch] = useState("");
+  const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
+  const nodeSearchRef = useRef<HTMLDivElement>(null);
   const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const { clusterInfo } = useContext(ClusterContext);
   const [useClusters, setUseClusters] = useState(false);
@@ -277,6 +281,16 @@ export default function OCHandoverExplorer({
     }, 50);
     return () => clearTimeout(id);
   }, [status, lockedHeight]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (nodeSearchRef.current && !nodeSearchRef.current.contains(e.target as Node)) {
+        setNodeSearchOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   // Phase 2: compute handover when triggered
   useEffect(() => {
@@ -766,7 +780,8 @@ export default function OCHandoverExplorer({
 
         {status === "ready" && data && (
           <>
-            <div className="flex gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
               <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => setViewMode("graph")}>
                 Graph
               </Button>
@@ -776,6 +791,44 @@ export default function OCHandoverExplorer({
               <Button size="sm" variant={viewMode === "log" ? "default" : "outline"} onClick={() => setViewMode("log")}>
                 Log
               </Button>
+              </div>
+              {viewMode === "graph" && (
+                <div ref={nodeSearchRef} className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ width: 14, height: 14 }} />
+                  <Input
+                    className="h-8 pl-7 pr-3 text-xs w-72"
+                    placeholder="Find resource…"
+                    value={nodeSearch}
+                    onChange={e => { setNodeSearch(e.target.value); setNodeSearchOpen(true); }}
+                    onFocus={() => setNodeSearchOpen(true)}
+                  />
+                  {nodeSearchOpen && nodeSearch.trim() !== "" && (() => {
+                    const q = nodeSearch.trim().toLowerCase();
+                    const matches = visibleGraphNodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
+                    if (matches.length === 0) return null;
+                    return (
+                      <div className="absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto" style={{ maxHeight: 260 }}>
+                        {matches.map(n => (
+                          <button
+                            key={n.id}
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
+                            onMouseDown={e => {
+                              e.preventDefault();
+                              setSelectedNode(n.id);
+                              setNodeSearch("");
+                              setNodeSearchOpen(false);
+                            }}
+                          >
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
+                            <span className="truncate">{n.id}</span>
+                            <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
@@ -789,6 +842,8 @@ export default function OCHandoverExplorer({
                     onNodeClick={setSelectedNode}
                     clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
                     positionsRef={graphPositionsRef}
+                    onVisibleNodesChange={setVisibleGraphNodes}
+                    clustered={(useClusters && !!clusterInfo) || clusterByOt}
                   />
                 </div>
                 {selectedNode && (
@@ -1029,6 +1084,8 @@ function HandoverGraph({
   onNodeClick,
   clusterInfo,
   positionsRef,
+  onVisibleNodesChange,
+  clustered,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1036,6 +1093,8 @@ function HandoverGraph({
   onNodeClick?: (id: string) => void;
   clusterInfo?: ClusterInfo;
   positionsRef?: { current: Record<string, { x: number; y: number }> };
+  onVisibleNodesChange?: (nodes: HandoverNode[]) => void;
+  clustered?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1094,6 +1153,10 @@ function HandoverGraph({
 
   const filterActive = filteredNodeIds.size < nodes.length;
   const hiddenCount = nodes.length - filteredNodeIds.size;
+
+  useEffect(() => {
+    if (onVisibleNodesChange) onVisibleNodesChange(nodes.filter(n => filteredNodeIds.has(n.id)));
+  }, [filteredNodeIds, nodes, onVisibleNodesChange]);
 
   const searchedNodes = useMemo(
     () => nodes.filter(n =>
@@ -1232,6 +1295,8 @@ function HandoverGraph({
 
   const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
+  // header ~37px, slider row ~30px, slider overhead ~37px, bottom (search+chips+all/none+checklist) ~290px
+  const filterPanelHeight = 37 + (clustered ? 0 : 37 + nodeTypes.length * 30) + 290;
 
   // Pre-compute all edge paths
   const edgePaths = useMemo(() => {
@@ -1652,7 +1717,7 @@ function HandoverGraph({
         {filterOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, height: 420, zIndex: 20,
+              position: "absolute", bottom: 68, right: 12, width: 272, height: filterPanelHeight, zIndex: 20,
               background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
               display: "flex", flexDirection: "column",
@@ -1672,39 +1737,41 @@ function HandoverGraph({
             </div>
 
             {/* Top % by type */}
-            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top % by type</span>
-                {Object.values(typePercentages).some(v => v < 100) && (
-                  <button
-                    type="button"
-                    onClick={() => setTypePercentages({})}
-                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
-                  >
-                    Reset all
-                  </button>
-                )}
+            {!clustered && (
+              <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top % by type</span>
+                  {Object.values(typePercentages).some(v => v < 100) && (
+                    <button
+                      type="button"
+                      onClick={() => setTypePercentages({})}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                    >
+                      Reset all
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {nodeTypes.map(ot => {
+                    const pct = typePercentages[ot] ?? 100;
+                    const color = typeColorMap[ot] ?? "#94a3b8";
+                    return (
+                      <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
+                        <Slider
+                          min={0} max={100} step={1}
+                          value={[pct]}
+                          onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
+                          className="w-20"
+                        />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {nodeTypes.map(ot => {
-                  const pct = typePercentages[ot] ?? 100;
-                  const color = typeColorMap[ot] ?? "#94a3b8";
-                  return (
-                    <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                      <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
-                      <Slider
-                        min={0} max={100} step={1}
-                        value={[pct]}
-                        onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
-                        className="w-20"
-                      />
-                      <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            )}
 
             {/* Node search + checklist */}
             <div style={{ padding: "10px 14px", flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1712,7 +1779,7 @@ function HandoverGraph({
                 <Search style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: 12, height: 12, color: "#94a3b8", pointerEvents: "none" }} />
                 <input
                   type="text"
-                  placeholder="Search nodes…"
+                  placeholder="Search resources…"
                   value={nodeSearch}
                   onChange={e => setNodeSearch(e.target.value)}
                   style={{
