@@ -24,7 +24,8 @@ import VariantsExplorer, {
 } from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
 import { ReactFlowProvider } from "@xyflow/react";
-import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
+import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
+import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
@@ -37,6 +38,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ChevronDown } from 'lucide-react';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -717,11 +719,206 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   return (
     <div className="w-full h-full bg-white">
       <ReactFlowProvider>
-        <OCDFGVisualizer
+        <NewOCDFGVisualizer
           height="100%"
           fileId={selectedFile?.id}
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+
+// NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
+const NewOCDFGComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+
+  useEffect(() => {
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>New OCDFG (ELK) Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout.
+          </p>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="new-show-controls">Show Controls Panel</Label>
+            <Switch
+              id="new-show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="new-initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="new-initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render NewOCDFGVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <NewOCDFGVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+
+const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+
+  useEffect(() => {
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>OCDFG (Variants) Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering.
+          </p>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="variants-show-controls">Show Controls Panel</Label>
+            <Switch
+              id="variants-show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="variants-initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="variants-initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render NewOCDFGVariantsVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <NewOCDFGVariantsVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
         />
       </ReactFlowProvider>
     </div>
@@ -738,4 +935,6 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ProcessAreaComponent,
   LogStatisticsComponent,
   OCDFGComponent,
+  NewOCDFGComponent,
+  NewOCDFGVariantsComponent,
 };

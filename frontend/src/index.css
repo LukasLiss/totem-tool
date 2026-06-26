@@ -146,3 +146,8 @@ html, body, #root {
 .react-flow__edge.dragging path {
   transition: none;
 }
+
+/* Ensure mouse hover events reach nodes when interaction is locked */
+.interactions-disabled .react-flow__pane {
+  pointer-events: none !important;
+}

@@ -12,7 +12,7 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
-import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -31,7 +31,7 @@ export function DevDashboard() {
         <ProcessArea fileId={selectedFile?.id} />
         <div className="relative h-[640px] overflow-hidden rounded-xl border bg-card shadow-sm">
           <ReactFlowProvider>
-            <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
+            <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
           </ReactFlowProvider>
         </div>
         <Card className="@container/card">
