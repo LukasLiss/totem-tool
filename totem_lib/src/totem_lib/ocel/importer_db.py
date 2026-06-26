@@ -26,6 +26,7 @@ import ijson
 import polars as pl
 
 from .ocel_duckdb import OcelDuckDB, create_ocel_schema
+from .validation import OCELValidationException, validate_ocel
 
 BATCH_SIZE = 50_000
 STREAMING_THRESHOLD_MB = 200
@@ -40,6 +41,7 @@ def import_ocel_db(
     db_path: str = ":memory:",
     streaming_threshold_mb: float = STREAMING_THRESHOLD_MB,
     graceful_import: bool = True,
+    strict_mode: bool = False,
 ) -> OcelDuckDB:
     """
     Import an OCEL 2.0 file directly into a DuckDB database.
@@ -113,7 +115,7 @@ def import_ocel_db(
         )
     size_mb = os.path.getsize(file_path) / 1024 / 1024
     dispatchers = stream if size_mb >= streaming_threshold_mb else bulk
-    return dispatchers[fmt](file_path, db_path, graceful_import)
+    return dispatchers[fmt](file_path, db_path, graceful_import, strict_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ def _graceful_cleanup(conn: duckdb.DuckDBPyConnection) -> None:
 # SQLite — bulk (DuckDB ATTACH, pure SQL pipeline)
 # ---------------------------------------------------------------------------
 
-def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     con = sqlite3.connect(file_path)
     cur = con.cursor()
 
@@ -225,6 +227,11 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True) -> 
     _sqlite_bulk_o2o(conn)
 
     conn.execute("DETACH src")
+
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)
@@ -364,7 +371,7 @@ def _sqlite_bulk_o2o(conn: duckdb.DuckDBPyConnection) -> None:
 # JSON — bulk (json.load + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
 
     with open(file_path, "r", encoding="utf-8") as f:
@@ -497,6 +504,11 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oc
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -507,7 +519,7 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oc
 # XML — bulk (ET.parse + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
     tree = ET.parse(file_path)
     root = tree.getroot()
@@ -647,6 +659,11 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -657,7 +674,7 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
 # CSV — bulk (DictReader + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
     with open(file_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -765,6 +782,11 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -775,7 +797,7 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
 # SQLite
 # ---------------------------------------------------------------------------
 
-def _import_sqlite(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_sqlite(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     con = sqlite3.connect(file_path)
     cur = con.cursor()
 
@@ -796,6 +818,11 @@ def _import_sqlite(file_path: str, db_path: str, graceful: bool = True) -> OcelD
     _sqlite_insert_o2o(cur, conn)
 
     con.close()
+
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)
@@ -1004,7 +1031,7 @@ def _sqlite_insert_o2o(cur: sqlite3.Cursor, conn: duckdb.DuckDBPyConnection) -> 
 # JSON (ijson streaming)
 # ---------------------------------------------------------------------------
 
-def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_json(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # --- Pass 1: collect attribute column names ---
     event_attr_cols: set[str] = set()
     obj_attr_cols:   set[str] = set()
@@ -1119,6 +1146,11 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuc
         flusher(conn, "object_attribute_history", hist_ph, hist_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -1143,7 +1175,7 @@ def _xml_attr_value(elem: ET.Element) -> str | None:
     return text or None
 
 
-def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_xml(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # --- Pass 1: collect attribute column names ---
     # Only collect names from data attributes (those with a "value" attr),
     # not from schema-definition attributes (those with a "type" attr only).
@@ -1318,6 +1350,11 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
         flusher(conn, "object_attribute_history", hist_ph, hist_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -1330,7 +1367,7 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
 # CSV
 # ---------------------------------------------------------------------------
 
-def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_csv(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # CSV headers tell us the attribute columns upfront — no separate pass needed.
     # utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add to CSV files
     with open(file_path, newline="", encoding="utf-8-sig") as f:
@@ -1436,6 +1473,11 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
     obj_rows = [(obj_id, obj_type) for obj_id, obj_type in seen_objs.items()]
     flusher(conn, "objects", obj_ph, obj_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
+
+    if strict_mode:
+        errors = validate_ocel(conn)
+        if errors:
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)

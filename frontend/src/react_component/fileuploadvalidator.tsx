@@ -1,6 +1,7 @@
 import { useState, useRef, useContext } from "react";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
@@ -20,6 +21,7 @@ export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
 
     const [file, setFile] = useState<File | null>(null);
+    const [validationStatus, setValidationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
     const hiddenInputRef = useRef<HTMLInputElement | null>(null);
 
 
@@ -76,15 +78,37 @@ export function FileUploadValidator() {
         toast.warning("No file selected!");
         return;
       }
+      setValidationStatus('loading');
       const response = await uploadFile(file);
       setSelectedFile(response);
+      setValidationStatus('success');
       toast.success("Upload successful", {
         description: file.name,
       });
       setFile(null);
-    } catch (err) {
+      // Reset status after a delay so user can upload again if needed
+      setTimeout(() => setValidationStatus('idle'), 3000);
+    } catch (err: any) {
       console.error("Upload failed:", err);
-      toast.error("Upload failed");
+      if (err.response?.data?.errors) {
+        const errorList = err.response.data.errors;
+        toast.error("Validation Failed", {
+          description: (
+            <div className="max-h-40 overflow-y-auto mt-2">
+              <ul className="list-disc pl-4 text-left space-y-1">
+                {errorList.map((e: string, i: number) => (
+                  <li key={i} className="text-xs text-red-600 dark:text-red-400">{e}</li>
+                ))}
+              </ul>
+            </div>
+          ),
+          duration: 10000,
+        });
+      } else {
+        toast.error("Upload failed");
+      }
+      setValidationStatus('error');
+      setTimeout(() => setValidationStatus('idle'), 3000);
     }
   };
 
@@ -125,7 +149,16 @@ export function FileUploadValidator() {
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
                 <span>{file?.name ?? "No file chosen"}</span>
             </div>
-              <Button className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
+              <Button 
+                className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg gap-2" 
+                type="submit"
+                disabled={validationStatus === 'loading'}
+              >
+                {validationStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {validationStatus === 'success' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
+                {validationStatus === 'error' && <XCircle className="h-4 w-4 text-red-500" />}
+                {validationStatus === 'loading' ? 'Validating...' : 'Validate & Upload'}
+              </Button>
           </div>
         </CardFooter>
       </form>
