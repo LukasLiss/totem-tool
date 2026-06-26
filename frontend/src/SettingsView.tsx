@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getCacheStats, clearCache } from "./api/cacheApi";
 import { toast } from "sonner";
-import { Database, HardDrive, Trash2, RefreshCw } from "lucide-react";
+import { Database, HardDrive, Trash2, RefreshCw, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 interface CacheStats {
   num_files: number;
@@ -18,6 +19,7 @@ interface CacheStats {
 }
 
 export function SettingsView() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
@@ -62,11 +64,22 @@ export function SettingsView() {
       <AppSidebar />
       <SidebarInset>
         <div className="flex flex-col gap-6 p-8 max-w-2xl mx-auto">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              Manage application settings and cache.
-            </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+              <p className="text-muted-foreground text-sm mt-1">
+                Manage application settings and cache.
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/overview")}
+              aria-label="Close settings"
+              title="Close settings"
+            >
+              <X className="h-5 w-5" />
+            </Button>
           </div>
 
           {/* Cache Management Card */}
