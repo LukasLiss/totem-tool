@@ -230,7 +230,30 @@ class EventLogViewSet(viewsets.ModelViewSet):
         project = Project.objects.create(name=project_name)
         project.users.add(user)
         project.save()
-        serializer.save(project=project)
+        
+        event_log = serializer.save(project=project)
+        
+        # Check if the file needs DuckDB conversion
+        file_path = event_log.file.path
+        if not file_path.lower().endswith('.duckdb'):
+            # Generate the new .duckdb path
+            base_name, _ = os.path.splitext(file_path)
+            new_path = base_name + ".duckdb"
+            
+            # Import and convert the file into the new DuckDB database
+            db = import_ocel_db(file_path, db_path=new_path)
+            db.close()
+            
+            # Remove the original uploaded file from disk
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+            
+            # Update the event_log to point to the new file
+            original_name, _ = os.path.splitext(event_log.file.name)
+            event_log.file.name = original_name + ".duckdb"
+            event_log.save(update_fields=['file'])
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):

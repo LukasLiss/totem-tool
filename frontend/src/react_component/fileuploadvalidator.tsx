@@ -13,14 +13,26 @@ import {
   CardTitle,
   CardContent,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { toast } from "sonner"
+import { useNavigate } from "react-router-dom"
 
 
 export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
+    const navigate = useNavigate();
 
     const [file, setFile] = useState<File | null>(null);
     const hiddenInputRef = useRef<HTMLInputElement | null>(null);
+    const [showConversionModal, setShowConversionModal] = useState(false);
+    const [isConverting, setIsConverting] = useState(false);
 
 
     const {getRootProps, getInputProps} = useDropzone({
@@ -82,9 +94,13 @@ export function FileUploadValidator() {
         description: file.name,
       });
       setFile(null);
+      setShowConversionModal(false);
+      setIsConverting(false);
+      navigate("/overview");
     } catch (err) {
       console.error("Upload failed:", err);
       toast.error("Upload failed");
+      setIsConverting(false);
     }
   };
 
@@ -93,7 +109,11 @@ export function FileUploadValidator() {
     e.preventDefault();
     const isValid = await validateFile();
     if (isValid) {
-      await handleFileUpload();
+      if (file && !file.name.toLowerCase().endsWith(".duckdb")) {
+        setShowConversionModal(true);
+      } else {
+        await handleFileUpload();
+      }
     }
  };
 
@@ -131,6 +151,34 @@ export function FileUploadValidator() {
       </form>
     </CardContent>
   </Card>
+
+  <Dialog open={showConversionModal} onOpenChange={setShowConversionModal}>
+    <DialogContent showCloseButton={!isConverting}>
+      <DialogHeader>
+        <DialogTitle>DuckDB Conversion Required</DialogTitle>
+        <DialogDescription>
+          To ensure optimal performance across the TOTeM Tool, non-DuckDB files 
+          are converted into an optimized backend storage format upon upload. 
+          This process may take a few moments depending on the file size.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button
+          variant="outline"
+          onClick={() => setShowConversionModal(false)}
+          disabled={isConverting}
+        >
+          Cancel
+        </Button>
+        <Button onClick={() => {
+          setIsConverting(true);
+          handleFileUpload();
+        }} disabled={isConverting}>
+          {isConverting ? "Converting & Uploading..." : "Convert and Upload"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
   </div>
   );
 }
