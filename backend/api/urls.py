@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, health_check
+from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, health_check, cache_stats, cache_clear
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -15,4 +15,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
+    path("cache/stats/", cache_stats, name="cache-stats"),
+    path("cache/clear/", cache_clear, name="cache-clear"),
 ]
+

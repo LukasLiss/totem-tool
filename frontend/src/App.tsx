@@ -11,6 +11,7 @@ import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
 import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
+import { SettingsView } from "./SettingsView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 
@@ -105,6 +106,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
+            <Route path="/settings" element={<SettingsView />} />
             <Route
               path="/"
               element={

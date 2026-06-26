@@ -2247,3 +2247,24 @@ def delete_user_data(request):
         {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
         status=status.HTTP_200_OK
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache management endpoints  (#76)
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def cache_stats(request):
+    """Return current cache statistics."""
+    from .cache_utils import get_cache_stats
+    return Response(get_cache_stats())
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cache_clear(request):
+    """Clear the entire results cache."""
+    from .cache_utils import clear_all_cache
+    clear_all_cache()
+    return Response({"status": "cleared"})
