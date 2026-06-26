@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
 from .models import EventLog
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, SQLQueryComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, SQLQueryComponent, PieChartComponent
 from django.db.models import Max
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -82,6 +82,12 @@ class SQLQueryComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 
+class PieChartComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = PieChartComponent
+        fields = "__all__"
+
+
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -93,4 +99,5 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         LogStatisticsComponent: LogStatisticsComponentSerializer,
         OCDFGComponent: OCDFGComponentSerializer,
         SQLQueryComponent: SQLQueryComponentSerializer,
+        PieChartComponent: PieChartComponentSerializer,
     }

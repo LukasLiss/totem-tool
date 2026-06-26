@@ -249,6 +249,17 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "PieChartComponent") {
+        props = {
+          query: (node as any).query ?? '',
+          ring_text: (node as any).ring_text ?? '',
+          chart_type: (node as any).chart_type ?? 'donut',
+          title: (node as any).title ?? '',
+          label_column: (node as any).label_column ?? '',
+          value_column: (node as any).value_column ?? '',
+          show_legend: (node as any).show_legend ?? true,
+          show_tooltip: (node as any).show_tooltip ?? true,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -326,6 +337,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "PieChartComponent") {
+          content = "Pie Chart";
         } else {
           content = "Unknown";
         }
@@ -363,6 +376,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // PieChartComponent properties
+            query: item.query,
+            ring_text: item.ring_text,
+            chart_type: item.chart_type,
+            title: item.title,
+            label_column: item.label_column,
+            value_column: item.value_column,
+            show_legend: item.show_legend,
+            show_tooltip: item.show_tooltip,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -390,6 +412,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // PieChartComponent properties
+              (node as any).query = item.query;
+              (node as any).ring_text = item.ring_text;
+              (node as any).chart_type = item.chart_type;
+              (node as any).title = item.title;
+              (node as any).label_column = item.label_column;
+              (node as any).value_column = item.value_column;
+              (node as any).show_legend = item.show_legend;
+              (node as any).show_tooltip = item.show_tooltip;
             }
           }
           // Set data attribute for persistence
