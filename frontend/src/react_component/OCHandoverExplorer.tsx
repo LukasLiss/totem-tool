@@ -1119,7 +1119,7 @@ function HandoverGraph({
   const dragOffset = useRef({ x: 0, y: 0 });
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
   const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
@@ -1406,6 +1406,9 @@ function HandoverGraph({
       markerId: string;
       count: number;
       weight: number;
+      avg_time: number | null;
+      min_time: number | null;
+      max_time: number | null;
       businessobject_type: string;
       source: string;
       target: string;
@@ -1456,6 +1459,7 @@ function HandoverGraph({
             key: `${pairKey}-${edge.businessobject_type}-${idx}`,
             d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
             color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
+            avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time,
             businessobject_type: edge.businessobject_type, source: srcId, target: tgtId,
           });
         });
@@ -1517,7 +1521,7 @@ function HandoverGraph({
           d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
         }
 
-        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
       });
     });
 
@@ -1661,7 +1665,7 @@ function HandoverGraph({
                 onMouseEnter={e => {
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect || dragId) return;
-                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: ep.count, weight: ep.weight });
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: ep.count, weight: ep.weight, avg_time: ep.avg_time, min_time: ep.min_time, max_time: ep.max_time });
                 }}
                 onMouseMove={e => {
                   if (dragId) return;
@@ -2087,6 +2091,13 @@ function HandoverGraph({
           }}>
             <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+            {tooltip.avg_time != null && (
+              <>
+                <div style={{ borderTop: "1px solid #E2E8F0", margin: "5px 0" }} />
+                <div><span style={{ fontWeight: 600 }}>Avg time:</span> {fmtDuration(tooltip.avg_time)}</div>
+                <div style={{ color: "#64748b" }}>Range: {fmtDuration(tooltip.min_time)} – {fmtDuration(tooltip.max_time)}</div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -2216,7 +2227,7 @@ function NodeDetailView({
   const [detailH, setDetailH] = useState(400);
   const [egoNorm, setEgoNorm] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
   const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
@@ -2305,7 +2316,7 @@ function NodeDetailView({
   // Ego is fixed at the vertical center of the visible container (overlay coordinate space)
   const OEY = detailH / 2;
 
-  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number }> = [];
+  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null }> = [];
 
   const pushEdge = (key: string, srcX: number, srcY: number, tgtX: number, tgtY: number,
     edge: HandoverEdge, lat: number) => {
@@ -2325,6 +2336,9 @@ function NodeDetailView({
       markerId: arrowId(edge.businessobject_type),
       count: edge.raw_weight,
       weight: getW(edge),
+      avg_time: edge.avg_time,
+      min_time: edge.min_time,
+      max_time: edge.max_time,
     });
   };
 
@@ -2486,7 +2500,7 @@ function NodeDetailView({
                 onMouseEnter={e => {
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect) return;
-                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: p.count, weight: p.weight });
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: p.count, weight: p.weight, avg_time: p.avg_time, min_time: p.min_time, max_time: p.max_time });
                 }}
                 onMouseMove={e => {
                   const rect = containerRef.current?.getBoundingClientRect();
@@ -2523,6 +2537,13 @@ function NodeDetailView({
           }}>
             <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
             <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+            {tooltip.avg_time != null && (
+              <>
+                <div style={{ borderTop: "1px solid #E2E8F0", margin: "5px 0" }} />
+                <div><span style={{ fontWeight: 600 }}>Avg time:</span> {fmtDuration(tooltip.avg_time)}</div>
+                <div style={{ color: "#64748b" }}>Range: {fmtDuration(tooltip.min_time)} – {fmtDuration(tooltip.max_time)}</div>
+              </>
+            )}
           </div>
         )}
       </div>
