@@ -69,6 +69,7 @@ type TotemVisualizerProps = {
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
+  apiEndpointType?: 'mlpa' | 'totem';
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4877,6 +4878,7 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
+  apiEndpointType = 'mlpa',
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -5130,7 +5132,7 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, true) : []), [rawTotem]);
+  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, apiEndpointType === 'mlpa') : []), [rawTotem, apiEndpointType]);
   const levelCount = layers.length;
   const extraTopPadding = useMemo(() => {
     const deficit = Math.max(0, 4 - levelCount);
@@ -5247,8 +5249,9 @@ function TotemVisualizer({
     setError(null);
     setRawTotem(null);
     try {
+      const endpoint = apiEndpointType === 'totem' ? 'discover_totem' : 'discover_mlpa';
       const { data: payload } = await axios.get<TotemApiResponse>(
-        `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
+        `${backendBaseUrl}/api/files/${eventLogId}/${endpoint}/`
       );
       setRawTotem(payload);
     } catch (err) {

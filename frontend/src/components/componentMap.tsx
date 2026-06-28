@@ -22,8 +22,9 @@ import VariantsExplorer, {
   type Extraction,
   type IsoStrategy,
 } from '@/react_component/VariantsExplorer';
-import ProcessArea from '@/react_component/ProcessArea';
-import { ReactFlowProvider } from "@xyflow/react";
+import ProcessArea from '../react_component/ProcessArea';
+import TotemMiner from '../react_component/TotemMiner';
+import ReactFlowComponent from '../react_component/ReactFlowComponent';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import { Switch } from '@/components/ui/switch';
@@ -542,6 +543,45 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 };
 
 
+// TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
+const TotemMinerComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  if (isEditMode) {
+    // EDIT MODE: Show configuration placeholder
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>TOTeM Miner</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The TOTeM Miner discovers and visualizes the structure of your event log.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {selectedFile 
+              ? `Currently analyzing: ${selectedFile.name || selectedFile.filename || 'Event Log'}`
+              : 'Automatically analyzing the current project\'s event log.'}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render TotemMiner with controls visible
+  return (
+    <TotemMiner
+      fileId={selectedFile?.id}
+      embedded={false}
+      height="100%"
+    />
+  );
+};
+
+
 // LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
 const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
@@ -933,6 +973,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ImageComponent,
   VariantsComponent,
   ProcessAreaComponent,
+  TotemMinerComponent,
   LogStatisticsComponent,
   OCDFGComponent,
   NewOCDFGComponent,

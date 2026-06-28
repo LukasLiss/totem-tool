@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
 from .models import EventLog
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
 from django.db.models import Max
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -65,6 +65,11 @@ class ProcessAreaComponentSerializer(DashboardComponentSerializer):
         model = ProcessAreaComponent
         fields = "__all__"
 
+class TotemMinerComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = TotemMinerComponent
+        fields = "__all__"
+
 class LogStatisticsComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = LogStatisticsComponent
@@ -89,6 +94,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ImageComponent: ImageComponentSerializer,
         VariantsComponent: VariantsComponentSerializer,
         ProcessAreaComponent: ProcessAreaComponentSerializer,
+        TotemMinerComponent: TotemMinerComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
         OCDFGComponent: OCDFGComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,

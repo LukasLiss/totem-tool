@@ -87,6 +87,10 @@ class ProcessAreaComponent(DashboardComponent):
     pass
 
 
+class TotemMinerComponent(DashboardComponent):
+    pass
+
+
 class LogStatisticsComponent(DashboardComponent):
     show_num_events = models.BooleanField(default=True)
     show_num_activities = models.BooleanField(default=True)

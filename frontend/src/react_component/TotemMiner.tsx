@@ -19,19 +19,19 @@ import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
 
-export type ProcessAreaProps = {
+export type TotemMinerProps = {
   fileId?: number | string | null;
   embedded?: boolean;
   backendBaseUrl?: string;
   height?: string | number;
 };
 
-export default function ProcessArea({
+export default function TotemMiner({
   fileId,
   embedded = false,
   backendBaseUrl = 'http://localhost:8000',
   height = 600,
-}: ProcessAreaProps) {
+}: TotemMinerProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
 
@@ -53,10 +53,10 @@ export default function ProcessArea({
         height="100%"
         backendBaseUrl={backendBaseUrl}
         reloadSignal={reloadSignal}
-        title="Totem Visualizer"
+        title="Totem Miner"
         embedded={true}
         onControlsReady={handleControlsReady}
-        apiEndpointType="mlpa"
+        apiEndpointType="totem"
       />
     </ReactFlowProvider>
   );
@@ -74,7 +74,7 @@ export default function ProcessArea({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <CardTitle>Process Area Visualizer</CardTitle>
+        <CardTitle>TOTeM Miner Visualizer</CardTitle>
         <CardAction className="flex items-center gap-2">
           {totemControls && (
             <>
