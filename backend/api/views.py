@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
+from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
 from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -500,6 +500,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(VariantsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'ProcessAreaComponent':
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'TotemMinerComponent':
+                components.append(TotemMinerComponent.objects.get(id=comp.id))
             elif comp.component_name == 'LogStatisticsComponent':
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
@@ -588,6 +590,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == 'ProcessAreaComponent':
                 ProcessAreaComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                )
+            elif component_name == 'TotemMinerComponent':
+                TotemMinerComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],
                     y=item['y'],

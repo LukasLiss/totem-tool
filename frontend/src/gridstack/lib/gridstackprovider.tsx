@@ -346,6 +346,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Variants Explorer";
         } else if (item.component_name === "ProcessAreaComponent") {
           content = "Process Area";
+        } else if (item.component_name === "TotemMinerComponent") {
+          content = "TOTeM Miner";
         } else if (item.component_name === "LogStatisticsComponent") {
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
