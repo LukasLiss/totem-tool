@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, PlusIcon, ScanIcon, Search, SlidersHorizontal, UnlockIcon, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, Network, PlusIcon, ScanIcon, Search, SlidersHorizontal, UnlockIcon, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -68,6 +68,16 @@ const NORMALIZATION_LABELS: Record<Normalization, string> = {
 
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
+
+// Interpolate between grey (#CBD5E1) and a hex color; t=0 → grey, t=1 → color
+function mixHex(hex: string, t: number): string {
+  const gr = [203, 213, 225]; // #CBD5E1
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${mix(gr[0], r)},${mix(gr[1], g)},${mix(gr[2], b)})`;
+}
 const ARROW_LEN = 14;  // arrow length along path direction (base → tip), user space
 const ARROW_H   = 18;  // arrow height perpendicular to path, user space
 const BASE_CURVE = 38;
@@ -1116,6 +1126,9 @@ function HandoverGraph({
   const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
 
   const [filterOpen, setFilterOpen] = useState(false);
+  const [centralityOpen, setCentralityOpen] = useState(false);
+  const [selectedCentrality, setSelectedCentrality] = useState<"in-degree" | "out-degree" | "both-degree" | "closeness" | "betweenness" | null>(null);
+  const [highlightedObjectType, setHighlightedObjectType] = useState<string | null>(null);
   const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
   const [nodeSearch, setNodeSearch] = useState("");
   const [checkedNodes, setCheckedNodes] = useState<Set<string>>(() => new Set(nodes.map(n => n.id)));
@@ -1274,6 +1287,89 @@ function HandoverGraph({
     return result;
   }, [edges, minWeightVal, filteredNodeIds, nodes.length]);
 
+  // Centrality scores — only computed when the user selects a measure
+  const centralityScores = useMemo<Map<string, number> | null>(() => {
+    if (!selectedCentrality) return null;
+    const nodeIds = Array.from(filteredNodeIds);
+    const n = nodeIds.length;
+    if (n < 2) return null;
+
+    const adj = new Map<string, Set<string>>();   // out-edges
+    const inAdj = new Map<string, Set<string>>(); // in-edges
+    nodeIds.forEach(id => { adj.set(id, new Set()); inAdj.set(id, new Set()); });
+    const seen = new Set<string>();
+    visibleEdges.forEach(e => {
+      if (e.source === e.target) return;
+      const key = `${e.source}\x00${e.target}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      adj.get(e.source)?.add(e.target);
+      inAdj.get(e.target)?.add(e.source);
+    });
+
+    const scores = new Map<string, number>();
+
+    if (selectedCentrality === "in-degree") {
+      nodeIds.forEach(id => scores.set(id, (inAdj.get(id)?.size ?? 0) / (n - 1)));
+    } else if (selectedCentrality === "out-degree") {
+      nodeIds.forEach(id => scores.set(id, (adj.get(id)?.size ?? 0) / (n - 1)));
+    } else if (selectedCentrality === "both-degree") {
+      nodeIds.forEach(id => {
+        const both = new Set([...inAdj.get(id)!, ...adj.get(id)!]);
+        scores.set(id, both.size / (n - 1));
+      });
+
+    } else if (selectedCentrality === "closeness") {
+      nodeIds.forEach(src => {
+        const dist = new Map<string, number>([[src, 0]]);
+        const queue = [src]; let i = 0;
+        while (i < queue.length) {
+          const u = queue[i++];
+          adj.get(u)!.forEach(v => { if (!dist.has(v)) { dist.set(v, dist.get(u)! + 1); queue.push(v); } });
+        }
+        const reachable = dist.size - 1;
+        if (reachable === 0) { scores.set(src, 0); return; }
+        const sumDist = Array.from(dist.values()).reduce((a, b) => a + b, 0);
+        scores.set(src, (reachable / (n - 1)) * (reachable / sumDist));
+      });
+
+    } else {
+      // Brandes betweenness (undirected)
+      nodeIds.forEach(id => scores.set(id, 0));
+      nodeIds.forEach(src => {
+        const stack: string[] = [];
+        const pred = new Map<string, string[]>(); nodeIds.forEach(id => pred.set(id, []));
+        const sigma = new Map<string, number>([[src, 1]]);
+        const dist = new Map<string, number>([[src, 0]]);
+        const queue = [src]; let i = 0;
+        while (i < queue.length) {
+          const v = queue[i++]; stack.push(v);
+          adj.get(v)!.forEach(w => {
+            if (!dist.has(w)) { dist.set(w, dist.get(v)! + 1); queue.push(w); }
+            if (dist.get(w) === dist.get(v)! + 1) {
+              sigma.set(w, (sigma.get(w) ?? 0) + (sigma.get(v) ?? 0));
+              pred.get(w)!.push(v);
+            }
+          });
+        }
+        const delta = new Map<string, number>();
+        while (stack.length) {
+          const w = stack.pop()!;
+          pred.get(w)!.forEach(v => {
+            delta.set(v, (delta.get(v) ?? 0) + ((sigma.get(v) ?? 0) / (sigma.get(w) ?? 1)) * (1 + (delta.get(w) ?? 0)));
+          });
+          if (w !== src) scores.set(w, scores.get(w)! + (delta.get(w) ?? 0));
+        }
+      });
+      const norm = n > 2 ? 1 / ((n - 1) * (n - 2)) : 1;
+      nodeIds.forEach(id => scores.set(id, scores.get(id)! * norm));
+    }
+
+    const maxVal = Math.max(...Array.from(scores.values()));
+    if (maxVal > 0) nodeIds.forEach(id => scores.set(id, scores.get(id)! / maxVal));
+    return scores;
+  }, [selectedCentrality, filteredNodeIds, visibleEdges]);
+
   // Detect which pairs have a reverse edge
   const reverseSet = useMemo(() => {
     const s = new Set(visibleEdges.map(e => `${e.source}\x00${e.target}`));
@@ -1310,6 +1406,9 @@ function HandoverGraph({
       markerId: string;
       count: number;
       weight: number;
+      businessobject_type: string;
+      source: string;
+      target: string;
     }> = [];
 
     const strokeFor = (w: number) => Math.max(0.3, (w / maxWeight) * 6);
@@ -1357,6 +1456,7 @@ function HandoverGraph({
             key: `${pairKey}-${edge.businessobject_type}-${idx}`,
             d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
             color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
+            businessobject_type: edge.businessobject_type, source: srcId, target: tgtId,
           });
         });
         return;
@@ -1417,7 +1517,7 @@ function HandoverGraph({
           d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
         }
 
-        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight });
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
       });
     });
 
@@ -1506,7 +1606,7 @@ function HandoverGraph({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          onClick={() => setNodeTooltip(t => t?.pinned ? null : t)}
+          onClick={() => { setNodeTooltip(t => t?.pinned ? null : t); if (!centralityScores) setHighlightedObjectType(null); }}
           style={{ cursor: dragId ? "grabbing" : "default", display: "block" }}
         >
           <defs>
@@ -1536,13 +1636,28 @@ function HandoverGraph({
                 d={ep.d}
                 fill="none"
                 markerEnd={`url(#${ep.markerId})`}
-                style={{ stroke: ep.color, strokeWidth: ep.strokeWidth, opacity: 0.85, pointerEvents: "none" }}
+                style={{
+                  stroke: ep.color,
+                  strokeWidth: ep.strokeWidth,
+                  opacity: centralityScores
+                    ? 0.2
+                    : highlightedObjectType
+                      ? (ep.businessobject_type === highlightedObjectType ? 0.85 : 0.12)
+                      : 0.85,
+                  pointerEvents: "none",
+                }}
               />
               <path
                 d={ep.d}
                 fill="none"
                 stroke="transparent"
                 strokeWidth={12}
+                style={{ cursor: centralityScores ? "default" : "pointer" }}
+                onClick={e => {
+                  if (centralityScores) return;
+                  e.stopPropagation();
+                  setHighlightedObjectType(t => t === ep.businessobject_type ? null : ep.businessobject_type);
+                }}
                 onMouseEnter={e => {
                   const rect = containerRef.current?.getBoundingClientRect();
                   if (!rect || dragId) return;
@@ -1560,16 +1675,26 @@ function HandoverGraph({
           ))}
 
           {/* Nodes */}
-          {nodes.filter(n => filteredNodeIds.has(n.id)).map(node => {
+          {(() => {
+            const highlightedNodeIds = highlightedObjectType
+              ? new Set(edgePaths.filter(ep => ep.businessobject_type === highlightedObjectType).flatMap(ep => [ep.source, ep.target]))
+              : null;
+            return nodes.filter(n => filteredNodeIds.has(n.id)).map(node => {
             const pos = positions[node.id];
             if (!pos) return null;
-            const color = typeColorMap[node.object_type] ?? "#94a3b8";
+            const baseColor = typeColorMap[node.object_type] ?? "#94a3b8";
+            const color = centralityScores
+              ? mixHex(baseColor, centralityScores.get(node.id) ?? 0)
+              : baseColor;
+            const nodeOpacity = (!centralityScores && highlightedNodeIds)
+              ? (highlightedNodeIds.has(node.id) ? 1 : 0.15)
+              : 1;
             const label = node.id.length > 11 ? node.id.slice(0, 11) + "…" : node.id;
             return (
               <g
                 key={node.id}
                 transform={`translate(${pos.x},${pos.y})`}
-                style={{ cursor: onNodeClick ? "pointer" : "grab" }}
+                style={{ cursor: onNodeClick ? "pointer" : "grab", opacity: nodeOpacity }}
                 onMouseDown={e => handleNodeMouseDown(node.id, e)}
                 onClick={e => {
                   e.stopPropagation();
@@ -1613,7 +1738,8 @@ function HandoverGraph({
                 </text>
               </g>
             );
-          })}
+          });
+          })()}
         </svg>
 
         {/* Button bar */}
@@ -1691,9 +1817,30 @@ function HandoverGraph({
           <div style={{ position: "relative" }}>
             <Button
               type="button"
+              variant={selectedCentrality ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); }}
+              className="rounded-full h-9 w-9"
+              title="Centrality measure"
+            >
+              <Network className="h-4 w-4" />
+            </Button>
+            {selectedCentrality && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#2563eb", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }} />
+            )}
+          </div>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
               variant={filterActive ? "secondary" : "outline"}
               size="icon"
-              onClick={() => setFilterOpen(o => !o)}
+              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Filter nodes"
             >
@@ -1867,6 +2014,59 @@ function HandoverGraph({
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Centrality panel */}
+        {centralityOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Centrality Measure</span>
+              <button
+                type="button"
+                onClick={() => setCentralityOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            {([
+              { key: "in-degree",   label: "In-Degree Centrality",   desc: "Number of unique resources that hand work to this one" },
+              { key: "out-degree",  label: "Out-Degree Centrality",  desc: "Number of unique resources this one hands work to" },
+              { key: "both-degree", label: "Degree Centrality",      desc: "Total unique partners (in and out combined)" },
+              { key: "closeness",   label: "Closeness Centrality",   desc: "How quickly this resource can reach all others via directed handovers" },
+              { key: "betweenness", label: "Betweenness Centrality", desc: "Fraction of directed shortest paths between any two resources passing through this one" },
+            ] as const).map(({ key, label, desc }) => {
+              const active = selectedCentrality === key;
+              return (
+                <div
+                  key={key}
+                  onClick={() => setSelectedCentrality(active ? null : key)}
+                  style={{
+                    padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F1F5F9",
+                    background: active ? "#EFF6FF" : "white",
+                    display: "flex", alignItems: "flex-start", gap: 10,
+                  }}
+                >
+                  <div style={{
+                    marginTop: 2, width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                    border: active ? "4px solid #2563EB" : "1.5px solid #CBD5E1",
+                    boxSizing: "border-box",
+                  }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: active ? "#1D4ED8" : "#0F172A" }}>{label}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
