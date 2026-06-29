@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.oc_dotted_chart.oc_dotted_chart_db import (
     _bucket_count_for_point_limit,
@@ -6,9 +8,12 @@ from totem_lib.oc_dotted_chart.oc_dotted_chart_db import (
 )
 from totem_lib.ocel import import_ocel_db
 
+TEST_DATA = Path(__file__).parent.parent / "test_data" / "small"
+CONTAINER_LOGISTICS_XML = str(TEST_DATA / "container_logistics.xml")
+
 
 def test_oc_dotted_chart_caps_rows_and_returns_contract():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     result = get_oc_dotted_chart_data(db, max_points=250)
 
@@ -34,7 +39,7 @@ def test_oc_dotted_chart_caps_rows_and_returns_contract():
 
 
 def test_oc_dotted_chart_supports_row_viewport_filter():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     result = get_oc_dotted_chart_data(
         db,
@@ -49,7 +54,7 @@ def test_oc_dotted_chart_supports_row_viewport_filter():
 
 
 def test_oc_dotted_chart_ignores_unknown_y_axis_values():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     result = get_oc_dotted_chart_data(
         db,
@@ -64,7 +69,7 @@ def test_oc_dotted_chart_ignores_unknown_y_axis_values():
 
 
 def test_oc_dotted_chart_dataset_total_count_is_full_log_size_for_sparse_dimensions():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     result = get_oc_dotted_chart_data(
         db,
@@ -78,7 +83,7 @@ def test_oc_dotted_chart_dataset_total_count_is_full_log_size_for_sparse_dimensi
 
 
 def test_oc_dotted_chart_supports_since_start_x_axis():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     result = get_oc_dotted_chart_data(
         db,
@@ -92,7 +97,7 @@ def test_oc_dotted_chart_supports_since_start_x_axis():
 
 
 def test_oc_dotted_chart_orders_rows_by_first_or_last_occurrence():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     first_result = get_oc_dotted_chart_data(db, row_order="first_occurrence", max_points=20_000)
     last_result = get_oc_dotted_chart_data(db, row_order="last_occurrence", max_points=20_000)
@@ -109,7 +114,7 @@ def test_oc_dotted_chart_orders_rows_by_first_or_last_occurrence():
 
 
 def test_oc_dotted_chart_exposes_object_dimensions_for_configuration():
-    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+    db = import_ocel_db(CONTAINER_LOGISTICS_XML)
 
     columns = get_oc_dotted_chart_columns(db)
     y_values = {option["value"] for option in columns["y_axis"]}
