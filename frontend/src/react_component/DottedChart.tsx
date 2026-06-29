@@ -587,7 +587,7 @@ export default function DottedChart({
         onMouseUp={handleChartMouseUp}
         onMouseLeave={handleChartMouseLeave}
       >
-        <div ref={chartInteractionRef} className="pr-[96px]">
+        <div ref={chartInteractionRef}>
           <ChartContainer
             config={{ events: { label: "Events", color: "var(--chart-1)" } }}
             className="aspect-auto shrink-0 rounded-md border bg-background p-1"
