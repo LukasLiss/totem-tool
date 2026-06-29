@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, LockIcon, MinusIcon, Network, PlusIcon, ScanIcon, Search, SlidersHorizontal, UnlockIcon, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, MinusIcon, Network, PlusIcon, ScanIcon, Search, SlidersHorizontal, Timer, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -854,6 +854,7 @@ export default function OCHandoverExplorer({
                     positionsRef={graphPositionsRef}
                     onVisibleNodesChange={setVisibleGraphNodes}
                     clustered={(useClusters && !!clusterInfo) || clusterByOt}
+                    parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
                   />
                 </div>
                 {selectedNode && (
@@ -1096,6 +1097,7 @@ function HandoverGraph({
   positionsRef,
   onVisibleNodesChange,
   clustered,
+  parallelFilter,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1105,13 +1107,13 @@ function HandoverGraph({
   positionsRef?: { current: Record<string, { x: number; y: number }> };
   onVisibleNodesChange?: (nodes: HandoverNode[]) => void;
   clustered?: boolean;
+  parallelFilter?: { enabled: boolean; threshold: number; minObs: number };
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [size, setSize] = useState({ width: 700, height: 450 });
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 700, h: 450 });
-  const [isLocked, setIsLocked] = useState(false);
   const [minWeightStr, setMinWeightStr] = useState("0.00");
   const viewBoxRef = useRef(viewBox);
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
@@ -1128,6 +1130,8 @@ function HandoverGraph({
   const [filterOpen, setFilterOpen] = useState(false);
   const [centralityOpen, setCentralityOpen] = useState(false);
   const [selectedCentrality, setSelectedCentrality] = useState<"in-degree" | "out-degree" | "both-degree" | "closeness" | "betweenness" | null>(null);
+  const [timeMetricOpen, setTimeMetricOpen] = useState(false);
+  const [selectedTimeMetric, setSelectedTimeMetric] = useState<"max" | "min" | "avg" | "range" | null>(null);
   const [highlightedObjectType, setHighlightedObjectType] = useState<string | null>(null);
   const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
   const [nodeSearch, setNodeSearch] = useState("");
@@ -1276,7 +1280,9 @@ function HandoverGraph({
     const fminX = Math.min(...fxs) - fpad, fmaxX = Math.max(...fxs) + fpad;
     const fminY = Math.min(...fys) - fpad, fmaxY = Math.max(...fys) + fpad;
     const MIN_VB = NODE_R * 10;
-    const fw = Math.max((fmaxX - fminX) * 1.15, MIN_VB), fh = Math.max((fmaxY - fminY) * 1.15, MIN_VB);
+    let fw = Math.max((fmaxX - fminX) * 1.15, MIN_VB), fh = Math.max((fmaxY - fminY) * 1.15, MIN_VB);
+    const ratio = size.width / (size.height || 1);
+    if (fw / fh < ratio) fw = fh * ratio; else fh = fw / ratio;
     setViewBox({ x: fminX - (fw - (fmaxX - fminX)) / 2, y: fminY - (fh - (fmaxY - fminY)) / 2, w: fw, h: fh });
   }, [nodes, edges, size]);
 
@@ -1369,6 +1375,31 @@ function HandoverGraph({
     if (maxVal > 0) nodeIds.forEach(id => scores.set(id, scores.get(id)! / maxVal));
     return scores;
   }, [selectedCentrality, filteredNodeIds, visibleEdges]);
+
+  // Edge time scores — only computed when the user selects a time metric
+  const edgeTimeScores = useMemo<Map<string, number> | null>(() => {
+    if (!selectedTimeMetric) return null;
+    const getRaw = (e: HandoverEdge): number | null => {
+      if (selectedTimeMetric === "max") return e.max_time;
+      if (selectedTimeMetric === "min") return e.min_time;
+      if (selectedTimeMetric === "avg") return e.avg_time;
+      if (e.max_time != null && e.min_time != null) return e.max_time - e.min_time;
+      return null;
+    };
+    const raw = new Map<string, number>();
+    visibleEdges.forEach(e => {
+      const key = `${e.source}\x00${e.target}\x00${e.businessobject_type}`;
+      const v = getRaw(e);
+      if (v != null) raw.set(key, v);
+    });
+    const maxVal = Math.max(0, ...Array.from(raw.values()));
+    const scores = new Map<string, number>();
+    visibleEdges.forEach(e => {
+      const key = `${e.source}\x00${e.target}\x00${e.businessobject_type}`;
+      scores.set(key, maxVal > 0 ? (raw.get(key) ?? 0) / maxVal : 0);
+    });
+    return scores;
+  }, [selectedTimeMetric, visibleEdges]);
 
   // Detect which pairs have a reverse edge
   const reverseSet = useMemo(() => {
@@ -1555,14 +1586,15 @@ function HandoverGraph({
     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     // Minimum size ensures self-loops (which arch ~NODE_R*2.4 above the node) remain visible.
     const MIN_VB = NODE_R * 10;
-    const w = Math.max((maxX - minX) * 1.15, MIN_VB);
-    const h = Math.max((maxY - minY) * 1.15, MIN_VB);
+    let w = Math.max((maxX - minX) * 1.15, MIN_VB);
+    let h = Math.max((maxY - minY) * 1.15, MIN_VB);
+    const ratio = size.width / (size.height || 1);
+    if (w / h < ratio) w = h * ratio; else h = w / ratio;
     setViewBox({ x: cx - w / 2, y: cy - h / 2, w, h });
   };
 
   // Node drag handlers
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
-    if (isLocked) return;
     e.preventDefault();
     setNodeTooltip(null);
     const pos = positions[id];
@@ -1579,7 +1611,7 @@ function HandoverGraph({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!dragId || isLocked) return;
+    if (!dragId) return;
     if (Math.hypot(e.clientX - mouseDownPos.current.x, e.clientY - mouseDownPos.current.y) > 4)
       dragHasMoved.current = true;
     const rect = svgRef.current?.getBoundingClientRect();
@@ -1590,13 +1622,141 @@ function HandoverGraph({
     setPositions(prev => ({
       ...prev,
       [dragId]: {
-        x: Math.max(NODE_R, Math.min(size.width - NODE_R, userX - dragOffset.current.x)),
-        y: Math.max(NODE_R, Math.min(size.height - NODE_R, userY - dragOffset.current.y)),
+        x: Math.max(vb.x + NODE_R, Math.min(vb.x + vb.w - NODE_R, userX - dragOffset.current.x)),
+        y: Math.max(vb.y + NODE_R, Math.min(vb.y + vb.h - NODE_R, userY - dragOffset.current.y)),
       },
     }));
   };
 
   const handleMouseUp = () => setDragId(null);
+
+  const downloadGraph = () => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const EXPORT_W = 1600;
+    const vb = viewBoxRef.current;
+    const GRAPH_H = Math.round(EXPORT_W * (vb.h / vb.w));
+
+    const PAD = 28;
+    const ROW_H = 22;
+    const FILT_X = Math.round(EXPORT_W * 0.60);
+    // Legend rows: "RESOURCES" header + nodeTypes + gap + "HANDOVER OBJECT TYPE" header + boTypes
+    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length;
+    // Filter rows: "FILTERS" header + 9 categories
+    const FILTER_ROWS = 1 + 9;
+    const PANEL_H = Math.ceil(Math.max(LEGEND_ROWS, FILTER_ROWS)) * ROW_H + PAD * 2;
+    const TOTAL_H = GRAPH_H + PANEL_H;
+
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(EXPORT_W));
+    clone.setAttribute("height", String(GRAPH_H));
+    const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bg.setAttribute("x", String(vb.x)); bg.setAttribute("y", String(vb.y));
+    bg.setAttribute("width", String(vb.w)); bg.setAttribute("height", String(vb.h));
+    bg.setAttribute("fill", "white");
+    clone.insertBefore(bg, clone.firstChild);
+
+    const svgStr = new XMLSerializer().serializeToString(clone);
+    const svgUrl = URL.createObjectURL(new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" }));
+
+    const img = new Image();
+    img.onload = () => {
+      const DPR = 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = EXPORT_W * DPR; canvas.height = TOTAL_H * DPR;
+      const ctx = canvas.getContext("2d")!;
+      ctx.scale(DPR, DPR);
+
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, EXPORT_W, TOTAL_H);
+      ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+      URL.revokeObjectURL(svgUrl);
+
+      // Panel background + top separator
+      ctx.fillStyle = "#F8FAFC";
+      ctx.fillRect(0, GRAPH_H, EXPORT_W, PANEL_H);
+      ctx.strokeStyle = "#E2E8F0"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, GRAPH_H); ctx.lineTo(EXPORT_W, GRAPH_H); ctx.stroke();
+
+      // Vertical divider between legend and filters
+      ctx.beginPath();
+      ctx.moveTo(FILT_X - 20, GRAPH_H + PAD);
+      ctx.lineTo(FILT_X - 20, GRAPH_H + PANEL_H - PAD);
+      ctx.stroke();
+
+      const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
+      const pTop = GRAPH_H + PAD;
+
+      // ---- LEGEND ----
+      // Resources section
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("RESOURCES", PAD, pTop + 10);
+      nodeTypes.forEach((ot, i) => {
+        const cy = pTop + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+        ctx.beginPath(); ctx.arc(PAD + 6, cy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = typeColorMap[ot] ?? "#94a3b8"; ctx.fill();
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(ot, PAD + 18, cy + 4);
+      });
+
+      // Handover object type section
+      const botStart = pTop + ROW_H + nodeTypes.length * ROW_H + ROW_H * 0.5;
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("HANDOVER OBJECT TYPE", PAD, botStart + 10);
+      boTypes.forEach((bt, i) => {
+        const cy = botStart + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+        ctx.fillStyle = typeColorMap[bt] ?? "#94a3b8";
+        ctx.fillRect(PAD, cy - 4, 16, 8);
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(bt, PAD + 22, cy + 4);
+      });
+
+      // ---- FILTERS ----
+      const centralityLabels: Record<string, string> = { "in-degree": "In-Degree", "out-degree": "Out-Degree", "both-degree": "Degree", closeness: "Closeness", betweenness: "Betweenness" };
+      const timeLabels: Record<string, string> = { max: "Max Time", min: "Min Time", avg: "Avg Time", range: "Range" };
+      const activePerc = Object.entries(typePercentages).filter(([, v]) => v < 100);
+      const minW = parseFloat(minWeightStr.replace(",", "."));
+
+      const filterItems: Array<{ label: string; value: string | null }> = [
+        { label: "Hidden nodes", value: hiddenCount > 0 ? `${hiddenCount} of ${nodes.length} hidden` : null },
+        { label: "Type percentage", value: activePerc.length > 0 ? activePerc.map(([ot, v]) => `${ot}: top ${v}%`).join(", ") : null },
+        { label: "Type focus", value: selectedTypeFilters.size > 0 ? [...selectedTypeFilters].join(", ") : null },
+        { label: "Min edge weight", value: minW > 0 ? minWeightStr : null },
+        { label: "Parallel filter", value: parallelFilter?.enabled ? `threshold ${parallelFilter.threshold.toFixed(2)}, min obs ${parallelFilter.minObs}` : null },
+        { label: "Centrality", value: selectedCentrality ? (centralityLabels[selectedCentrality] ?? selectedCentrality) : null },
+        { label: "Time metric", value: selectedTimeMetric ? (timeLabels[selectedTimeMetric] ?? selectedTimeMetric) : null },
+        { label: "Highlighted type", value: highlightedObjectType ?? null },
+        { label: "Clustering", value: clustered ? "Active" : null },
+      ];
+
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("FILTERS", FILT_X, pTop + 10);
+      filterItems.forEach(({ label, value }, i) => {
+        const fy = pTop + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+        ctx.font = `bold 12px ${FONT}`; ctx.fillStyle = "#64748b";
+        const labelStr = `${label}:`;
+        ctx.fillText(labelStr, FILT_X, fy + 4);
+        const labelW = ctx.measureText(`${label}:  `).width;
+        if (value) {
+          ctx.font = `12px ${FONT}`; ctx.fillStyle = "#0F172A";
+          ctx.fillText(value, FILT_X + labelW, fy + 4);
+        } else {
+          ctx.font = `12px ${FONT}`; ctx.fillStyle = "#94a3b8";
+          ctx.fillText("None", FILT_X + labelW, fy + 4);
+        }
+      });
+
+      canvas.toBlob(blob => {
+        if (!blob) return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `handover-graph-${new Date().toISOString().slice(0, 10)}.png`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      }, "image/png");
+    };
+    img.src = svgUrl;
+  };
 
   return (
     <div className="space-y-3">
@@ -1610,7 +1770,7 @@ function HandoverGraph({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          onClick={() => { setNodeTooltip(t => t?.pinned ? null : t); if (!centralityScores) setHighlightedObjectType(null); }}
+          onClick={() => { setNodeTooltip(t => t?.pinned ? null : t); setHighlightedObjectType(null); }}
           style={{ cursor: dragId ? "grabbing" : "default", display: "block" }}
         >
           <defs>
@@ -1643,11 +1803,13 @@ function HandoverGraph({
                 style={{
                   stroke: ep.color,
                   strokeWidth: ep.strokeWidth,
-                  opacity: centralityScores
-                    ? 0.2
-                    : highlightedObjectType
-                      ? (ep.businessobject_type === highlightedObjectType ? 0.85 : 0.12)
-                      : 0.85,
+                  opacity: highlightedObjectType
+                    ? (ep.businessobject_type === highlightedObjectType ? 0.85 : 0.12)
+                    : edgeTimeScores
+                      ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0))
+                      : centralityScores
+                        ? 0.2
+                        : 0.85,
                   pointerEvents: "none",
                 }}
               />
@@ -1656,9 +1818,8 @@ function HandoverGraph({
                 fill="none"
                 stroke="transparent"
                 strokeWidth={12}
-                style={{ cursor: centralityScores ? "default" : "pointer" }}
+                style={{ cursor: "pointer" }}
                 onClick={e => {
-                  if (centralityScores) return;
                   e.stopPropagation();
                   setHighlightedObjectType(t => t === ep.businessobject_type ? null : ep.businessobject_type);
                 }}
@@ -1690,7 +1851,7 @@ function HandoverGraph({
             const color = centralityScores
               ? mixHex(baseColor, centralityScores.get(node.id) ?? 0)
               : baseColor;
-            const nodeOpacity = (!centralityScores && highlightedNodeIds)
+            const nodeOpacity = highlightedNodeIds
               ? (highlightedNodeIds.has(node.id) ? 1 : 0.15)
               : 1;
             const label = node.id.length > 11 ? node.id.slice(0, 11) + "…" : node.id;
@@ -1745,6 +1906,36 @@ function HandoverGraph({
           });
           })()}
         </svg>
+
+        {highlightedObjectType && (
+          <div style={{
+            position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
+            display: "flex", alignItems: "center", gap: 7,
+            background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 9999,
+            padding: "5px 12px 5px 10px",
+            boxShadow: "0 2px 6px rgba(15,23,42,0.10)",
+            fontSize: 12, fontWeight: 600, color: "#92400E",
+            pointerEvents: "none",
+          }}>
+            <AlertTriangle style={{ width: 13, height: 13, color: "#D97706", flexShrink: 0 }} />
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: typeColorMap[highlightedObjectType] ?? "#94a3b8", flexShrink: 0 }} />
+            <span>{highlightedObjectType} <span style={{ fontWeight: 400, opacity: 0.7 }}>is highlighted</span></span>
+            <button
+              type="button"
+              onClick={() => setHighlightedObjectType(null)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", color: "#D97706", marginLeft: 2, pointerEvents: "auto" }}
+            >
+              <X style={{ width: 12, height: 12 }} />
+            </button>
+          </div>
+        )}
+
+        {(filterOpen || centralityOpen || timeMetricOpen) && (
+          <div
+            style={{ position: "absolute", inset: 0, zIndex: 19 }}
+            onClick={() => { setFilterOpen(false); setCentralityOpen(false); setTimeMetricOpen(false); }}
+          />
+        )}
 
         {/* Button bar */}
         <div style={{
@@ -1808,22 +1999,15 @@ function HandoverGraph({
           <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9">
             <ScanIcon className="h-4 w-4" />
           </Button>
-          <Button
-            type="button"
-            variant={isLocked ? "secondary" : "outline"}
-            size="icon"
-            onClick={() => setIsLocked(prev => !prev)}
-            className="rounded-full h-9 w-9"
-            title={isLocked ? "Unlock interactions" : "Lock interactions"}
-          >
-            {isLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+          <Button type="button" variant="outline" size="icon" onClick={downloadGraph} className="rounded-full h-9 w-9" title="Download graph as PNG">
+            <Download className="h-4 w-4" />
           </Button>
           <div style={{ position: "relative" }}>
             <Button
               type="button"
               variant={selectedCentrality ? "secondary" : "outline"}
               size="icon"
-              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); }}
+              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); setTimeMetricOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Centrality measure"
             >
@@ -1842,9 +2026,30 @@ function HandoverGraph({
           <div style={{ position: "relative" }}>
             <Button
               type="button"
+              variant={selectedTimeMetric ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => { setTimeMetricOpen(o => !o); setCentralityOpen(false); setFilterOpen(false); }}
+              className="rounded-full h-9 w-9"
+              title="Time metric"
+            >
+              <Timer className="h-4 w-4" />
+            </Button>
+            {selectedTimeMetric && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#d97706", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }} />
+            )}
+          </div>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
               variant={filterActive ? "secondary" : "outline"}
               size="icon"
-              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); }}
+              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); setTimeMetricOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Filter nodes"
             >
@@ -2021,6 +2226,63 @@ function HandoverGraph({
           </div>
         )}
 
+        {/* Time metric panel */}
+        {timeMetricOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Time Metric</span>
+              <button type="button" onClick={() => setTimeMetricOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}>
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            {([
+              { key: "max",   label: "Max Time",   desc: "Longest handover time observed for each arc" },
+              { key: "min",   label: "Min Time",   desc: "Shortest handover time observed for each arc" },
+              { key: "avg",   label: "Avg Time",   desc: "Average handover time for each arc" },
+              { key: "range", label: "Range",      desc: "Spread between longest and shortest handover (max − min)" },
+            ] as const).map(({ key, label, desc }) => {
+              const active = selectedTimeMetric === key;
+              return (
+                <div
+                  key={key}
+                  onClick={() => {
+                    const next = active ? null : key;
+                    setSelectedTimeMetric(next);
+                  }}
+                  style={{
+                    padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F1F5F9",
+                    background: active ? "#FFF7ED" : "white",
+                    display: "flex", alignItems: "flex-start", gap: 10,
+                  }}
+                >
+                  <div style={{
+                    marginTop: 2, width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                    border: active ? "4px solid #D97706" : "1.5px solid #CBD5E1",
+                    boxSizing: "border-box",
+                  }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: active ? "#92400E" : "#0F172A" }}>{label}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ padding: "8px 14px", background: "#FFFBEB", borderTop: "1px solid #FDE68A", display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <Info style={{ width: 11, height: 11, color: "#92400E", flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontSize: 10, color: "#92400E", lineHeight: 1.4 }}>
+                Brighter arcs always indicate a higher value. For Min Time, a bright arc means even the shortest observed handover was long.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Centrality panel */}
         {centralityOpen && (
           <div
@@ -2052,7 +2314,7 @@ function HandoverGraph({
               return (
                 <div
                   key={key}
-                  onClick={() => setSelectedCentrality(active ? null : key)}
+                  onClick={() => { setSelectedCentrality(active ? null : key); }}
                   style={{
                     padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F1F5F9",
                     background: active ? "#EFF6FF" : "white",
@@ -2380,6 +2642,9 @@ function NodeDetailView({
       markerId: arrowId(edge.businessobject_type),
       count: edge.raw_weight,
       weight: getW(edge),
+      avg_time: edge.avg_time,
+      min_time: edge.min_time,
+      max_time: edge.max_time,
     });
   });
 
