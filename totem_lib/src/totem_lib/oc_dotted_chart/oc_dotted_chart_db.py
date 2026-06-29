@@ -79,18 +79,7 @@ def get_oc_dotted_chart_data(
         f"SELECT COUNT(*) FROM ({dimensioned_sql}) dimensioned {dimensioned_where_sql}",
         [*time_params, *row_params],
     ).fetchone()[0]
-    dataset_dimensioned_sql = _dimensioned_events_sql(
-        base_sql=base_sql,
-        base_where_sql="",
-        x_expr=x_expr,
-        y_expr=y_expr,
-        color_expr=color_expr,
-        shape_expr=shape_expr,
-        row_order_expr=row_order_expr,
-    )
-    dataset_total_count = db.conn.execute(
-        f"SELECT COUNT(*) FROM ({dataset_dimensioned_sql}) dimensioned WHERE x IS NOT NULL AND y IS NOT NULL"
-    ).fetchone()[0]
+    dataset_total_count = _event_count(db)
 
     if total_count == 0:
         return {
@@ -298,6 +287,10 @@ def get_oc_dotted_chart_columns(db: OcelDuckDB) -> dict[str, list[dict[str, str]
         ],
         "sort_by": [*time_options, *categorical_options],
     }
+
+
+def _event_count(db: OcelDuckDB) -> int:
+    return int(db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
 
 
 def _base_events_sql(

@@ -59,7 +59,22 @@ def test_oc_dotted_chart_ignores_unknown_y_axis_values():
 
     assert result["events"] == []
     assert result["total_count"] == 0
+    assert result["dataset_total_count"] == _event_count(db)
     assert result["sampled"] is False
+
+
+def test_oc_dotted_chart_dataset_total_count_is_full_log_size_for_sparse_dimensions():
+    db = import_ocel_db("totem_lib/test_data/small/container_logistics.xml")
+
+    result = get_oc_dotted_chart_data(
+        db,
+        x_axis="object_attr:Vehicle:DepartureDate",
+        y_axis="activity",
+        max_points=500,
+    )
+
+    assert result["total_count"] < _event_count(db)
+    assert result["dataset_total_count"] == _event_count(db)
 
 
 def test_oc_dotted_chart_supports_since_start_x_axis():
@@ -151,3 +166,7 @@ def _expected_activity_rows(db, aggregate: str) -> dict[str, int]:
         """
     ).fetchall()
     return {activity: index for index, (activity,) in enumerate(rows, start=1)}
+
+
+def _event_count(db) -> int:
+    return db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
