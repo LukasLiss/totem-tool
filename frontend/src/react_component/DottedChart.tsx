@@ -482,6 +482,7 @@ export default function DottedChart({
 
   const handleConfigChange = useCallback(
     (nextConfig: DottedChartConfig) => {
+      const configChanged = dottedChartConfigKey(nextConfig) !== dottedChartConfigKey(effectiveConfig);
       const rowOrderChanged = nextConfig.rowOrder !== effectiveConfig.rowOrder;
       const hasZoomedFrame =
         !isFullRange(effectiveControlBrushRange, effectiveFramePoints.length) ||
@@ -498,14 +499,16 @@ export default function DottedChart({
           resetBrushOnNextPointsRef.current = true;
           resetYBrushOnNextRowsRef.current = true;
           setRequestedViewport(nextViewport);
-          setSampleSeed((current) => current + 1);
         }
       }
 
       setConfig(nextConfig);
+      if (configChanged) {
+        setSampleSeed((current) => current + 1);
+      }
     },
     [
-      effectiveConfig.rowOrder,
+      effectiveConfig,
       effectiveControlBrushRange,
       effectiveControlYBrushRange,
       effectiveFramePoints,
@@ -1557,6 +1560,17 @@ function formatAxisLabel(axis: AxisOption): string {
 
 function axisOptionKey(axis: AxisOption): string {
   return axis.type === "event_attribute" ? `${axis.type}:${axis.name}` : axis.type;
+}
+
+function dottedChartConfigKey(config: DottedChartConfig): string {
+  return [
+    axisOptionKey(config.xAxis),
+    axisOptionKey(config.yAxis),
+    axisOptionKey(config.colorBy),
+    axisOptionKey(config.shapeBy),
+    config.rowOrder,
+    config.maxPoints,
+  ].join("|");
 }
 
 function formatColumnLabel(name: string): string {
