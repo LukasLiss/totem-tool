@@ -618,6 +618,8 @@ export default function DottedChart({
               />
               <Tooltip
                 cursor={{ strokeDasharray: "3 3" }}
+                isAnimationActive={false}
+                animationDuration={0}
                 content={
                   <DottedChartTooltip
                     xAxis={effectiveConfig.xAxis}
