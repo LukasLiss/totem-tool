@@ -112,13 +112,8 @@ export default function DottedChart({
   const chartWrapperRef = useRef<HTMLDivElement | null>(null);
   const chartInteractionRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    setConfig(defaultConfig);
-  }, [defaultConfig]);
-
-  useEffect(() => {
+  const resetZoomFrame = useCallback(() => {
     setRequestedViewport(viewport);
-    setSampleSeed(0);
     setFramePoints([]);
     setFrameYTicks([]);
     setControlBrushRange({ startIndex: 0, endIndex: 0 });
@@ -129,7 +124,16 @@ export default function DottedChart({
     previousFrameRowCountRef.current = 0;
     resetBrushOnNextPointsRef.current = false;
     resetYBrushOnNextRowsRef.current = false;
-  }, [fileId, viewport]);
+  }, [viewport]);
+
+  useEffect(() => {
+    setConfig(defaultConfig);
+  }, [defaultConfig]);
+
+  useEffect(() => {
+    resetZoomFrame();
+    setSampleSeed(0);
+  }, [fileId, resetZoomFrame]);
 
   const { data, loading, error } = useDottedChartData({
     fileId,
@@ -483,37 +487,13 @@ export default function DottedChart({
   const handleConfigChange = useCallback(
     (nextConfig: DottedChartConfig) => {
       const configChanged = dottedChartConfigKey(nextConfig) !== dottedChartConfigKey(effectiveConfig);
-      const rowOrderChanged = nextConfig.rowOrder !== effectiveConfig.rowOrder;
-      const hasZoomedFrame =
-        !isFullRange(effectiveControlBrushRange, effectiveFramePoints.length) ||
-        !isFullRange(effectiveControlYBrushRange, effectiveFrameYTicks.length);
-
-      if (rowOrderChanged && hasZoomedFrame) {
-        const nextViewport = viewportFromFrameSelection(
-          effectiveFramePoints,
-          effectiveFrameYTicks,
-          effectiveControlBrushRange,
-          effectiveControlYBrushRange
-        );
-        if (nextViewport) {
-          resetBrushOnNextPointsRef.current = true;
-          resetYBrushOnNextRowsRef.current = true;
-          setRequestedViewport(nextViewport);
-        }
-      }
-
       setConfig(nextConfig);
       if (configChanged) {
+        resetZoomFrame();
         setSampleSeed((current) => current + 1);
       }
     },
-    [
-      effectiveConfig,
-      effectiveControlBrushRange,
-      effectiveControlYBrushRange,
-      effectiveFramePoints,
-      effectiveFrameYTicks,
-    ]
+    [effectiveConfig, resetZoomFrame]
   );
 
   if (!fileId) {
