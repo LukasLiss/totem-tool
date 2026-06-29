@@ -106,9 +106,7 @@ export default function DottedChart({
   const previousFrameRowCountRef = useRef(0);
   const resetBrushOnNextPointsRef = useRef(false);
   const resetYBrushOnNextRowsRef = useRef(false);
-  const colorKeysRef = useRef<string[]>([]);
-  const colorByKeyRef = useRef("");
-  const colorEventsRef = useRef<OCEvent[] | null>(null);
+  const [colorKeyState, setColorKeyState] = useState<ColorKeyState>({ colorByKey: "", keys: [] });
   const chartWrapperRef = useRef<HTMLDivElement | null>(null);
   const chartInteractionRef = useRef<HTMLDivElement | null>(null);
 
@@ -226,30 +224,28 @@ export default function DottedChart({
     [effectiveFramePoints]
   );
   const colorByKey = useMemo(() => axisOptionKey(effectiveConfig.colorBy), [effectiveConfig.colorBy]);
-  const colorGrouping = useMemo(() => {
-    const colorByChanged = colorByKeyRef.current !== colorByKey;
-    const eventsChanged = colorEventsRef.current !== events;
-
-    if (colorByChanged) {
-      if (!eventsChanged && colorEventsRef.current !== null) {
-        return makeColorScale(effectiveFramePoints);
-      }
-
-      colorByKeyRef.current = colorByKey;
-      colorKeysRef.current = [];
-    }
-
-    const nextColorGrouping = makeColorScale(effectiveFramePoints, colorKeysRef.current);
-    colorKeysRef.current = nextColorGrouping.keys;
-    colorEventsRef.current = events;
-    return nextColorGrouping;
-  }, [colorByKey, effectiveFramePoints, events]);
+  const persistedColorKeys = colorKeyState.colorByKey === colorByKey ? colorKeyState.keys : [];
+  const colorGrouping = useMemo(
+    () => makeColorScale(effectiveFramePoints, persistedColorKeys),
+    [effectiveFramePoints, persistedColorKeys]
+  );
   const colorScale = colorGrouping.scale;
   const colorKeys = colorGrouping.keys;
   const colorLegendEntries = useMemo(
     () => buildColorLegendEntries(effectiveFramePoints, colorScale, colorKeys),
     [colorKeys, colorScale, effectiveFramePoints]
   );
+
+  useEffect(() => {
+    if (
+      colorKeyState.colorByKey === colorByKey &&
+      arraysEqual(colorKeyState.keys, colorKeys)
+    ) {
+      return;
+    }
+
+    setColorKeyState({ colorByKey, keys: colorKeys });
+  }, [colorByKey, colorKeyState, colorKeys]);
   const frameXLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "x"), [effectiveFramePoints]);
   const frameYLabels = useMemo(() => makeAxisLabelLookup(effectiveFramePoints, "y"), [effectiveFramePoints]);
   const effectiveControlBrushRange = useMemo(
@@ -1048,6 +1044,11 @@ type ColorLegendEntry = {
   color: string;
 };
 
+type ColorKeyState = {
+  colorByKey: string;
+  keys: string[];
+};
+
 function buildColorLegendEntries(
   points: ChartPoint[],
   colorScale: Map<string, string>,
@@ -1451,6 +1452,10 @@ function fullBrushRange(pointCount: number): BrushRange {
 function isFullRange(range: BrushRange, pointCount: number): boolean {
   if (pointCount <= 0) return true;
   return range.startIndex === 0 && range.endIndex === pointCount - 1;
+}
+
+function arraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function formatXAxisTick(
