@@ -702,18 +702,6 @@ const DottedChartMinimapOverlay = React.memo(function DottedChartMinimapOverlay(
       onMouseMove={(event) => event.stopPropagation()}
       onMouseUp={(event) => event.stopPropagation()}
     >
-      <div className={cn(!showMinimap && "hidden")}>
-        <DottedChartMinimap
-          points={points}
-          framePoints={framePoints}
-          yTicks={yTicks}
-          colorScale={colorScale}
-          colorKeys={colorKeys}
-          xRange={xRange}
-          yRange={yRange}
-          onRangeChange={onRangeChange}
-        />
-      </div>
       <Button
         type="button"
         variant="outline"
@@ -729,6 +717,18 @@ const DottedChartMinimapOverlay = React.memo(function DottedChartMinimapOverlay(
           )}
         </span>
       </Button>
+      <div className={cn(!showMinimap && "hidden")}>
+        <DottedChartMinimap
+          points={points}
+          framePoints={framePoints}
+          yTicks={yTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={xRange}
+          yRange={yRange}
+          onRangeChange={onRangeChange}
+        />
+      </div>
     </div>
   );
 });
