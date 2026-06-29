@@ -10,20 +10,16 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import {
-  layoutOCDFGLongestTrace,
-  type DfgNode,
-  type DfgLink,
-} from '../utils/GraphLayouter';
+import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
 import { mapTypesToColors } from '../utils/objectColors';
-import OcdfgEdge from './OcdfgEdge';
+import NewOcdfgEdge from './NewOcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
 import OcdfgDefaultNode from './OcdfgDefaultNode';
 import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, BugIcon, ZapIcon, Sun } from 'lucide-react';
+import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -57,30 +53,43 @@ const VARIANT_PRESETS = {
   },
 } as const;
 
-export type TraceVariant = {
-  trace: string[];  // List of activity names in order
-  count: number;    // Number of object instances with this trace
-  objects: string[]; // Object IDs that followed this trace
+export type DfgNode = {
+  id: string;
+  label: string;
+  types?: string[];
 };
 
-// Trace variants per object type
-export type TraceVariantsPerType = Record<string, {
-  variants: TraceVariant[];
-  total_objects: number;
-}>;
-
+export type DfgLink = {
+  source: string;
+  target: string;
+  key?: string;
+  objtype?: string;
+  weight?: number;
+  variant_rank?: number;
+};
 
 export type OcdfgGraph = {
   nodes: DfgNode[];
   links: DfgLink[];
-  trace_variants?: TraceVariantsPerType;
 };
+
+interface TraceVariantEntry {
+  trace: string[];
+  count: number;
+  objects?: string[];
+}
+interface TraceVariantsForType {
+  variants: TraceVariantEntry[];
+  total_objects: number;
+}
+export type TraceVariantsMap = Record<string, TraceVariantsForType>;
 
 interface DfgData {
   dfg: OcdfgGraph;
+  trace_variants?: TraceVariantsMap;
 }
 
-interface OCDFGVisualizerProps {
+interface NewOCDFGVisualizerProps {
   height?: string | number;
   data?: OcdfgGraph;
   fileId?: number;
@@ -115,7 +124,6 @@ function measureGraphSize(
 ) {
   const visible = renderNodes
     .map((node) => {
-      // XYFlow keeps measured sizes on runtime nodes; fall back to declared sizes otherwise.
       const positionSource = (node as any).positionAbsolute ?? node.position;
       const x = coerceNumeric(positionSource?.x);
       const y = coerceNumeric(positionSource?.y);
@@ -168,7 +176,6 @@ function measureGraphSize(
     maxY = Math.max(maxY, (y ?? 0) + height);
   });
 
-  // Incorporate edge polylines so self-loops or long bends are accounted for.
   renderEdges.forEach((edge) => {
     const data = edge.data as { polyline?: Array<{ x?: number; y?: number }>; arrowPath?: string } | undefined;
     const polyline = Array.isArray(data?.polyline) ? data!.polyline : [];
@@ -196,79 +203,28 @@ function measureGraphSize(
   };
 }
 
-function transformLayoutDirection(
-  nodes: Node[],
-  edges: Edge[],
-  direction: LayoutDirection,
-): { nodes: Node[]; edges: Edge[] } {
-  if (direction !== 'LR') {
-    return { nodes, edges };
+
+
+function extractElkPolyline(elkEdge: any): Array<{ x: number; y: number }> | undefined {
+  if (!elkEdge.sections || elkEdge.sections.length === 0) return undefined;
+  const section = elkEdge.sections[0];
+  const points: Array<{ x: number; y: number }> = [];
+  
+  if (section.startPoint) {
+    points.push({ x: section.startPoint.x, y: section.startPoint.y });
   }
-
-  const positions = nodes
-    .map((node) => {
-      const x = coerceNumeric(node.position?.x) ?? 0;
-      const y = coerceNumeric(node.position?.y) ?? 0;
-      return { x, y };
-    })
-    .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-
-  const minX = positions.length > 0 ? Math.min(...positions.map((p) => p.x)) : 0;
-  const minY = positions.length > 0 ? Math.min(...positions.map((p) => p.y)) : 0;
-
-  const swapPoint = (point?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(point?.x) ?? 0;
-    const y = coerceNumeric(point?.y) ?? 0;
-    return {
-      x: y - minY,
-      y: x - minX,
-    };
-  };
-
-  const swapVector = (vector?: { x?: number; y?: number }) => {
-    const x = coerceNumeric(vector?.x) ?? 0;
-    const y = coerceNumeric(vector?.y) ?? 0;
-    return { x: y, y: x };
-  };
-
-  const transformedNodes = nodes.map((node) => {
-    const pos = swapPoint(node.position ?? { x: 0, y: 0 });
-    return {
-      ...node,
-      position: pos,
-    };
-  });
-
-  const transformedEdges = edges.map((edge) => {
-    const data = edge.data as {
-      polyline?: Array<{ x: number; y: number }>;
-      sourceAnchorOffset?: { x?: number; y?: number };
-      targetAnchorOffset?: { x?: number; y?: number };
-    } | undefined;
-    const swappedPolyline = data?.polyline?.map((pt) => swapPoint(pt));
-    const swappedSourceOffset = data?.sourceAnchorOffset
-      ? swapVector(data.sourceAnchorOffset)
-      : data?.sourceAnchorOffset;
-    const swappedTargetOffset = data?.targetAnchorOffset
-      ? swapVector(data.targetAnchorOffset)
-      : data?.targetAnchorOffset;
-    const nextData =
-      swappedPolyline || swappedSourceOffset || swappedTargetOffset
-        ? {
-          ...data,
-          polyline: swappedPolyline ?? data?.polyline,
-          sourceAnchorOffset: swappedSourceOffset ?? data?.sourceAnchorOffset,
-          targetAnchorOffset: swappedTargetOffset ?? data?.targetAnchorOffset,
-        }
-        : data;
-
-    return nextData ? { ...edge, data: nextData } : edge;
-  });
-
-  return { nodes: transformedNodes, edges: transformedEdges };
+  if (section.bendPoints) {
+    section.bendPoints.forEach((p: any) => {
+      points.push({ x: p.x, y: p.y });
+    });
+  }
+  if (section.endPoint) {
+    points.push({ x: section.endPoint.x, y: section.endPoint.y });
+  }
+  return points;
 }
 
-function OCDFGVisualizer({
+function NewOCDFGVisualizer({
   height = 'calc(100vh - 50px)',
   data,
   fileId,
@@ -279,8 +235,8 @@ function OCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
-}: OCDFGVisualizerProps) {
-  console.log('[OCDFGVisualizer] Longest Trace Mode - Component mounted!');
+}: NewOCDFGVisualizerProps) {
+  console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -288,15 +244,50 @@ function OCDFGVisualizer({
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [typeColors, setTypeColors] = useState<Record<string, string>>({});
-  const [typeVisibility, setTypeVisibility] = useState<Record<string, boolean>>({});
   const [typeAvailability, setTypeAvailability] = useState<Record<string, boolean>>({});
-  const [typeTraceLimit, setTypeTraceLimit] = useState<Record<string, number>>({});
-  const [typeTraceMax, setTypeTraceMax] = useState<Record<string, number>>({});
-  const [baseNodes, setBaseNodes] = useState<Node[]>([]);
-  const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
-  const [dfgData, setDfgData] = useState<{ nodes: DfgNode[]; links: DfgLink[]; trace_variants?: TraceVariantsPerType } | null>(null);
+  const [typeVisibility, setTypeVisibility] = useState<Record<string, boolean>>({});
+
+  const [dfgData, setDfgData] = useState<OcdfgGraph | null>(null);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
+  const [baseNodes, setBaseNodes] = useState<Node[]>([]);
+  const [baseEdges, setBaseEdges] = useState<Edge[]>([]);
+
+  // Edge weight slider state
+  const [weightMax, setWeightMax] = useState<Record<string, number>>({});
+  const [weightLimit, setWeightLimit] = useState<Record<string, number>>({});
+
+  const [animateEdges, setAnimateEdges] = useState(false);
+  const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
+  const [measuredGraphSize, setMeasuredGraphSize] = useState<{ width: number; height: number } | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+
+  const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
+  const resolvedVariant = variant ?? 'full';
+  const variantPreset = VARIANT_PRESETS[resolvedVariant] ?? VARIANT_PRESETS.full;
+  const autoFitView = true;
+  const paddingForSize = variantPreset.padding;
+  const fallbackNodeWidth = variantPreset.nodeWidth;
+  const fallbackNodeHeight = Math.max(variantPreset.minHeightBase, variantPreset.nodeWidth * 0.36);
+  const nodePadding = variantPreset.nodePadding;
+  const fontSize = variantPreset.fontSize;
+  const terminalSize = variantPreset.terminalSize;
+  const hideChrome = resolvedVariant !== 'full' || showControls === false;
+  const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  // Stable refs so reportGraphSize can read current nodes/edges without
+  // being listed as a dependency (which would create an infinite loop).
+  const nodesRef = useRef<Node[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+
+  const reactFlow = useReactFlow();
+  const { fitView } = reactFlow;
+
+  const LEGEND_WIDTH = 300;
+  const LEGEND_MARGIN = 24;
+  const LEGEND_BUFFER = 120;
+  const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER;
+
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
   const dragStartRef = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
@@ -332,34 +323,7 @@ function OCDFGVisualizer({
 
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
-  const [showDebugOverlays, setShowDebugOverlays] = useState(false);
-  const [animateEdges, setAnimateEdges] = useState(false);
-  const [dimTerminalEdges, setDimTerminalEdges] = useState(false);
-  const [measuredGraphSize, setMeasuredGraphSize] = useState<{ width: number; height: number } | null>(null);
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const layoutActiveTypesRef = useRef<string[] | null>(null);
-  const initialAvailabilityRef = useRef<Record<string, boolean> | null>(null);
-  const layoutTraceLimitRef = useRef<string | null>(null);
-  const typeTraceLimitCacheRef = useRef<Record<string, number>>({});
-  const resolvedVariant = variant ?? 'full';
-  const variantPreset = VARIANT_PRESETS[resolvedVariant] ?? VARIANT_PRESETS.full;
-  const autoFitView = true;
-  const paddingForSize = variantPreset.padding;
-  const fallbackNodeWidth = variantPreset.nodeWidth;
-  const fallbackNodeHeight = Math.max(variantPreset.minHeightBase, variantPreset.nodeWidth * 0.36);
-  const nodePadding = variantPreset.nodePadding;
-  const fontSize = variantPreset.fontSize;
-  const terminalSize = variantPreset.terminalSize;
-  const hideChrome = resolvedVariant !== 'full' || showControls === false;
-  const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const reactFlow = useReactFlow({ id: reactFlowId } as any);
-  const { fitView } = reactFlow;
-  // Layout reserve for legend on the left
-  const LEGEND_WIDTH = 300;
-  const LEGEND_MARGIN = 24;
-  const LEGEND_BUFFER = 120;
-  const LEGEND_TOTAL = LEGEND_WIDTH + LEGEND_MARGIN * 2 + LEGEND_BUFFER; // total space to keep free on the left
+
   const fitViewOptions = useMemo(() => {
     if (resolvedVariant === 'detail' || hideChrome) {
       return { padding: DETAIL_FIT_PADDING, offset: { x: 0, y: 0 } };
@@ -367,8 +331,9 @@ function OCDFGVisualizer({
     const leftOffset = LEGEND_TOTAL * 0.7;
     return { padding: 0.15, offset: { x: leftOffset, y: 0 } };
   }, [resolvedVariant, hideChrome, LEGEND_TOTAL]);
+
   const fitViewWithOffset = useCallback(() => fitView(fitViewOptions as any), [fitView, fitViewOptions]);
-  const edgeTypes = useMemo(() => ({ ocdfg: OcdfgEdge as any }), []);
+  const edgeTypes = useMemo(() => ({ ocdfg: NewOcdfgEdge as any }), []);
   const nodeTypes = useMemo(
     () => ({
       ocdfgStart: OcdfgTerminalNode as any,
@@ -389,14 +354,6 @@ function OCDFGVisualizer({
     return keysA.every(k => Boolean(a[k]) === Boolean(b[k]));
   };
 
-  const resolveOwnerTypes = (entry?: { objtypes?: string[] }) => {
-    const values = entry?.objtypes ?? [];
-    return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
-  };
-
-  const resolveOwnerPairs = (entry?: { objtypes?: string[] }) => {
-    return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
-  };
 
   function computeTypeAvailability(layoutNodes: Node[], layoutEdges: Edge[], allTypes: string[]) {
     const presence = Object.fromEntries(allTypes.map(t => [t, false])) as Record<string, boolean>;
@@ -408,33 +365,14 @@ function OCDFGVisualizer({
       if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) {
         return;
       }
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { objtypes?: string[] } | undefined,
-      );
-      ownerTypes.forEach((t) => {
-        if (t in presence) {
-          presence[t] = true;
-        }
-      });
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && objtype in presence) {
+        presence[objtype] = true;
+      }
     });
 
     return presence;
   }
-
-  const stripDebugNodes = useCallback((nodeList: Node[]) => {
-    return nodeList.filter((node) => {
-      const id = typeof node.id === 'string' ? node.id : '';
-      const type = typeof node.type === 'string' ? node.type : '';
-      const data = (node.data as { isBuffer?: boolean; isDummy?: boolean } | undefined) ?? {};
-      if (id.startsWith('debug-')) return false;
-      if (type.startsWith('debug')) return false;
-      if (data.isBuffer || data.isDummy) return false;
-      return true;
-    });
-  }, []);
-
-  const nodesRef = useRef<Node[]>([]);
-  const edgesRef = useRef<Edge[]>([]);
 
   const addLegendSpacer = useCallback((nodesIn: Node[]): Node[] => {
     if (hideChrome || Object.keys(typeColors).length === 0) return nodesIn;
@@ -461,12 +399,10 @@ function OCDFGVisualizer({
 
   const shiftForLegend = useCallback(
     (nodesIn: Node[], edgesIn: Edge[]) => {
-      // Only shift when the left legend is visible.
       if (hideChrome || Object.keys(typeColors).length === 0) {
         return { nodes: nodesIn, edges: edgesIn };
       }
-      // Apply a fixed positive shift so the graph always starts to the right of the legend.
-      const shift = LEGEND_TOTAL + 16; // include outer margin
+      const shift = LEGEND_TOTAL + 16;
 
       const shiftedNodes = nodesIn.map(n => n.position
         ? { ...n, position: { ...n.position, x: n.position.x + shift } }
@@ -485,22 +421,12 @@ function OCDFGVisualizer({
     [hideChrome, typeColors],
   );
 
-  useEffect(() => {
-    nodesRef.current = nodes;
-  }, [nodes]);
-
-  useEffect(() => {
-    edgesRef.current = edges;
-  }, [edges]);
-
   const reportGraphSize = useCallback(
     (renderNodes?: Node[], renderEdges?: Edge[]) => {
-      const nodesToMeasure =
-        (renderNodes && renderNodes.length > 0 && renderNodes) ||
-        nodesRef.current;
-      const edgesToMeasure =
-        (renderEdges && renderEdges.length > 0 && renderEdges) ||
-        edgesRef.current;
+      // Use the passed args first; fall back to refs (not state) so this
+      // callback does NOT need nodes/edges in its dependency array.
+      const nodesToMeasure = renderNodes ?? nodesRef.current;
+      const edgesToMeasure = renderEdges ?? edgesRef.current;
 
       const measured = measureGraphSize(
         nodesToMeasure,
@@ -520,6 +446,9 @@ function OCDFGVisualizer({
         onSizeChange(measured);
       }
     },
+    // nodes and edges intentionally omitted — we use refs to avoid an
+    // infinite loop: setNodes → nodes changes → reportGraphSize recreated
+    // → effect re-runs → setNodes again.
     [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
   );
 
@@ -583,43 +512,41 @@ function OCDFGVisualizer({
 
   useEffect(() => {
     if (data) {
-      setDfgData({
-        nodes: Array.isArray(data.nodes) ? data.nodes : [],
-        links: Array.isArray(data.links) ? data.links : [],
-        trace_variants: data.trace_variants,
-      });
+      setDfgData(data);
+      return;
+    }
+
+    if (!fileId) {
+      setDfgData({ nodes: [], links: [] });
       return;
     }
 
     let cancelled = false;
-    const url = fileId
-      ? `http://127.0.0.1:8000/api/ocdfg/?file_id=${fileId}`
-      : 'http://127.0.0.1:8000/api/ocdfg/';
+    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
-        if (graph) {
-          setDfgData({
-            nodes: Array.isArray(graph.nodes) ? graph.nodes : [],
-            links: Array.isArray(graph.links) ? graph.links : [],
-          });
-        } else {
-          setDfgData({ nodes: [], links: [] });
-        }
+        if (graph) setDfgData(graph);
+        else        setDfgData({ nodes: [], links: [] });
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('[OCDFGVisualizer] Failed to load OCDFG data', err);
+          console.error('[NewOCDFGVisualizer] Failed to load new OCDFG data', err);
           setDfgData({ nodes: [], links: [] });
         }
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [data, fileId]);
+
+  const handleWeightLimitChange = useCallback(
+    (otype: string, value: number) => {
+      setWeightLimit(prev => ({ ...prev, [otype]: value }));
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!dfgData) {
@@ -633,11 +560,6 @@ function OCDFGVisualizer({
       setTypeColors({});
       setTypeAvailability({});
       setTypeVisibility({});
-      setTypeTraceLimit({});
-      setTypeTraceMax({});
-      typeTraceLimitCacheRef.current = {};
-      layoutActiveTypesRef.current = null;
-      layoutTraceLimitRef.current = null;
       initialAvailabilityRef.current = null;
       return;
     }
@@ -646,30 +568,41 @@ function OCDFGVisualizer({
     const dfgNodes = Array.isArray(dfgData.nodes) ? dfgData.nodes : [];
     const dfgLinks = Array.isArray(dfgData.links) ? dfgData.links : [];
 
-    const allTypes = Array.from(new Set(dfgNodes.flatMap((node) => node.types ?? [])));
-    const ownersByType = new Map<string, Set<string>>();
-    dfgLinks.forEach((link) => {
-      resolveOwnerPairs(link).forEach(({ owner, type }) => {
-        if (!ownersByType.has(type)) ownersByType.set(type, new Set());
-        ownersByType.get(type)!.add(owner);
-      });
-    });
+    const allTypes = Array.from(new Set([
+      ...dfgNodes.flatMap((node) => node.types ?? []),
+      ...dfgLinks.map((link) => link.key ?? link.objtype).filter((t): t is string => typeof t === 'string')
+    ]));
 
-    const initialTraceMax = Object.fromEntries(
-      allTypes.map((type) => [type, ownersByType.get(type)?.size ?? 0]),
-    );
-    setTypeTraceMax(initialTraceMax);
-    setTypeTraceLimit(initialTraceMax);
     const colors = mapTypesToColors(allTypes, typeColorOverrides);
     setTypeColors(colors);
     const initialAvailability = Object.fromEntries(allTypes.map((type) => [type, true]));
     setTypeAvailability(initialAvailability);
     const initialVisibility = Object.fromEntries(allTypes.map((type) => [type, true]));
     setTypeVisibility(initialVisibility);
-    typeTraceLimitCacheRef.current = {};
-    layoutActiveTypesRef.current = null;
-    layoutTraceLimitRef.current = null;
     initialAvailabilityRef.current = null;
+
+    // Compute max edge weight per object type
+    const maxWeights: Record<string, number> = {};
+    allTypes.forEach((type) => {
+      maxWeights[type] = 0;
+    });
+    dfgLinks.forEach((link) => {
+      const otype = link.key ?? link.objtype ?? 'default';
+      const weight = link.weight ?? 0;
+      if (maxWeights[otype] === undefined || weight > maxWeights[otype]) {
+        maxWeights[otype] = weight;
+      }
+    });
+    setWeightMax(maxWeights);
+    setWeightLimit((prev) => {
+      const next = { ...prev };
+      allTypes.forEach((type) => {
+        if (next[type] === undefined) {
+          next[type] = 0;
+        }
+      });
+      return next;
+    });
 
     const groupCounts: Record<string, number> = {};
     dfgLinks.forEach((link) => {
@@ -684,28 +617,7 @@ function OCDFGVisualizer({
       outgoingCounts[link.source] = (outgoingCounts[link.source] ?? 0) + 1;
     });
 
-    const resolveLinkFrequency = (link: DfgLink) => {
-      if (typeof link.weight === 'number' && Number.isFinite(link.weight)) {
-        return Math.max(0, link.weight);
-      }
-      if (link.weights && typeof link.weights === 'object') {
-        const total = Object.values(link.weights).reduce((sum: number, value) => {
-          if (typeof value === 'number' && Number.isFinite(value)) {
-            return sum + value;
-          }
-          return sum;
-        }, 0);
-        if (total > 0) {
-          return total;
-        }
-      }
-      if (Array.isArray(link.objtypes) && link.objtypes.length > 0) {
-        return link.objtypes.length;
-      }
-      return 1;
-    };
-
-    const frequencies = dfgLinks.map(resolveLinkFrequency);
+    const frequencies = dfgLinks.map(l => l.weight ?? 1);
     const minFrequency = frequencies.length > 0 ? Math.min(...frequencies) : 1;
     const maxFrequency = frequencies.length > 0 ? Math.max(...frequencies) : minFrequency;
     const frequencySpan = Math.max(maxFrequency - minFrequency, 0);
@@ -726,7 +638,6 @@ function OCDFGVisualizer({
     const typeIndicatorSize = resolvedVariant === 'detail' ? 10 : 14;
     const typeIndicatorThickness = resolvedVariant === 'detail' ? 1.5 : 2;
 
-    // Create standard React Flow nodes
     const initialNodes: Node[] = dfgNodes.map((node) => {
       const isStart = (incomingCounts[node.id] ?? 0) === 0;
       const isEnd = !isStart && (outgoingCounts[node.id] ?? 0) === 0;
@@ -840,14 +751,16 @@ function OCDFGVisualizer({
       const key = `${link.source}->${link.target}`;
       const currentIndex = groupIndex[key] ?? 0;
       groupIndex[key] = currentIndex + 1;
+      const typeKey = link.key ?? link.objtype ?? 'default';
+
       return {
-        id: `e${index}-${link.source}-${link.target}`,
+        id: `e${index}-${link.source}-${link.target}-${typeKey}`,
         source: link.source,
         target: link.target,
         type: 'ocdfg',
         animated: true,
         data: {
-          objtypes: link.objtypes ?? (link.key ? [link.key] : link.objtype ? [link.objtype] : []),
+          objtype: typeKey,
           colors,
           parallelIndex: currentIndex,
           parallelCount: groupCounts[key],
@@ -856,6 +769,7 @@ function OCDFGVisualizer({
           frequency: frequencies[index],
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
+          weight: link.weight ?? 1,
         },
       } as Edge;
     });
@@ -873,73 +787,58 @@ function OCDFGVisualizer({
       .map(([type]) => type)
       .sort();
 
-    const requestedTypes = activeTypes;
-    const traceLimitKey = JSON.stringify(typeTraceLimit);
-
-    layoutActiveTypesRef.current = activeTypes;
-    layoutTraceLimitRef.current = traceLimitKey;
-
     if (activeTypes.length === 0) {
       setBaseNodes([]);
       setBaseEdges([]);
       return;
     }
 
-    layoutOCDFGLongestTrace({
-      renderNodes: rawNodes,
-      renderEdges: rawEdges,
-      dfgNodes: dfgData.nodes,
-      dfgLinks: dfgData.links,
-      typeTraceLimit,
-      activeTypes,
-      direction: layoutDirection,
-      layoutKey: reactFlowId,
-      includeDebugOverlays: showDebugOverlays,
-      ignoreTypesWithoutTraces: resolvedVariant === 'detail',
-      backendTraceVariants: dfgData.trace_variants,
-    }).then(({ nodes: layoutedNodes, edges: layoutedEdges, traceCounts }) => {
-      if (traceCounts) {
-        const prevMaxSnapshot = typeTraceMax;
-        setTypeTraceMax((prev) => {
-          const next: Record<string, number> = { ...prev };
-          let changed = false;
-          Object.entries(traceCounts).forEach(([type, count]) => {
-            if (next[type] !== count) {
-              next[type] = count;
-              changed = true;
-            }
-          });
-          return changed ? next : prev;
-        });
-        setTypeTraceLimit((prev) => {
-          const next: Record<string, number> = { ...prev };
-          let changed = false;
-          Object.entries(traceCounts).forEach(([type, count]) => {
-            const prevMax = prevMaxSnapshot[type];
-            const current = prev[type];
-            const shouldAutoExpand = current === undefined || current === prevMax;
-            const desired = shouldAutoExpand ? count : Math.min(Math.max(0, current ?? count), count);
-            if (desired !== current) {
-              next[type] = desired;
-              changed = true;
-            }
-          });
-          return changed ? next : prev;
-        });
-      }
+    const filteredNodes = rawNodes.filter(node => {
+      const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
+      return nodeTypes.length === 0 ? true : nodeTypes.some(t => typeVisibility[t] !== false);
+    });
 
-      const cleanedNodes = (resolvedVariant === 'detail' || !showDebugOverlays)
-        ? stripDebugNodes(layoutedNodes)
-        : layoutedNodes;
-      const { nodes: directedNodes, edges: directedEdges } = transformLayoutDirection(
-        cleanedNodes,
-        layoutedEdges,
-        layoutDirection,
-      );
+    const filteredEdges = rawEdges.filter(edge => {
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      const isVisible = objtype ? typeVisibility[objtype] !== false : true;
+      if (!isVisible) return false;
+
+      const weight = (edge.data as any)?.weight ?? 0;
+      const threshold = weightLimit[objtype ?? ''] ?? 0;
+      return weight >= threshold;
+    });
+
+    const naiveNodes = dfgData.nodes;
+    const naiveLinks = dfgData.links.map(l => ({
+      source: l.source,
+      target: l.target,
+      weight: l.weight,
+      objtypes: [l.key ?? l.objtype],
+    }));
+
+    const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
+
+    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+      const processedEdges = layoutedEdges.map(e => {
+        const polyline = extractElkPolyline(e);
+        return {
+          ...e,
+          data: {
+            ...(e.data ?? {}),
+            polyline,
+          }
+        };
+      });
+
+      const directedNodes = layoutedNodes;
+      const directedEdges = processedEdges;
+
       const shifted = shiftForLegend(directedNodes, directedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
+
       setBaseNodes(spacedNodes);
       setBaseEdges(shifted.edges);
+
       if (directedNodes.length > 0) {
         const availability = computeTypeAvailability(
           directedNodes,
@@ -960,27 +859,24 @@ function OCDFGVisualizer({
         initialAvailabilityRef.current = mergedAvailability;
         setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
       }
+
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
     }).catch(console.error);
   }, [
     typeVisibility,
-    typeTraceLimit,
     rawNodes,
     rawEdges,
     dfgData,
     typeColors,
     fitViewWithOffset,
     resolvedVariant,
-    stripDebugNodes,
     layoutDirection,
-    transformLayoutDirection,
-    reactFlowId,
     autoFitView,
-    reportGraphSize,
-    showDebugOverlays,
     shiftForLegend,
+    addLegendSpacer,
+    weightLimit,
   ]);
 
   useEffect(() => {
@@ -991,24 +887,7 @@ function OCDFGVisualizer({
       return;
     }
 
-    const nodesForVisibility = showDebugOverlays ? baseNodes : stripDebugNodes(baseNodes);
-
-    const availability = computeTypeAvailability(nodesForVisibility, baseEdges, Object.keys(typeColors));
-    if (!initialAvailabilityRef.current) {
-      initialAvailabilityRef.current = availability;
-    }
-    const mergedAvailability = initialAvailabilityRef.current
-      ? Object.fromEntries(
-        Object.keys(availability).map((type) => [
-          type,
-          availability[type] || initialAvailabilityRef.current?.[type] === true,
-        ]),
-      )
-      : availability;
-    initialAvailabilityRef.current = mergedAvailability;
-    setTypeAvailability(prev => shallowBoolRecordEqual(prev, mergedAvailability) ? prev : mergedAvailability);
-
-    const resolvedNodes = nodesForVisibility.map((node) => {
+    const resolvedNodes = baseNodes.map((node) => {
       const nodeTypes = (node.data as { types?: string[] } | undefined)?.types ?? [];
       const baseHidden = node.hidden === true;
       const hasVisibleType = nodeTypes.length === 0
@@ -1023,20 +902,14 @@ function OCDFGVisualizer({
 
     const visibleNodeIds = new Set(resolvedNodes.filter(n => !n.hidden).map(n => n.id));
     const filteredEdges = baseEdges.filter(edge => {
-      const ownerTypes = resolveOwnerTypes(
-        edge.data as { objtypes?: string[] } | undefined,
-      );
-      const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
-      if (blockedByType) return false;
+      const objtype = (edge.data as { objtype?: string } | undefined)?.objtype;
+      if (objtype && typeVisibility[objtype] === false) return false;
       return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
     }).map(edge => ({
       ...edge,
       animated: animateEdges,
       data: {
         ...(edge.data ?? {}),
-        overlayDebug: showDebugOverlays
-          ? (edge.data as Record<string, unknown>)?.overlayDebug ?? false
-          : false,
         dimmed:
           dimTerminalEdges
           && (
@@ -1048,10 +921,12 @@ function OCDFGVisualizer({
       },
     }));
 
+    nodesRef.current = resolvedNodes;
+    edgesRef.current = filteredEdges;
     setNodes(resolvedNodes);
     setEdges(filteredEdges);
     reportGraphSize(resolvedNodes, filteredEdges);
-  }, [baseNodes, baseEdges, typeVisibility, typeColors, reportGraphSize, showDebugOverlays, animateEdges, dimTerminalEdges, stripDebugNodes]);
+  }, [baseNodes, baseEdges, typeVisibility, typeColors, reportGraphSize, animateEdges, dimTerminalEdges]);
 
   useEffect(() => {
     if (!typeAvailability) return;
@@ -1077,63 +952,15 @@ function OCDFGVisualizer({
     if (typeAvailability[type] !== true && checked) {
       return;
     }
-
-    const max = typeTraceMax[type] ?? 0;
-    const currentLimit = typeTraceLimit[type] ?? max;
-
-    if (!checked) {
-      typeTraceLimitCacheRef.current[type] = currentLimit;
-      setTypeTraceLimit(prev => ({ ...prev, [type]: 0 }));
-      setTypeVisibility(prev => ({ ...prev, [type]: false }));
-      return;
-    }
-
-    const cached = typeTraceLimitCacheRef.current[type];
-    const restoredBase = cached ?? currentLimit ?? max;
-    const restored = Math.min(Math.max(0, restoredBase), max);
-    setTypeVisibility(prev => ({ ...prev, [type]: true }));
-    setTypeTraceLimit(prev => ({ ...prev, [type]: restored }));
+    setTypeVisibility(prev => ({ ...prev, [type]: checked }));
   };
-
-  const handleTraceLimitChange = (type: string, value: number) => {
-    const max = typeTraceMax[type] ?? 0;
-    const clamped = Math.min(Math.max(0, Math.round(value)), max);
-    const prevLimit = typeTraceLimit[type] ?? max;
-
-    if (clamped === 0) {
-      typeTraceLimitCacheRef.current[type] = prevLimit;
-      setTypeVisibility(prev => (prev[type] === false ? prev : { ...prev, [type]: false }));
-    }
-
-    if (clamped > 0) {
-      setTypeVisibility(prev => ({ ...prev, [type]: true }));
-    }
-
-    setTypeTraceLimit(prev => ({ ...prev, [type]: clamped }));
-  };
-
-  useEffect(() => {
-    if (Object.keys(typeTraceMax).length === 0) return;
-    setTypeTraceLimit((prev) => {
-      const next: Record<string, number> = { ...prev };
-      let changed = false;
-      Object.entries(typeTraceMax).forEach(([type, max]) => {
-        const current = prev[type];
-        const desired = current === undefined ? max : Math.min(Math.max(0, current), max);
-        if (desired !== current) {
-          next[type] = desired;
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  }, [typeTraceMax]);
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
 
   return (
     <div
       ref={containerRef}
+      className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
       <ReactFlow
@@ -1158,16 +985,18 @@ function OCDFGVisualizer({
         zoomOnPinch={!interactionsDisabled}
         zoomOnScroll={!interactionsDisabled}
         zoomOnDoubleClick={!interactionsDisabled}
+        preventScrolling={!interactionsDisabled}
       />
 
       {!hideChrome && (
         <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
             top: 16 + legendPosition.y,
             left: 16 + legendPosition.x,
             display: 'flex',
-
             flexDirection: 'column',
             gap: 16,
             maxHeight: 'calc(100% - 32px)',
@@ -1185,9 +1014,11 @@ function OCDFGVisualizer({
             }}
           >
             <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-              Object-Centric DFG
+              Object-Centric DFG (Arc Weight)
             </div>
           </div>
+
+
           {Object.keys(typeColors).length > 0 && (
             <div
               style={{
@@ -1221,7 +1052,7 @@ function OCDFGVisualizer({
                   onPointerUp={handleLegendPointerUp}
                   onPointerCancel={handleLegendPointerUp}
                 >
-                  Longest Trace View
+                  Object Types
                 </span>
                 <button
                   type="button"
@@ -1239,72 +1070,76 @@ function OCDFGVisualizer({
               </div>
               {!legendCollapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {Object.entries(typeColors).map(([type, color]) => {
-                    const max = typeTraceMax[type] ?? 0;
-                    const resolvedLimit = typeTraceLimit[type] ?? max;
-                    const clampedLimit = Math.min(Math.max(0, resolvedLimit), max);
-                    const isVisible = typeVisibility[type] !== false;
-                    const sliderDisabled = typeAvailability[type] !== true || max <= 0;
-                    const sliderValue = clampedLimit;
-
-                    return (
+                  {Object.entries(typeColors).map(([type, color]) => (
+                    <div
+                      key={type}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 4,
+                        paddingBottom: 6,
+                        borderBottom: '1px solid #E2E8F0',
+                      }}
+                    >
                       <div
-                        key={type}
                         style={{
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: 4,
-                          paddingBottom: 6,
-                          borderBottom: '1px solid #E2E8F0',
+                          alignItems: 'center',
+                          gap: 10,
+                          justifyContent: 'space-between',
+                          opacity: typeAvailability[type] !== true ? 0.4 : 1,
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span
-                              aria-hidden
-                              style={{
-                                display: 'inline-block',
-                                width: 18,
-                                height: 18,
-                                borderRadius: '50%',
-                                background: color,
-                                border: '1px solid rgba(15, 23, 42, 0.12)',
-                                boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
-                              }}
-                            />
-                            <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
-                          </div>
-                          <Switch
-                            checked={typeVisibility[type] !== false}
-                            disabled={typeAvailability[type] !== true}
-                            onCheckedChange={(checked) => handleTypeToggle(type, checked)}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span
+                            aria-hidden
+                            style={{
+                              display: 'inline-block',
+                              width: 18,
+                              height: 18,
+                              borderRadius: '50%',
+                              background: color,
+                              border: '1px solid rgba(15, 23, 42, 0.12)',
+                              boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
+                            }}
                           />
+                          <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
                         </div>
+                        <Switch
+                          checked={typeVisibility[type] !== false}
+                          disabled={typeAvailability[type] !== true}
+                          onCheckedChange={(checked) => handleTypeToggle(type, checked)}
+                        />
+                      </div>
+
+                      {/* Per-type edge weight slider */}
+                      {weightMax[type] !== undefined && weightMax[type] > 0 && (
                         <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: 8,
-                            opacity: typeAvailability[type] ? (isVisible ? 1 : 0.7) : 0.5,
+                            opacity: typeAvailability[type] ? (typeVisibility[type] !== false ? 1 : 0.7) : 0.5,
                           }}
                         >
                           <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
                             <Slider
                               min={0}
-                              max={max}
+                              max={weightMax[type]}
                               step={1}
-                              value={[sliderValue]}
-                              onValueChange={(values) => handleTraceLimitChange(type, values?.[0] ?? 0)}
-                              disabled={sliderDisabled}
+                              value={[weightLimit[type] ?? 0]}
+                              onValueChange={(values) => handleWeightLimitChange(type, values?.[0] ?? 0)}
+                              disabled={typeAvailability[type] !== true}
+                              inverted
                             />
-                            <span style={{ fontSize: 12, color: '#475569', minWidth: 72, textAlign: 'right' }}>
-                              {sliderValue}/{max} traces
+                            <span style={{ fontSize: 12, color: '#475569', minWidth: 80, textAlign: 'right' }}>
+                              Min Weight: {weightLimit[type] ?? 0}
                             </span>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1361,16 +1196,6 @@ function OCDFGVisualizer({
             </Button>
             <Button
               type="button"
-              variant={showDebugOverlays ? 'secondary' : 'outline'}
-              size="icon"
-              onClick={() => setShowDebugOverlays((prev) => !prev)}
-              className="rounded-full h-9 w-9"
-              title={showDebugOverlays ? 'Hide debug overlays' : 'Show debug overlays'}
-            >
-              <BugIcon className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
               variant={animateEdges ? 'secondary' : 'outline'}
               size="icon"
               onClick={() => setAnimateEdges((prev) => !prev)}
@@ -1396,4 +1221,4 @@ function OCDFGVisualizer({
   );
 }
 
-export default OCDFGVisualizer;
+export default NewOCDFGVisualizer;
