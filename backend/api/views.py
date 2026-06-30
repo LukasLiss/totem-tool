@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -18,6 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 import networkx as nx
 
@@ -340,6 +341,69 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=["get"])
+    def oc_dotted_chart(self, request, pk=None):
+        """Returns sampled event data for the object-centric dotted chart."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            row_min = _optional_int(request.query_params.get("row_min"))
+            row_max = _optional_int(request.query_params.get("row_max"))
+            max_points = int(request.query_params.get("max_points", 3000))
+            sample_seed = int(request.query_params.get("sample_seed", 0))
+        except ValueError:
+            return Response(
+                {"error": "row_min, row_max, max_points, and sample_seed must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = get_oc_dotted_chart_data(
+                    db,
+                    t_min=request.query_params.get("t_min"),
+                    t_max=request.query_params.get("t_max"),
+                    row_min=row_min,
+                    row_max=row_max,
+                    x_axis=request.query_params.get("x_axis", "time"),
+                    y_axis=request.query_params.get("y_axis"),
+                    color_by=request.query_params.get("color_by", "activity"),
+                    shape_by=request.query_params.get("shape_by", "none"),
+                    sort_by=request.query_params.get("sort_by", "time"),
+                    row_order=request.query_params.get("row_order", "first_occurrence"),
+                    max_points=max_points,
+                    sample_seed=sample_seed,
+                )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to load OC dotted chart data: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def oc_dotted_chart_columns(self, request, pk=None):
+        """Returns configurable dimensions for the object-centric dotted chart."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = get_oc_dotted_chart_columns(db)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to load OC dotted chart columns: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -393,6 +457,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCDottedChartComponent':
+                components.append(OCDottedChartComponent.objects.get(id=comp.id))
             elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
             else:
@@ -506,6 +572,24 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                )
+            elif component_name == 'OCDottedChartComponent':
+                OCDottedChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    file_id=item.get('file_id'),
+                    x_axis=item.get('x_axis') or 'time',
+                    y_axis=item.get('y_axis') or 'activity',
+                    color_by=item.get('color_by') or 'activity',
+                    shape_by=item.get('shape_by') or 'none',
+                    row_order=item.get('row_order') or 'first_occurrence',
+                    max_points=item.get('max_points', 10000),
+                    show_minimap=item.get('show_minimap', True),
+                    show_controls=item.get('show_controls', True),
                 )
             elif component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 NewOCDFGComponent.objects.create(
@@ -666,6 +750,12 @@ def _object_types(db: OcelDuckDB) -> list[str]:
             "SELECT DISTINCT obj_type FROM objects"
         ).fetchall()
     )
+
+
+def _optional_int(value):
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _layout_shim(db: OcelDuckDB):

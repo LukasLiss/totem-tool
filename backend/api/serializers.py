@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
 from .models import EventLog
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
 from django.db.models import Max
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -75,6 +75,13 @@ class OCDFGComponentSerializer(DashboardComponentSerializer):
         model = OCDFGComponent
         fields = "__all__"
 
+
+class OCDottedChartComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = OCDottedChartComponent
+        fields = "__all__"
+
+
 class NewOCDFGComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = NewOCDFGComponent
@@ -91,5 +98,6 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ProcessAreaComponent: ProcessAreaComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
         OCDFGComponent: OCDFGComponentSerializer,
+        OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
     }
