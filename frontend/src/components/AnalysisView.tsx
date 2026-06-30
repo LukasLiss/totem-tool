@@ -11,8 +11,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import ProcessArea from "@/react_component/ProcessArea";
-import OCDFGVisualizer from "@/react_component/OCDFGVisualizer";
+import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
+import DottedChart from "@/react_component/DottedChart";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
@@ -39,7 +40,7 @@ export function AnalysisView() {
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
-                  <OCDFGVisualizer height="100%" fileId={selectedFile?.id} />
+                  <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
                 </ReactFlowProvider>
               </CardContent>
             </Card>
@@ -59,6 +60,31 @@ export function AnalysisView() {
                   fileId={selectedFile?.id}
                   colWidth={120}
                   embedded={true}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case 'dottedChart':
+        return (
+          <div className="w-full max-w-7xl">
+            <Card className="@container/card">
+              <CardHeader className="items-center relative z-10 justify-between">
+                <CardTitle>OC Dotted Chart</CardTitle>
+                <CardDescription>Object-centric event distribution</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DottedChart
+                  fileId={selectedFile?.id}
+                  xAxis={{ type: "time" }}
+                  yAxis={{ type: "activity" }}
+                  colorBy={{ type: "activity" }}
+                  shapeBy={{ type: "none" }}
+                  rowOrder="first_occurrence"
+                  maxPoints={10000}
+                  showControls={true}
+                  className="min-h-[700px]"
                 />
               </CardContent>
             </Card>

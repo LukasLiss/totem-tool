@@ -7,14 +7,13 @@ import {
   roundedPath,
   trimPolyline,
   type Point,
-  sampleCubicBezier,
 } from '../utils/edgeGeometry';
 
 type NodeVariant = 'start' | 'end' | 'center';
 
 type EdgeData = {
   polyline?: Point[];
-  objtypes?: string[];
+  objtype?: string;
   colors?: Record<string, string>;
   parallelIndex?: number;
   parallelCount?: number;
@@ -275,7 +274,6 @@ function resolveNodeGeometry(node: Node | undefined) {
   };
 }
 
-// TODO: schoener ineinander verschachteln bei mehreren self-loops machen
 function buildSelfLoopPolyline(
   geometry: { center: Point; size: { width: number; height: number } },
   laneIndex: number = 0,
@@ -417,7 +415,7 @@ function buildSelfLoopPolyline(
       points.push({ x, y });
     }
   }
-  // If multiple self-loops exist, scale the entire curve toward the center to keep concentric rings.
+
   if (laneCount > 1 && laneIndex > 0) {
     const scale = Math.max(0.5, 1 - laneIndex * 0.2);
     return points.map(p => ({
@@ -429,7 +427,7 @@ function buildSelfLoopPolyline(
   return points;
 }
 
-const OcdfgEdge = memo(function OcdfgEdge({
+const NewOcdfgEdge = memo(function NewOcdfgEdge({
   id,
   data,
   selected,
@@ -442,7 +440,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
   target,
   style,
 }: EdgeProps<EdgeData>) {
-  const objtypes = data?.objtypes && data.objtypes.length > 0 ? data.objtypes : ['default'];
+  const objtype = data?.objtype ?? 'default';
   const colorMap = data?.colors ?? {};
   const reactFlow = useReactFlow();
   const sourceGeometry = resolveNodeGeometry(reactFlow.getNode(source));
@@ -460,24 +458,10 @@ const OcdfgEdge = memo(function OcdfgEdge({
       return buildSelfLoopPolyline(targetGeometry, laneIdx, laneCount);
     }
 
-    // Compute base polyline points
-    let basePoints: Point[];
-
-    // DISABLED: Parametric edge rendering was causing massive backwards bending artifacts
-    // because it recomputed curves differently than GraphLayouter. Using pre-computed polyline instead.
-    // if (data?.curveParams) {
-    //   ... dynamic collision detection code removed ...
-    // }
-
-    // Use pre-computed polyline from GraphLayouter (always)
-    // Lane offsets for parallel edges are already baked into the polyline by GraphLayouter
-    basePoints = (data?.polyline && data.polyline.length >= 2)
+    let basePoints = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
 
-    // For edges that opt into center anchoring, ensure endpoints track the node
-    // positions even when nodes move. Otherwise, clamp the stored polyline to
-    // the current handle endpoints.
     const useNodeCenters = data?.sourceAnchorOffset !== undefined;
     const clampedBase = useNodeCenters
       ? basePoints.map((point, index) => {
@@ -487,20 +471,16 @@ const OcdfgEdge = memo(function OcdfgEdge({
             return { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
           }
 
-          // Proportional stretching: transform intermediate points to follow node movement
-          // This makes curved edges stay smooth during node dragging
           const originalSrc = basePoints[0];
           const originalTgt = basePoints[basePoints.length - 1];
           const newSrc = { x: sourceX + sourceOffset.x, y: sourceY + sourceOffset.y };
           const newTgt = { x: targetX + targetOffset.x, y: targetY + targetOffset.y };
 
-          // Calculate original position relative to endpoints (0 to 1 range)
           const originalVector = {
             x: originalTgt.x - originalSrc.x,
             y: originalTgt.y - originalSrc.y,
           };
 
-          // Avoid division by zero for perfectly aligned endpoints
           const relX =
             Math.abs(originalVector.x) > 0.001
               ? (point.x - originalSrc.x) / originalVector.x
@@ -510,7 +490,6 @@ const OcdfgEdge = memo(function OcdfgEdge({
               ? (point.y - originalSrc.y) / originalVector.y
               : 0.5;
 
-          // Apply same relative position to new endpoints
           const newVector = {
             x: newTgt.x - newSrc.x,
             y: newTgt.y - newSrc.y,
@@ -527,16 +506,12 @@ const OcdfgEdge = memo(function OcdfgEdge({
           { x: targetX, y: targetY },
         );
 
-    // Adjust both endpoints so the polyline enters and leaves the node on the
-    // rectangle boundary, avoiding paths that cut through node interiors. This
-    // makes edges look more "side-attached" on strongly horizontal segments.
     let clamped = clampedBase;
 
     if (sourceGeometry && clamped.length >= 2) {
       const currentSource = clamped[0];
       const nextPoint = clamped[1];
       if (!pointOnNodeBoundary(currentSource, sourceGeometry)) {
-        // For lane-offset edges, use the offset center for collision calculation
         const offsetCenter = {
           x: sourceGeometry.center.x + sourceOffset.x,
           y: sourceGeometry.center.y + sourceOffset.y,
@@ -567,7 +542,6 @@ const OcdfgEdge = memo(function OcdfgEdge({
     }
 
     const approachPoint = clamped[clamped.length - 2];
-    // For lane-offset edges, use the offset center for collision calculation
     const targetOffsetCenter = {
       x: targetGeometry.center.x + targetOffset.x,
       y: targetGeometry.center.y + targetOffset.y,
@@ -615,7 +589,6 @@ const OcdfgEdge = memo(function OcdfgEdge({
   }, [polyline]);
 
   const smoothingIterations = useMemo(() => {
-    // Skip smoothing for bezier curves (already smooth)
     if (data?.polylineKind === 'bezier') {
       return 0;
     }
@@ -629,36 +602,21 @@ const OcdfgEdge = memo(function OcdfgEdge({
     [polyline, smoothingIterations],
   );
 
-  // Fixed thickness: always 12px (thicknessFactor = 2 for base stroke of 6)
-  const thicknessFactorRaw = 2;
-  const baseStroke = 6; // Fixed base stroke
-  const strokeBase = baseStroke * thicknessFactorRaw; // = 12px
-  const tailOwner = objtypes[0];
-  const headOwner = objtypes[objtypes.length - 1];
-  const tailColor = tailOwner && tailOwner !== 'default'
-    ? (colorMap[tailOwner] ?? '#2563EB')
-    : '#2563EB';
-  const headColor = headOwner && headOwner !== 'default'
-    ? (colorMap[headOwner] ?? '#2563EB')
-    : '#2563EB';
+  const thicknessFactorRaw = data?.thicknessFactor ?? 2;
+  const baseStroke = 3; // Slimmer base stroke since we have separate arcs now
+  const strokeBase = baseStroke * thicknessFactorRaw;
+  const edgeColor = objtype !== 'default' ? (colorMap[objtype] ?? DEFAULT_COLOR) : DEFAULT_COLOR;
+
   const backgroundStrokeWidth = strokeBase + 4 * thicknessFactorRaw;
   const selectionStrokeWidth = strokeBase + 6 * thicknessFactorRaw;
-  const minOwnerWidth = 2.5 * thicknessFactorRaw;
-  const arrowScale = Math.min(2.2, (strokeBase + 6 * thicknessFactorRaw) / 8);
-  const desiredArrowLength = 16 * arrowScale;
-  const arrowTip = smoothedPolyline.length > 0
-    ? smoothedPolyline[smoothedPolyline.length - 1]
-    : null;
+  const arrowScale = Math.min(2.0, (strokeBase + 6 * thicknessFactorRaw) / 8);
+  const desiredArrowLength = 14 * arrowScale;
+  const arrowTip = smoothedPolyline.length > 0 ? smoothedPolyline[smoothedPolyline.length - 1] : null;
   const arrowBase = useMemo(
-    () => (desiredArrowLength > 0
-      ? pointAlongPolylineFromEnd(smoothedPolyline, desiredArrowLength)
-      : null),
+    () => (desiredArrowLength > 0 ? pointAlongPolylineFromEnd(smoothedPolyline, desiredArrowLength) : null),
     [smoothedPolyline, desiredArrowLength],
   );
-  const arrowPrev = arrowBase
-    ?? (smoothedPolyline.length > 1
-      ? smoothedPolyline[smoothedPolyline.length - 2]
-      : arrowTip);
+  const arrowPrev = arrowBase ?? (smoothedPolyline.length > 1 ? smoothedPolyline[smoothedPolyline.length - 2] : arrowTip);
   const arrowGeometry = useMemo(
     () => (arrowTip && arrowPrev ? buildArrowHead(arrowTip, arrowPrev, arrowScale) : null),
     [arrowTip, arrowPrev, arrowScale],
@@ -671,7 +629,6 @@ const OcdfgEdge = memo(function OcdfgEdge({
   }, [smoothedPolyline, arrowGeometry]);
 
   const path = useMemo(() => roundedPath(trimmedPolyline, 30), [trimmedPolyline]);
-
   const dimOpacity = dimmed ? 0.38 : 1;
 
   const baseStyle = useMemo(
@@ -679,14 +636,13 @@ const OcdfgEdge = memo(function OcdfgEdge({
       ...style,
       stroke: '#CBD5E1',
       strokeWidth: backgroundStrokeWidth,
-      strokeOpacity: 0.55 * dimOpacity,
+      strokeOpacity: 0.35 * dimOpacity,
       strokeLinecap: 'round' as const,
       strokeLinejoin: 'round' as const,
     }),
     [style, backgroundStrokeWidth, dimOpacity],
   );
 
-  // Detect if source or target node is being dragged to disable CSS transitions
   const isDragging = useMemo(() => {
     const sourceNode = reactFlow.getNode(source);
     const targetNode = reactFlow.getNode(target);
@@ -707,7 +663,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
         <path
           d={path}
           fill="none"
-          stroke="rgba(236, 72, 153, 0.6)" // pink highlighter
+          stroke="rgba(236, 72, 153, 0.6)"
           strokeWidth={backgroundStrokeWidth + 14}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -719,38 +675,26 @@ const OcdfgEdge = memo(function OcdfgEdge({
         path={path}
         style={baseStyle}
         className="ocdfg-edge-base"
-        interactionWidth={Math.max(selectionStrokeWidth, 36)}
+        interactionWidth={Math.max(selectionStrokeWidth, 24)}
       />
 
-      {objtypes.map((objtype, index) => {
-        const color = objtype === 'default'
-          ? (index === objtypes.length - 1 ? headColor : tailColor)
-          : (colorMap[objtype] ?? headColor);
-        const width = Math.max(minOwnerWidth, strokeBase / objtypes.length);
-        const dash = objtypes.length > 1 ? '10 7' : undefined;
-        const dashOffset = objtypes.length > 1 ? index * 6 : undefined;
-        return (
-          <path
-            key={`${id}-${objtype}-${index}`}
-            d={path}
-            fill="none"
-            strokeWidth={width}
-            strokeDasharray={dash}
-            strokeDashoffset={dashOffset}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="ocdfg-edge-stripe"
-            style={{ stroke: color, opacity: dimOpacity }}
-          />
-        );
-      })}
+      <path
+        d={path}
+        fill="none"
+        stroke={edgeColor}
+        strokeWidth={strokeBase}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="ocdfg-edge-line"
+        style={{ opacity: dimOpacity }}
+      />
 
       {arrowGeometry?.path && (
         <>
           <path
             className="ocdfg-arrow-head"
             d={arrowGeometry.path}
-            fill={headColor}
+            fill={edgeColor}
             opacity={0.95 * dimOpacity}
             style={{ animation: 'none', strokeDasharray: 'none' }}
           />
@@ -780,4 +724,4 @@ const OcdfgEdge = memo(function OcdfgEdge({
   );
 });
 
-export default OcdfgEdge;
+export default NewOcdfgEdge;
