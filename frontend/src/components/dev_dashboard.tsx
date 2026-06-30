@@ -59,7 +59,7 @@ export function DevDashboard() {
             <CardDescription>Object-centric resource handover analysis</CardDescription>
           </CardHeader>
           <CardContent className="p-0 pb-0">
-            <OCHandoverExplorer fileId={selectedFile?.id} embedded={true} />
+            <OCHandoverExplorer fileId={selectedFile?.id} embedded={true} fileName={selectedFile?.file?.split("/").pop()} />
           </CardContent>
         </Card>
         <Card className="@container/card">

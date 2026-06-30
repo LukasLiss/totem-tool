@@ -41,6 +41,7 @@ type OCHandoverExplorerProps = {
   fileId?: number;
   onDataLoad?: (data: HandoverData) => void;
   embedded?: boolean;
+  fileName?: string;
 };
 
 type ViewMode = "table" | "graph" | "log";
@@ -87,6 +88,7 @@ export default function OCHandoverExplorer({
   fileId,
   onDataLoad,
   embedded = false,
+  fileName,
 }: OCHandoverExplorerProps) {
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
   const [method, setMethod] = useState<Method>("oc");
@@ -855,6 +857,10 @@ export default function OCHandoverExplorer({
                     onVisibleNodesChange={setVisibleGraphNodes}
                     clustered={(useClusters && !!clusterInfo) || clusterByOt}
                     parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
+                    normalization={normalization}
+                    normalizationScope={normalizationScope}
+                    maxGap={maxGap}
+                    fileName={fileName}
                   />
                 </div>
                 {selectedNode && (
@@ -1098,6 +1104,10 @@ function HandoverGraph({
   onVisibleNodesChange,
   clustered,
   parallelFilter,
+  normalization,
+  normalizationScope,
+  maxGap,
+  fileName,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1108,6 +1118,10 @@ function HandoverGraph({
   onVisibleNodesChange?: (nodes: HandoverNode[]) => void;
   clustered?: boolean;
   parallelFilter?: { enabled: boolean; threshold: number; minObs: number };
+  normalization?: Normalization;
+  normalizationScope?: "global" | "per_bo_type";
+  maxGap?: number | null;
+  fileName?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1638,13 +1652,21 @@ function HandoverGraph({
     const GRAPH_H = Math.round(EXPORT_W * (vb.h / vb.w));
 
     const PAD = 28;
-    const ROW_H = 22;
-    const FILT_X = Math.round(EXPORT_W * 0.60);
-    // Legend rows: "RESOURCES" header + nodeTypes + gap + "HANDOVER OBJECT TYPE" header + boTypes
-    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length;
-    // Filter rows: "FILTERS" header + 9 categories
-    const FILTER_ROWS = 1 + 9;
-    const PANEL_H = Math.ceil(Math.max(LEGEND_ROWS, FILTER_ROWS)) * ROW_H + PAD * 2;
+    const ROW_H = 20;
+    const HEADER_H = 32;
+
+    // Three-column boundaries
+    const LEG_END = Math.round(EXPORT_W * 0.37);   // ~592
+    const SET_X   = LEG_END + 24;                   // ~616
+    const SET_END  = Math.round(EXPORT_W * 0.60);   // ~960
+    const FILT_X   = SET_END + 24;                  // ~984
+
+    // Dynamic panel height: header + max(legend, settings, filters) rows
+    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + 1; // res header + items + gap + bot header + items + gap + scale header + scale row
+    const SETTINGS_ROWS = 5;  // header + 4 items
+    const FILTER_ROWS   = 9;  // header + 8 items
+    const CONTENT_ROWS  = Math.ceil(Math.max(LEGEND_ROWS, SETTINGS_ROWS, FILTER_ROWS));
+    const PANEL_H = HEADER_H + PAD + CONTENT_ROWS * ROW_H + PAD;
     const TOTAL_H = GRAPH_H + PANEL_H;
 
     const clone = svg.cloneNode(true) as SVGSVGElement;
@@ -1673,78 +1695,123 @@ function HandoverGraph({
       ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
       URL.revokeObjectURL(svgUrl);
 
-      // Panel background + top separator
-      ctx.fillStyle = "#F8FAFC";
-      ctx.fillRect(0, GRAPH_H, EXPORT_W, PANEL_H);
+      const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
+
+      // ── Header strip ──
+      ctx.fillStyle = "#F1F5F9";
+      ctx.fillRect(0, GRAPH_H, EXPORT_W, HEADER_H);
       ctx.strokeStyle = "#E2E8F0"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(0, GRAPH_H); ctx.lineTo(EXPORT_W, GRAPH_H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, GRAPH_H + HEADER_H); ctx.lineTo(EXPORT_W, GRAPH_H + HEADER_H); ctx.stroke();
 
-      // Vertical divider between legend and filters
-      ctx.beginPath();
-      ctx.moveTo(FILT_X - 20, GRAPH_H + PAD);
-      ctx.lineTo(FILT_X - 20, GRAPH_H + PANEL_H - PAD);
-      ctx.stroke();
+      const hMid = GRAPH_H + HEADER_H / 2 + 4;
+      if (fileName) {
+        ctx.font = `bold 13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(fileName, PAD, hMid);
+      }
+      ctx.font = `12px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      const dateStr = `Exported: ${new Date().toLocaleDateString()}`;
+      ctx.fillText(dateStr, EXPORT_W - PAD - ctx.measureText(dateStr).width, hMid);
 
-      const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
-      const pTop = GRAPH_H + PAD;
+      // ── Content panel ──
+      ctx.fillStyle = "#F8FAFC";
+      ctx.fillRect(0, GRAPH_H + HEADER_H, EXPORT_W, PANEL_H - HEADER_H);
 
-      // ---- LEGEND ----
-      // Resources section
+      // Vertical dividers
+      const divTop = GRAPH_H + HEADER_H + 8;
+      const divBot = GRAPH_H + PANEL_H - 8;
+      ctx.strokeStyle = "#E2E8F0"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(LEG_END + 12, divTop); ctx.lineTo(LEG_END + 12, divBot); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(SET_END + 12, divTop); ctx.lineTo(SET_END + 12, divBot); ctx.stroke();
+
+      const pTop = GRAPH_H + HEADER_H + PAD;
+
+      // ── LEGEND ──
+      let ly = pTop;
       ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
-      ctx.fillText("RESOURCES", PAD, pTop + 10);
-      nodeTypes.forEach((ot, i) => {
-        const cy = pTop + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+      ctx.fillText("RESOURCES", PAD, ly + 9); ly += ROW_H;
+      nodeTypes.forEach(ot => {
+        const cy = ly + ROW_H / 2 - 2;
         ctx.beginPath(); ctx.arc(PAD + 6, cy, 6, 0, Math.PI * 2);
         ctx.fillStyle = typeColorMap[ot] ?? "#94a3b8"; ctx.fill();
         ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
         ctx.fillText(ot, PAD + 18, cy + 4);
+        ly += ROW_H;
       });
+      ly += ROW_H * 0.5;
 
-      // Handover object type section
-      const botStart = pTop + ROW_H + nodeTypes.length * ROW_H + ROW_H * 0.5;
       ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
-      ctx.fillText("HANDOVER OBJECT TYPE", PAD, botStart + 10);
-      boTypes.forEach((bt, i) => {
-        const cy = botStart + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+      ctx.fillText("HANDOVER OBJECT TYPE", PAD, ly + 9); ly += ROW_H;
+      boTypes.forEach(bt => {
+        const cy = ly + ROW_H / 2 - 2;
         ctx.fillStyle = typeColorMap[bt] ?? "#94a3b8";
         ctx.fillRect(PAD, cy - 4, 16, 8);
         ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
         ctx.fillText(bt, PAD + 22, cy + 4);
+        ly += ROW_H;
+      });
+      ly += ROW_H * 0.5;
+
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("SCALE (WEIGHT OF THICKEST ARC)", PAD, ly + 9); ly += ROW_H;
+      const scaleCy = ly + ROW_H / 2 - 2;
+      ctx.save();
+      ctx.strokeStyle = "#374151"; ctx.lineWidth = 6; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
+      ctx.restore();
+      ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+      ctx.fillText(`= ${maxWeight.toFixed(4)}`, PAD + 38, scaleCy + 4);
+
+      // ── GRAPH SETTINGS ──
+      const normLabel = normalization ? (NORMALIZATION_LABELS[normalization] ?? normalization) : "—";
+      const settingsItems: Array<{ label: string; value: string }> = [
+        { label: "Norm method",     value: normLabel },
+        { label: "Per object type", value: normalizationScope === "per_bo_type" ? "Yes" : "No" },
+        { label: "Max gap",         value: maxGap != null ? String(maxGap) : "None" },
+      ];
+
+      let sy = pTop;
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("GRAPH SETTINGS", SET_X, sy + 9); sy += ROW_H;
+      settingsItems.forEach(({ label, value }) => {
+        const cy = sy + ROW_H / 2 - 2;
+        ctx.font = `bold 12px ${FONT}`; ctx.fillStyle = "#64748b";
+        ctx.fillText(`${label}:`, SET_X, cy + 4);
+        const lw = ctx.measureText(`${label}:  `).width;
+        const isNone = value === "None" || value === "—";
+        ctx.font = `12px ${FONT}`; ctx.fillStyle = isNone ? "#94a3b8" : "#0F172A";
+        ctx.fillText(value, SET_X + lw, cy + 4);
+        sy += ROW_H;
       });
 
-      // ---- FILTERS ----
+      // ── FILTERS ──
       const centralityLabels: Record<string, string> = { "in-degree": "In-Degree", "out-degree": "Out-Degree", "both-degree": "Degree", closeness: "Closeness", betweenness: "Betweenness" };
       const timeLabels: Record<string, string> = { max: "Max Time", min: "Min Time", avg: "Avg Time", range: "Range" };
       const activePerc = Object.entries(typePercentages).filter(([, v]) => v < 100);
       const minW = parseFloat(minWeightStr.replace(",", "."));
 
       const filterItems: Array<{ label: string; value: string | null }> = [
-        { label: "Hidden nodes", value: hiddenCount > 0 ? `${hiddenCount} of ${nodes.length} hidden` : null },
+        { label: "Hidden nodes",    value: hiddenCount > 0 ? `${hiddenCount} of ${nodes.length} hidden` : null },
         { label: "Type percentage", value: activePerc.length > 0 ? activePerc.map(([ot, v]) => `${ot}: top ${v}%`).join(", ") : null },
-        { label: "Type focus", value: selectedTypeFilters.size > 0 ? [...selectedTypeFilters].join(", ") : null },
         { label: "Min edge weight", value: minW > 0 ? minWeightStr : null },
         { label: "Parallel filter", value: parallelFilter?.enabled ? `threshold ${parallelFilter.threshold.toFixed(2)}, min obs ${parallelFilter.minObs}` : null },
-        { label: "Centrality", value: selectedCentrality ? (centralityLabels[selectedCentrality] ?? selectedCentrality) : null },
-        { label: "Time metric", value: selectedTimeMetric ? (timeLabels[selectedTimeMetric] ?? selectedTimeMetric) : null },
-        { label: "Highlighted type", value: highlightedObjectType ?? null },
-        { label: "Clustering", value: clustered ? "Active" : null },
+        { label: "Centrality",      value: selectedCentrality ? (centralityLabels[selectedCentrality] ?? selectedCentrality) : null },
+        { label: "Time metric",     value: selectedTimeMetric ? (timeLabels[selectedTimeMetric] ?? selectedTimeMetric) : null },
+        { label: "Highlighted type",value: highlightedObjectType ?? null },
+        { label: "Clustering",      value: clustered ? "Active" : null },
       ];
 
+      let fy = pTop;
       ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
-      ctx.fillText("FILTERS", FILT_X, pTop + 10);
-      filterItems.forEach(({ label, value }, i) => {
-        const fy = pTop + ROW_H + i * ROW_H + ROW_H / 2 - 4;
+      ctx.fillText("FILTERS", FILT_X, fy + 9); fy += ROW_H;
+      filterItems.forEach(({ label, value }) => {
+        const cy = fy + ROW_H / 2 - 2;
         ctx.font = `bold 12px ${FONT}`; ctx.fillStyle = "#64748b";
-        const labelStr = `${label}:`;
-        ctx.fillText(labelStr, FILT_X, fy + 4);
-        const labelW = ctx.measureText(`${label}:  `).width;
-        if (value) {
-          ctx.font = `12px ${FONT}`; ctx.fillStyle = "#0F172A";
-          ctx.fillText(value, FILT_X + labelW, fy + 4);
-        } else {
-          ctx.font = `12px ${FONT}`; ctx.fillStyle = "#94a3b8";
-          ctx.fillText("None", FILT_X + labelW, fy + 4);
-        }
+        ctx.fillText(`${label}:`, FILT_X, cy + 4);
+        const lw = ctx.measureText(`${label}:  `).width;
+        ctx.font = `12px ${FONT}`; ctx.fillStyle = value ? "#0F172A" : "#94a3b8";
+        ctx.fillText(value ?? "None", FILT_X + lw, cy + 4);
+        fy += ROW_H;
       });
 
       canvas.toBlob(blob => {
@@ -1803,13 +1870,17 @@ function HandoverGraph({
                 style={{
                   stroke: ep.color,
                   strokeWidth: ep.strokeWidth,
-                  opacity: highlightedObjectType
-                    ? (ep.businessobject_type === highlightedObjectType ? 0.85 : 0.12)
-                    : edgeTimeScores
-                      ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0))
-                      : centralityScores
-                        ? 0.2
-                        : 0.85,
+                  opacity: (() => {
+                    const isHighlighted = !highlightedObjectType || ep.businessobject_type === highlightedObjectType;
+                    const timeScore = edgeTimeScores ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0)) : null;
+                    if (highlightedObjectType) {
+                      if (!isHighlighted) return 0.12;
+                      return timeScore ?? 0.85;
+                    }
+                    if (timeScore !== null) return timeScore;
+                    if (centralityScores) return 0.2;
+                    return 0.85;
+                  })(),
                   pointerEvents: "none",
                 }}
               />
