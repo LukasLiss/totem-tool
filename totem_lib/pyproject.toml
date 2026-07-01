@@ -36,3 +36,29 @@ dependencies = [
 test = [
     "pytest",
 ]
+dev = [
+    "pytest",
+    "black>=24.0",
+    "ruff>=0.5",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+# Black owns formatting; Ruff is used as a linter / import sorter only.
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+# E501 (line length) is handled by Black.
+ignore = ["E501"]
