@@ -901,6 +901,7 @@ def ochandover(request):
             cluster_map = raw
 
     cluster_by_ot = p.get("cluster_by_ot", "false").lower() in ("true", "1", "yes")
+    include_flows = p.get("include_flows", "false").lower() in ("true", "1", "yes")
 
     try:
         EventLog.objects.get(pk=file_id, project__users=request.user)
@@ -972,7 +973,7 @@ def ochandover(request):
                         return Response({"error": "min_parallel_observations must be at least 1"}, status=status.HTTP_400_BAD_REQUEST)
                 except ValueError:
                     return Response({"error": "Invalid min_parallel_observations value"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map, cluster_by_ot=cluster_by_ot)
+            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map, cluster_by_ot=cluster_by_ot, include_flows=include_flows)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -996,7 +997,17 @@ def ochandover(request):
         for u, v, data in graph.edges(data=True)
     ]
 
-    return Response({"nodes": nodes, "edges": edges}, status=status.HTTP_200_OK)
+    response_data: dict = {"nodes": nodes, "edges": edges}
+    if include_flows:
+        animation_flows = graph.graph.get("animation_flows")
+        if animation_flows:
+            response_data["flows"] = animation_flows["flows"]
+            response_data["timeline"] = animation_flows["timeline"]
+        else:
+            response_data["flows"] = []
+            response_data["timeline"] = None
+
+    return Response(response_data, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])

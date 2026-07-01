@@ -27,7 +27,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                   parallel_threshold: float | None = None,
                   min_parallel_observations: int = 1,
                   cluster_map: dict[str, str] | None = None,
-                  cluster_by_ot: bool = False) -> 'OCHANDOVER':
+                  cluster_by_ot: bool = False,
+                  include_flows: bool = False) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -334,6 +335,30 @@ class OCHANDOVER(nx.MultiDiGraph):
             eog_arcs, event_resources, _event_ts, max_gap
         )
 
+        # Capture individual flows before aggregation when requested.
+        # Timestamps are converted from raw unix values to seconds if they look like ms.
+        _animation_flows: dict | None = None
+        if include_flows and not _raw_handovers.is_empty():
+            _flows_list = _raw_handovers.to_dicts()
+            _ts_sample = _flows_list[0]["start_unix"]
+            _ts_div = 1000.0 if abs(_ts_sample) > 1e10 else 1.0
+            _flows_serialised = [
+                {
+                    "source": f["source"],
+                    "target": f["target"],
+                    "bo_type": f["businessobject_type"],
+                    "start_time": f["start_unix"] / _ts_div,
+                    "duration": max(f["time_delta"] / _ts_div, 1.0),
+                }
+                for f in _flows_list
+            ]
+            _ts_starts = [f["start_time"] for f in _flows_serialised]
+            _ts_ends = [f["start_time"] + f["duration"] for f in _flows_serialised]
+            _animation_flows = {
+                "flows": _flows_serialised,
+                "timeline": {"start": min(_ts_starts), "end": max(_ts_ends)},
+            }
+
         handover_edges = (
             _raw_handovers
             .group_by(["source", "target", "businessobject_type"])
@@ -445,6 +470,9 @@ class OCHANDOVER(nx.MultiDiGraph):
                 max_time=row.get("max_time"),
             )
 
+        if _animation_flows is not None:
+            graph.graph["animation_flows"] = _animation_flows
+
         return graph
 
     @staticmethod
@@ -530,18 +558,32 @@ class OCHANDOVER(nx.MultiDiGraph):
         # Resource expansion happens once after all bridges are collected and
         # deduplicated, so each unique event-level transition yields exactly one
         # handover regardless of how many BO instances share it.
-        _rows: list[dict] = []
+        #
+        # Secondary deduplication: repair arcs can produce multiple bridges from
+        # the same source event to different target events that resolve to the same
+        # (source_resource, target_resource) pair — e.g. an orphan repair adds
+        # e0→e2 alongside the kept e0→e1, both mapping to E0→E1, inflating the
+        # count. For each (source_event, source_resource, target_resource, bo_type)
+        # group keep only the bridge with the earliest target timestamp.
+        _best: dict[tuple[str, str, str, str], tuple[int, int]] = {}
         for (_src_eid, _tgt_eid, _btype) in _bridge_arcs:
             _src_ts = _event_ts_dict.get(_src_eid, 0)
             _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
             for _src in _event_resources_dict.get(_src_eid, []):
                 for _tgt in _event_resources_dict.get(_tgt_eid, []):
-                    _rows.append({
-                        "source": _src,
-                        "target": _tgt,
-                        "businessobject_type": _btype,
-                        "time_delta": _tgt_ts - _src_ts,
-                    })
+                    _key = (_src_eid, _src, _tgt, _btype)
+                    if _key not in _best or _tgt_ts < _best[_key][0]:
+                        _best[_key] = (_tgt_ts, _src_ts)
+
+        _rows: list[dict] = []
+        for (_src_eid, _src, _tgt, _btype), (_tgt_ts, _src_ts) in _best.items():
+            _rows.append({
+                "source": _src,
+                "target": _tgt,
+                "businessobject_type": _btype,
+                "time_delta": _tgt_ts - _src_ts,
+                "start_unix": _src_ts,
+            })
 
         if _rows:
             return pl.DataFrame(_rows)
@@ -550,6 +592,7 @@ class OCHANDOVER(nx.MultiDiGraph):
             "target": pl.Utf8,
             "businessobject_type": pl.Utf8,
             "time_delta": pl.Int64,
+            "start_unix": pl.Int64,
         })
 
 

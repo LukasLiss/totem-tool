@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, MinusIcon, Network, PlusIcon, ScanIcon, Search, SlidersHorizontal, Timer, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Timer, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -36,6 +36,18 @@ export type HandoverEdge = {
   max_time: number | null;
 };
 export type HandoverData = { nodes: HandoverNode[]; edges: HandoverEdge[] };
+
+type FlowEvent = {
+  source: string;
+  target: string;
+  bo_type: string;
+  start_time: number;  // Unix seconds
+  duration: number;    // seconds (>= 1)
+};
+type FlowsData = {
+  flows: FlowEvent[];
+  timeline: { start: number; end: number };
+};
 
 type OCHandoverExplorerProps = {
   fileId?: number;
@@ -124,6 +136,8 @@ export default function OCHandoverExplorer({
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [logError, setLogError] = useState("");
+  const [flowsData, setFlowsData] = useState<FlowsData | null>(null);
+  const [flowsStatus, setFlowsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
   type MlpaLayer = { level: number; areas: { objectTypes: string[] }[] };
   const [mlpaLayers, setMlpaLayers] = useState<MlpaLayer[] | null>(null);
@@ -379,6 +393,72 @@ export default function OCHandoverExplorer({
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
+  };
+
+  // Clear flows when handover data is recomputed
+  useEffect(() => {
+    setFlowsData(null);
+    setFlowsStatus("idle");
+  }, [data]);
+
+  const fetchFlows = async () => {
+    if (!fileId || flowsStatus === "loading") return;
+    setFlowsStatus("loading");
+    setFlowsData(null);
+
+    const token = localStorage.getItem("access_token");
+    if (!token) { setFlowsStatus("error"); return; }
+
+    const params: Record<string, string> = {
+      file_id: String(fileId),
+      method,
+      include_flows: "true",
+    };
+    if (method === "oc") {
+      params.resource_types = [...resourceTypes].join(",");
+      params.businessobject_types = [...boTypes].join(",");
+      if (maxGap !== null) params.max_gap = String(maxGap);
+      params.normalization = normalization;
+      params.normalization_scope = normalizationScope;
+      if (parallelFilterEnabled) {
+        params.parallel_threshold = String(parallelThreshold);
+        params.min_parallel_observations = String(minParallelObs);
+      }
+      if (clusterByOt) params.cluster_by_ot = "true";
+    } else {
+      params.case_type = caseType;
+      params.resource_type = flatResourceType;
+      if (maxGap !== null) params.max_gap = String(maxGap);
+    }
+
+    try {
+      const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+      const res = activeClusterMap
+        ? await fetch("/api/handover/", {
+            method: "POST",
+            credentials: "include",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
+          })
+        : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
+            credentials: "include",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const result = await res.json();
+      if (result.flows && result.timeline) {
+        setFlowsData({ flows: result.flows, timeline: result.timeline });
+        setFlowsStatus("ready");
+      } else {
+        setFlowsStatus("error");
+      }
+    } catch {
+      setFlowsStatus("error");
+    }
   };
 
   // When cluster mode is enabled, auto-select the resource types present in the cluster data.
@@ -803,6 +883,25 @@ export default function OCHandoverExplorer({
               <Button size="sm" variant={viewMode === "log" ? "default" : "outline"} onClick={() => setViewMode("log")}>
                 Log
               </Button>
+              {viewMode === "graph" && method === "oc" && (
+                <>
+                  <div className="w-px h-5 bg-border mx-0.5 self-center" />
+                  <Button
+                    size="sm"
+                    variant={flowsData ? "secondary" : "outline"}
+                    onClick={flowsData
+                      ? () => { setFlowsData(null); setFlowsStatus("idle"); }
+                      : fetchFlows}
+                    disabled={flowsStatus === "loading"}
+                    className="gap-1.5"
+                  >
+                    {flowsStatus === "loading"
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <Play className="h-3.5 w-3.5" />}
+                    {flowsStatus === "loading" ? "Loading…" : flowsData ? "Stop" : "Animate"}
+                  </Button>
+                </>
+              )}
               </div>
               {viewMode === "graph" && (
                 <div ref={nodeSearchRef} className="relative">
@@ -861,6 +960,7 @@ export default function OCHandoverExplorer({
                     normalizationScope={normalizationScope}
                     maxGap={maxGap}
                     fileName={fileName}
+                    flowsData={flowsData}
                   />
                 </div>
                 {selectedNode && (
@@ -1094,6 +1194,32 @@ type SimLink = SimulationLinkDatum<SimNode>;
 
 const CLUSTER_COLORS = ["#f43f5e","#f97316","#eab308","#22c55e","#06b6d4","#8b5cf6","#ec4899","#14b8a6"];
 
+function updateDotLayer(
+  layer: SVGGElement,
+  pathMap: Map<string, SVGPathElement>,
+  flows: FlowEvent[],
+  currentTime: number,
+  colorMap: Record<string, string>,
+): void {
+  while (layer.firstChild) layer.removeChild(layer.firstChild);
+  for (const flow of flows) {
+    if (flow.start_time > currentTime || currentTime >= flow.start_time + flow.duration) continue;
+    const pathEl = pathMap.get(`${flow.source}|${flow.target}|${flow.bo_type}`);
+    if (!pathEl || !pathEl.isConnected) continue;
+    const t = Math.min(1, (currentTime - flow.start_time) / flow.duration);
+    const pt = pathEl.getPointAtLength(t * pathEl.getTotalLength());
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", String(pt.x));
+    c.setAttribute("cy", String(pt.y));
+    c.setAttribute("r", "6");
+    c.setAttribute("fill", colorMap[flow.bo_type] ?? "#94a3b8");
+    c.setAttribute("stroke", "white");
+    c.setAttribute("stroke-width", "1.5");
+    c.setAttribute("pointer-events", "none");
+    layer.appendChild(c);
+  }
+}
+
 function HandoverGraph({
   nodes,
   edges,
@@ -1108,6 +1234,7 @@ function HandoverGraph({
   normalizationScope,
   maxGap,
   fileName,
+  flowsData,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1122,6 +1249,7 @@ function HandoverGraph({
   normalizationScope?: "global" | "per_bo_type";
   maxGap?: number | null;
   fileName?: string;
+  flowsData?: FlowsData | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1140,6 +1268,89 @@ function HandoverGraph({
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
   const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
+
+  // ── Animation state & refs ────────────────────────────────────
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [sliderTime, setSliderTime] = useState(0);
+  const [playSpeed, setPlaySpeed] = useState(100);
+  const playSpeedRef = useRef(100);
+  useEffect(() => { playSpeedRef.current = playSpeed; }, [playSpeed]);
+  const playheadTimeRef = useRef(0);
+  const lastWallClockRef = useRef<number | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const dotsLayerRef = useRef<SVGGElement>(null);
+  const pathMapRef = useRef<Map<string, SVGPathElement>>(new Map());
+  const frameCountRef = useRef(0);
+
+  // Cancel animation on unmount
+  useEffect(() => () => { if (animFrameRef.current !== null) cancelAnimationFrame(animFrameRef.current); }, []);
+
+  // Reset animation state when flowsData changes
+  useEffect(() => {
+    if (animFrameRef.current !== null) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+    setIsPlaying(false);
+    lastWallClockRef.current = null;
+    const start = flowsData?.timeline.start ?? 0;
+    playheadTimeRef.current = start;
+    setSliderTime(start);
+    const layer = dotsLayerRef.current;
+    if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
+  }, [flowsData]);
+
+  // Rebuild path lookup map after edges are re-rendered in the DOM
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const map = new Map<string, SVGPathElement>();
+    svgRef.current.querySelectorAll<SVGPathElement>("[data-flow-edge]").forEach(el => {
+      const key = el.getAttribute("data-flow-edge")!;
+      map.set(key, el);
+    });
+    pathMapRef.current = map;
+  });
+
+  const playAnimation = () => {
+    if (!flowsData || isPlaying) return;
+    if (playheadTimeRef.current >= flowsData.timeline.end) {
+      playheadTimeRef.current = flowsData.timeline.start;
+      setSliderTime(flowsData.timeline.start);
+    }
+    setIsPlaying(true);
+    lastWallClockRef.current = null;
+    const fd = flowsData;
+    const tcm = typeColorMap;
+    const tick = (wallNow: number) => {
+      if (lastWallClockRef.current === null) lastWallClockRef.current = wallNow;
+      const wallDelta = (wallNow - lastWallClockRef.current) / 1000;
+      lastWallClockRef.current = wallNow;
+      const newTime = Math.min(playheadTimeRef.current + wallDelta * playSpeedRef.current, fd.timeline.end);
+      playheadTimeRef.current = newTime;
+      const layer = dotsLayerRef.current;
+      if (layer) updateDotLayer(layer, pathMapRef.current, fd.flows, newTime, tcm);
+      frameCountRef.current = (frameCountRef.current + 1) % 4;
+      if (frameCountRef.current === 0) setSliderTime(newTime);
+      if (newTime < fd.timeline.end) {
+        animFrameRef.current = requestAnimationFrame(tick);
+      } else {
+        setIsPlaying(false);
+        setSliderTime(newTime);
+      }
+    };
+    animFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const pauseAnimation = () => {
+    if (animFrameRef.current !== null) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+    setIsPlaying(false);
+    lastWallClockRef.current = null;
+  };
+
+  const scrubTo = (time: number) => {
+    playheadTimeRef.current = time;
+    setSliderTime(time);
+    const layer = dotsLayerRef.current;
+    if (layer && flowsData) updateDotLayer(layer, pathMapRef.current, flowsData.flows, time, typeColorMap);
+  };
+  // ─────────────────────────────────────────────────────────────
 
   const [filterOpen, setFilterOpen] = useState(false);
   const [centralityOpen, setCentralityOpen] = useState(false);
@@ -1864,6 +2075,7 @@ function HandoverGraph({
           {edgePaths.map(ep => (
             <g key={ep.key}>
               <path
+                data-flow-edge={`${ep.source}|${ep.target}|${ep.businessobject_type}`}
                 d={ep.d}
                 fill="none"
                 markerEnd={`url(#${ep.markerId})`}
@@ -1873,13 +2085,17 @@ function HandoverGraph({
                   opacity: (() => {
                     const isHighlighted = !highlightedObjectType || ep.businessobject_type === highlightedObjectType;
                     const timeScore = edgeTimeScores ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0)) : null;
+                    let base: number;
                     if (highlightedObjectType) {
-                      if (!isHighlighted) return 0.12;
-                      return timeScore ?? 0.85;
+                      base = !isHighlighted ? 0.12 : (timeScore ?? 0.85);
+                    } else if (timeScore !== null) {
+                      base = timeScore;
+                    } else if (centralityScores) {
+                      base = 0.2;
+                    } else {
+                      base = 0.85;
                     }
-                    if (timeScore !== null) return timeScore;
-                    if (centralityScores) return 0.2;
-                    return 0.85;
+                    return flowsData ? base * 0.25 : base;
                   })(),
                   pointerEvents: "none",
                 }}
@@ -1976,6 +2192,9 @@ function HandoverGraph({
             );
           });
           })()}
+
+          {/* Animation dots layer — populated imperatively by updateDotLayer */}
+          <g ref={dotsLayerRef} />
         </svg>
 
         {highlightedObjectType && (
@@ -2488,6 +2707,56 @@ function HandoverGraph({
           );
         })()}
       </div>
+
+      {/* Playback bar */}
+      {flowsData && (
+        <div className="flex items-center gap-2 px-3 py-2 mt-1 border rounded-md bg-muted/30">
+          <button
+            className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent transition-colors shrink-0"
+            onClick={isPlaying ? pauseAnimation : playAnimation}
+            title={isPlaying ? "Pause" : "Play"}
+          >
+            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          </button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex items-center gap-1 text-xs border rounded px-2 py-1 bg-background hover:bg-accent transition-colors shrink-0 tabular-nums">
+                {playSpeed}× <ChevronDown className="h-3 w-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={String(playSpeed)}
+                onValueChange={v => { const s = Number(v); setPlaySpeed(s); playSpeedRef.current = s; }}
+              >
+                {[1, 10, 100, 1000, 5000, 10000, 50000].map(s => (
+                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <div className="flex-1 min-w-0 px-1">
+            <Slider
+              min={flowsData.timeline.start}
+              max={flowsData.timeline.end}
+              step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
+              value={[sliderTime]}
+              onValueChange={([v]) => scrubTo(v)}
+            />
+          </div>
+
+          <span className="text-xs text-muted-foreground tabular-nums shrink-0 whitespace-nowrap">
+            {new Date(sliderTime * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "2-digit" })}
+            {" "}
+            {new Date(sliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          <span className="text-xs text-muted-foreground shrink-0">
+            ({flowsData.flows.length.toLocaleString()} flows)
+          </span>
+        </div>
+      )}
 
       {/* Legends */}
       <div className="flex gap-8 text-xs flex-wrap">
