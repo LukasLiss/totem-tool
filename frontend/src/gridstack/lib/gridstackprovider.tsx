@@ -13,7 +13,7 @@ import { componentMap } from "../../components/componentMap";
 interface GridContextValue {
   grid: GridStack | null;
   gridRef: React.RefObject<HTMLDivElement>;
-  addWidget: (content?: string) => void;
+  addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
   getLayout: () => any[];
   loadLayout: (layout: any[]) => void;
   resetGrid: () => void;
@@ -27,7 +27,8 @@ const GridModeContext = createContext<{
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
-  selectedFile: any;
+  selectedFile?: any;  // Made optional
+  dashboardId: number;  // Added
 }
 
 export const useGridMode = () => useContext(GridModeContext);
@@ -49,11 +50,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
   selectedFile,
+  dashboardId,
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
-
+  const componentIdCounter = useRef(1);  // Counter for generating unique component IDs
 
   // Define grid options here so resetGrid can access them
   const gridOptions: GridStackOptions = {
@@ -62,6 +64,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     removable: "#trash",
     float: true,
     ...(options || {}),
+  };
+
+  // Function to generate a unique component ID
+  const generateComponentId = () => {
+    return componentIdCounter.current++;
   };
 
   useEffect(() => {
@@ -87,8 +94,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         root.render(
           <Component
             node={w}
-            isEditMode={isEditMode} // Use current isEditMode
+            isEditMode={isEditMode}
             selectedFile={selectedFile}
+            dashboardId={dashboardId}  // Pass dashboardId
             onUpdate={(updates) => {
               Object.assign(w, updates);
               gridRef.current?.update(el, updates);
@@ -110,9 +118,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
-        const root = (item as any)._reactRoot;
-        const node = (item as any).gridstackNode;
-        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        const contentEl = item.querySelector('.grid-stack-item-content') || item;
+        const root = (contentEl as any)._reactRoot;
+        const node = (contentEl as any).gridstackNode;
+        const component_name = (node as any)?.component_name || (contentEl as HTMLElement).dataset.componentName || item.dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -122,6 +131,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node={node}
               isEditMode={isEditMode}
               selectedFile={selectedFile}
+              dashboardId={dashboardId}
               onUpdate={(updates) => {
                 Object.assign(node, updates);
                 gridRef.current?.update(item as HTMLElement, updates);
@@ -135,8 +145,30 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     } else {
       console.log('No grid instance to update');
     }
-  }, [isEditMode, grid, selectedFile]);
+  }, [isEditMode, grid, selectedFile, dashboardId]);
 
+  // Implement addWidget to add new widgets with generated component_id
+  const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
+    if (!grid) return;
+    const newId = generateComponentId();
+    const widgetEl = grid.addWidget({
+      x: 0,
+      y: 0,
+      w: 2,
+      h: 2,
+      content,
+      component_name: componentName,
+      component_id: newId,
+    });
+    if (widgetEl) {
+      const node = grid.getGridItems().find(item => item.el === widgetEl)?.gridstackNode;
+      if (node) {
+        (node as any).component_name = componentName;
+        (node as any).component_id = newId;
+      }
+      widgetEl.dataset.componentName = componentName;
+    }
+  };
 
   const resetGrid = () => {
     console.log("Resetting grid completely");
@@ -176,6 +208,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     if (!gridRef.current) return [];
     const nodes = gridRef.current.save(false) as GridStackNode[];
     return nodes.map((node, index) => {
+      // Ensure component_id is set (generate if missing)
+      let component_id = (node as any).component_id || generateComponentId();
+      (node as any).component_id = component_id;  // Update node for consistency
       // Use component_name from the node, fallback to data attribute or content-based logic
       let component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
       let props: any = {};
@@ -188,11 +223,17 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: (node as any).text || "Enter text here", font_size: 14 };  // Read from node.text
+        props = { text: (node as any).text || "Enter text here", font_size: 14 };  
+      } else if (component_name === "ImageComponent") {
+        props = { image: (node as any).image};
       } else if (component_name === "VariantsComponent") {
         props = {
           automatic_loading: (node as any).automatic_loading ?? false,
           leading_object_type: (node as any).leading_object_type ?? '',
+          // Persisted advanced settings — see VariantsExplorer.tsx for semantics.
+          extraction: (node as any).extraction ?? 'leading_1hop',
+          iso: (node as any).iso ?? 'wl+vf2',
+          timeout_s: (node as any).timeout_s ?? 10.0,
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -209,11 +250,27 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "OCDottedChartComponent") {
+        props = {
+          x_axis: (node as any).x_axis ?? "time",
+          y_axis: (node as any).y_axis ?? "activity",
+          color_by: (node as any).color_by ?? "activity",
+          shape_by: (node as any).shape_by ?? "none",
+          row_order: (node as any).row_order ?? "first_occurrence",
+          max_points: (node as any).max_points ?? 10000,
+        };
+      } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'TB',
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
       
       return {
+        id: component_id,  // Now always set
         component_name,
         x: node.x,
         y: node.y,
@@ -271,7 +328,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       layout.forEach((item, index) => {
         console.log(`Adding widget ${index}:`, item);
         let content = "";
-        if (item.component_name === "NumberOfEventsComponent") {
+        if (item.component_name === "NumberofEventsComponent") {
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
@@ -285,9 +342,18 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "OCDottedChartComponent") {
+          content = "OC Dotted Chart";
+        } else if (item.component_name === "NewOCDFGComponent") {
+          content = "Object-Centric DFG (Arc Weight)";
+        } else if (item.component_name === "NewOCDFGVariantsComponent") {
+          content = "Object-Centric DFG (Variants)";
         } else {
           content = "Unknown";
         }
+        
+        // Ensure component_id is set (generate if missing from layout)
+        const component_id = item.id || item.component_id || generateComponentId();
         
         try {
           const widgetEl = gridRef.current?.addWidget({
@@ -298,11 +364,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             content,  // Keep for GridStack compatibility
             text: item.text,
             component_name: item.component_name,
+            component_id,  // Now always set
             color: item.color,
             font_size: item.font_size,
             image: item.image,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
+            // VariantsComponent — persisted advanced settings
+            extraction: item.extraction,
+            iso: item.iso,
+            timeout_s: item.timeout_s,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -314,18 +385,30 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // OCDottedChartComponent properties
+            x_axis: item.x_axis,
+            y_axis: item.y_axis,
+            color_by: item.color_by,
+            shape_by: item.shape_by,
+            row_order: item.row_order,
+            max_points: item.max_points,
+            layout_direction: item.layout_direction,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
             const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
             if (node) {
               (node as any).component_name = item.component_name;
+              (node as any).component_id = component_id;  // Ensure it's set
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
               (node as any).image = item.image; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+              (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
+              (node as any).iso = item.iso;                 // For VariantsComponent advanced settings
+              (node as any).timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               // LogStatisticsComponent properties
               (node as any).show_num_events = item.show_num_events;
               (node as any).show_num_activities = item.show_num_activities;
@@ -337,6 +420,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // OCDottedChartComponent properties
+              (node as any).x_axis = item.x_axis;
+              (node as any).y_axis = item.y_axis;
+              (node as any).color_by = item.color_by;
+              (node as any).shape_by = item.shape_by;
+              (node as any).row_order = item.row_order;
+              (node as any).max_points = item.max_points;
+              (node as any).layout_direction = item.layout_direction;
             }
           }
           // Set data attribute for persistence
@@ -358,7 +449,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
   return (
     <GridModeContext.Provider value={{ isEditMode, setIsEditMode }}>
-      <GridContext.Provider value={{ grid, gridRef, getLayout, loadLayout, resetGrid }}>
+      <GridContext.Provider value={{ grid, gridRef, addWidget, getLayout, loadLayout, resetGrid }}>
         {children}
       </GridContext.Provider>
     </GridModeContext.Provider>

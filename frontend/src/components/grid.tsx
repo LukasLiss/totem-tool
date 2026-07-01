@@ -15,9 +15,9 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
 import {
-  Settings, Save
+  Settings, Save, Minus, Plus
 } from "lucide-react"
-
+import { toast } from "sonner"
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -43,15 +43,9 @@ const GridContent: React.FC = () => {
         return;
       }
       
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        console.log("No token found");
-        return;
-      }
-      
       try {
         console.log("Fetching layout for dashboard:", selectedDashboard);
-        const response = await getLayout(selectedDashboard, token);
+        const response = await getLayout(selectedDashboard);
         console.log("Layout response:", response);
         
         if (Array.isArray(response) && response.length > 0) {
@@ -71,31 +65,27 @@ const GridContent: React.FC = () => {
 
   const handleSave = async () => {
     if (!selectedDashboard) {
-      alert("No dashboard selected!");
+      toast.error("No dashboard selected!");
       return;
     }
     const layout = getGridLayout();
-    console.log('Layout to save:', layout); // Debug: Check what's being saved
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
+    console.log('Layout to save:', layout);
     try {
-      const response = await saveLayout(selectedDashboard, layout, token);
+      const response = await saveLayout(selectedDashboard, layout);
       console.log('Save response:', response); // Debug: Check API response
-      alert("Layout saved!");
+      toast.success("Layout saved!");
     } catch (error) {
       console.error('Save failed:', error); // Debug: Check for errors
-      alert("Save failed!");
+      toast.error("Save failed!");
     }
   };
 
   const handleLoad = async () => {
     if (!selectedDashboard) {
-      alert("No dashboard selected!");
+      toast.error("No dashboard selected!");
       return;
     }
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
-    const response = await getLayout(selectedDashboard, token);
+    const response = await getLayout(selectedDashboard);
     // Small delay to ensure any pending operations complete
     setTimeout(() => loadLayout(response), 50);
   };
@@ -119,17 +109,26 @@ const GridContent: React.FC = () => {
             <Save />
             <span className="sr-only">Toggle Sidebar</span>
           </Button>
+          
           : null}
+        {isEditMode ?<Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+            console.log('Edit mode button clicked, current isEditMode:', isEditMode);
+            setIsEditMode(!isEditMode);}}>
+            <Minus />
+            <span className="sr-only">Toggle Sidebar</span>
+          </Button> :
         <Button
             variant="ghost"
             size="icon"
             onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
             setIsEditMode(!isEditMode);}}>
-            <Settings />
+            <Plus />
             <span className="sr-only">Toggle Sidebar</span>
-          </Button>
-        
+          </Button> }
         
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
@@ -140,7 +139,6 @@ const GridContent: React.FC = () => {
           </GridContainer>
         </div>
         {isEditMode ? <SidePanel /> : null}
-
       </div>
     </div>
   );
@@ -148,11 +146,12 @@ const GridContent: React.FC = () => {
 
 const Grid: React.FC = () => {
   const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
-
+  const { viewMode } = useContext(DashboardContext);
+  const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
   console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
-    <GridProvider selectedFile={selectedFile}>
+    <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
       <GridContent />
     </GridProvider>
   </SidebarInset>

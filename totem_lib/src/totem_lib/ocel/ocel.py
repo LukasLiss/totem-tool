@@ -9,7 +9,7 @@ from totem_lib.simulation.utils.process_area import ProcessArea
 EVENTS_SCHEMA = {
     "_eventId": pl.Utf8,
     "_activity": pl.Utf8,
-    "_timestampUnix": pl.Int64,
+    "_timestampUnix": pl.Int64, # in seconds
     "_objects": pl.List(pl.Utf8),
     "_qualifiers": pl.List(pl.Utf8),
     "_attributes": pl.Utf8,
@@ -24,7 +24,7 @@ OBJECTS_SCHEMA = {
 
 OBJECT_ATTRIBUTE_SCHEMA = {
     "_objId": pl.Utf8,
-    "_timestampUnix": pl.Int64,
+    "_timestampUnix": pl.Int64, # in seconds
     "_jsonObjAttributes": pl.Utf8,
 }
 
@@ -37,7 +37,6 @@ class ObjectCentricEventLog:
     methods for adding data, accessing event and object attributes, and
     managing the object-to-object graph.
     """
-
     def __init__(
         self,
         events: pl.DataFrame,

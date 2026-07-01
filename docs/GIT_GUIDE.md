@@ -1,92 +1,132 @@
-# Git Management for TOTeM-Tool
+# Git & PR Guide
 
-## ✅ Files to Commit (Source Code)
+How we use Git, branches, and pull requests on this repo. Read this once before your first PR.
 
-### Root Level
-- `package.json` - Project scripts and metadata
-- `README.md`, `LICENSE` - Documentation
-- `*.md` files - Documentation and guides
-- `*.bat` files - Development scripts
+## TL;DR
 
-### Backend (Django)
-- `backend/manage.py`
-- `backend/requirements.txt`
-- `backend/totem_backend/` - Django project files
-- `backend/api/` - API app files
-- **Include migrations:** `backend/api/migrations/`
+- One **epic branch** per epic issue, branched from `main`.
+- One **sub-branch** per sub-issue, branched from its epic branch.
+- Sub-PRs merge into the epic branch — does not require a review.
+- When the epic is complete, one PR from the epic branch into `main` — this PR **requires a review**.
+- Every PR body contains `Closes #<issue-number>` so the linked issue closes automatically on merge.
 
-### Frontend (React)
-- `frontend/package.json` - Dependencies and scripts
-- `frontend/src/` - React source code
-- `frontend/public/` - Static files
+```
+main
+ └── epic/127-dotted-chart            ← epic branch (one PR to main at the end, review required)
+      ├── epic/127/128-sampling-endpoint   ← sub-branch (PR into epic branch, self-merge OK)
+      ├── epic/127/129-core-component
+      └── epic/127/130-config-ui
+```
 
-### Electron
-- `electron/main.js` - Electron main process
-- `electron/package.json` - Electron dependencies
+## Branch naming
 
-## ❌ Files NOT to Commit (Generated/Build)
+Use lowercase, hyphen-separated slugs. Keep slugs short (3–5 words).
 
-### Dependencies
-- `node_modules/` (all locations)
-- `backend/venv/` - Python virtual environment
-- `package-lock.json` files
+| Type | Pattern | Example |
+|---|---|---|
+| Epic | `epic/<epic-number>-<slug>` | `epic/127-dotted-chart` |
+| Sub-issue | `epic/<epic-number>/<sub-number>-<slug>` | `epic/127/128-sampling-endpoint` |
+| Standalone (no epic) | `issue/<number>-<slug>` | `issue/145-fix-jwt-expiry` |
+| Quick fix, no issue | `chore/<slug>` or `fix/<slug>` | `chore/bump-duckdb` |
 
-### Build Artifacts
-- `frontend/build/` - React production build
-- `electron/dist/` - Electron executable
-- `electron/resources/` - Copied build resources
+The shared `epic/127/...` prefix makes the parent–child relationship visible in `git branch`, GitHub's branch picker, and `gh pr list`.
 
-### Runtime Files
-- `backend/db.sqlite3` - Database file
-- `backend/__pycache__/` - Python cache
-- `*.log` files
+## Workflow
 
-### IDE/System Files
-- `.vscode/`, `.idea/` - IDE settings
-- `.DS_Store`, `Thumbs.db` - OS files
+### 1. Start of an epic
 
-## 🚀 Recommended Git Workflow
+The maintainer creates the epic branch from `main` and pushes it:
 
-1. **Initial Setup:**
-   ```bash
-   git add .gitignore
-   git add README.md LICENSE *.md
-   git add package.json backend/ frontend/ electron/
-   git commit -m "Initial TOTeM-Tool project setup"
-   ```
+```bash
+git checkout main && git pull
+git checkout -b epic/127-dotted-chart
+git push -u origin epic/127-dotted-chart
+```
 
-2. **Development:**
-   ```bash
-   # Before committing, check what's staged
-   git status
-   
-   # Add source files only
-   git add backend/api/ frontend/src/ electron/main.js
-   git commit -m "Add new feature"
-   ```
+### 2. Work on a sub-issue
 
-3. **Clean Repository:**
-   ```bash
-   # Remove accidentally committed files
-   git rm -r --cached node_modules/
-   git rm --cached backend/db.sqlite3
-   git commit -m "Remove build artifacts from tracking"
-   ```
+Branch from the **epic branch**, not from `main`:
 
-## 📊 Current Ignore Rules
+```bash
+git checkout epic/127-dotted-chart && git pull
+git checkout -b epic/127/128-sampling-endpoint
+# ... commit your work ...
+git push -u origin epic/127/128-sampling-endpoint
+```
 
-The `.gitignore` covers:
-- All `node_modules/` directories
-- Python virtual environments
-- Build outputs (`build/`, `dist/`)
-- Database files
-- IDE configurations
-- OS-specific files
-- Temporary files
+Commit often. Small, focused commits make review easier if you decide to request one. Commit messages: short imperative subject line ("Add sampling endpoint"), optional body for the why.
 
-## 💡 Tips
+### 3. Open a sub-PR
 
-- **Never commit build artifacts** - They can be regenerated
-- **Always commit source code** - The files you edit
-- **Include documentation** - README, guides, etc.
-- **Check before pushing** - Use `git status` to verify
+Open the PR with the **epic branch as the base** (not `main`):
+
+```bash
+gh pr create --base epic/127-dotted-chart --fill
+```
+
+In the PR body, include `Closes #128` so the sub-issue closes when the PR is merged. This is what makes the sub-issue tick off in the epic's sub-issues panel and on the project board.
+
+**Reviews on sub-PRs are optional.** Request one (`gh pr edit --add-reviewer <user>`) if:
+
+- You're unsure about an approach.
+- The change touches an unfamiliar area or a layer boundary (e.g. `totem_lib` ↔ backend).
+- Something feels risky.
+
+Otherwise self-merge once CI is green.
+
+You can use **"Squash and merge"** for sub-PRs. The epic branch stays linear and each sub-issue shows up as one commit.
+
+### 4. Keep the sub-branch fresh
+
+If the epic branch advances while you're working (other sub-PRs landed), rebase onto it:
+
+```bash
+git checkout epic/127/128-sampling-endpoint
+git fetch origin
+git rebase origin/epic/127-dotted-chart
+git push --force-with-lease
+```
+
+Use `--force-with-lease`, never `--force` — it refuses to overwrite work someone else pushed.
+
+### 5. Close the epic
+
+When every sub-issue is merged, open one PR from the epic branch to `main`:
+
+```bash
+gh pr create --base main --head epic/127-dotted-chart
+```
+
+This PR body should include `Closes #127` (the epic issue).
+
+**A review is required by branch protection.** Wait for approval before merging. Use **"Merge commit"** (not squash) so the individual sub-issue commits stay in `main`'s history.
+
+After merge, delete the epic branch.
+
+## Pull request checklist
+
+The PR template prompts for these — fill them in:
+
+- **Summary**: 1–3 bullets on what changes and why.
+- **Linked issue**: `Closes #<num>`. One per PR.
+- **Test plan**: how you verified it. Commands, manual steps, screenshots for UI.
+- **Screenshots**: before/after for any visible change.
+
+Keep PRs small. If a sub-issue grows beyond ~500 changed lines, ask whether it should be split.
+
+## Conventions
+
+- **Don't push to `main`.** Always go through a PR.
+- **Don't push to someone else's branch** without asking.
+- **Don't merge your own epic→main PR** without an approval, even if you have the button.
+- **One sub-issue per PR**, one `Closes #` per PR. Bundling makes the project board lie.
+- **CI must pass** before merging. If it's flaky, fix the flake or flag it — don't merge red.
+- **Delete branches after merge.** GitHub offers this in the merge dialog.
+
+## When something goes wrong
+
+- **Accidentally branched from `main` instead of the epic?** Rebase: `git rebase --onto epic/127-dotted-chart main your-branch`.
+- **Merged into the wrong base?** Don't try to "un-merge." Open a follow-up PR that reverts and re-applies on the right base, and ping a maintainer.
+- **Force-push wiped your work?** `git reflog` shows your recent commits — you can usually recover.
+
+When in doubt, ask before pushing.

@@ -1,0 +1,29 @@
+name: Bug
+description: Something is broken
+title: "[Bug]: "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps so someone else can hit the same problem
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: "OS, branch/commit, electron vs web, log size, browser if relevant"
+      placeholder: "macOS 14.5, main@abcd123, electron, log ~50k events"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste relevant stack traces or attach screenshots

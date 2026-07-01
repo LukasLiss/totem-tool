@@ -1,16 +1,16 @@
 import { deleteUserData } from './api/projectApi';
 import { Button } from './components/ui/button';
-
+import { toast } from 'sonner';
 
 export function DeleteView(){
 const handleDelete = async () => {
-    const token = localStorage.getItem("access_token");
     try {
-      await deleteUserData(token);
+      await deleteUserData();
       console.log('Successfull deletion')
+      toast.success("All projects deleted successfully");
     } catch (err) {
       console.error("Deletion failed:", err);
-      alert("Deletion failed");
+      toast.error("Deletion failed");
     }
   };
 return (

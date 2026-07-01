@@ -17,10 +17,8 @@ import { toast } from "sonner"
 
 
 export function FileUploadValidator() {
-    //Uploads data while checking for the right format (JSON, XML, SQLITE) using MagicNumbers and filename endings
-    //Right now JSON with OR logic
     const { setSelectedFile } = useContext(SelectedFileContext);
-    
+
     const [file, setFile] = useState<File | null>(null);
     const hiddenInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -38,8 +36,6 @@ export function FileUploadValidator() {
       },
       multiple: false,
     });
-    
-    //Validation
 
     const validateFile = async () => {
     if (!file) {
@@ -47,11 +43,9 @@ export function FileUploadValidator() {
       return false;
     }
 
-     
-
     const type = await fileTypeFromBlob(file);
-    console.log("Detected type:", type); // { ext, mime }
-    
+    console.log("Detected type:", type);
+
     const isJson =
       type?.ext === "json" || file.name.toLowerCase().endsWith(".json");
     const isXml =
@@ -62,35 +56,33 @@ export function FileUploadValidator() {
         file.name.toLowerCase().endsWith(".db"));
     const isCsv =
       type?.ext === "csv" || file.name.toLowerCase().endsWith(".csv");
+    // The `file-type` library has no DuckDB signature, so `type?.ext` is
+    // undefined for valid DuckDB files. Fall back to filename matching, in
+    // line with how isJson / isCsv are handled.
+    const isDuckDB =
+      file.name.toLowerCase().endsWith(".duckdb");
 
-    if (!(isJson || isXml || isSqlite || isCsv)){
-        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', or 'csv'."});
+    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
+        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
         return false;
     }
-    
+
     return true;
   };
 
-  // Upload
-
   const handleFileUpload = async () => {
-    const token = localStorage.getItem("access_token");
     try {
-      if (!token) {
-      console.error("No token found!");
-      return;
-      }
       if (!file) {
         toast.warning("No file selected!");
         return;
       }
-      const response = await uploadFile(file, token);
+      const response = await uploadFile(file);
       setSelectedFile(response);
       toast.success("Upload successful", {
-      description: file.name,
-    });
+        description: file.name,
+      });
       setFile(null);
-        } catch (err) {
+    } catch (err) {
       console.error("Upload failed:", err);
       toast.error("Upload failed");
     }
@@ -106,9 +98,6 @@ export function FileUploadValidator() {
  };
 
 
-
-
-
   return (
   <div>
     <Card className="w-full max-w-sm m-6">
@@ -119,10 +108,9 @@ export function FileUploadValidator() {
       </CardHeader>
         <CardContent>
           <form className="flex flex-col" onSubmit={handleSubmit}>
-            <div {...getRootProps({ className: 
+            <div {...getRootProps({ className:
               "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })}>
-              {/* hidden input so FormData works if needed */}
-              <input 
+              <input
                 type="file"
                 name="my-file"
                 ref={hiddenInputRef}
@@ -130,10 +118,10 @@ export function FileUploadValidator() {
               />
               <input  {...getInputProps()} />
               <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
-            </div>  
-       
+            </div>
+
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
-          <div className="flex flex-col justify-center w-full">    
+          <div className="flex flex-col justify-center w-full">
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
                 <span>{file?.name ?? "No file chosen"}</span>
             </div>

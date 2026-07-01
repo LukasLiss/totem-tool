@@ -11,20 +11,15 @@ type FileItem = {
 
 export function FileLoader() {
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [, setShowDropdown] = useState(false); 
-  const [selectedFileId, setSelectedFileId] = useState(""); 
+  const [, setShowDropdown] = useState(false);
+  const [selectedFileId, setSelectedFileId] = useState("");
   const [processedResult, setProcessedResult] = useState(null);
 
   const handleFileLoad = async () => {
-    const token = localStorage.getItem("access_token")
     try {
-      if (!token) {
-        console.error("No token found!");
-        return;
-      }
-      const response = await getUserFiles(token); // fetch user files
+      const response = await getUserFiles();
       setFiles(response);
-      setShowDropdown(true); // show dropdown after loading
+      setShowDropdown(true);
       console.log('Successfully loaded user files')
       console.log('file_length',files.length)
     } catch (err) {
@@ -44,21 +39,15 @@ export function FileLoader() {
       return;
     }
 
-    const token = localStorage.getItem("access_token");
-
     try {
-      if (!token) {
-        console.error("No token found!");
-        return;
-      }
-      const result = await processFile(token, selectedFileId);
+      const result = await processFile(selectedFileId);
       setProcessedResult(result);
     } catch (err) {
       console.error("Failed to process file:", err);
     }
   };
   return (
-    
+
        <div style={{ padding: "1rem" }}>
       <button onClick={handleFileLoad}>Load My Files</button>
 

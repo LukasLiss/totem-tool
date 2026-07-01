@@ -55,3 +55,5 @@ pytest ./tests/
 ## Acknowledgements
 The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
 The TOTeM visualization function is adapted from [this repository](https://github.com/loeseke/object-centric-streaming-discovery/).
+The OCCN class and its conformance checking functions are adapted from [this repository](https://github.com/olekuhlmann/OCCN-OCPN-Transformer).
+The OCCN-Miner is based on the original implementation by [Caspar Mensing](https://github.com/CasparMensing/OCFHM).

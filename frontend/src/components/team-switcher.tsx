@@ -20,8 +20,7 @@ import {
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
-
-// extend type to allow optional logo component
+import { DashboardContext } from "@/contexts/DashboardContext.tsx";
 
 
 export function Switcher() {
@@ -31,40 +30,25 @@ export function Switcher() {
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
   const navigate = useNavigate();
-  
-  // find active project by id, fallback to first
+  const { setViewMode } = useContext(DashboardContext)
+
 const displayName = selectedFile?.file
   ? selectedFile.file.split("/").pop()
   : "No file selected";
 
   useEffect(() => {
       const fetchFiles = async () => {
-        const token = localStorage.getItem("access_token");
         try {
-          if (!token) {
-            console.error("No token found!");
-            
-          }
-          const response = await getUserFiles(token);
+          const response = await getUserFiles();
           setFiles(response);
           console.log('Loading files successfull')
         } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                  navigate("/login", {
-                    replace: true,
-                    state: { from: location.pathname },
-                  });
-                } else {
-                  console.error(error);
-                  }
-                };
+          console.error(error);
+        }
       };
       fetchFiles();
     }, []);
-  
-  
-  
-  
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -80,7 +64,7 @@ const displayName = selectedFile?.file
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{displayName}</span>
               </div>
-              
+
               <ChevronsUpDown className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
@@ -99,7 +83,8 @@ const displayName = selectedFile?.file
               <DropdownMenuItem
                 key={project.id}
                 onClick={() => {
-                  setSelectedFile(project); // put entire file into context
+                  setSelectedFile(project);
+                  setViewMode({ type: 'overview' });
                   console.log("Saved to context:", project);
                 }}
                 className="gap-2 p-2"

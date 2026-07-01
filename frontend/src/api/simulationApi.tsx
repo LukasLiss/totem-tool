@@ -1,6 +1,14 @@
-import { authFetch } from "./authApi";
+import axios from "axios";
 
 const BASE_URL = "http://localhost:8000/api";
+
+function toError(e: unknown, fallback: string): Error {
+  if (axios.isAxiosError(e)) {
+    const msg = (e.response?.data as { error?: string } | undefined)?.error;
+    return new Error(msg || `${fallback}: ${e.response?.status ?? e.message}`);
+  }
+  return e instanceof Error ? e : new Error(fallback);
+}
 
 export type ProcessAreaInfo = {
   level: number;
@@ -178,51 +186,44 @@ export type SimulationDetailsRequest = {
 };
 
 export async function fetchProcessAreas(fileId: number): Promise<ProcessAreasResponse> {
-  const res = await authFetch(`${BASE_URL}/simulation/process-areas/?file_id=${fileId}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  try {
+    const { data } = await axios.get(`${BASE_URL}/simulation/process-areas/?file_id=${fileId}`);
+    return data;
+  } catch (e) {
+    throw toError(e, "HTTP error");
+  }
 }
 
 export async function fetchSimulationDetails(config: SimulationDetailsRequest): Promise<SimulationDetailsResponse> {
-  const res = await authFetch(`${BASE_URL}/simulation/details/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  try {
+    const { data } = await axios.post(`${BASE_URL}/simulation/details/`, config);
+    return data;
+  } catch (e) {
+    throw toError(e, "HTTP error");
   }
-  return res.json();
 }
 
 export async function runSimulation(config: SimulationConfig): Promise<SimulationResult> {
-  const res = await authFetch(`${BASE_URL}/simulation/run/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  try {
+    const { data } = await axios.post(`${BASE_URL}/simulation/run/`, config);
+    return data;
+  } catch (e) {
+    throw toError(e, "HTTP error");
   }
-  return res.json();
 }
 
 // Keep a simulated run as an event log in the user's collection. Only call this
 // when the user explicitly chooses to keep the log; until then the simulated
 // log lives only as a temporary file on the server.
 export async function saveSimulatedLog(simRunId: string): Promise<SimulatedFileInfo> {
-  const res = await authFetch(`${BASE_URL}/simulation/save-log/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sim_run_id: simRunId }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  try {
+    const { data } = await axios.post(`${BASE_URL}/simulation/save-log/`, {
+      sim_run_id: simRunId,
+    });
+    return data;
+  } catch (e) {
+    throw toError(e, "HTTP error");
   }
-  return res.json();
 }
 
 // Download a simulated run's OCEL 2.0 JSON without persisting it as an event log.
@@ -230,14 +231,16 @@ export async function downloadSimulatedLog(
   simRunId: string,
   filename = "simulated_log.json",
 ): Promise<void> {
-  const res = await authFetch(
-    `${BASE_URL}/simulation/download-log/?sim_run_id=${encodeURIComponent(simRunId)}`,
-  );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Download failed: ${res.status}`);
+  let blob: Blob;
+  try {
+    const res = await axios.get(
+      `${BASE_URL}/simulation/download-log/?sim_run_id=${encodeURIComponent(simRunId)}`,
+      { responseType: "blob" },
+    );
+    blob = res.data;
+  } catch (e) {
+    throw toError(e, "Download failed");
   }
-  const blob = await res.blob();
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -249,15 +252,12 @@ export async function downloadSimulatedLog(
 }
 
 export async function fetchGraphEditDistance(simRunId: string): Promise<number | null> {
-  const res = await authFetch(`${BASE_URL}/simulation/graph-edit-distance/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sim_run_id: simRunId }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `HTTP ${res.status}`);
+  try {
+    const { data } = await axios.post(`${BASE_URL}/simulation/graph-edit-distance/`, {
+      sim_run_id: simRunId,
+    });
+    return data.graph_edit_distance;
+  } catch (e) {
+    throw toError(e, "HTTP error");
   }
-  const data = await res.json();
-  return data.graph_edit_distance;
 }

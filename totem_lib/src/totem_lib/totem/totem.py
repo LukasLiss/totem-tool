@@ -509,7 +509,7 @@ def totemDiscovery(ocel, tau=0.9):
             continue
         o2o.setdefault(source_o, dict())
         o2o[source_o].setdefault(type_of_target_o, set())
-        o2o[source_o][type_of_target_o].update([source_o])
+        o2o[source_o][type_of_target_o].update([target_o])
 
     # compute log cardinality
     print(f"computing log cardinalities, start time: {datetime.now()}")

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import axios from 'axios';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -5244,26 +5245,11 @@ function TotemVisualizer({
 
     setLoading(true);
     setError(null);
-    // Clear stale data so the legend/process areas reflect the new backend result as soon as it arrives
     setRawTotem(null);
     try {
-      const token = localStorage.getItem('access_token');
-      const endpoint = `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
-      const response = await fetch(
-        endpoint,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        },
+      const { data: payload } = await axios.get<TotemApiResponse>(
+        `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
       );
-
-      if (!response.ok) {
-        throw new Error(`Backend responded with ${response.status}`);
-      }
-
-      const payload: TotemApiResponse = await response.json();
       setRawTotem(payload);
     } catch (err) {
       console.error('[TotemVisualizer] Failed to load Totem data', err);
@@ -5294,23 +5280,12 @@ function TotemVisualizer({
       setDetailError((prev) => ({ ...prev, [areaId]: undefined }));
 
       try {
-        const token = localStorage.getItem('access_token');
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
-        const response = await fetch(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-          },
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
+          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`
         );
-
-        const payload: { dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph> =
-          await response.json();
-        if (!response.ok) {
-          const errMsg = payload?.filter_error || payload?.error || `Backend responded with ${response.status}`;
-          throw new Error(errMsg);
+        if (payload?.filter_error || payload?.error) {
+          throw new Error(payload.filter_error || payload.error);
         }
         const graph = payload?.dfg ?? { nodes: (payload as any)?.nodes, links: (payload as any)?.links };
         if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) {

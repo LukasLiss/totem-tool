@@ -1,5 +1,5 @@
 from pm4py import discover_oc_petri_net
-from totem_lib import PolarsOCELAdapter, ObjectCentricEventLog
+from totem_lib import convert_ocel_polars_to_pm4py, ObjectCentricEventLog
 
 
 def discover_oc_petri_net_polars(ocel: ObjectCentricEventLog):
@@ -17,6 +17,6 @@ def discover_oc_petri_net_polars(ocel: ObjectCentricEventLog):
     oc_petri_net : oc_petri_net
         The discovered Object-Centric Petri Net.
     """
-    adapter = PolarsOCELAdapter(ocel)
-    oc_petri_net = discover_oc_petri_net(adapter)
+    pm4py_ocel = convert_ocel_polars_to_pm4py(ocel)
+    oc_petri_net = discover_oc_petri_net(pm4py_ocel)
     return oc_petri_net

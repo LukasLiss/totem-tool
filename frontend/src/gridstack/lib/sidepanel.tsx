@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
 import { useGrid } from "./gridstackprovider";
 import {
-  Trash, CirclePlus
+  Trash, CirclePlus, Image, TextInitial, Hash
 } from "lucide-react"
 
 
@@ -88,6 +88,61 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .oc-dotted-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 7,
+        w: 10,
+        content: "OC Dotted Chart",
+        component_name: "OCDottedChartComponent",
+        x_axis: "time",
+        y_axis: "activity",
+        color_by: "activity",
+        shape_by: "none",
+        row_order: "first_occurrence",
+        max_points: 10000,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Arc Weight)",
+        component_name: "NewOCDFGComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-variants-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Variants)",
+        component_name: "NewOCDFGVariantsComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -126,6 +181,39 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>OCDFG</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item oc-dotted-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OC Dotted Chart preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="14" y1="8" x2="14" y2="40" stroke="#475569" strokeWidth="2" />
+          <line x1="14" y1="40" x2="90" y2="40" stroke="#475569" strokeWidth="2" />
+          <circle cx="25" cy="33" r="3" fill="#2563eb" />
+          <circle cx="39" cy="29" r="3" fill="#16a34a" />
+          <circle cx="52" cy="24" r="3" fill="#dc2626" />
+          <circle cx="67" cy="18" r="3" fill="#ca8a04" />
+          <circle cx="80" cy="13" r="3" fill="#9333ea" />
+          <circle cx="31" cy="21" r="2.5" fill="#0891b2" />
+          <circle cx="58" cy="34" r="2.5" fill="#db2777" />
+          <circle cx="75" cy="28" r="2.5" fill="#65a30d" />
+        </svg>
+        <div>OC Dotted Chart</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Arc Weight)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Variants)</div>
       </div>
     </div>
   );

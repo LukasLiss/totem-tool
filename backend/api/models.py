@@ -12,8 +12,7 @@ def user_directory_path(instance, filename):
     return os.path.join("legacy", filename)
 
 def project_directory_path(instance, filename):
-    return os.path.join(instance.project.name, filename)
-
+    return os.path.join(instance.dashboard.project.name, filename)
 
 class Project(models.Model):
     users = models.ManyToManyField(User)
@@ -77,6 +76,11 @@ class ImageComponent(DashboardComponent):
 class VariantsComponent(DashboardComponent):
     automatic_loading = models.BooleanField(default=False, null=True, blank=True)
     leading_object_type = models.CharField(max_length=100, null=True, blank=True)
+    # Advanced settings — persist user's chosen extraction / iso / timeout
+    # so reloading the dashboard restores them. Defaults match `find_variants`.
+    extraction = models.CharField(max_length=32, default="leading_1hop", null=True, blank=True)
+    iso = models.CharField(max_length=32, default="wl+vf2", null=True, blank=True)
+    timeout_s = models.FloatField(default=10.0, null=True, blank=True)
 
 
 class ProcessAreaComponent(DashboardComponent):
@@ -96,3 +100,25 @@ class LogStatisticsComponent(DashboardComponent):
 class OCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
+
+
+class OCDottedChartComponent(DashboardComponent):
+    file_id = models.PositiveIntegerField(null=True, blank=True)
+    x_axis = models.CharField(max_length=255, default="time")
+    y_axis = models.CharField(max_length=255, default="activity")
+    color_by = models.CharField(max_length=255, default="activity")
+    shape_by = models.CharField(max_length=255, default="none")
+    row_order = models.CharField(max_length=32, default="first_occurrence")
+    max_points = models.PositiveIntegerField(default=10000)
+    show_minimap = models.BooleanField(default=True)
+    show_controls = models.BooleanField(default=True)
+
+
+class NewOCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)
+    layout_direction = models.CharField(
+        max_length=2,
+        choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
+        default='TB',
+    )

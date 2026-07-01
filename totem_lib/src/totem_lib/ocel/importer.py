@@ -5,7 +5,13 @@ import xml.etree.ElementTree as ET
 import os
 import re
 from collections import defaultdict
-from . import ObjectCentricEventLog
+from . import ObjectCentricEventLog, schema_base_filtering, propagate_filtering
+from .importer_duckdb import (
+    import_ocel_from_duckdb,
+    load_events_from_duckdb,
+    load_objects_from_duckdb,
+    load_object_attributes_from_duckdb,
+)
 
 
 def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
@@ -14,13 +20,20 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
 
     Args:
         file_path (str): The path to the OCEL file.
-        file_format (str, optional): The format of the OCEL file. Must be one of "sqlite", "json", "xml", or "csv".
+        file_format (str, optional): The format of the OCEL file. Must be one
+            of "sqlite", "json", "xml", "csv", or "duckdb".
 
     Returns:
         ObjectCentricEventLog: The imported object-centric event log.
     """
     if file_format is None:
-        extension_map = {".sqlite": "sqlite", ".json": "json", ".xml": "xml", ".csv": "csv"}
+        extension_map = {
+            ".sqlite": "sqlite",
+            ".json": "json",
+            ".xml": "xml",
+            ".csv": "csv",
+            ".duckdb": "duckdb",
+        }
         _, ext = os.path.splitext(file_path)
         file_format = extension_map.get(ext.lower())
         if file_format is None:
@@ -31,6 +44,16 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
 
     if file_format == "csv":
         return import_ocel_from_csv(file_path)
+
+    if file_format == "duckdb":
+        # The DuckDB importer already produces fully-shaped events + objects
+        # + object_attributes dataframes. We still run the standard
+        # post-filtering so the result is byte-identical to importing the
+        # original source.
+        ocel = import_ocel_from_duckdb(file_path)
+        ocel = schema_base_filtering(ocel)
+        ocel = propagate_filtering(ocel)
+        return ocel
 
     loaders = {
         "sqlite": (load_events_from_sqlite, load_objects_from_sqlite),
@@ -45,7 +68,13 @@ def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLo
     events_df = events_loader(file_path)
     objects_df = objects_loader(file_path)
 
-    return ObjectCentricEventLog(events=events_df, objects=objects_df)
+    ocel = ObjectCentricEventLog(events=events_df, objects=objects_df)
+    
+    # Apply filtering for consistent structure
+    ocel = schema_base_filtering(ocel)
+    ocel = propagate_filtering(ocel)
+    
+    return ocel
 
 
 def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
@@ -136,7 +165,7 @@ def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
         timestamp_unix = None
         if timestamp_str:
             try:
-                timestamp_unix = int(pl.Series([timestamp_str]).str.to_datetime().dt.epoch(time_unit="s")[0])
+                timestamp_unix = int(pl.Series([timestamp_str]).str.to_datetime(time_zone="UTC").dt.epoch(time_unit="s")[0])
             except Exception:
                 timestamp_unix = 0
 
@@ -276,11 +305,17 @@ def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
             "_jsonObjAttributes": pl.Utf8,
         })
 
-    return ObjectCentricEventLog(
+    ocel =  ObjectCentricEventLog(
         events=events_df,
         objects=objects_df,
         object_attributes=object_attributes_df
     )
+    
+    # Apply filtering for consistent structure
+    ocel = schema_base_filtering(ocel)
+    ocel = propagate_filtering(ocel)
+    
+    return ocel
 
 
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
@@ -353,7 +388,7 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+        pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime")
     )
     df = df.with_columns(
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
@@ -467,7 +502,7 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
     df = df.with_columns(
-        pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime")
+        pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime")
     )
     df = df.with_columns(
         pl.col("_timestamp_datetime").dt.epoch(time_unit="s").alias("_timestampUnix"),
@@ -564,9 +599,9 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
     # convert timestamp to epoch seconds
     df = df.with_columns(
         [
-            pl.col("_timestamp_str").str.to_datetime().alias("_timestamp_datetime"),
+            pl.col("_timestamp_str").str.to_datetime(time_zone="UTC").alias("_timestamp_datetime"),
             pl.col("_timestamp_str")
-            .str.to_datetime()
+            .str.to_datetime(time_zone="UTC")
             .dt.epoch(time_unit="s")
             .alias("_timestampUnix"),
         ]

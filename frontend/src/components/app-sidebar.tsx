@@ -43,100 +43,58 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   useEffect(() => {
     const fetchFiles = async () => {
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        setFiles([]);
-        return;
-      }
       try {
-        if (!token) {
-          console.error("No token found!");
-          
-        }
-        const response = await getUserFiles(token);
+        const response = await getUserFiles();
         const data = response.results || response;
         setFiles(Array.isArray(data) ? data : []);
       } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                  navigate("/login", {
-                    replace: true,
-                    state: { from: location.pathname },
-                  });
-                } else {
-                  console.error(error);
-                  setFiles([]);
-            }
-          };
+        console.error(error);
+        setFiles([]);
+      }
     };
     fetchFiles();
   }, []);
 
-  
-
   useEffect(() => {
-  const fetchDashboards = async () => {
-    if (!selectedFile?.project) {
-      setDashboards([]);
-      return;
-    }
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setDashboards([]);
-      
-    }
-    try {
-      const response = await getDashboards(token, selectedFile.project);
-      const data = response.results || response;
-      setDashboards(Array.isArray(data) ? data : []);
-    } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                  navigate("/login", {
-                    replace: true,
-                    state: { from: location.pathname },
-                  });
-                } else {
-                  console.error(error);
-                  setDashboards([]);   }
-          };
-    }
-  
-  fetchDashboards();
-}, [selectedFile]);
+    const fetchDashboards = async () => {
+      if (!selectedFile?.project) {
+        setDashboards([]);
+        return;
+      }
+      try {
+        const response = await getDashboards(selectedFile.project);
+        const data = response.results || response;
+        setDashboards(Array.isArray(data) ? data : []);
+      } catch (error: any) {
+        console.error(error);
+        setDashboards([]);
+      }
+    };
+    fetchDashboards();
+  }, [selectedFile]);
 
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
-        
-          <Switcher/>
-        
+        <Switcher/>
       </SidebarHeader>
       <SidebarContent>
         <NavOverview />
         <NavAnalysis />
-        <NavDashboard 
-          dashboards={dashboards} 
+        <NavDashboard
+          dashboards={dashboards}
           refreshDashboards={async () => {
             if (!selectedFile?.project) return;
-            const token = localStorage.getItem("access_token");
-            if (!token) return;
             try {
-              const response = await getDashboards(token, selectedFile.project);
+              const response = await getDashboards(selectedFile.project);
               const data = response.results || response;
               setDashboards(Array.isArray(data) ? data : []);
             } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                  navigate("/login", {
-                    replace: true,
-                    state: { from: location.pathname },
-                  });
-                } else {
-                  console.error(error);
-                  setDashboards([]);
+              console.error(error);
+              setDashboards([]);
             }
-          };
-        }}        /> 
-        
-        
+          }}
+        />
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>

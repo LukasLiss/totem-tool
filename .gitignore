@@ -7,6 +7,7 @@ totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
+!.claude/**/*.md
 *.txt
 totem_lib/venv/*
 
@@ -67,10 +68,9 @@ __pycache__/
 backend/venv/
 backend/env/
 backend/user_files/*
-!backend/user_files/guest/
-!backend/user_files/guest/ContainerLogistics.json
-!backend/user_files/guest/ContainerLogistics.sqlite
-!backend/user_files/guest/ContainerLogistics.xml
+!backend/user_files/ContainerLogistics.json
+!backend/user_files/ContainerLogistics.sqlite
+!backend/user_files/ContainerLogistics.xml
 .venv/
 .env/
 
@@ -138,8 +138,6 @@ electron/*.zip
 .vscode/
 *.code-workspace
 
-# Claude Code CLI
-.claude/
 
 # JetBrains IDEs
 .idea/
@@ -250,3 +248,7 @@ test-*.md
 # *.bat
 
 highwayimplementation.md
+
+# Large OCEL test/evaluation files — place manually, never commit to git
+totem_lib/test_data/large/*
+!totem_lib/test_data/large/.gitkeep

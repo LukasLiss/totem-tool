@@ -10,9 +10,25 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 from corsheaders.defaults import default_headers
+
+
+# Force UTF-8 on the process stdout/stderr. totem_lib emits progress markers
+# (e.g. the ✅/📊 characters in the variants discovery) via print(); on Windows
+# the console defaults to cp1252, so those prints raise UnicodeEncodeError and
+# surface as opaque API errors ("'charmap' codec can't encode ..."). Settings is
+# imported by every entrypoint (runserver and its reloader child, gunicorn, the
+# PyInstaller build), so reconfiguring here fixes all of them regardless of how
+# the process was launched or whether PYTHONUTF8 propagated.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -162,3 +178,18 @@ SIMPLE_JWT = {
 
 MEDIA_ROOT = BASE_DIR / "user_files"
 MEDIA_URL = "/files/"
+
+# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
+
+if LOCAL_MODE:
+    SIMPLE_JWT = {
+        'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+        'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+        'ROTATE_REFRESH_TOKENS': True,
+        'BLACKLIST_AFTER_ROTATION': True,
+    }
+
+# Credentials used for the auto-seeded Guest account in local mode
+LOCAL_GUEST_USERNAME = 'Guest'
+LOCAL_GUEST_PASSWORD = 'guest'

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useContext } from "react";
+import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
 import {
@@ -15,24 +16,45 @@ import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
-import VariantsExplorer from '@/react_component/VariantsExplorer';
+import VariantsExplorer, {
+  EXTRACTION_OPTIONS,
+  ISO_OPTIONS,
+  type Extraction,
+  type IsoStrategy,
+} from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
+import DottedChart from '@/react_component/DottedChart';
+import {
+  DottedChartControls,
+  type DottedChartConfig,
+} from '@/react_component/dottedChart/DottedChartControls';
+import {
+  axisOptionToParam,
+  type AxisOption,
+  type RowOrderOption,
+} from '@/react_component/dottedChart/dottedChartUtils';
+import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
+import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ChevronDown } from 'lucide-react';
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
   node: GridStackNode & {
+    component_id: number;
     component_name?: string;
     text?: string;
     font_size?: number;
@@ -40,6 +62,10 @@ interface ComponentProps {
     image?: string;
     automatic_loading?: boolean;
     leading_object_type?: string;
+    // Persisted advanced settings for the Variants Explorer
+    extraction?: "leading_1hop" | "leading_bfs" | "connected";
+    iso?: "db_signature" | "trace" | "signature" | "wl" | "wl+vf2" | "exact";
+    timeout_s?: number;
     // LogStatisticsComponent properties
     show_num_events?: boolean;
     show_num_activities?: boolean;
@@ -51,9 +77,19 @@ interface ComponentProps {
     // OCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
+    // OCDottedChartComponent properties
+    file_id?: number | null;
+    x_axis?: string;
+    y_axis?: string;
+    color_by?: string;
+    shape_by?: string;
+    row_order?: RowOrderOption;
+    max_points?: number;
+    show_minimap?: boolean;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
+  dashboardId: number;  // Added for API calls
   selectedFile?: { id: number; [key: string]: any }; // Selected event log file
 }
 
@@ -128,16 +164,9 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
       
       setIsLoading(true);
       setError(null);
-      
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        setError("No access token found");
-        setIsLoading(false);
-        return;
-      }
-      
+
       try {
-        const result = await processFile(token, selectedFile.id);
+        const result = await processFile(selectedFile.id);
         setProcessedResult(result);
         console.log("Processing result:", result);
       } catch (err) {
@@ -152,31 +181,28 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
   }, [selectedFile]); // Only re-run when selectedFile changes
 
   return (
-    <div style={{ padding: '10px', color: node.color || 'blue', textAlign: 'center' }}>
-      <h3>Number of Events</h3>
-      {isEditMode ? (
-        // Edit mode: Editable (example: input for value)
-        
-          <Button onClick={() => alert('Refresh data!')} className="mt-2" variant="primary">
-            Refresh Data
-          </Button>
-        
-      ) : (
-        // Normal mode: Read-only
-        <>
-          <p style={{ fontSize: '24px', fontWeight: 'bold' }}>{processedResult || 'Loading...'}</p>
-          <Button onClick={() => alert('Refresh data!')} variant="primary">
-            Refresh
-          </Button>
-        </>
-      )}
+    <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardDescription>
+            Number of Events
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
+        </CardContent>
+      </Card>
     </div>
   );
 };
 
 
-const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
-  const [imageUrl, setImageUrl] = useState<string | null>(node.image || null);
+const ImageComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  dashboardId,
+}) => {
   const [uploading, setUploading] = useState(false);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -184,36 +210,56 @@ const ImageComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode =
     if (!file) return;
 
     setUploading(true);
-    const token = localStorage.getItem('access_token');
+
     try {
-      const data = await uploadImageToComponent(node.id, file, token);
-      setImageUrl(data.image);
+      const data = await uploadImageToComponent(
+        dashboardId,
+        node.component_id,
+        file
+      );
+
+      // Single source of truth
       onUpdate?.({ image: data.image });
     } catch (error) {
-      console.error('Upload error:', error);
+      console.error("Upload error:", error);
     } finally {
       setUploading(false);
     }
   };
+
   return (
     <Card className="w-full h-full rounded-none">
-      <CardHeader>
-        <CardTitle>Image Component</CardTitle>
-      </CardHeader>
-      <CardContent>
+      
+
+      
         {isEditMode ? (
-          <>
-            <Input type="file" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
+          <><CardHeader>
+              <CardTitle>Image Component</CardTitle>
+            </CardHeader>
+            <CardContent>
+            <Input
+              type="file"
+              accept="image/*"
+              onChange={handleFileUpload}
+              disabled={uploading}
+            />
+            </CardContent>
+
             {uploading && <p>Uploading...</p>}
           </>
-        ) : (
-          imageUrl ? (
-            <img src={imageUrl} alt="Uploaded" className="w-full h-full object-cover" />
-          ) : (
-            <p>No image uploaded</p>
-          )
-        )}
-      </CardContent>
+        ) : node.image ? (
+          <CardContent>
+          
+          <img
+            src={`http://localhost:8000${node.image}`}
+            alt="Uploaded"
+            className="w-full h-full object-cover"
+          />
+          </CardContent>) : (<CardContent>
+          <p>No image uploaded</p>
+        </CardContent>)
+          
+        }
     </Card>
   );
 };
@@ -229,14 +275,30 @@ const VariantsComponent: React.FC<ComponentProps> = ({
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [extraction, setExtraction] = useState<Extraction>(
+    (node.extraction as Extraction) ?? 'leading_1hop'
+  );
+  const [iso, setIso] = useState<IsoStrategy>(
+    (node.iso as IsoStrategy) ?? 'wl+vf2'
+  );
+  const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 10);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
 
-  // Sync with node when it changes
+  // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
-  }, [node.automatic_loading, node.leading_object_type]);
+    setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
+    setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
+    setTimeoutS(node.timeout_s ?? 10);
+  }, [
+    node.automatic_loading,
+    node.leading_object_type,
+    node.extraction,
+    node.iso,
+    node.timeout_s,
+  ]);
 
   // Fetch object types when file changes (for edit mode dropdown)
   useEffect(() => {
@@ -244,16 +306,9 @@ const VariantsComponent: React.FC<ComponentProps> = ({
 
     const fetchTypes = async () => {
       setLoadingTypes(true);
-      const token = localStorage.getItem('access_token');
       try {
-        const res = await fetch(`/api/files/${selectedFile.id}/object_types/`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const types = await res.json();
-          setAvailableTypes(types.sort());
-        }
+        const { data } = await axios.get(`/api/files/${selectedFile.id}/object_types/`);
+        setAvailableTypes(data.sort());
       } catch (err) {
         console.error('Failed to fetch object types:', err);
       } finally {
@@ -274,14 +329,37 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ leading_object_type: value } as any);
   };
 
+  const handleExtractionChange = (value: string) => {
+    const v = value as Extraction;
+    setExtraction(v);
+    onUpdate?.({ extraction: v } as any);
+  };
+
+  const handleIsoChange = (value: string) => {
+    const v = value as IsoStrategy;
+    setIso(v);
+    onUpdate?.({ iso: v } as any);
+  };
+
+  const handleTimeoutChange = (raw: string) => {
+    const n = Number(raw);
+    const safe = Number.isFinite(n) && n > 0 ? n : 10;
+    setTimeoutS(safe);
+    onUpdate?.({ timeout_s: safe } as any);
+  };
+
   if (isEditMode) {
     // EDIT MODE: Configuration form
+    const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
+    const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
+    const leadingTypeIgnored = extraction === 'connected';
+
     return (
       <Card className="w-full h-full rounded-none">
         <CardHeader>
           <CardTitle>Variants Explorer Settings</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 overflow-auto">
           {/* Automatic Loading Toggle */}
           <div className="flex items-center justify-between">
             <Label htmlFor="auto-loading">Automatic variant computation</Label>
@@ -297,8 +375,19 @@ const VariantsComponent: React.FC<ComponentProps> = ({
             <Label>Leading object type</Label>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between">
-                  {leadingType || 'Select object type (optional)'}
+                <Button
+                  variant="outline"
+                  className="w-full justify-between"
+                  disabled={leadingTypeIgnored}
+                  title={
+                    leadingTypeIgnored
+                      ? 'Ignored when extraction is "Connected components"'
+                      : undefined
+                  }
+                >
+                  {leadingTypeIgnored
+                    ? '— (ignored for Connected components)'
+                    : (leadingType || 'Select object type (optional)')}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56">
@@ -312,6 +401,93 @@ const VariantsComponent: React.FC<ComponentProps> = ({
             </DropdownMenu>
             {loadingTypes && <p className="text-sm text-muted-foreground">Loading types...</p>}
             {!selectedFile?.id && <p className="text-sm text-muted-foreground">Select a file to see available types</p>}
+          </div>
+
+          {/* Extraction strategy */}
+          <div className="space-y-2">
+            <Label>Extraction strategy</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {extractionOpt?.label ?? extraction}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[320px]">
+                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={extraction} onValueChange={handleExtractionChange}>
+                  {EXTRACTION_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {extractionOpt && (
+              <p className="text-xs text-muted-foreground">{extractionOpt.hint}</p>
+            )}
+          </div>
+
+          {/* Isomorphism strategy */}
+          <div className="space-y-2">
+            <Label>Isomorphism strategy</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">{isoOpt?.label ?? iso}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[300px]">
+                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={iso} onValueChange={handleIsoChange}>
+                  {ISO_OPTIONS.map((opt) => (
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {isoOpt && (
+              <p className="text-xs text-muted-foreground">{isoOpt.hint}</p>
+            )}
+          </div>
+
+          {/* Timeout (seconds) */}
+          <div className="space-y-2">
+            <Label htmlFor="variants-timeout">Timeout (seconds)</Label>
+            <Input
+              id="variants-timeout"
+              type="number"
+              min={1}
+              max={120}
+              step={1}
+              value={timeoutS}
+              onChange={(e) => handleTimeoutChange(e.target.value)}
+              className="w-[120px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Wall-clock budget per computation. The default of 10 s protects
+              against runaway runs on hard combinations.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -327,6 +503,21 @@ const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
+          defaultExtraction={extraction}
+          defaultIso={iso}
+          defaultTimeoutS={timeoutS}
+          onAdvancedChange={(s) => {
+            // Mirror the explorer's choices into our local state so this
+            // wrapper stays in sync with what the user sees inside.
+            setExtraction(s.extraction);
+            setIso(s.iso);
+            setTimeoutS(s.timeout_s);
+            onUpdate?.({
+              extraction: s.extraction,
+              iso: s.iso,
+              timeout_s: s.timeout_s,
+            } as any);
+          }}
         />
       </CardContent>
     </Card>
@@ -548,11 +739,306 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   return (
     <div className="w-full h-full bg-white">
       <ReactFlowProvider>
-        <OCDFGVisualizer
+        <NewOCDFGVisualizer
           height="100%"
           fileId={selectedFile?.id}
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
+  xAxis: { type: "time" },
+  yAxis: { type: "activity" },
+  colorBy: { type: "activity" },
+  shapeBy: { type: "none" },
+  rowOrder: "first_occurrence",
+  maxPoints: 10000,
+};
+
+// OCDottedChartComponent: Dashboard wrapper for Object-Centric Dotted Chart
+const OCDottedChartComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const effectiveFileId = selectedFile?.id;
+  const config = nodeToDottedChartConfig(node);
+
+  const handleConfigChange = (nextConfig: DottedChartConfig) => {
+    onUpdate?.({
+      x_axis: axisOptionToPersistedValue(nextConfig.xAxis),
+      y_axis: axisOptionToPersistedValue(nextConfig.yAxis),
+      color_by: axisOptionToPersistedValue(nextConfig.colorBy),
+      shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
+      row_order: nextConfig.rowOrder,
+      max_points: nextConfig.maxPoints,
+    } as any);
+  };
+
+  if (isEditMode) {
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>OC Dotted Chart Settings</CardTitle>
+          <CardDescription>Configure the dashboard widget.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 overflow-auto">
+          <DottedChartControls
+            fileId={effectiveFileId}
+            config={config}
+            onConfigChange={handleConfigChange}
+          />
+          {!effectiveFileId && (
+            <p className="text-sm text-muted-foreground">
+              Select an event log in the application sidebar to render this widget.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="w-full h-full rounded-none overflow-auto">
+      <CardContent className="h-full p-0">
+        <DottedChart
+          fileId={effectiveFileId}
+          xAxis={config.xAxis}
+          yAxis={config.yAxis}
+          colorBy={config.colorBy}
+          shapeBy={config.shapeBy}
+          rowOrder={config.rowOrder}
+          maxPoints={config.maxPoints}
+          showControls={false}
+          showMinimap={true}
+          className="h-full"
+        />
+      </CardContent>
+    </Card>
+  );
+};
+
+function nodeToDottedChartConfig(node: ComponentProps["node"]): DottedChartConfig {
+  return {
+    xAxis: persistedValueToAxisOption(node.x_axis, DOTTED_CHART_DEFAULT_CONFIG.xAxis),
+    yAxis: persistedValueToAxisOption(node.y_axis, DOTTED_CHART_DEFAULT_CONFIG.yAxis),
+    colorBy: persistedValueToAxisOption(node.color_by, DOTTED_CHART_DEFAULT_CONFIG.colorBy),
+    shapeBy: persistedValueToAxisOption(node.shape_by, DOTTED_CHART_DEFAULT_CONFIG.shapeBy),
+    rowOrder: node.row_order ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrder,
+    maxPoints: node.max_points ?? DOTTED_CHART_DEFAULT_CONFIG.maxPoints,
+  };
+}
+
+function persistedValueToAxisOption(value: string | undefined, fallback: AxisOption): AxisOption {
+  if (!value) return fallback;
+  if (isBuiltinDottedChartAxis(value)) return { type: value };
+  return { type: "event_attribute", name: value };
+}
+
+function axisOptionToPersistedValue(axis: AxisOption): string {
+  return axis.type === "none" ? "none" : axisOptionToParam(axis) ?? "none";
+}
+
+function isBuiltinDottedChartAxis(
+  value: string
+): value is "time" | "timestamp" | "timestamp_unix" | "since_start" | "activity" | "none" {
+  return ["time", "timestamp", "timestamp_unix", "since_start", "activity", "none"].includes(value);
+}
+
+
+// NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
+const NewOCDFGComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+
+  useEffect(() => {
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>New OCDFG (ELK) Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout.
+          </p>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="new-show-controls">Show Controls Panel</Label>
+            <Switch
+              id="new-show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="new-initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="new-initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render NewOCDFGVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <NewOCDFGVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+
+const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+
+  useEffect(() => {
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>OCDFG (Variants) Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering.
+          </p>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="variants-show-controls">Show Controls Panel</Label>
+            <Switch
+              id="variants-show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="variants-initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="variants-initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render NewOCDFGVariantsVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <NewOCDFGVariantsVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={layoutDirection}
         />
       </ReactFlowProvider>
     </div>
@@ -569,4 +1055,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ProcessAreaComponent,
   LogStatisticsComponent,
   OCDFGComponent,
+  OCDottedChartComponent,
+  NewOCDFGComponent,
+  NewOCDFGVariantsComponent,
 };

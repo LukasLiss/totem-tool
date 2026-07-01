@@ -1,0 +1,19 @@
+name: Chore
+description: Refactor, dep bump, internal cleanup, or other non-user-facing work
+title: "[Chore]: "
+labels: ["type:chore"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: What needs to change?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Why is this worth doing now?
+    validations:
+      required: true

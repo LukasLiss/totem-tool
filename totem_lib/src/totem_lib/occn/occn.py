@@ -12,6 +12,8 @@ class OCCausalNet(object):
     Object-Centric Causal Net capturing dependency graph and marker groups.
     Start activities are named "START_{object_type}" and end activities "END_{object_type}".
 
+    See `examples/OCCN.md` for an introduction and example usage.
+
     Reference:
     Liss et al. (2025). Object-Centric Causal Nets.
     CAiSE 2025. https://doi.org/10.1007/978-3-031-94571-7_6
@@ -363,6 +365,32 @@ class OCCausalNet(object):
 
     def __get_relative_occurrence_threshold(self):
         return self.__relative_occurrence_threshold
+    
+    def apply_relative_occurrence_threshold(self, relative_occurrence_threshold: float):
+        """
+        Returns a new OCCN with the same dependency graph and marker groups filtered for the new relative occurrence threshold.
+        Does not mutate the current OCCN. Does not have an effect if new threshold <= current threshold.
+        
+        Parameters
+        ----------
+        relative_occurrence_threshold : float
+            New relative occurrence threshold to apply. Range is [0,1].
+
+        Returns
+        -------
+        OCCausalNet
+            New OCCN with filtered marker groups.
+        """
+        if relative_occurrence_threshold < 0 or relative_occurrence_threshold > 1:
+            raise ValueError(f"new threshold must be in [0,1], got {relative_occurrence_threshold}")
+        
+        return OCCausalNet(
+            dependency_graph=self.dependency_graph,
+            input_marker_groups=self.input_marker_groups,
+            output_marker_groups=self.output_marker_groups,
+            activity_count=self.activity_count,
+            relative_occurrence_threshold=relative_occurrence_threshold,
+        )
 
     dependency_graph = property(__get_dependency_graph)
     activities = property(__get_activities)

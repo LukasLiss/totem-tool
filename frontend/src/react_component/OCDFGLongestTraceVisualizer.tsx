@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
+import axios from 'axios';
 import {
   ReactFlow,
   useReactFlow,
@@ -65,6 +66,38 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
+  const dragStartRef = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
+
+  const handleLegendPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      startX: legendPosition.x,
+      startY: legendPosition.y,
+    };
+  }, [legendPosition]);
+
+  const handleLegendPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setLegendPosition({
+      x: dragStartRef.current.startX + dx,
+      y: dragStartRef.current.startY + dy,
+    });
+  }, []);
+
+  const handleLegendPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragStartRef.current) return;
+    e.stopPropagation();
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragStartRef.current = null;
+  }, []);
+
   const [interactionLocked, setInteractionLocked] = useState(true);
   const [showDebugOverlays, setShowDebugOverlays] = useState(false);
   const [showBufferZones, setShowBufferZones] = useState(false);
@@ -97,27 +130,12 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     return keysA.every(k => Boolean(a[k]) === Boolean(b[k]));
   };
 
-  const resolveOwnerTypes = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
-    const values = entry?.ownerTypes && entry.ownerTypes.length > 0
-      ? entry.ownerTypes
-      : entry?.owners ?? [];
+  const resolveOwnerTypes = (entry?: { objtypes?: string[] }) => {
+    const values = entry?.objtypes ?? [];
     return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
   };
 
-  const resolveOwnerPairs = (entry?: { owners?: string[]; ownerTypes?: string[] }) => {
-    const owners = entry?.owners ?? [];
-    const ownerTypes = entry?.ownerTypes ?? [];
-    if (owners.length > 0 && ownerTypes.length === owners.length) {
-      return owners
-        .map((owner, index) => ({ owner, type: ownerTypes[index] }))
-        .filter(
-          (pair): pair is { owner: string; type: string } =>
-            typeof pair.owner === 'string'
-            && pair.owner.length > 0
-            && typeof pair.type === 'string'
-            && pair.type.length > 0,
-        );
-    }
+  const resolveOwnerPairs = (entry?: { objtypes?: string[] }) => {
     return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
   };
 
@@ -132,7 +150,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         return;
       }
       const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
+        edge.data as { objtypes?: string[] } | undefined,
       );
       ownerTypes.forEach((t) => {
         if (t in presence) {
@@ -211,9 +229,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   );
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/ocdfg/')
-      .then((response) => response.json())
-      .then((data: DfgData) => {
+    axios.get<DfgData>('http://127.0.0.1:8000/api/ocdfg/')
+      .then(({ data }) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
         // Accept trace variants from either the dfg payload or top-level.
         const traceVariants = data.dfg?.trace_variants ?? data.trace_variants;
@@ -256,8 +273,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
               return total;
             }
           }
-          if (Array.isArray(link.owners) && link.owners.length > 0) {
-            return link.owners.length;
+          if (Array.isArray(link.objtypes) && link.objtypes.length > 0) {
+            return link.objtypes.length;
           }
           return 1;
         };
@@ -388,8 +405,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
             type: 'ocdfg',
             animated: true,
             data: {
-              owners: link.owners ?? [],
-              ownerTypes: link.ownerTypes ?? [],
+              objtypes: link.objtypes ?? (link.key ? [link.key] : link.objtype ? [link.objtype] : []),
               colors,
               parallelIndex: currentIndex,
               parallelCount: groupCounts[key],
@@ -527,7 +543,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     const visibleNodeIds = new Set(resolvedNodes.filter(n => !n.hidden).map(n => n.id));
     const filteredEdges = baseEdges.filter(edge => {
       const ownerTypes = resolveOwnerTypes(
-        edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined,
+        edge.data as { objtypes?: string[] } | undefined,
       );
       const blockedByType = ownerTypes.some(t => typeVisibility[t] === false);
       if (blockedByType) return false;
@@ -666,7 +682,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     if (baseEdges.length === 0) return;
     const edgesByType: Record<string, Edge[]> = {};
     baseEdges.forEach((edge) => {
-      const owners = resolveOwnerTypes(edge.data as { owners?: string[]; ownerTypes?: string[] } | undefined);
+      const owners = resolveOwnerTypes(edge.data as { objtypes?: string[] } | undefined);
       owners.forEach((type) => {
         if (!edgesByType[type]) edgesByType[type] = [];
         edgesByType[type].push(edge);
@@ -712,8 +728,8 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       <div
         style={{
           position: 'absolute',
-          top: 16,
-          left: 16,
+          top: 16 + legendPosition.y,
+          left: 16 + legendPosition.x,
           display: 'flex',
           flexDirection: 'column',
           gap: 16,
@@ -746,7 +762,15 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
                 color: '#0F172A',
               }}
             >
-              <span>Longest Trace View</span>
+              <span
+                style={{ cursor: 'grab' }}
+                onPointerDown={handleLegendPointerDown}
+                onPointerMove={handleLegendPointerMove}
+                onPointerUp={handleLegendPointerUp}
+                onPointerCancel={handleLegendPointerUp}
+              >
+                Longest Trace View
+              </span>
               <button
                 type="button"
                 onClick={() => setLegendCollapsed((prev) => !prev)}
@@ -758,7 +782,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
                   cursor: 'pointer',
                 }}
               >
-                {legendCollapsed ? 'Show' : 'Hide'}
+                {legendCollapsed ? 'Expand' : 'Collapse'}
               </button>
             </div>
             {!legendCollapsed && (

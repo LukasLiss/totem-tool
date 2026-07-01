@@ -1,5 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar";
 import React, { useState, useContext, useEffect } from "react";
+import axios from "axios";
 import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import VariantsExplorer, { type Variant } from "./react_component/VariantsExplorer";
 
@@ -34,20 +35,10 @@ export function VariantsOverview() {
       setErrorMsg("");
 
       try {
-        const res = await fetch(`/api/variants/?file_id=${fileId}`, {
-          credentials: "include",
+        const { data: rawData } = await axios.get(`/api/variants/?file_id=${fileId}`, {
           signal: ac.signal,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-        const ct = res.headers.get("content-type") || "";
-        if (!ct.includes("application/json")) {
-          const text = await res.text();
-          throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
-        }
-
-        const data = await res.json();
-        const arr: Variant[] = Array.isArray(data) ? data : data?.variants;
+        const arr: Variant[] = Array.isArray(rawData) ? rawData : rawData?.variants;
 
         if (!cancelled) {
           const safe = Array.isArray(arr) ? arr : [];

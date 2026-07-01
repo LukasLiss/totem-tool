@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect } from "react";
+import axios from "axios";
 
 type AuthState = "authenticated" | "anonymous" | "expired";
 
@@ -11,16 +12,33 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+async function guestReAuth() {
+  const resp = await axios.post(
+    "http://localhost:8000/token/",
+    { username: "Guest", password: "guest" },
+    { headers: { "Content-Type": "application/json" } }
+  );
+  const { access, refresh } = resp.data;
+  axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;
+  localStorage.setItem("access_token", access);
+  if (refresh) localStorage.setItem("refresh_token", refresh);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const [authState, setAuthState] = useState<AuthState>("authenticated");
 
-  // 🔑 CENTRAL REDIRECT LOGIC
   useEffect(() => {
-  if (authState === "expired") {
-    navigate("/login", { replace: true });
-  }
-}, [authState, navigate]);
+    if (authState !== "expired") return;
+
+    if (import.meta.env.VITE_LOCAL_MODE) {
+      guestReAuth()
+        .then(() => setAuthState("authenticated"))
+        .catch(() => setAuthState("anonymous"));
+    } else {
+      navigate("/login", { replace: true });
+    }
+  }, [authState, navigate]);
 
   return (
     <AuthContext.Provider value={{ authState, setAuthState }}>

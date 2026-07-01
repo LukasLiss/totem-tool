@@ -1,4 +1,4 @@
-import { ChevronRight, FileStack, Settings2 } from "lucide-react"
+import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
 import { useContext,  useState } from 'react'
 import {
   Collapsible,
@@ -39,6 +39,10 @@ import { toast } from "sonner"
 import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
+import { useNavigate } from "react-router-dom";
+
+
+
 
 export function NavDashboard({
   dashboards,
@@ -54,54 +58,72 @@ export function NavDashboard({
   const [ openDelete, setOpenDelete ] = useState(false);
   const [dashboardToRename, setDashboardToRename] = useState<null | { id: number; name: string }>(null);
   const [dashboardToDelete, setDashboardToDelete] = useState<null | { id: number; name: string }>(null);
+  const navigate = useNavigate()
 
 
 
   const { selectedFile } = useContext(SelectedFileContext);
   console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
-    const token = localStorage.getItem("access_token");
     if (!selectedFile?.project) return;
     try {
-      await addDashboard(dashboardname, selectedFile.project, token);
+      await addDashboard(dashboardname, selectedFile.project);
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (err) {
-      console.error("Upload failed:", err);
+    } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Upload failed:", error);
       toast.error("Dashboard could not be created");
     }
   };
+};
 
   const handleChangeName = async () => {
-  if (!dashboardToRename) return; // nothing selected
+  if (!dashboardToRename) return;
 
-  const token = localStorage.getItem("access_token");
   try {
-    await renameDashboard(dashboardToRename.id, dashboardname, token);  // ✅ pass ID here
+    await renameDashboard(dashboardToRename.id, dashboardname);
     await refreshDashboards();
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (err) {
-    console.error("Rename failed:", err);
-    toast.error("Dashboard could not be renamed");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Rename failed:", error);
+      toast.error("Dashboard could not be renamed");
+    }
+  };
 };
-
 
   const handleDeleteDashboard = async () => {
 
-  const token = localStorage.getItem("access_token");
   try {
-    await deleteDashboard(dashboardToDelete.id, token);  
+    await deleteDashboard(dashboardToDelete.id);
     await refreshDashboards();
     setOpenDelete(false);
     setDashboardToDelete(null); // reset
-  } catch (err) {
-    console.error("Delete failed:", err);
-    toast.error("Dashboard could not be deleted");
-  }
+  } catch (error: any) {
+              if (error.message === "UNAUTHORIZED") {
+                navigate("/login", {
+                  replace: true,
+                  state: { from: location.pathname },
+                });
+              } else {
+      console.error("Delete failed:", error);
+      toast.error("Dashboard could not be deleted");
+    }
+  };
 };
 
 
@@ -132,7 +154,10 @@ export function NavDashboard({
                         console.log("Dashboard clicked:", dashboard);
                         setViewMode({ type: 'dashboard', id: dashboard.id });
                       }}>
-                        <span>{dashboard.name}</span>
+                        <span className="flex-1 truncate"
+                        title={dashboard.name}
+
+                        >{dashboard.name}</span>
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -167,10 +192,11 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton asChild>
+                    <SidebarMenuSubButton className="flex w-full items-center justify-between">
                       <Dialog open={open} onOpenChange={setOpen}>
-                        <DialogTrigger>
-                          Add Dashboard +
+                        <DialogTrigger className="pr-9 hover:bg-accent rounded flex w-full items-center justify-between">
+                          <Plus className="w-4 h-4"/>
+                          <span >Add Dashboard</span>
                         </DialogTrigger>
                         <DialogContent className="sm:max-w-[425px]">
                           <form
@@ -248,6 +274,7 @@ export function NavDashboard({
                   value={dashboardname}
                   onChange={(e) => setDashboardname(e.target.value)}
                   placeholder={dashboardToRename?.name || "Dashboard Name"}
+                  maxLength={100}
                 />
               </div>
             </div>
