@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Timer, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -95,6 +95,22 @@ const ARROW_LEN = 14;  // arrow length along path direction (base → tip), user
 const ARROW_H   = 18;  // arrow height perpendicular to path, user space
 const BASE_CURVE = 38;
 
+const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+function fmtSpeed(s: number): string {
+  if (s === 1) return "1×";
+  const exp = Math.log10(s);
+  if (Number.isInteger(exp)) return `10${_SUPS[exp]}×`;
+  const e = Math.floor(exp);
+  return `${s / Math.pow(10, e)}·10${_SUPS[e]}×`;
+}
+
+const _SPEED_OPTIONS = [1, 10, 100, 1000, 5000, 10000, 50000, 100000, 1000000, 10000000, 100000000];
+function snapSpeed(target: number): number {
+  return _SPEED_OPTIONS.reduce((best, s) =>
+    Math.abs(Math.log(s) - Math.log(target)) < Math.abs(Math.log(best) - Math.log(target)) ? s : best
+  );
+}
+
 /* ── Main component ─────────────────────────────────────────── */
 export default function OCHandoverExplorer({
   fileId,
@@ -138,6 +154,26 @@ export default function OCHandoverExplorer({
   const [logError, setLogError] = useState("");
   const [flowsData, setFlowsData] = useState<FlowsData | null>(null);
   const [flowsStatus, setFlowsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [animIsPlaying, setAnimIsPlaying] = useState(false);
+  const [animSliderTime, setAnimSliderTime] = useState(0);
+  const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
+  const animPlayRef = useRef<(() => void) | null>(null);
+  const animPauseRef = useRef<(() => void) | null>(null);
+  const animScrubRef = useRef<((t: number) => void) | null>(null);
+  useEffect(() => {
+    setAnimIsPlaying(false);
+    if (flowsData) {
+      const duration = flowsData.timeline.end - flowsData.timeline.start;
+      setAnimPlaySpeed(snapSpeed(Math.max(1, duration / 30)));
+      setAnimSliderTime(flowsData.timeline.start);
+    } else {
+      setAnimPlaySpeed(100);
+      setAnimSliderTime(0);
+    }
+  }, [flowsData]);
+  useEffect(() => {
+    if (selectedNode) animPauseRef.current?.();
+  }, [selectedNode]);
 
   type MlpaLayer = { level: number; areas: { objectTypes: string[] }[] };
   const [mlpaLayers, setMlpaLayers] = useState<MlpaLayer[] | null>(null);
@@ -872,8 +908,8 @@ export default function OCHandoverExplorer({
 
         {status === "ready" && data && (
           <>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
               <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => setViewMode("graph")}>
                 Graph
               </Button>
@@ -883,28 +919,78 @@ export default function OCHandoverExplorer({
               <Button size="sm" variant={viewMode === "log" ? "default" : "outline"} onClick={() => setViewMode("log")}>
                 Log
               </Button>
-              {viewMode === "graph" && method === "oc" && (
-                <>
-                  <div className="w-px h-5 bg-border mx-0.5 self-center" />
-                  <Button
-                    size="sm"
-                    variant={flowsData ? "secondary" : "outline"}
+              </div>
+              {viewMode === "graph" && method === "oc" && !selectedNode && (
+                <div className="w-px h-5 bg-border self-center shrink-0" />
+              )}
+              {viewMode === "graph" && method === "oc" && !selectedNode && (
+                <div className={`flex items-center border rounded-md overflow-hidden transition-all${flowsData && !selectedNode ? " flex-1 min-w-0" : ""}`}>
+                  {/* Animate / Stop button */}
+                  <button
+                    className="flex items-center gap-1.5 h-8 px-3 text-sm font-medium hover:bg-accent transition-colors shrink-0 disabled:opacity-50"
                     onClick={flowsData
                       ? () => { setFlowsData(null); setFlowsStatus("idle"); }
                       : fetchFlows}
                     disabled={flowsStatus === "loading"}
-                    className="gap-1.5"
                   >
                     {flowsStatus === "loading"
                       ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : <Play className="h-3.5 w-3.5" />}
-                    {flowsStatus === "loading" ? "Loading…" : flowsData ? "Stop" : "Animate"}
-                  </Button>
-                </>
+                      : flowsData
+                        ? <Square className="h-3.5 w-3.5" />
+                        : <><Play className="h-3.5 w-3.5" /><span>Animate</span></>}
+                  </button>
+                  {/* Expanded playback controls */}
+                  {flowsData && !selectedNode && (
+                    <>
+                      <div className="w-px h-5 bg-border self-center shrink-0" />
+                      <button
+                        className="flex items-center justify-center h-8 w-8 hover:bg-accent transition-colors shrink-0"
+                        onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                        title={animIsPlaying ? "Pause" : "Play"}
+                      >
+                        {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center text-xs border-l border-r w-20 pl-2 pr-1.5 h-8 hover:bg-accent transition-colors shrink-0 tabular-nums">
+                            <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuRadioGroup
+                            value={String(animPlaySpeed)}
+                            onValueChange={v => setAnimPlaySpeed(Number(v))}
+                          >
+                            {_SPEED_OPTIONS.map(s => (
+                              <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <div className="flex-1 min-w-0 px-2 flex items-center">
+                        <Slider
+                          min={flowsData.timeline.start}
+                          max={flowsData.timeline.end}
+                          step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
+                          value={[animSliderTime]}
+                          onValueChange={([v]) => animScrubRef.current?.(v)}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums shrink-0 whitespace-nowrap pr-2 inline-block w-32">
+                        {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                        {" "}
+                        {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0 pr-3">
+                        ({flowsData.flows.length.toLocaleString()} flows)
+                      </span>
+                    </>
+                  )}
+                </div>
               )}
-              </div>
               {viewMode === "graph" && (
-                <div ref={nodeSearchRef} className="relative">
+                <div ref={nodeSearchRef} className="relative shrink-0 ml-auto">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ width: 14, height: 14 }} />
                   <Input
                     className="h-8 pl-7 pr-3 text-xs w-72"
@@ -961,6 +1047,11 @@ export default function OCHandoverExplorer({
                     maxGap={maxGap}
                     fileName={fileName}
                     flowsData={flowsData}
+                    playSpeed={animPlaySpeed}
+                    onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
+                    playRef={animPlayRef}
+                    pauseRef={animPauseRef}
+                    scrubRef={animScrubRef}
                   />
                 </div>
                 {selectedNode && (
@@ -1235,6 +1326,11 @@ function HandoverGraph({
   maxGap,
   fileName,
   flowsData,
+  playSpeed: playSpeedProp = 100,
+  onAnimStateChange,
+  playRef,
+  pauseRef,
+  scrubRef,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1250,6 +1346,11 @@ function HandoverGraph({
   maxGap?: number | null;
   fileName?: string;
   flowsData?: FlowsData | null;
+  playSpeed?: number;
+  onAnimStateChange?: (s: { isPlaying: boolean; sliderTime: number }) => void;
+  playRef?: React.RefObject<(() => void) | null>;
+  pauseRef?: React.RefObject<(() => void) | null>;
+  scrubRef?: React.RefObject<((t: number) => void) | null>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1272,15 +1373,17 @@ function HandoverGraph({
   // ── Animation state & refs ────────────────────────────────────
   const [isPlaying, setIsPlaying] = useState(false);
   const [sliderTime, setSliderTime] = useState(0);
-  const [playSpeed, setPlaySpeed] = useState(100);
   const playSpeedRef = useRef(100);
-  useEffect(() => { playSpeedRef.current = playSpeed; }, [playSpeed]);
+  useEffect(() => { playSpeedRef.current = playSpeedProp; }, [playSpeedProp]);
   const playheadTimeRef = useRef(0);
   const lastWallClockRef = useRef<number | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const dotsLayerRef = useRef<SVGGElement>(null);
   const pathMapRef = useRef<Map<string, SVGPathElement>>(new Map());
   const frameCountRef = useRef(0);
+
+  // Sync local animation state to parent toolbar
+  useEffect(() => { onAnimStateChange?.({ isPlaying, sliderTime }); }, [isPlaying, sliderTime]);
 
   // Cancel animation on unmount
   useEffect(() => () => { if (animFrameRef.current !== null) cancelAnimationFrame(animFrameRef.current); }, []);
@@ -1350,6 +1453,11 @@ function HandoverGraph({
     const layer = dotsLayerRef.current;
     if (layer && flowsData) updateDotLayer(layer, pathMapRef.current, flowsData.flows, time, typeColorMap);
   };
+
+  // Expose animation functions to parent toolbar via refs
+  if (playRef) playRef.current = playAnimation;
+  if (pauseRef) pauseRef.current = pauseAnimation;
+  if (scrubRef) scrubRef.current = scrubTo;
   // ─────────────────────────────────────────────────────────────
 
   const [filterOpen, setFilterOpen] = useState(false);
@@ -2095,7 +2203,8 @@ function HandoverGraph({
                     } else {
                       base = 0.85;
                     }
-                    return flowsData ? base * 0.25 : base;
+                    const hasMetric = edgeTimeScores !== null || centralityScores !== null;
+                    return (flowsData && !hasMetric) ? base * 0.25 : base;
                   })(),
                   pointerEvents: "none",
                 }}
@@ -2708,55 +2817,6 @@ function HandoverGraph({
         })()}
       </div>
 
-      {/* Playback bar */}
-      {flowsData && (
-        <div className="flex items-center gap-2 px-3 py-2 mt-1 border rounded-md bg-muted/30">
-          <button
-            className="flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent transition-colors shrink-0"
-            onClick={isPlaying ? pauseAnimation : playAnimation}
-            title={isPlaying ? "Pause" : "Play"}
-          >
-            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          </button>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-1 text-xs border rounded px-2 py-1 bg-background hover:bg-accent transition-colors shrink-0 tabular-nums">
-                {playSpeed}× <ChevronDown className="h-3 w-3" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup
-                value={String(playSpeed)}
-                onValueChange={v => { const s = Number(v); setPlaySpeed(s); playSpeedRef.current = s; }}
-              >
-                {[1, 10, 100, 1000, 5000, 10000, 50000].map(s => (
-                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <div className="flex-1 min-w-0 px-1">
-            <Slider
-              min={flowsData.timeline.start}
-              max={flowsData.timeline.end}
-              step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
-              value={[sliderTime]}
-              onValueChange={([v]) => scrubTo(v)}
-            />
-          </div>
-
-          <span className="text-xs text-muted-foreground tabular-nums shrink-0 whitespace-nowrap">
-            {new Date(sliderTime * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "2-digit" })}
-            {" "}
-            {new Date(sliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-          <span className="text-xs text-muted-foreground shrink-0">
-            ({flowsData.flows.length.toLocaleString()} flows)
-          </span>
-        </div>
-      )}
 
       {/* Legends */}
       <div className="flex gap-8 text-xs flex-wrap">
