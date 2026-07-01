@@ -267,6 +267,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                             "target_event": _eid_next,
                             "businessobject_id": _bo_id,
                             "businessobject_type": _bo_type,
+                            "_orphan": False,
                         })
                     else:
                         # Dead-end repair: connect _eid_i to its first sequential successor.
@@ -278,6 +279,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                                     "target_event": _eid_j,
                                     "businessobject_id": _bo_id,
                                     "businessobject_type": _bo_type,
+                                    "_orphan": False,
                                 })
                                 break
 
@@ -290,12 +292,38 @@ class OCHANDOVER(nx.MultiDiGraph):
                                     "target_event": _eid_next,
                                     "businessobject_id": _bo_id,
                                     "businessobject_type": _bo_type,
+                                    "_orphan": True,
                                 })
                                 break
+
+            # Remove dominated orphan arcs (Definition 4.6 refinement):
+            # an orphan repair arc (src, tgt) is dominated if every resource at tgt
+            # is already covered by a non-orphan arc from the same src event.
+            _event_res: dict[str, frozenset] = {
+                r["_eventId"]: frozenset(r["resources"])
+                for r in event_resources.to_dicts()
+            }
+            _src_covered: dict[str, set] = {}
+            _non_orphan_pairs: set[tuple[str, str]] = set()
+            for _arc in _new_arcs:
+                if not _arc["_orphan"]:
+                    _s, _t = _arc["source_event"], _arc["target_event"]
+                    _non_orphan_pairs.add((_s, _t))
+                    _src_covered.setdefault(_s, set()).update(_event_res.get(_t, frozenset()))
+
+            _new_arcs = [
+                _arc for _arc in _new_arcs
+                if not _arc["_orphan"]
+                or (_arc["source_event"], _arc["target_event"]) in _non_orphan_pairs
+                or not _event_res.get(_arc["target_event"], frozenset()).issubset(
+                    _src_covered.get(_arc["source_event"], set())
+                )
+            ]
 
             if _new_arcs:
                 modified_eog_arcs = (
                     pl.DataFrame(_new_arcs)
+                    .drop("_orphan")
                     .unique(subset=["source_event", "target_event", "businessobject_id"])
                 )
             else:
