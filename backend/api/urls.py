@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check
+from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -13,6 +13,7 @@ urlpatterns = [
     path('greeting/', greeting, name='greeting'),
     path('ocdfg/', OCDFGViewSet, name='ocdfg'),
     path('new-ocdfg/', NewOCDFGViewSet, name='new-ocdfg'),
+    path('occn/', OCCNViewSet, name='occn'),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
