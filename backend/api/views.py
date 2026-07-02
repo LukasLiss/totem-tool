@@ -2337,16 +2337,10 @@ def OCCNViewSet(request):
         return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
-        parameters = {}
-        if object_type_filter:
-            parameters["object_types"] = object_type_filter
+        parameters = {"object_types": object_type_filter} if object_type_filter else None
 
         with _with_ocel_db(user_file) as db:
-            occn = discover_occn(
-                db,
-                relativeOccuranceThreshold=threshold,
-                parameters=parameters if parameters else None,
-            )
+            occn = discover_occn(db, relativeOccuranceThreshold=threshold, parameters=parameters)
 
         result = serialize_occn(occn)
         return Response(result, status=status.HTTP_200_OK)

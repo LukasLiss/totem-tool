@@ -80,6 +80,14 @@ def discover_occn(
     # Pre-process OCEL
     eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
 
+    # If object_types was specified, filter both DataFrames to only those types.
+    if "object_types" in parameters:
+        eventLogForMiner = eventLogForMiner[
+            eventLogForMiner["object_type"].isin(objectTypes)
+        ].copy()
+        valid_event_ids = set(eventLogForMiner["event_id"])
+        eventLog = eventLog[eventLog["event_id"].isin(valid_event_ids)].copy()
+
     # Pre-process data
     objectSet = set(eventLogForMiner["object"])
     eventLogDict = _generateEventLogDict(eventLogForMiner)
