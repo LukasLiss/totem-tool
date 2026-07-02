@@ -158,6 +158,7 @@ export default function OCHandoverExplorer({
   const [animIsPlaying, setAnimIsPlaying] = useState(false);
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
+  const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("fade");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
   const animScrubRef = useRef<((t: number) => void) | null>(null);
@@ -969,6 +970,21 @@ export default function OCHandoverExplorer({
                           </DropdownMenuRadioGroup>
                         </DropdownMenuContent>
                       </DropdownMenu>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center text-xs border-l border-r w-24 pl-2 pr-1.5 h-8 hover:bg-accent transition-colors shrink-0">
+                            <span className="flex-1 text-center capitalize">{connectorMode}</span>
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                            <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <div className="flex-1 min-w-0 px-2 flex items-center">
                         <Slider
                           min={flowsData.timeline.start}
@@ -1049,6 +1065,7 @@ export default function OCHandoverExplorer({
                     fileName={fileName}
                     flowsData={flowsData}
                     playSpeed={animPlaySpeed}
+                    connectorMode={connectorMode}
                     onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
                     playRef={animPlayRef}
                     pauseRef={animPauseRef}
@@ -1292,14 +1309,13 @@ function updateDotLayer(
   flows: FlowEvent[],
   currentTime: number,
   colorMap: Record<string, string>,
+  connectorMode: "fade" | "persist" | "none",
 ): void {
   while (layer.firstChild) layer.removeChild(layer.firstChild);
 
   type DotEntry = { px: number; py: number; t: number; color: string };
   const dots: DotEntry[] = [];
-  // Flows sharing (source, start_time, bo_id) but going to different targets are
-  // the same object instance splitting to multiple resources in parallel.
-  const splitGroups = new Map<string, number[]>();
+  const boGroups = connectorMode !== "none" ? new Map<string, number[]>() : null;
 
   for (const flow of flows) {
     if (flow.start_time > currentTime || currentTime >= flow.start_time + flow.duration) continue;
@@ -1309,30 +1325,38 @@ function updateDotLayer(
     const pt = pathEl.getPointAtLength(t * pathEl.getTotalLength());
     const idx = dots.length;
     dots.push({ px: pt.x, py: pt.y, t, color: colorMap[flow.bo_type] ?? "#94a3b8" });
-    const groupKey = `${flow.source}|${flow.start_time}|${flow.bo_id}`;
-    if (!splitGroups.has(groupKey)) splitGroups.set(groupKey, []);
-    splitGroups.get(groupKey)!.push(idx);
+    if (boGroups) {
+      if (!boGroups.has(flow.bo_id)) boGroups.set(flow.bo_id, []);
+      boGroups.get(flow.bo_id)!.push(idx);
+    }
   }
 
-  // Draw connectors underneath dots; fade out over first 35% of travel
-  const FADE_T = 0.35;
-  for (const indices of splitGroups.values()) {
-    if (indices.length < 2) continue;
-    for (let i = 0; i < indices.length; i++) {
-      for (let j = i + 1; j < indices.length; j++) {
-        const a = dots[indices[i]], b = dots[indices[j]];
-        const opacity = Math.max(0, 1 - (a.t + b.t) / 2 / FADE_T);
-        if (opacity <= 0) continue;
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        line.setAttribute("x1", String(a.px));
-        line.setAttribute("y1", String(a.py));
-        line.setAttribute("x2", String(b.px));
-        line.setAttribute("y2", String(b.py));
-        line.setAttribute("stroke", a.color);
-        line.setAttribute("stroke-width", "1.5");
-        line.setAttribute("opacity", String(opacity));
-        line.setAttribute("pointer-events", "none");
-        layer.appendChild(line);
+  // Draw connectors between all currently active dots of the same bo_id
+  if (boGroups) {
+    const FADE_T = 0.35;
+    for (const indices of boGroups.values()) {
+      if (indices.length < 2) continue;
+      for (let i = 0; i < indices.length; i++) {
+        for (let j = i + 1; j < indices.length; j++) {
+          const a = dots[indices[i]], b = dots[indices[j]];
+          let opacity: number;
+          if (connectorMode === "fade") {
+            opacity = Math.max(0, 1 - (a.t + b.t) / 2 / FADE_T);
+            if (opacity <= 0) continue;
+          } else {
+            opacity = 0.6;
+          }
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.setAttribute("x1", String(a.px));
+          line.setAttribute("y1", String(a.py));
+          line.setAttribute("x2", String(b.px));
+          line.setAttribute("y2", String(b.py));
+          line.setAttribute("stroke", a.color);
+          line.setAttribute("stroke-width", "1.5");
+          line.setAttribute("opacity", String(opacity));
+          line.setAttribute("pointer-events", "none");
+          layer.appendChild(line);
+        }
       }
     }
   }
@@ -1367,6 +1391,7 @@ function HandoverGraph({
   fileName,
   flowsData,
   playSpeed: playSpeedProp = 100,
+  connectorMode: connectorModeProp = "fade" as const,
   onAnimStateChange,
   playRef,
   pauseRef,
@@ -1387,6 +1412,7 @@ function HandoverGraph({
   fileName?: string;
   flowsData?: FlowsData | null;
   playSpeed?: number;
+  connectorMode?: "fade" | "persist" | "none";
   onAnimStateChange?: (s: { isPlaying: boolean; sliderTime: number }) => void;
   playRef?: React.RefObject<(() => void) | null>;
   pauseRef?: React.RefObject<(() => void) | null>;
@@ -1415,6 +1441,8 @@ function HandoverGraph({
   const [sliderTime, setSliderTime] = useState(0);
   const playSpeedRef = useRef(100);
   useEffect(() => { playSpeedRef.current = playSpeedProp; }, [playSpeedProp]);
+  const connectorModeRef = useRef<"fade" | "persist" | "none">(connectorModeProp);
+  useEffect(() => { connectorModeRef.current = connectorModeProp; }, [connectorModeProp]);
   const playheadTimeRef = useRef(0);
   const lastWallClockRef = useRef<number | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -1468,7 +1496,7 @@ function HandoverGraph({
       const newTime = Math.min(playheadTimeRef.current + wallDelta * playSpeedRef.current, fd.timeline.end);
       playheadTimeRef.current = newTime;
       const layer = dotsLayerRef.current;
-      if (layer) updateDotLayer(layer, pathMapRef.current, fd.flows, newTime, tcm);
+      if (layer) updateDotLayer(layer, pathMapRef.current, fd.flows, newTime, tcm, connectorModeRef.current);
       frameCountRef.current = (frameCountRef.current + 1) % 4;
       if (frameCountRef.current === 0) setSliderTime(newTime);
       if (newTime < fd.timeline.end) {
@@ -1491,7 +1519,7 @@ function HandoverGraph({
     playheadTimeRef.current = time;
     setSliderTime(time);
     const layer = dotsLayerRef.current;
-    if (layer && flowsData) updateDotLayer(layer, pathMapRef.current, flowsData.flows, time, typeColorMap);
+    if (layer && flowsData) updateDotLayer(layer, pathMapRef.current, flowsData.flows, time, typeColorMap, connectorModeRef.current);
   };
 
   // Expose animation functions to parent toolbar via refs
