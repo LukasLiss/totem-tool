@@ -29,6 +29,10 @@ import { assignTypeColors, nextFreeColor } from '@/editors/shared/colors';
 import EditorShell from '@/editors/shared/EditorShell';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
 import {
+  loadEditorSession,
+  saveEditorSession,
+} from '@/editors/shared/sessionCache';
+import {
   OCCN_FORMAT,
   occnEndActivity,
   occnStartActivity,
@@ -150,7 +154,8 @@ function OccnEditorInner() {
       }
       const activities = [...activityMap.values()];
 
-      let layouted: Record<string, XY> = {};
+      // Null prototype: keys are activity names (user data, e.g. "__proto__").
+      let layouted: Record<string, XY> = Object.create(null);
       if (activities.some((a) => !a.position) && activities.length > 0) {
         try {
           layouted = await elkLayeredPositions(
@@ -161,7 +166,7 @@ function OccnEditorInner() {
             model.arcs.map((arc) => ({ source: arc.source, target: arc.target })),
           );
         } catch {
-          layouted = {};
+          layouted = Object.create(null);
         }
       }
 
@@ -206,26 +211,30 @@ function OccnEditorInner() {
   // Derived render data
   // -------------------------------------------------------------------------
 
-  const typeColors = useMemo(
-    () => Object.fromEntries(types.map((t) => [t.name, t.color])),
-    [types],
-  );
+  const typeColors = useMemo(() => {
+    // Null prototype: type names are user data (e.g. "__proto__").
+    const result: Record<string, string> = Object.create(null);
+    for (const t of types) result[t.name] = t.color;
+    return result;
+  }, [types]);
 
   const incidentTypes = useMemo(() => {
     const order = new Map(types.map((t, i) => [t.name, i]));
-    const sets: Record<string, Set<string>> = {};
+    // Null prototype: keys are activity names (user data, e.g. "__proto__").
+    const sets: Record<string, Set<string>> = Object.create(null);
     for (const edge of edges) {
       const ot = edge.data?.objectType;
       if (!ot) continue;
       (sets[edge.source] ??= new Set()).add(ot);
       (sets[edge.target] ??= new Set()).add(ot);
     }
-    return Object.fromEntries(
-      Object.entries(sets).map(([name, set]) => [
-        name,
-        [...set].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99)),
-      ]),
-    );
+    const result: Record<string, string[]> = Object.create(null);
+    for (const [name, set] of Object.entries(sets)) {
+      result[name] = [...set].sort(
+        (a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99),
+      );
+    }
+    return result;
   }, [edges, types]);
 
   const parallelOffset = useMemo(() => {
@@ -255,10 +264,13 @@ function OccnEditorInner() {
     [typeColors, incidentTypes, parallelOffset],
   );
 
-  const nodesById = useMemo(
-    () => Object.fromEntries(nodes.map((n) => [n.id, n])),
-    [nodes],
-  );
+  const nodesById = useMemo(() => {
+    // Null prototype: node ids are user data — lookups and `in` checks for
+    // names like "__proto__" must not hit Object.prototype.
+    const result: Record<string, OccnNode> = Object.create(null);
+    for (const n of nodes) result[n.id] = n;
+    return result;
+  }, [nodes]);
 
   // -------------------------------------------------------------------------
   // React Flow handlers
@@ -826,15 +838,23 @@ function OccnEditorInner() {
       const marker = bindings[ref.activity]?.[ref.side]?.[ref.groupIndex]?.[markerIndex];
       if (!marker) return;
       const [related, objectType, [min0, max0], key0] = marker;
-      const min = patch.min !== undefined ? Math.max(1, Math.round(patch.min)) : min0;
+      // Non-finite guards: Infinity/NaN must never reach the state — a
+      // JSON.stringify'd Infinity becomes null and the export stops loading.
+      const min =
+        patch.min !== undefined && Number.isFinite(patch.min)
+          ? Math.max(1, Math.round(patch.min))
+          : min0;
       let max =
         patch.max !== undefined
-          ? patch.max === -1
+          ? patch.max === -1 || !Number.isFinite(patch.max)
             ? -1
             : Math.max(1, Math.round(patch.max))
           : max0;
       if (max !== -1 && max < min) max = min;
-      const key = patch.key !== undefined ? Math.max(0, Math.round(patch.key)) : key0;
+      const key =
+        patch.key !== undefined && Number.isFinite(patch.key)
+          ? Math.max(0, Math.round(patch.key))
+          : key0;
       if (min === min0 && max === max0 && key === key0) return;
       history.record(serialize());
       const next: OccnMarker = [related, objectType, [min, max], key];
@@ -876,13 +896,15 @@ function OccnEditorInner() {
         toast.error(parsed.error);
         return;
       }
+      // Importing replaces the whole model — snapshot the current one so the
+      // replacement is undoable instead of a silent data-loss path.
+      history.record(serialize());
       await applyModel(parsed.model, { fit: true });
-      history.reset();
       toast.success(`Loaded "${parsed.model.name}".`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not read the file.');
     }
-  }, [applyModel, history]);
+  }, [applyModel, history, serialize]);
 
   const onExport = useCallback(() => {
     const filename = toFilename(modelName, 'occn-model');
@@ -896,10 +918,12 @@ function OccnEditorInner() {
       toast.error(parsed.error);
       return;
     }
+    // Loading the example replaces the whole model — snapshot the current one
+    // so the replacement is undoable instead of a silent data-loss path.
+    history.record(serialize());
     await applyModel(parsed.model, { fit: true });
-    history.reset();
     toast.success('Loaded the shipping example.');
-  }, [applyModel, history]);
+  }, [applyModel, history, serialize]);
 
   const onAutoLayout = useCallback(async () => {
     if (nodes.length === 0) return;
@@ -958,6 +982,43 @@ function OccnEditorInner() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Session cache: the editor unmounts when the user switches to another
+  // sidebar view. Save the serialized model on unmount and restore it on the
+  // next mount so switching views never loses unsaved work.
+  // ---------------------------------------------------------------------------
+
+  const sessionRef = useRef({ serialize, applyModel });
+  sessionRef.current = { serialize, applyModel };
+
+  useEffect(() => {
+    const cached = loadEditorSession<OccnModelFile>('occn');
+    if (
+      cached &&
+      (cached.activities.length > 0 ||
+        cached.objectTypes.length > 0 ||
+        cached.arcs.length > 0)
+    ) {
+      // Restoring twice (React StrictMode double-invokes effects in dev) is
+      // harmless: applyModel fully replaces the state each time.
+      void sessionRef.current.applyModel(cached, { fit: true });
+    }
+    return () => {
+      const snapshot = sessionRef.current.serialize();
+      // Skip trivial (empty) snapshots: StrictMode runs this cleanup between
+      // the doubled mount effects, before the restored state has rendered —
+      // saving the still-empty state would clobber the cached model.
+      if (
+        snapshot.activities.length > 0 ||
+        snapshot.objectTypes.length > 0 ||
+        snapshot.arcs.length > 0
+      ) {
+        saveEditorSession('occn', snapshot);
+      }
+    };
+    // Mount/unmount only — the cleanup reads the latest state via sessionRef.
   }, []);
 
   // -------------------------------------------------------------------------

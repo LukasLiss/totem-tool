@@ -35,6 +35,7 @@ import EditorShell from '@/editors/shared/EditorShell';
 import { nextFreeColor } from '@/editors/shared/colors';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
 import { parseOcpnModelFile, type OcpnModelFile } from '@/editors/shared/model-types';
+import { loadEditorSession, saveEditorSession } from '@/editors/shared/sessionCache';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { edgeTypes } from './ArcEdge';
@@ -116,6 +117,8 @@ function OcpnEditorInner() {
   );
   const serializeRef = useRef(serialize);
   serializeRef.current = serialize;
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   const record = useCallback(
     () => history.record(serializeRef.current()),
@@ -141,6 +144,31 @@ function OcpnEditorInner() {
     },
     [fitView],
   );
+
+  const applyModelRef = useRef(applyModel);
+  applyModelRef.current = applyModel;
+
+  // -------------------------------------------------------------------------
+  // Session cache — the editor unmounts when the user switches to another
+  // sidebar view; persist the model on unmount and restore it on mount so a
+  // view switch never loses work. Mount/unmount only (refs hold live state);
+  // restoring the cached model twice (StrictMode) is harmless.
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    const cached = loadEditorSession<OcpnModelFile>('ocpn');
+    if (
+      cached &&
+      (cached.places.length > 0 ||
+        cached.transitions.length > 0 ||
+        cached.objectTypes.length > 0)
+    ) {
+      applyModelRef.current(cached, { fit: true });
+    }
+    return () => {
+      saveEditorSession('ocpn', serializeRef.current());
+    };
+  }, []);
 
   // -------------------------------------------------------------------------
   // Undo / redo (+ keyboard shortcuts)
@@ -472,10 +500,22 @@ function OcpnEditorInner() {
   // Deletion (keyboard deletes go through onBeforeDelete for one snapshot)
   // -------------------------------------------------------------------------
 
-  const onBeforeDelete = useCallback(async () => {
-    record();
-    return true;
-  }, [record]);
+  const onBeforeDelete = useCallback(
+    async ({
+      nodes: toDeleteNodes,
+      edges: toDeleteEdges,
+    }: {
+      nodes: OcpnFlowNode[];
+      edges: ArcFlowEdge[];
+    }) => {
+      // xyflow calls this even for an empty selection — don't record a
+      // no-op snapshot (it would also wipe the redo stack).
+      if (toDeleteNodes.length === 0 && toDeleteEdges.length === 0) return false;
+      record();
+      return true;
+    },
+    [record],
+  );
 
   const deleteNode = useCallback(
     (nodeId: string) => {
@@ -710,12 +750,14 @@ function OcpnEditorInner() {
         toast.error(parsed.error);
         return;
       }
+      // Keep the current model reachable via undo instead of resetting history.
+      record();
       applyModel(parsed.model, { fit: true });
-      history.reset();
+      for (const warning of parsed.warnings ?? []) toast.info(warning);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not read the file.');
     }
-  }, [applyModel, history]);
+  }, [applyModel, record]);
 
   const handleExport = useCallback(() => {
     const filename = toFilename(modelName, 'ocpn-model');
@@ -730,17 +772,27 @@ function OcpnEditorInner() {
       toast.error(parsed.error);
       return;
     }
+    // Keep the current model reachable via undo instead of resetting history.
+    record();
     applyModel(parsed.model, { fit: true });
-    history.reset();
-  }, [applyModel, history]);
+    for (const warning of parsed.warnings ?? []) toast.info(warning);
+  }, [applyModel, record]);
 
   const handleAutoLayout = useCallback(async () => {
     if (nodes.length === 0) return;
     record();
     try {
       const laidOut = await layoutOcpn(nodes, edges);
-      setNodes(laidOut);
-      setEdges((current) => assignArcHandles(laidOut, current));
+      // Edits may have landed while ELK was running — merge only the computed
+      // positions into the CURRENT state instead of replacing it wholesale.
+      const positions = new Map(laidOut.map((n) => [n.id, n.position] as const));
+      const mergePositions = (current: OcpnFlowNode[]): OcpnFlowNode[] =>
+        current.map((n) => {
+          const position = positions.get(n.id);
+          return position ? { ...n, position } : n;
+        });
+      setNodes(mergePositions);
+      setEdges((current) => assignArcHandles(mergePositions(nodesRef.current), current));
       window.setTimeout(() => fitView({ padding: 0.2 }), 0);
     } catch {
       toast.error('Auto layout failed.');

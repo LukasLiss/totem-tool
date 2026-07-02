@@ -89,7 +89,8 @@ function CommitInput({
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
-          commit();
+          // Only blur — the onBlur handler performs the single commit
+          // (calling commit() here too would commit twice).
           (event.target as HTMLInputElement).blur();
         }
         if (event.key === 'Escape') setDraft(value);

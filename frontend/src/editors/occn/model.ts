@@ -26,32 +26,41 @@ import {
 // Bindings helpers (all immutable — they return new structures)
 // ---------------------------------------------------------------------------
 
+/**
+ * Count range max: -1 is the canonical "unbounded". Map any non-finite value
+ * (Infinity, NaN — JSON.stringify would turn them into null and break the
+ * exported file) to -1 so neither the state nor the export ever carries them.
+ */
+const sanitizeMax = (max: number): number => (Number.isFinite(max) ? max : -1);
+
 const cloneGroups = (groups: OccnMarkerGroup[] | undefined): OccnMarkerGroup[] =>
   (groups ?? []).map((group) =>
     group.map(
       ([related, objectType, [min, max], key]): OccnMarker => [
         related,
         objectType,
-        [min, max],
+        [min, sanitizeMax(max)],
         key,
       ],
     ),
   );
 
-export const cloneBindings = (bindings: BindingsMap): BindingsMap =>
-  Object.fromEntries(
-    Object.entries(bindings).map(([activity, b]) => [
-      activity,
-      { img: cloneGroups(b.img), omg: cloneGroups(b.omg) },
-    ]),
-  );
+export const cloneBindings = (bindings: BindingsMap): BindingsMap => {
+  // Null prototype: activity names are user data ("__proto__" etc. must be
+  // ordinary keys, not prototype mutations).
+  const result: BindingsMap = Object.create(null);
+  for (const [activity, b] of Object.entries(bindings)) {
+    result[activity] = { img: cloneGroups(b.img), omg: cloneGroups(b.omg) };
+  }
+  return result;
+};
 
 /** Normalise parsed bindings and guarantee an entry for every activity. */
 export function normalizeBindings(
   raw: Record<string, OccnActivityBindings>,
   activityNames: Iterable<string>,
 ): BindingsMap {
-  const result: BindingsMap = {};
+  const result: BindingsMap = Object.create(null);
   for (const name of activityNames) result[name] = { img: [], omg: [] };
   for (const [activity, b] of Object.entries(raw)) {
     result[activity] = { img: cloneGroups(b.img), omg: cloneGroups(b.omg) };
@@ -61,7 +70,7 @@ export function normalizeBindings(
 
 /** Drop empty groups (and keep the totem_lib from_dict shape) for export. */
 export function pruneBindings(bindings: BindingsMap): Record<string, OccnActivityBindings> {
-  const result: Record<string, OccnActivityBindings> = {};
+  const result: Record<string, OccnActivityBindings> = Object.create(null);
   for (const [activity, b] of Object.entries(bindings)) {
     result[activity] = {
       img: cloneGroups(b.img).filter((g) => g.length > 0),
@@ -82,16 +91,18 @@ const mapGroups = (
 const mapBindings = (
   bindings: BindingsMap,
   fn: (marker: OccnMarker, side: 'img' | 'omg', activity: string) => OccnMarker | null,
-): BindingsMap =>
-  Object.fromEntries(
-    Object.entries(bindings).map(([activity, b]) => [
-      activity,
-      {
-        img: mapGroups(b.img, (m) => fn(m, 'img', activity)),
-        omg: mapGroups(b.omg, (m) => fn(m, 'omg', activity)),
-      } satisfies ActivityBindings,
-    ]),
-  );
+): BindingsMap => {
+  // Null prototype: callers assign renamed activities back into the result
+  // (`result[newName] = ...`), which must work for names like "__proto__".
+  const result: BindingsMap = Object.create(null);
+  for (const [activity, b] of Object.entries(bindings)) {
+    result[activity] = {
+      img: mapGroups(b.img, (m) => fn(m, 'img', activity)),
+      omg: mapGroups(b.omg, (m) => fn(m, 'omg', activity)),
+    } satisfies ActivityBindings;
+  }
+  return result;
+};
 
 /** Rename an activity everywhere: bindings key + all `related` references. */
 export function renameActivityInBindings(
@@ -280,7 +291,8 @@ export async function elkLayeredPositions(
     })),
   };
   const layouted = await elk.layout(graph);
-  const positions: Record<string, XY> = {};
+  // Null prototype: keys are activity names (user data, e.g. "__proto__").
+  const positions: Record<string, XY> = Object.create(null);
   for (const child of layouted.children ?? []) {
     positions[child.id] = { x: child.x ?? 0, y: child.y ?? 0 };
   }

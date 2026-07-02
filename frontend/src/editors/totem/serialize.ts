@@ -86,7 +86,10 @@ export function modelToFlow(model: TotemModelFile): {
     if (!source || !target) return [];
     return [
       {
-        id: relation.id || freshId('relation'),
+        // Always mint a fresh id: ids stored in files can collide with ids the
+        // module-level freshId() counter hands out after a page reload, and
+        // nothing references relation ids across import/undo.
+        id: freshId('relation'),
         type: 'totemRelation' as const,
         source,
         target,

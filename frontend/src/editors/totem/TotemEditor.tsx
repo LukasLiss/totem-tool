@@ -37,6 +37,10 @@ import {
   type TemporalRelation,
   type TotemModelFile,
 } from '@/editors/shared/model-types';
+import {
+  loadEditorSession,
+  saveEditorSession,
+} from '@/editors/shared/sessionCache';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { EXAMPLE_MODEL } from './example';
@@ -54,6 +58,8 @@ import {
 
 const nodeTypes = { totemType: TotemTypeNode };
 const edgeTypes = { totemRelation: TotemRelationEdge };
+
+const SESSION_KEY = 'totem';
 
 /** Swap of the reading direction: D↔Di, I↔Ii, P stays — same semantics. */
 const TEMPORAL_SWAP: Record<TemporalRelation, TemporalRelation> = {
@@ -377,13 +383,38 @@ function TotemEditorInner() {
       const flow = modelToFlow(model);
       setNodes(flow.nodes);
       setEdges(flow.edges);
-      history.reset();
+      // Keep the refs in sync immediately: if the editor unmounts before the
+      // next render (StrictMode dev double-mount, fast view switches), the
+      // unmount save must serialize the loaded model, not the stale state.
+      nameRef.current = model.name;
+      nodesRef.current = flow.nodes;
+      edgesRef.current = flow.edges;
       requestAnimationFrame(() => {
         fitView({ padding: 0.2 });
       });
     },
-    [fitView, history],
+    [fitView],
   );
+
+  // Persist the model across sidebar view switches: the editor unmounts when
+  // another view opens, so save the serialized model on unmount and restore it
+  // on the next mount. Mount/unmount only — the cleanup reads the latest state
+  // from refs. StrictMode-safe: loadModel syncs the refs immediately, so the
+  // dev double-mount round-trips the exact same model (restoring twice is
+  // harmless), and an untouched empty editor never overwrites a real cache
+  // entry with anything the restore path would pick up (trivial models are
+  // ignored on mount).
+  const loadModelRef = useRef(loadModel);
+  loadModelRef.current = loadModel;
+  useEffect(() => {
+    const cached = loadEditorSession<TotemModelFile>(SESSION_KEY);
+    if (cached && (cached.objectTypes.length > 0 || cached.relations.length > 0)) {
+      loadModelRef.current(cached);
+    }
+    return () => {
+      saveEditorSession(SESSION_KEY, serializeCurrent());
+    };
+  }, [serializeCurrent]);
 
   const handleNew = useCallback(() => {
     setNodes([]);
@@ -410,9 +441,11 @@ function TotemEditorInner() {
       toast.error(parsed.error);
       return;
     }
+    // Importing replaces the model — make it undoable instead of wiping history.
+    recordSnapshot();
     loadModel(parsed.model);
     toast.success(`Loaded "${parsed.model.name}".`);
-  }, [loadModel]);
+  }, [loadModel, recordSnapshot]);
 
   const handleExport = useCallback(() => {
     const filename = toFilename(nameRef.current, 'totem-model');
@@ -427,8 +460,10 @@ function TotemEditorInner() {
       toast.error(parsed.error);
       return;
     }
+    // Loading the example replaces the model — make it undoable.
+    recordSnapshot();
     loadModel(parsed.model);
-  }, [loadModel]);
+  }, [loadModel, recordSnapshot]);
 
   const handleAutoLayout = useCallback(async () => {
     if (nodesRef.current.length < 2) return;

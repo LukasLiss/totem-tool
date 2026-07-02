@@ -41,6 +41,12 @@ export type GroupLineVis = {
 const INPUT_BASE_T = 0.85;
 const OUTPUT_BASE_T = 0.15;
 const STACK_STEP_T = 0.11;
+/**
+ * Span along the curve available for stacked markers: inputs occupy
+ * t ∈ [0.55, 0.85], outputs t ∈ [0.15, 0.45]. With many groups on one arc end
+ * the step shrinks so markers compress but never coincide.
+ */
+const STACK_SPAN_T = 0.3;
 
 export function computeMarkerLayout(args: {
   nodes: OccnNode[];
@@ -84,6 +90,26 @@ export function computeMarkerLayout(args: {
     return slot;
   };
 
+  // Pre-count markers per arc end (same placement predicate as below) so the
+  // stacking step can adapt to the number of stacked markers.
+  const slotCounts = new Map<string, number>();
+  for (const node of nodes) {
+    const b = bindings[node.id];
+    if (!b) continue;
+    for (const side of ['img', 'omg'] as const) {
+      for (const group of b[side]) {
+        for (const [related, objectType] of group) {
+          const source = side === 'img' ? related : node.id;
+          const target = side === 'img' ? node.id : related;
+          const id = arcId(source, target, objectType);
+          if (!edgeIds.has(id) || !boxes.has(source) || !boxes.has(target)) continue;
+          const key = `${id}|${side === 'img' ? 'in' : 'out'}`;
+          slotCounts.set(key, (slotCounts.get(key) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
   const markers: MarkerVis[] = [];
   const lines: GroupLineVis[] = [];
 
@@ -106,11 +132,15 @@ export function computeMarkerLayout(args: {
           const id = arcId(source, target, objectType);
           const cubic = cubicFor(id, source, target);
           if (!cubic) return;
-          const slot = takeSlot(`${id}|${side === 'img' ? 'in' : 'out'}`);
+          const slotKey = `${id}|${side === 'img' ? 'in' : 'out'}`;
+          const slot = takeSlot(slotKey);
+          const count = slotCounts.get(slotKey) ?? 1;
+          const step =
+            count > 1 ? Math.min(STACK_STEP_T, STACK_SPAN_T / (count - 1)) : 0;
           const t =
             side === 'img'
-              ? Math.max(0.52, INPUT_BASE_T - slot * STACK_STEP_T)
-              : Math.min(0.48, OUTPUT_BASE_T + slot * STACK_STEP_T);
+              ? INPUT_BASE_T - slot * step
+              : OUTPUT_BASE_T + slot * step;
           const pos = cubicPointAt(cubic, t);
           points.push(pos);
           markers.push({

@@ -163,7 +163,10 @@ export function flowToModel(
     } else {
       transitions.push({
         id: node.id,
-        label: node.data.silent ? null : node.data.label,
+        // Silent transitions keep their remembered label (silent: true marks
+        // them as τ) so toggling silent off after a save/load round trip
+        // restores the name; label is null only when there is none.
+        label: node.data.silent ? node.data.label || null : node.data.label,
         silent: node.data.silent || undefined,
         position,
       });
