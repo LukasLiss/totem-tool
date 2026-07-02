@@ -41,6 +41,7 @@ type FlowEvent = {
   source: string;
   target: string;
   bo_type: string;
+  bo_id: string;
   start_time: number;  // Unix seconds
   duration: number;    // seconds (>= 1)
 };
@@ -1293,17 +1294,56 @@ function updateDotLayer(
   colorMap: Record<string, string>,
 ): void {
   while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+  type DotEntry = { px: number; py: number; t: number; color: string };
+  const dots: DotEntry[] = [];
+  // Flows sharing (source, start_time, bo_id) but going to different targets are
+  // the same object instance splitting to multiple resources in parallel.
+  const splitGroups = new Map<string, number[]>();
+
   for (const flow of flows) {
     if (flow.start_time > currentTime || currentTime >= flow.start_time + flow.duration) continue;
     const pathEl = pathMap.get(`${flow.source}|${flow.target}|${flow.bo_type}`);
     if (!pathEl || !pathEl.isConnected) continue;
     const t = Math.min(1, (currentTime - flow.start_time) / flow.duration);
     const pt = pathEl.getPointAtLength(t * pathEl.getTotalLength());
+    const idx = dots.length;
+    dots.push({ px: pt.x, py: pt.y, t, color: colorMap[flow.bo_type] ?? "#94a3b8" });
+    const groupKey = `${flow.source}|${flow.start_time}|${flow.bo_id}`;
+    if (!splitGroups.has(groupKey)) splitGroups.set(groupKey, []);
+    splitGroups.get(groupKey)!.push(idx);
+  }
+
+  // Draw connectors underneath dots; fade out over first 35% of travel
+  const FADE_T = 0.35;
+  for (const indices of splitGroups.values()) {
+    if (indices.length < 2) continue;
+    for (let i = 0; i < indices.length; i++) {
+      for (let j = i + 1; j < indices.length; j++) {
+        const a = dots[indices[i]], b = dots[indices[j]];
+        const opacity = Math.max(0, 1 - (a.t + b.t) / 2 / FADE_T);
+        if (opacity <= 0) continue;
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", String(a.px));
+        line.setAttribute("y1", String(a.py));
+        line.setAttribute("x2", String(b.px));
+        line.setAttribute("y2", String(b.py));
+        line.setAttribute("stroke", a.color);
+        line.setAttribute("stroke-width", "1.5");
+        line.setAttribute("opacity", String(opacity));
+        line.setAttribute("pointer-events", "none");
+        layer.appendChild(line);
+      }
+    }
+  }
+
+  // Draw dots on top of connectors
+  for (const { px, py, color } of dots) {
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("cx", String(pt.x));
-    c.setAttribute("cy", String(pt.y));
+    c.setAttribute("cx", String(px));
+    c.setAttribute("cy", String(py));
     c.setAttribute("r", "6");
-    c.setAttribute("fill", colorMap[flow.bo_type] ?? "#94a3b8");
+    c.setAttribute("fill", color);
     c.setAttribute("stroke", "white");
     c.setAttribute("stroke-width", "1.5");
     c.setAttribute("pointer-events", "none");

@@ -375,6 +375,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                     "source": f["source"],
                     "target": f["target"],
                     "bo_type": f["businessobject_type"],
+                    "bo_id": f["businessobject_id"],
                     "start_time": f["start_unix"] / _ts_div,
                     "duration": max(f["time_delta"] / _ts_div, 1.0),
                 }
@@ -627,6 +628,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                 "source": _src,
                 "target": _tgt,
                 "businessobject_type": _btype,
+                "businessobject_id": _bid,
                 "time_delta": _tgt_ts - _src_ts,
                 "start_unix": _src_ts,
             })
@@ -637,6 +639,7 @@ class OCHANDOVER(nx.MultiDiGraph):
             "source": pl.Utf8,
             "target": pl.Utf8,
             "businessobject_type": pl.Utf8,
+            "businessobject_id": pl.Utf8,
             "time_delta": pl.Int64,
             "start_unix": pl.Int64,
         })
