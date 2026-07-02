@@ -26,7 +26,7 @@ export type ObjectTypeDef = {
 };
 
 export type ParseResult<T> =
-  | { ok: true; model: T }
+  | { ok: true; model: T; warnings?: string[] }
   | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------
@@ -307,6 +307,7 @@ export function parseTotemModelFile(raw: unknown): ParseResult<TotemModelFile> {
   }
   const relations: TotemRelation[] = [];
   const seenPairs = new Set<string>();
+  const seenRelationIds = new Set<string>();
   for (const [index, entry] of relationsRaw.entries()) {
     if (!isRecord(entry)) return { ok: false, error: `Relation #${index + 1} must be an object.` };
     const source = asName(entry.source);
@@ -323,7 +324,7 @@ export function parseTotemModelFile(raw: unknown): ParseResult<TotemModelFile> {
     if (source === target) {
       return { ok: false, error: `Relation #${index + 1}: self-relations are not supported in TOTeM.` };
     }
-    const pairKey = [source, target].sort().join(' ');
+    const pairKey = JSON.stringify([source, target].sort());
     if (seenPairs.has(pairKey)) {
       return {
         ok: false,
@@ -361,8 +362,11 @@ export function parseTotemModelFile(raw: unknown): ParseResult<TotemModelFile> {
     const targetToSource = parseDirection(entry.targetToSource, 'targetToSource');
     if (typeof targetToSource === 'string') return { ok: false, error: targetToSource };
 
+    let relationId = typeof entry.id === 'string' && entry.id ? entry.id : `relation-${index + 1}`;
+    while (seenRelationIds.has(relationId)) relationId = `${relationId}-dup`;
+    seenRelationIds.add(relationId);
     relations.push({
-      id: typeof entry.id === 'string' && entry.id ? entry.id : `relation-${index + 1}`,
+      id: relationId,
       source,
       target,
       temporal,
@@ -434,7 +438,9 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
     const label = typeof entry.label === 'string' ? entry.label : null;
     transitions.push({
       id,
-      label: silent ? null : (label ?? id),
+      // Keep a provided label even for silent transitions so toggling silent
+      // off after a save/load round trip restores the original name.
+      label: silent ? label : (label ?? id),
       silent,
       position: isXY(entry.position) ? entry.position : undefined,
     });
@@ -447,6 +453,7 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
   if (!Array.isArray(arcsRaw)) return { ok: false, error: '"arcs" must be an array.' };
   const arcs: OcpnArc[] = [];
   const seenArcs = new Set<string>();
+  const seenArcIds = new Set<string>();
   for (const [index, entry] of arcsRaw.entries()) {
     if (!isRecord(entry)) return { ok: false, error: `Arc #${index + 1} must be an object.` };
     const source = asName(entry.source);
@@ -470,17 +477,48 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
         error: `Arc #${index + 1} (${source} → ${target}) is not allowed: arcs must connect a place and a transition.`,
       };
     }
-    const arcKey = `${source} ${target}`;
+    const arcKey = JSON.stringify([source, target]);
     if (seenArcs.has(arcKey)) {
       return { ok: false, error: `Duplicate arc ${source} → ${target}.` };
     }
     seenArcs.add(arcKey);
+    let arcId = typeof entry.id === 'string' && entry.id ? entry.id : `arc-${index + 1}`;
+    while (seenArcIds.has(arcId)) arcId = `${arcId}-dup`;
+    seenArcIds.add(arcId);
     arcs.push({
-      id: typeof entry.id === 'string' && entry.id ? entry.id : `arc-${index + 1}`,
+      id: arcId,
       source,
       target,
       variable: entry.variable === true,
     });
+  }
+
+  // Well-formedness (Def. 5.2): per transition and object type, arcs are
+  // uniformly variable or uniformly non-variable. Normalise ill-formed input
+  // towards variable and report it.
+  const warnings: string[] = [];
+  const placeTypeById = new Map(places.map((p) => [p.id, p.objectType]));
+  const arcGroups = new Map<
+    string,
+    { transition: string; objectType: string; arcs: OcpnArc[] }
+  >();
+  for (const arc of arcs) {
+    const transition = transitionIds.has(arc.source) ? arc.source : arc.target;
+    const place = transitionIds.has(arc.source) ? arc.target : arc.source;
+    const objectType = placeTypeById.get(place) ?? '';
+    const key = JSON.stringify([transition, objectType]);
+    const group = arcGroups.get(key);
+    if (group) group.arcs.push(arc);
+    else arcGroups.set(key, { transition, objectType, arcs: [arc] });
+  }
+  for (const group of arcGroups.values()) {
+    const variableCount = group.arcs.filter((arc) => arc.variable).length;
+    if (variableCount > 0 && variableCount < group.arcs.length) {
+      for (const arc of group.arcs) arc.variable = true;
+      warnings.push(
+        `Made all ${group.arcs.length} arcs between "${group.transition}" and its "${group.objectType}" places variable (well-formedness).`,
+      );
+    }
   }
 
   return {
@@ -494,6 +532,7 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
       transitions,
       arcs,
     },
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 
@@ -534,7 +573,9 @@ export function parseOccnModelFile(raw: unknown): ParseResult<OccnModelFile> {
   }
 
   // Marker groups — format of OCCausalNet.from_dict.
-  const markerGroups: Record<string, OccnActivityBindings> = {};
+  // Null prototype: activity names are user data ("__proto__" etc. must be
+  // ordinary keys, not prototype mutations).
+  const markerGroups: Record<string, OccnActivityBindings> = Object.create(null);
   const markerGroupsRaw = isRecord(raw.markerGroups) ? raw.markerGroups : {};
   for (const [activity, bindingsRaw] of Object.entries(markerGroupsRaw)) {
     if (!isRecord(bindingsRaw)) {
@@ -564,13 +605,20 @@ export function parseOccnModelFile(raw: unknown): ParseResult<OccnModelFile> {
             !Array.isArray(range) ||
             range.length !== 2 ||
             typeof range[0] !== 'number' ||
-            typeof range[1] !== 'number' ||
-            typeof markerKey !== 'number'
+            typeof markerKey !== 'number' ||
+            !Number.isFinite(markerKey)
           ) {
             return `markerGroups["${activity}"].${key}: markers must be [activity, objectType, [min, max], key].`;
           }
-          const [min, max] = range;
-          if (min < 0 || (max !== -1 && max < min)) {
+          const min = range[0];
+          // Unbounded max: -1 is canonical; also accept null/Infinity (JSON
+          // serialisers turn Infinity into null) so such files stay loadable.
+          const max =
+            range[1] === null || range[1] === Infinity ? -1 : range[1];
+          if (typeof max !== 'number' || !Number.isFinite(max)) {
+            return `markerGroups["${activity}"].${key}: invalid count range max ${String(range[1])}.`;
+          }
+          if (!Number.isFinite(min) || min < 0 || (max !== -1 && max < min)) {
             return `markerGroups["${activity}"].${key}: invalid count range [${min}, ${max}].`;
           }
           registerActivity(related);
@@ -593,7 +641,7 @@ export function parseOccnModelFile(raw: unknown): ParseResult<OccnModelFile> {
   const arcs: OccnArc[] = [];
   const arcKeys = new Set<string>();
   const addArc = (source: string, target: string, objectType: string) => {
-    const key = `${source} ${target} ${objectType}`;
+    const key = JSON.stringify([source, target, objectType]);
     if (arcKeys.has(key)) return;
     arcKeys.add(key);
     arcs.push({ source, target, objectType });
