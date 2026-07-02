@@ -4,16 +4,16 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
 # DuckDB-backed implementations (`OCDFGDb`, `totemDiscovery_db`, `find_variants`
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
-# Django side. Polars-only algorithms (`discover_oc_petri_net_polars`,
-# `discover_occn`) are not currently wired into the UI.
+# Django side.
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
+from totem_lib import discover_occn, serialize_occn
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
@@ -461,6 +461,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(OCDottedChartComponent.objects.get(id=comp.id))
             elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCCNComponent':
+                components.append(OCCNComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -602,6 +604,18 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                     layout_direction=item.get('layout_direction', 'TB'),
+                )
+            elif component_name == 'OCCNComponent':
+                OCCNComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    relative_occurrence_threshold=item.get('relative_occurrence_threshold', 0.0),
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
             # Add more as needed
 
@@ -2278,6 +2292,60 @@ def NewOCDFGViewSet(request):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def OCCNViewSet(request):
+    """
+    Discover and return a serialized OCCN for the given event log file.
+
+    Query params:
+        file_id (required)         — ID of the EventLog to mine
+        object_types (optional)    — comma-separated object type filter
+        relativeOccuranceThreshold — float in [0, 1], default 0.0
+    """
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Parse optional comma-separated object type filter.
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = [t.strip() for t in raw_object_types.split(",") if t.strip()] or None
+
+    # Parse and validate threshold.
+    raw_threshold = request.query_params.get("relativeOccuranceThreshold", "0.0")
+    try:
+        threshold = float(raw_threshold)
+        if not (0.0 <= threshold <= 1.0):
+            return Response(
+                {"error": "relativeOccuranceThreshold must be a float in [0, 1]"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "relativeOccuranceThreshold must be a float"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        user_file = EventLog.objects.get(id=file_id)
+    except EventLog.DoesNotExist:
+        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        parameters = {"object_types": object_type_filter} if object_type_filter else None
+
+        with _with_ocel_db(user_file) as db:
+            occn = discover_occn(db, relativeOccuranceThreshold=threshold, parameters=parameters)
+
+        result = serialize_occn(occn)
+        return Response(result, status=status.HTTP_200_OK)
+
+    except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
