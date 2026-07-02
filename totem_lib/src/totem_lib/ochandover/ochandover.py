@@ -547,14 +547,12 @@ class OCHANDOVER(nx.MultiDiGraph):
             r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()
         }
 
-        # Bridge arcs: keyed by (source_event, target_event, bo_type).
-        # Multiple BO instances that produce the same bridge share one entry here —
-        # the arc is a shared artifact, not duplicated per instance.
-        # Value is the minimum gap seen across all BO instances for that bridge.
-        _bridge_arcs: dict[tuple[str, str, str], int] = {}
+        # Bridge arcs: keyed by (source_event, target_event, bo_id) so each BO
+        # instance is tracked individually. Collapsing to bo_type happens after
+        # Pass 2, preserving correctness when different instances share a target event.
+        _bo_bridges: dict[tuple[str, str, str], int] = {}
 
         for _bid, _adj_map in _bo_adj.items():
-            _btype = _bo_type_map[_bid]
             _bo_resource_eids = _bo_all_events[_bid] & _resource_event_set
 
             for _r1 in _bo_resource_eids:
@@ -571,11 +569,11 @@ class OCHANDOVER(nx.MultiDiGraph):
                             continue
                         if _neid in _resource_event_set:
                             if max_gap is None or _gap <= max_gap:
-                                _key = (_r1, _neid, _btype)
-                                if _key not in _bridge_arcs:
-                                    _bridge_arcs[_key] = _gap
+                                _key = (_r1, _neid, _bid)
+                                if _key not in _bo_bridges:
+                                    _bo_bridges[_key] = _gap
                                 else:
-                                    _bridge_arcs[_key] = min(_bridge_arcs[_key], _gap)
+                                    _bo_bridges[_key] = min(_bo_bridges[_key], _gap)
                             _visited.add(_neid)
                         else:
                             _next_gap = _gap + 1
@@ -583,28 +581,48 @@ class OCHANDOVER(nx.MultiDiGraph):
                                 _visited.add(_neid)
                                 _queue.append((_neid, _next_gap))
 
-        # Resource expansion happens once after all bridges are collected and
-        # deduplicated, so each unique event-level transition yields exactly one
-        # handover regardless of how many BO instances share it.
-        #
-        # Secondary deduplication: repair arcs can produce multiple bridges from
-        # the same source event to different target events that resolve to the same
-        # (source_resource, target_resource) pair — e.g. an orphan repair adds
-        # e0→e2 alongside the kept e0→e1, both mapping to E0→E1, inflating the
-        # count. For each (source_event, source_resource, target_resource, bo_type)
-        # group keep only the bridge with the earliest target timestamp.
-        _best: dict[tuple[str, str, str, str], tuple[int, int]] = {}
-        for (_src_eid, _tgt_eid, _btype) in _bridge_arcs:
+        # Pass 2: for each (src_res, tgt_res, bo_id, tgt_event) keep only the bridge
+        # with the latest source timestamp. When the parallel filter produces both a
+        # dead-end repair arc and a sequential arc for the same object to the same
+        # target, this collapses them to one — the handover is attributed to the most
+        # recent activity on that object. Using bo_id (not bo_type) prevents collapsing
+        # genuinely separate handovers from different object instances that happen to
+        # share a target event (e.g. two objects processed sequentially, shipped in batch).
+        _pass2: dict[tuple[str, str, str, str], tuple[str, int, int]] = {}
+        # key: (src_res, tgt_res, bo_id, tgt_eid) → (src_eid, src_ts, gap)
+        for (_src_eid, _tgt_eid, _bid), _gap in _bo_bridges.items():
             _src_ts = _event_ts_dict.get(_src_eid, 0)
-            _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
             for _src in _event_resources_dict.get(_src_eid, []):
                 for _tgt in _event_resources_dict.get(_tgt_eid, []):
-                    _key = (_src_eid, _src, _tgt, _btype)
-                    if _key not in _best or _tgt_ts < _best[_key][0]:
-                        _best[_key] = (_tgt_ts, _src_ts)
+                    _p2_key = (_src, _tgt, _bid, _tgt_eid)
+                    if _p2_key not in _pass2 or _src_ts > _pass2[_p2_key][1]:
+                        _pass2[_p2_key] = (_src_eid, _src_ts, _gap)
 
+        # Pass 1: for each (src_event, src_res, tgt_res, bo_id) keep only the bridge
+        # with the earliest target timestamp. This removes orphan repair arc duplicates
+        # where one source event produces multiple target events for the same object
+        # and resource pair. Using bo_id (not bo_type) prevents incorrectly collapsing
+        # different objects that share a source event but have different target events.
+        _best: dict[tuple[str, str, str, str], tuple[str, int, int]] = {}
+        # key: (src_eid, src_res, tgt_res, bo_id) → (tgt_eid, tgt_ts, src_ts)
+        for (_src, _tgt, _bid, _tgt_eid), (_src_eid, _src_ts, _gap) in _pass2.items():
+            _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
+            _key = (_src_eid, _src, _tgt, _bid)
+            if _key not in _best or _tgt_ts < _best[_key][1]:
+                _best[_key] = (_tgt_eid, _tgt_ts, _src_ts)
+
+        # Exists dedup: collapse to one row per (src_event, tgt_event, src_res, tgt_res,
+        # bo_type). Multiple bo_ids of the same type involved in the same event-pair
+        # transition count as one handover — this is the OCPM advantage over flattening
+        # where each object would inflate the count.
+        _seen_pairs: set[tuple[str, str, str, str, str]] = set()
         _rows: list[dict] = []
-        for (_src_eid, _src, _tgt, _btype), (_tgt_ts, _src_ts) in _best.items():
+        for (_src_eid, _src, _tgt, _bid), (_tgt_eid, _tgt_ts, _src_ts) in _best.items():
+            _btype = _bo_type_map[_bid]
+            _pair_key = (_src_eid, _tgt_eid, _src, _tgt, _btype)
+            if _pair_key in _seen_pairs:
+                continue
+            _seen_pairs.add(_pair_key)
             _rows.append({
                 "source": _src,
                 "target": _tgt,
