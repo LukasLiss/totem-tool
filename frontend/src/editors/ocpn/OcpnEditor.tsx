@@ -248,8 +248,11 @@ function OcpnEditorInner() {
           markerEnd: {
             type: MarkerType.ArrowClosed,
             color,
-            width: variable ? 17 : 14,
-            height: variable ? 17 : 14,
+            // Absolute units — otherwise the marker scales with the wide
+            // stroke of variable arcs and renders as a giant triangle.
+            markerUnits: 'userSpaceOnUse',
+            width: variable ? 22 : 18,
+            height: variable ? 22 : 18,
           },
         };
       }),
