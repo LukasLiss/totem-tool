@@ -4329,173 +4329,109 @@ function computeDetailLayout(
 ): DetailLayoutState {
   if (detailNodes.length === 0) return {};
 
-  const nodes = detailNodes.map((detail) => {
-    const preferredDirection = detail.preferredSide === 'left' ? -1 : 1;
-    const baseDistance =
-      detail.anchor.width / 2 + detail.size.width / 2 + metrics.detailOffset;
-    const targetX =
-      detail.anchor.centerX +
-      preferredDirection * Math.max(baseDistance, metrics.detailMinDistance);
-    const targetY = detail.anchor.centerY;
-    const previous = previousLayout[detail.areaId];
+  const layout: DetailLayoutState = {};
+  const placedRects: Rect[] = [];
+  const padding = metrics.detailCollisionPadding;
 
-    return {
-      ...detail,
-      x: Number.isFinite(previous?.x) ? previous!.x : targetX,
-      y: Number.isFinite(previous?.y) ? previous!.y : targetY,
-      targetX,
-      targetY,
-      vx: 0,
-      vy: 0,
-    };
-  });
-
-  const getRect = (node: typeof nodes[number]) =>
-    detailRectFromCenter(
-      { x: node.x, y: node.y },
-      { width: node.size.width, height: node.size.height },
-      node.id,
-    );
-
-  const totalIterations = Math.max(1, Math.round(DETAIL_ITERATIONS * iterationScale));
-
-  for (let iteration = 0; iteration < totalIterations; iteration += 1) {
-    nodes.forEach((node) => {
-      node.vx = (node.vx + (node.targetX - node.x) * DETAIL_ANCHOR_SPRING) * DETAIL_DAMPING;
-      node.vy = (node.vy + (node.targetY - node.y) * DETAIL_ANCHOR_SPRING) * DETAIL_DAMPING;
-    });
-
-    for (let i = 0; i < nodes.length; i += 1) {
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const a = nodes[i];
-        const b = nodes[j];
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const minDx = (a.size.width + b.size.width) / 2 + metrics.detailCollisionPadding;
-        const minDy = (a.size.height + b.size.height) / 2 + metrics.detailCollisionPadding;
-        const overlapX = minDx - Math.abs(dx);
-        const overlapY = minDy - Math.abs(dy);
-
-        if (overlapX > 0 && overlapY > 0) {
-          const pushOnX = overlapX < overlapY;
-          const pushAmount = Math.min(overlapX, overlapY) * DETAIL_REPULSION;
-          if (pushOnX) {
-            const dirX = dx >= 0 ? 1 : -1;
-            a.vx += dirX * pushAmount;
-            b.vx -= dirX * pushAmount;
-          } else {
-            const dirY = dy >= 0 ? 1 : -1;
-            a.vy += dirY * pushAmount;
-            b.vy -= dirY * pushAmount;
-          }
-        } else {
-          const distance = Math.hypot(dx, dy);
-          const desiredRange = Math.max(minDx, minDy) * 1.35;
-          if (distance > 1e-3 && distance < desiredRange) {
-            const softness =
-              ((desiredRange - distance) / desiredRange) *
-              DETAIL_REPULSION *
-              0.45;
-            const ux = dx / distance;
-            const uy = dy / distance;
-            a.vx += ux * softness;
-            a.vy += uy * softness;
-            b.vx -= ux * softness;
-            b.vy -= uy * softness;
-          }
-        }
+  const isOverlap = (rect: Rect) => {
+    // Check against processAreas
+    for (const area of processAreas) {
+      if (
+        rect.left < area.right + padding &&
+        rect.right > area.left - padding &&
+        rect.top < area.bottom + padding &&
+        rect.bottom > area.top - padding
+      ) {
+        return true;
       }
     }
-
-    nodes.forEach((node) => {
-      const rect = getRect(node);
-      processAreas.forEach((area) => {
-        const expandedLeft = area.left - metrics.detailCollisionPadding;
-        const expandedRight = area.right + metrics.detailCollisionPadding;
-        const expandedTop = area.top - metrics.detailCollisionPadding;
-        const expandedBottom = area.bottom + metrics.detailCollisionPadding;
-        const overlapX = Math.min(rect.right, expandedRight) - Math.max(rect.left, expandedLeft);
-        const overlapY = Math.min(rect.bottom, expandedBottom) - Math.max(rect.top, expandedTop);
-        if (overlapX > 0 && overlapY > 0) {
-          const areaCenterX = (area.left + area.right) / 2;
-          const areaCenterY = (area.top + area.bottom) / 2;
-          if (overlapX < overlapY) {
-            const dir = node.x >= areaCenterX ? 1 : -1;
-            node.vx += dir * overlapX * DETAIL_OBSTACLE_PUSH;
-          } else {
-            const dir = node.y >= areaCenterY ? 1 : -1;
-            node.vy += dir * overlapY * DETAIL_OBSTACLE_PUSH;
-          }
-        }
-      });
-
-      node.x += node.vx;
-      node.y += node.vy;
-
-      if (!Number.isFinite(node.x)) node.x = node.targetX;
-      if (!Number.isFinite(node.y)) node.y = node.targetY;
-
-      const minX = node.size.width / 2 + metrics.detailMinDistance;
-      const minY = node.size.height / 2 + metrics.detailMinDistance;
-      node.x = Math.max(minX, node.x);
-      node.y = Math.max(minY, node.y);
-    });
-  }
-
-  // Final clean-up to make sure nothing overlaps after the simulation.
-  const resolveRectangleOverlap = (
-    rectA: Rect,
-    rectB: Rect,
-  ): { dx: number; dy: number } | null => {
-    const overlapX = Math.min(rectA.right, rectB.right) - Math.max(rectA.left, rectB.left);
-    const overlapY = Math.min(rectA.bottom, rectB.bottom) - Math.max(rectA.top, rectB.top);
-    if (overlapX > 0 && overlapY > 0) {
-      if (overlapX < overlapY) {
-        return { dx: overlapX * (rectA.left < rectB.left ? -0.5 : 0.5), dy: 0 };
+    // Check against already placed details
+    for (const placed of placedRects) {
+      if (
+        rect.left < placed.right + padding &&
+        rect.right > placed.left - padding &&
+        rect.top < placed.bottom + padding &&
+        rect.bottom > placed.top - padding
+      ) {
+        return true;
       }
-      return { dx: 0, dy: overlapY * (rectA.top < rectB.top ? -0.5 : 0.5) };
     }
-    return null;
+    return false;
   };
 
-  for (let pass = 0; pass < 3; pass += 1) {
-    for (let i = 0; i < nodes.length; i += 1) {
-      const a = nodes[i];
-      const rectA = getRect(a);
-      processAreas.forEach((area) => {
-        const overlap = resolveRectangleOverlap(rectA, {
-          ...area,
-          left: area.left - metrics.detailCollisionPadding,
-          right: area.right + metrics.detailCollisionPadding,
-          top: area.top - metrics.detailCollisionPadding,
-          bottom: area.bottom + metrics.detailCollisionPadding,
-        });
-        if (overlap) {
-          a.x += overlap.dx * 2;
-          a.y += overlap.dy * 2;
-        }
-      });
+  detailNodes.forEach((node) => {
+    const { anchor, size } = node;
+    let bestPos: { x: number; y: number } | null = null;
+    let bestDist = Infinity;
 
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const b = nodes[j];
-        const rectB = getRect(b);
-        const overlap = resolveRectangleOverlap(rectA, rectB);
-        if (overlap) {
-          a.x += overlap.dx;
-          a.y += overlap.dy;
-          b.x -= overlap.dx;
-          b.y -= overlap.dy;
+    // Search in 4 directions
+    const directions = [
+      { dx: 1, dy: 0, startD: anchor.width / 2 + size.width / 2 + metrics.detailOffset }, // Right
+      { dx: -1, dy: 0, startD: anchor.width / 2 + size.width / 2 + metrics.detailOffset }, // Left
+      { dx: 0, dy: 1, startD: anchor.height / 2 + size.height / 2 + metrics.detailOffset }, // Bottom
+      { dx: 0, dy: -1, startD: anchor.height / 2 + size.height / 2 + metrics.detailOffset }, // Top
+    ];
+    
+    // Sort directions to prefer the node's preferredSide if specified
+    if (node.preferredSide) {
+      const preferredDx = node.preferredSide === 'left' ? -1 : 1;
+      directions.sort((a, b) => {
+        if (a.dx === preferredDx && b.dx !== preferredDx) return -1;
+        if (b.dx === preferredDx && a.dx !== preferredDx) return 1;
+        return 0;
+      });
+    }
+
+    for (const dir of directions) {
+      let d = dir.startD;
+      let found = false;
+      while (d < 5000) { // max search distance
+        const cx = anchor.centerX + dir.dx * d;
+        const cy = anchor.centerY + dir.dy * d;
+        const rect: Rect = {
+          left: cx - size.width / 2,
+          right: cx + size.width / 2,
+          top: cy - size.height / 2,
+          bottom: cy + size.height / 2,
+          width: size.width,
+          height: size.height
+        };
+
+        if (!isOverlap(rect)) {
+          // Add a small penalty for going Top/Bottom if Left/Right is preferred
+          const penalty = (dir.dy !== 0 && node.preferredSide) ? 100 : 0;
+          if (d + penalty < bestDist) {
+            bestDist = d + penalty;
+            bestPos = { x: cx, y: cy };
+          }
+          found = true;
+          break; // Stop searching this direction once we find the first valid spot
         }
+        d += 40; // Step size
       }
     }
-  }
 
-  const layout: DetailLayoutState = {};
-  nodes.forEach((node) => {
+    if (!bestPos) {
+      // Fallback if somehow blocked for 5000px
+      bestPos = { 
+        x: anchor.centerX + (node.preferredSide === 'left' ? -1 : 1) * (anchor.width / 2 + size.width / 2 + metrics.detailOffset), 
+        y: anchor.centerY 
+      };
+    }
+
     layout[node.areaId] = {
-      x: Math.round(node.x * 100) / 100,
-      y: Math.round(node.y * 100) / 100,
+      x: Math.round(bestPos.x * 100) / 100,
+      y: Math.round(bestPos.y * 100) / 100,
     };
+
+    placedRects.push({
+      left: bestPos.x - size.width / 2,
+      right: bestPos.x + size.width / 2,
+      top: bestPos.y - size.height / 2,
+      bottom: bestPos.y + size.height / 2,
+      width: size.width,
+      height: size.height
+    });
   });
 
   return layout;
@@ -4805,12 +4741,79 @@ function buildLayersFromFrontend(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
+function getFilteredDetailData(
+  cachedDetail: OcdfgGraph | undefined,
+  detailedOcdfgView: boolean,
+  layers: ProcessLayer[],
+  area: ProcessAreaDefinition,
+): OcdfgGraph | null {
+  if (!cachedDetail) return null;
+  if (detailedOcdfgView) return cachedDetail;
+
+  const objectTypeToLevel = new Map<string, number>();
+  layers.forEach((layer) => {
+    layer.areas.forEach((a) => {
+      a.objectTypes.forEach((ot) => {
+        objectTypeToLevel.set(ot, layer.level);
+      });
+    });
+  });
+
+  const minLevel = layers.length > 0 ? Math.min(...layers.map((l) => l.level)) : 0;
+  if (area.level <= minLevel) {
+    return cachedDetail;
+  }
+
+  const filteredNodes = cachedDetail.nodes.filter((node) => {
+    const nodeTypes = node.types ?? [];
+    const hasLowerLevelType = nodeTypes.some((ot) => {
+      const otLevel = objectTypeToLevel.get(ot);
+      return otLevel !== undefined && otLevel < area.level;
+    });
+    return !hasLowerLevelType;
+  });
+
+  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
+  const filteredLinks = cachedDetail.links.filter((link) => {
+    return filteredNodeIds.has(link.source) && filteredNodeIds.has(link.target);
+  });
+
+  const originalDegree = new Map<string, number>();
+  cachedDetail.links.forEach((l) => {
+    originalDegree.set(l.source, (originalDegree.get(l.source) || 0) + 1);
+    originalDegree.set(l.target, (originalDegree.get(l.target) || 0) + 1);
+  });
+
+  const filteredDegree = new Map<string, number>();
+  filteredLinks.forEach((l) => {
+    filteredDegree.set(l.source, (filteredDegree.get(l.source) || 0) + 1);
+    filteredDegree.set(l.target, (filteredDegree.get(l.target) || 0) + 1);
+  });
+
+  const finalFilteredNodes = filteredNodes.filter((n) => {
+    const orig = originalDegree.get(n.id) || 0;
+    const curr = filteredDegree.get(n.id) || 0;
+    // Remove the node if it had edges originally, but lost all of them due to filtering
+    if (orig > 0 && curr === 0) {
+      return false;
+    }
+    return true;
+  });
+
+  return {
+    ...cachedDetail,
+    nodes: finalFilteredNodes,
+    links: filteredLinks,
+  };
+}
+
 function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
   if (useBackendMlpa && data.layers && data.layers.length > 0) {
     return buildLayersFromBackend(data);
   }
   return buildLayersFromFrontend(data);
 }
+
 
 function TotemVisualizer({
   eventLogId,
@@ -4872,6 +4875,7 @@ function TotemVisualizer({
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
   const [detailError, setDetailError] = useState<Record<string, string | undefined>>({});
   const [allOcdfgNodes, setAllOcdfgNodes] = useState<OcdfgNodeSummary[] | null>(null);
+  const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -5393,6 +5397,26 @@ function TotemVisualizer({
   useEffect(() => {
     levelMinimumWidthRef.current = levelMinimumWidth;
   }, [levelMinimumWidth]);
+
+  const filteredDetailCache = useMemo(() => {
+    const result: Record<string, OcdfgGraph> = {};
+    layers.forEach((layer) => {
+      layer.areas.forEach((area) => {
+        if (expandedAreas[area.id] && detailCache[area.id]) {
+          const filtered = getFilteredDetailData(
+            detailCache[area.id],
+            detailedOcdfgView,
+            layers,
+            area
+          );
+          if (filtered) {
+            result[area.id] = filtered;
+          }
+        }
+      });
+    });
+    return result;
+  }, [detailCache, detailedOcdfgView, layers, expandedAreas]);
   const detailEdgeSegments = useMemo(
     () => edgeSegments.filter((segment) => segment.relation === 'A'),
     [edgeSegments],
@@ -5905,15 +5929,16 @@ function TotemVisualizer({
             onClick={(e) => { e.stopPropagation(); zoomIn(); }}
             title="Zoom in"
             style={{
-              width: 28, height: 28, borderRadius: '50%', border: '1px solid #e2e8f0',
+              width: 36, height: 36, borderRadius: '50%', border: '1px solid #e2e8f0',
               background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center',
               justifyContent: 'center', color: '#475569',
               transition: 'background 120ms, border-color 120ms',
+              flexShrink: 0,
             }}
             onMouseEnter={e => (e.currentTarget.style.background = '#f1f5f9')}
             onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
@@ -5925,15 +5950,16 @@ function TotemVisualizer({
             onClick={(e) => { e.stopPropagation(); zoomOut(); }}
             title="Zoom out"
             style={{
-              width: 28, height: 28, borderRadius: '50%', border: '1px solid #e2e8f0',
+              width: 36, height: 36, borderRadius: '50%', border: '1px solid #e2e8f0',
               background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center',
               justifyContent: 'center', color: '#475569',
               transition: 'background 120ms, border-color 120ms',
+              flexShrink: 0,
             }}
             onMouseEnter={e => (e.currentTarget.style.background = '#f1f5f9')}
             onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
           </button>
@@ -5948,15 +5974,16 @@ function TotemVisualizer({
             }}
             title="Fit diagram to view"
             style={{
-              width: 28, height: 28, borderRadius: '50%', border: '1px solid #e2e8f0',
+              width: 36, height: 36, borderRadius: '50%', border: '1px solid #e2e8f0',
               background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center',
               justifyContent: 'center', color: '#475569',
               transition: 'background 120ms, border-color 120ms',
+              flexShrink: 0,
             }}
             onMouseEnter={e => (e.currentTarget.style.background = '#f1f5f9')}
             onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
               <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
               <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
@@ -5970,25 +5997,65 @@ function TotemVisualizer({
             onClick={(e) => { e.stopPropagation(); setPanLocked(prev => !prev); }}
             title={panLocked ? 'Unlock panning' : 'Lock panning'}
             style={{
-              width: 28, height: 28, borderRadius: '50%', border: '1px solid #e2e8f0',
+              width: 36, height: 36, borderRadius: '50%', border: '1px solid #e2e8f0',
               background: panLocked ? '#f1f5f9' : '#fff',
               cursor: 'pointer', display: 'flex', alignItems: 'center',
               justifyContent: 'center',
-              color: '#334155',
-              transition: 'background 120ms, border-color 120ms',
+              color: panLocked ? '#2563eb' : '#475569',
+              transition: 'background 120ms, color 120ms, border-color 120ms',
+              flexShrink: 0,
             }}
-            onMouseEnter={e => { if (!panLocked) e.currentTarget.style.background = '#f1f5f9'; }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; }}
             onMouseLeave={e => { e.currentTarget.style.background = panLocked ? '#f1f5f9' : '#fff'; }}
           >
             {panLocked ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
               </svg>
             ) : (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                 <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+              </svg>
+            )}
+          </button>
+
+          {/* Eye/Detail toggle */}
+          <button
+            data-totem-control
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              setDetailedOcdfgView(prev => !prev); 
+              setExpandedAreas({});
+              setDetailSizes({});
+              setDetailLayout({});
+              setDetailCache({});
+              setDetailLoading({});
+              setDetailError({});
+            }}
+            title={detailedOcdfgView ? 'Show level-based view (default)' : 'Show detailed view (all activities)'}
+            style={{
+              width: 36, height: 36, borderRadius: '50%', border: '1px solid #e2e8f0',
+              background: detailedOcdfgView ? '#f1f5f9' : '#fff',
+              cursor: 'pointer', display: 'flex', alignItems: 'center',
+              justifyContent: 'center',
+              color: detailedOcdfgView ? '#2563eb' : '#475569',
+              transition: 'background 120ms, color 120ms, border-color 120ms',
+              flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = detailedOcdfgView ? '#f1f5f9' : '#fff'; }}
+          >
+            {detailedOcdfgView ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
               </svg>
             )}
           </button>
@@ -6293,7 +6360,7 @@ function TotemVisualizer({
                           const cachedDetail = detailCache[area.id];
                           const loadingDetail = Boolean(detailLoading[area.id]);
                           const errorDetail = detailError[area.id];
-                          const detailData = cachedDetail;
+                          const detailData = filteredDetailCache[area.id] ?? null;
                           const areaColumns = area.objectTypes
                             .map((t) => nodeColumns[t])
                             .filter((c) => Number.isFinite(c));
