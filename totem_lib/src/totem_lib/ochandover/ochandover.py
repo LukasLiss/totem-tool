@@ -375,7 +375,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                     "source": f["source"],
                     "target": f["target"],
                     "bo_type": f["businessobject_type"],
-                    "bo_id": f["businessobject_id"],
+                    "bo_ids": f["businessobject_ids"],
                     "start_time": f["start_unix"] / _ts_div,
                     "duration": max(f["time_delta"] / _ts_div, 1.0),
                 }
@@ -613,33 +613,39 @@ class OCHANDOVER(nx.MultiDiGraph):
                 _best[_key] = (_tgt_eid, _tgt_ts, _src_ts)
 
         # Exists dedup: collapse to one row per (src_event, tgt_event, src_res, tgt_res,
-        # bo_type). Multiple bo_ids of the same type involved in the same event-pair
-        # transition count as one handover — this is the OCPM advantage over flattening
-        # where each object would inflate the count.
-        _seen_pairs: set[tuple[str, str, str, str, str]] = set()
-        _rows: list[dict] = []
+        # bo_type). All bo_ids sharing the same event-pair are accumulated so the
+        # frontend can draw connectors between flows that share any object instance.
+        _pair_rows: dict[tuple[str, str, str, str, str], dict] = {}
         for (_src_eid, _src, _tgt, _bid), (_tgt_eid, _tgt_ts, _src_ts) in _best.items():
             _btype = _bo_type_map[_bid]
             _pair_key = (_src_eid, _tgt_eid, _src, _tgt, _btype)
-            if _pair_key in _seen_pairs:
-                continue
-            _seen_pairs.add(_pair_key)
-            _rows.append({
-                "source": _src,
-                "target": _tgt,
-                "businessobject_type": _btype,
-                "businessobject_id": _bid,
-                "time_delta": _tgt_ts - _src_ts,
-                "start_unix": _src_ts,
-            })
+            if _pair_key not in _pair_rows:
+                _pair_rows[_pair_key] = {
+                    "source": _src,
+                    "target": _tgt,
+                    "businessobject_type": _btype,
+                    "businessobject_ids": [_bid],
+                    "time_delta": _tgt_ts - _src_ts,
+                    "start_unix": _src_ts,
+                }
+            else:
+                _pair_rows[_pair_key]["businessobject_ids"].append(_bid)
+        _rows = list(_pair_rows.values())
 
         if _rows:
-            return pl.DataFrame(_rows)
+            return pl.DataFrame(_rows, schema={
+                "source": pl.Utf8,
+                "target": pl.Utf8,
+                "businessobject_type": pl.Utf8,
+                "businessobject_ids": pl.List(pl.Utf8),
+                "time_delta": pl.Int64,
+                "start_unix": pl.Int64,
+            })
         return pl.DataFrame(schema={
             "source": pl.Utf8,
             "target": pl.Utf8,
             "businessobject_type": pl.Utf8,
-            "businessobject_id": pl.Utf8,
+            "businessobject_ids": pl.List(pl.Utf8),
             "time_delta": pl.Int64,
             "start_unix": pl.Int64,
         })

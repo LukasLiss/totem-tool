@@ -41,7 +41,7 @@ type FlowEvent = {
   source: string;
   target: string;
   bo_type: string;
-  bo_id: string;
+  bo_ids: string[];
   start_time: number;  // Unix seconds
   duration: number;    // seconds (>= 1)
 };
@@ -1315,7 +1315,8 @@ function updateDotLayer(
 
   type DotEntry = { px: number; py: number; t: number; color: string };
   const dots: DotEntry[] = [];
-  const boGroups = connectorMode !== "none" ? new Map<string, number[]>() : null;
+  // Inverted index: bo_id → dot indices that carry it
+  const boIndex = connectorMode !== "none" ? new Map<string, number[]>() : null;
 
   for (const flow of flows) {
     if (flow.start_time > currentTime || currentTime >= flow.start_time + flow.duration) continue;
@@ -1325,20 +1326,44 @@ function updateDotLayer(
     const pt = pathEl.getPointAtLength(t * pathEl.getTotalLength());
     const idx = dots.length;
     dots.push({ px: pt.x, py: pt.y, t, color: colorMap[flow.bo_type] ?? "#94a3b8" });
-    if (boGroups) {
-      if (!boGroups.has(flow.bo_id)) boGroups.set(flow.bo_id, []);
-      boGroups.get(flow.bo_id)!.push(idx);
+    if (boIndex) {
+      for (const bid of flow.bo_ids) {
+        if (!boIndex.has(bid)) boIndex.set(bid, []);
+        boIndex.get(bid)!.push(idx);
+      }
     }
   }
 
-  // Draw a single polyline through all active dots of the same bo_id.
-  // Angular sort around the centroid with largest-gap traversal gives a
-  // non-crossing open line regardless of how the dots are arranged.
-  if (boGroups) {
+  // Connected components: dots sharing any bo_id belong to the same group
+  const componentOf = boIndex ? new Int32Array(dots.length).fill(-1) : null;
+  if (boIndex && componentOf) {
+    let nextId = 0;
+    const merge = (a: number, b: number) => {
+      const ca = componentOf[a], cb = componentOf[b];
+      if (ca === -1 && cb === -1) { componentOf[a] = componentOf[b] = nextId++; }
+      else if (ca === -1) { componentOf[a] = cb; }
+      else if (cb === -1) { componentOf[b] = ca; }
+      else if (ca !== cb) { for (let k = 0; k < componentOf.length; k++) if (componentOf[k] === cb) componentOf[k] = ca; }
+    };
+    for (const indices of boIndex.values()) {
+      for (let i = 1; i < indices.length; i++) merge(indices[0], indices[i]);
+    }
+    for (let k = 0; k < componentOf.length; k++) if (componentOf[k] === -1) componentOf[k] = nextId++;
+  }
+
+  // Draw a polyline per connected component (dots sharing any bo_id).
+  // Angular sort around the centroid gives a non-crossing open line.
+  if (componentOf) {
     const FADE_T = 0.35;
-    for (const indices of boGroups.values()) {
+    const groups = new Map<number, number[]>();
+    for (let k = 0; k < dots.length; k++) {
+      const c = componentOf[k];
+      if (!groups.has(c)) groups.set(c, []);
+      groups.get(c)!.push(k);
+    }
+    for (const indices of groups.values()) {
       if (indices.length < 2) continue;
-      const avgT = indices.reduce((s, i) => s + dots[i].t, 0) / indices.length;
+      const avgT = indices.reduce((s: number, i: number) => s + dots[i].t, 0) / indices.length;
       let opacity: number;
       if (connectorMode === "fade") {
         opacity = Math.max(0, 1 - avgT / FADE_T);
@@ -1346,8 +1371,8 @@ function updateDotLayer(
       } else {
         opacity = 0.6;
       }
-      const cx = indices.reduce((s, i) => s + dots[i].px, 0) / indices.length;
-      const cy = indices.reduce((s, i) => s + dots[i].py, 0) / indices.length;
+      const cx = indices.reduce((s: number, i: number) => s + dots[i].px, 0) / indices.length;
+      const cy = indices.reduce((s: number, i: number) => s + dots[i].py, 0) / indices.length;
       const byAngle = [...indices]
         .map(i => ({ i, a: Math.atan2(dots[i].py - cy, dots[i].px - cx) }))
         .sort((x, y) => x.a - y.a);
