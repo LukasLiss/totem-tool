@@ -28,7 +28,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                   min_parallel_observations: int = 1,
                   cluster_map: dict[str, str] | None = None,
                   cluster_by_ot: bool = False,
-                  include_flows: bool = False) -> 'OCHANDOVER':
+                  include_flows: bool = False,
+                  include_bindings: bool = False) -> 'OCHANDOVER':
 
         """
             Normalization still an issue
@@ -502,7 +503,187 @@ class OCHANDOVER(nx.MultiDiGraph):
         if _animation_flows is not None:
             graph.graph["animation_flows"] = _animation_flows
 
+        if include_bindings:
+            _ev_res_dict: dict[str, list[str]] = {
+                r["_eventId"]: r["resources"] for r in event_resources.to_dicts()
+            }
+            graph.graph["bindings"] = cls._compute_bindings(eog_arcs, _ev_res_dict)
+
         return graph
+
+    @staticmethod
+    def _compute_bindings(
+        eog_arcs: pl.DataFrame,
+        event_resources_dict: dict[str, list[str]],
+    ) -> list[dict]:
+        """
+        Compute C-net style same-object binding annotations per resource.
+
+        A binding occurs when the same bo_id flows from one source event to 2+
+        distinct target resources simultaneously (one BFS per source event per bo_id).
+        Returns a flat list of binding dicts for frontend overlay rendering.
+
+        Each dict: {type, resource, arcs: [{other_resource, bo_type, mark, is_gapped}],
+                    line_type, count}
+        mark = "dot" (single object) | "square" (multiple objects on that arc at that event).
+        line_type = "solid" | "dotted" | None (solo).
+        is_gapped = True if any occurrence had intermediate non-resource events.
+        """
+        from collections import defaultdict, deque
+
+        resource_event_set = set(event_resources_dict.keys())
+
+        # Build per-BO adjacency and type map
+        bo_adj: dict[str, dict[str, list[str]]] = {}
+        bo_type_map: dict[str, str] = {}
+        for row in eog_arcs.iter_rows(named=True):
+            bid = row["businessobject_id"]
+            if bid not in bo_adj:
+                bo_adj[bid] = {}
+                bo_type_map[bid] = row["businessobject_type"]
+            bo_adj[bid].setdefault(row["source_event"], []).append(row["target_event"])
+
+        # BFS per (bo_id, source_event): find all reachable target resource events.
+        # src_obj_out[(src_event, bo_id)] = {tgt_res: is_gapped}  — False wins over True
+        # tgt_obj_in[(tgt_event, bo_id)] = {src_res: is_gapped}
+        src_obj_out: dict[tuple, dict[str, bool]] = defaultdict(dict)
+        tgt_obj_in:  dict[tuple, dict[str, bool]] = defaultdict(dict)
+
+        for bid, adj in bo_adj.items():
+            all_ev = set(adj.keys()) | {e for vs in adj.values() for e in vs}
+            for src_ev in all_ev & resource_event_set:
+                queue: deque = deque([(src_ev, 0)])
+                visited: set[str] = {src_ev}
+                while queue:
+                    eid, gap = queue.popleft()
+                    for neid in adj.get(eid, []):
+                        if neid in visited:
+                            continue
+                        if neid in resource_event_set:
+                            visited.add(neid)
+                            is_gapped = gap > 0
+                            for tgt_res in event_resources_dict.get(neid, []):
+                                prev = src_obj_out[(src_ev, bid)].get(tgt_res)
+                                if prev is None or (prev and not is_gapped):
+                                    src_obj_out[(src_ev, bid)][tgt_res] = is_gapped
+                            for src_res in event_resources_dict.get(src_ev, []):
+                                prev = tgt_obj_in[(neid, bid)].get(src_res)
+                                if prev is None or (prev and not is_gapped):
+                                    tgt_obj_in[(neid, bid)][src_res] = is_gapped
+                        else:
+                            visited.add(neid)
+                            queue.append((neid, gap + 1))
+
+        # arc_total_out[(src_event, bo_type, tgt_res)] = set of bo_ids crossing this arc at this event
+        # Used to determine dot (1 object) vs square (multiple objects).
+        arc_total_out: dict[tuple, set] = defaultdict(set)
+        for (src_ev, bid), tgt_map in src_obj_out.items():
+            bt = bo_type_map[bid]
+            for tgt_res in tgt_map:
+                arc_total_out[(src_ev, bt, tgt_res)].add(bid)
+
+        arc_total_in: dict[tuple, set] = defaultdict(set)
+        for (tgt_ev, bid), src_map in tgt_obj_in.items():
+            bt = bo_type_map[bid]
+            for src_res in src_map:
+                arc_total_in[(tgt_ev, bt, src_res)].add(bid)
+
+        result: list[dict] = []
+
+        def _line_type(arc_bo_sets: list[set]) -> str:
+            """solid if total bo_id sets form a chain of subsets; dotted if cross-cutting."""
+            intersection = arc_bo_sets[0].copy()
+            for s in arc_bo_sets[1:]:
+                intersection &= s
+            min_set = min(arc_bo_sets, key=len)
+            return "solid" if intersection == min_set else "dotted"
+
+        def _build(obj_map: dict, arc_totals: dict, direction: str) -> None:
+            # arc_marks_all: aggregate over ALL occurrences (binding + solo) — used
+            # to determine the mark type (dot/square) shown inside binding entries.
+            arc_marks_all: dict[tuple, dict] = {}  # (res, other_res, bt) → info
+            # arc_marks_solo: aggregate over SOLO-ONLY occurrences (same bo_id goes
+            # to exactly 1 target at that event). These always emit their own entry
+            # and are never suppressed by binding entries on the same arc.
+            arc_marks_solo: dict[tuple, dict] = {}
+
+            bind_info: dict[tuple, dict] = {}   # (res, pattern, bt) → info
+
+            for (event, bid), other_map in obj_map.items():
+                if not other_map:
+                    continue
+                bt = bo_type_map[bid]
+
+                for res in event_resources_dict.get(event, []):
+                    targets = list(other_map.items())  # [(other_res, is_gapped)]
+
+                    # Update arc_marks_all for every target unconditionally.
+                    for other_res, is_gapped in targets:
+                        total = arc_totals.get((event, bt, other_res), {bid})
+                        mark = "square" if len(total) > 1 else "dot"
+                        arc_key = (res, other_res, bt)
+                        if arc_key not in arc_marks_all:
+                            arc_marks_all[arc_key] = {"mark": "dot", "any_gapped": False, "count": 0}
+                        arc_marks_all[arc_key]["count"] += 1
+                        if mark == "square":
+                            arc_marks_all[arc_key]["mark"] = "square"
+                        if is_gapped:
+                            arc_marks_all[arc_key]["any_gapped"] = True
+
+                    if len(targets) >= 2:
+                        # Same-object binding: this bo_id goes to 2+ targets simultaneously.
+                        pattern = frozenset(or_ for or_, _ in targets)
+                        key = (res, pattern, bt)
+                        if key not in bind_info:
+                            bind_info[key] = {"line_type": "solid", "count": 0}
+                        bind_info[key]["count"] += 1
+                        arc_bo_sets = [arc_totals.get((event, bt, or_), {bid}) for or_ in pattern]
+                        if _line_type(arc_bo_sets) == "dotted":
+                            bind_info[key]["line_type"] = "dotted"
+                    else:
+                        # Solo occurrence: this bo_id goes to exactly 1 target.
+                        # Track separately so we always emit a mark for it, even when
+                        # the same arc also appears inside a binding entry.
+                        other_res, is_gapped = targets[0]
+                        total = arc_totals.get((event, bt, other_res), {bid})
+                        mark = "square" if len(total) > 1 else "dot"
+                        solo_key = (res, other_res, bt)
+                        if solo_key not in arc_marks_solo:
+                            arc_marks_solo[solo_key] = {"mark": "dot", "any_gapped": False, "count": 0}
+                        arc_marks_solo[solo_key]["count"] += 1
+                        if mark == "square":
+                            arc_marks_solo[solo_key]["mark"] = "square"
+                        if is_gapped:
+                            arc_marks_solo[solo_key]["any_gapped"] = True
+
+            for (res, pattern, bt), info in bind_info.items():
+                result.append({
+                    "type": direction,
+                    "resource": res,
+                    "arcs": sorted(
+                        [{"other_resource": or_, "bo_type": bt,
+                          "mark": arc_marks_all.get((res, or_, bt), {}).get("mark", "dot"),
+                          "is_gapped": arc_marks_all.get((res, or_, bt), {}).get("any_gapped", False)}
+                         for or_ in pattern],
+                        key=lambda x: x["other_resource"],
+                    ),
+                    "line_type": info["line_type"],
+                    "count": info["count"],
+                })
+
+            for (res, other_res, bt), info in arc_marks_solo.items():
+                result.append({
+                    "type": direction,
+                    "resource": res,
+                    "arcs": [{"other_resource": other_res, "bo_type": bt,
+                               "mark": info["mark"], "is_gapped": info["any_gapped"]}],
+                    "line_type": None,
+                    "count": info["count"],
+                })
+
+        _build(src_obj_out, arc_total_out, "output")
+        _build(tgt_obj_in,  arc_total_in,  "input")
+        return result
 
     @staticmethod
     def _resource_pairs_from_eog(

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useContext } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useContext } from "react";
 import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, X } from "lucide-react";
@@ -48,6 +48,19 @@ type FlowEvent = {
 type FlowsData = {
   flows: FlowEvent[];
   timeline: { start: number; end: number };
+};
+type BindingArc = {
+  other_resource: string;
+  bo_type: string;
+  mark: "dot" | "square";
+  is_gapped: boolean;
+};
+type BindingPattern = {
+  type: "output" | "input";
+  resource: string;
+  arcs: BindingArc[];
+  line_type: "solid" | "dotted" | null;
+  count: number;
 };
 
 type OCHandoverExplorerProps = {
@@ -147,6 +160,7 @@ export default function OCHandoverExplorer({
   const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
   const nodeSearchRef = useRef<HTMLDivElement>(null);
   const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const graphViewBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const { clusterInfo } = useContext(ClusterContext);
   const [useClusters, setUseClusters] = useState(false);
   const [clusterByOt, setClusterByOt] = useState(false);
@@ -155,6 +169,8 @@ export default function OCHandoverExplorer({
   const [logError, setLogError] = useState("");
   const [flowsData, setFlowsData] = useState<FlowsData | null>(null);
   const [flowsStatus, setFlowsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [bindingsData, setBindingsData] = useState<BindingPattern[] | null>(null);
+  const [bindingsStatus, setBindingsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [animIsPlaying, setAnimIsPlaying] = useState(false);
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
@@ -261,7 +277,7 @@ export default function OCHandoverExplorer({
   }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs, clusterByOt]);
 
   // Reset selected node and locked height when data changes
-  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); graphPositionsRef.current = {}; }, [data]);
+  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); graphPositionsRef.current = {}; graphViewBoxRef.current = null; }, [data]);
 
   // Reset log data when fileId changes
   useEffect(() => {
@@ -433,10 +449,12 @@ export default function OCHandoverExplorer({
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
-  // Clear flows when handover data is recomputed
+  // Clear flows + bindings when handover data is recomputed
   useEffect(() => {
     setFlowsData(null);
     setFlowsStatus("idle");
+    setBindingsData(null);
+    setBindingsStatus("idle");
   }, [data]);
 
   const fetchFlows = async () => {
@@ -496,6 +514,62 @@ export default function OCHandoverExplorer({
       }
     } catch {
       setFlowsStatus("error");
+    }
+  };
+
+  const fetchBindings = async () => {
+    if (!fileId || bindingsStatus === "loading") return;
+    setBindingsStatus("loading");
+    setBindingsData(null);
+    const token = localStorage.getItem("access_token");
+    if (!token) { setBindingsStatus("error"); return; }
+    const params: Record<string, string> = {
+      file_id: String(fileId),
+      method,
+      include_bindings: "true",
+    };
+    if (method === "oc") {
+      params.resource_types = [...resourceTypes].join(",");
+      params.businessobject_types = [...boTypes].join(",");
+      if (maxGap !== null) params.max_gap = String(maxGap);
+      params.normalization = normalization;
+      params.normalization_scope = normalizationScope;
+      if (parallelFilterEnabled) {
+        params.parallel_threshold = String(parallelThreshold);
+        params.min_parallel_observations = String(minParallelObs);
+      }
+      if (clusterByOt) params.cluster_by_ot = "true";
+    } else {
+      params.case_type = caseType;
+      params.resource_type = flatResourceType;
+      if (maxGap !== null) params.max_gap = String(maxGap);
+    }
+    try {
+      const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+      const res = activeClusterMap
+        ? await fetch("/api/handover/", {
+            method: "POST",
+            credentials: "include",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
+          })
+        : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
+            credentials: "include",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const result = await res.json();
+      if (Array.isArray(result.bindings)) {
+        setBindingsData(result.bindings);
+        setBindingsStatus("ready");
+      } else {
+        setBindingsStatus("error");
+      }
+    } catch {
+      setBindingsStatus("error");
     }
   };
 
@@ -1006,6 +1080,20 @@ export default function OCHandoverExplorer({
                   )}
                 </div>
               )}
+              {viewMode === "graph" && method === "oc" && !selectedNode && (
+                <button
+                  className={`flex items-center gap-1.5 h-8 px-3 text-sm font-medium border rounded-md hover:bg-accent transition-colors shrink-0 disabled:opacity-50${bindingsData ? " bg-accent" : ""}`}
+                  onClick={bindingsData
+                    ? () => { setBindingsData(null); setBindingsStatus("idle"); }
+                    : fetchBindings}
+                  disabled={bindingsStatus === "loading"}
+                  title="Show C-net bindings"
+                >
+                  {bindingsStatus === "loading"
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <><Network className="h-3.5 w-3.5" />{!bindingsData && <span>Bindings</span>}</>}
+                </button>
+              )}
               {viewMode === "graph" && (
                 <div ref={nodeSearchRef} className="relative shrink-0 ml-auto">
                   <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ width: 14, height: 14 }} />
@@ -1056,6 +1144,7 @@ export default function OCHandoverExplorer({
                     onNodeClick={setSelectedNode}
                     clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
                     positionsRef={graphPositionsRef}
+                    savedViewBoxRef={graphViewBoxRef}
                     onVisibleNodesChange={setVisibleGraphNodes}
                     clustered={(useClusters && !!clusterInfo) || clusterByOt}
                     parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
@@ -1070,6 +1159,7 @@ export default function OCHandoverExplorer({
                     playRef={animPlayRef}
                     pauseRef={animPauseRef}
                     scrubRef={animScrubRef}
+                    bindingsData={bindingsData}
                   />
                 </div>
                 {selectedNode && (
@@ -1415,6 +1505,7 @@ function HandoverGraph({
   onNodeClick,
   clusterInfo,
   positionsRef,
+  savedViewBoxRef,
   onVisibleNodesChange,
   clustered,
   parallelFilter,
@@ -1429,6 +1520,7 @@ function HandoverGraph({
   playRef,
   pauseRef,
   scrubRef,
+  bindingsData,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1436,6 +1528,7 @@ function HandoverGraph({
   onNodeClick?: (id: string) => void;
   clusterInfo?: ClusterInfo;
   positionsRef?: { current: Record<string, { x: number; y: number }> };
+  savedViewBoxRef?: { current: { x: number; y: number; w: number; h: number } | null };
   onVisibleNodesChange?: (nodes: HandoverNode[]) => void;
   clustered?: boolean;
   parallelFilter?: { enabled: boolean; threshold: number; minObs: number };
@@ -1450,6 +1543,7 @@ function HandoverGraph({
   playRef?: React.RefObject<(() => void) | null>;
   pauseRef?: React.RefObject<(() => void) | null>;
   scrubRef?: React.RefObject<((t: number) => void) | null>;
+  bindingsData?: BindingPattern[] | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1480,6 +1574,7 @@ function HandoverGraph({
   const lastWallClockRef = useRef<number | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const dotsLayerRef = useRef<SVGGElement>(null);
+  const bindingsLayerRef = useRef<SVGGElement>(null);
   const pathMapRef = useRef<Map<string, SVGPathElement>>(new Map());
   const frameCountRef = useRef(0);
 
@@ -1501,8 +1596,8 @@ function HandoverGraph({
     if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
   }, [flowsData]);
 
-  // Rebuild path lookup map after edges are re-rendered in the DOM
-  useEffect(() => {
+  // Rebuild path lookup map after edges are re-rendered in the DOM (must run before binding layer)
+  useLayoutEffect(() => {
     if (!svgRef.current) return;
     const map = new Map<string, SVGPathElement>();
     svgRef.current.querySelectorAll<SVGPathElement>("[data-flow-edge]").forEach(el => {
@@ -1510,6 +1605,142 @@ function HandoverGraph({
       map.set(key, el);
     });
     pathMapRef.current = map;
+  });
+
+  // Render C-net binding overlay imperatively so we can use getPointAtLength on live SVG paths
+  useLayoutEffect(() => {
+    const layer = bindingsLayerRef.current;
+    if (!layer) return;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+    if (!bindingsData || bindingsData.length === 0) return;
+
+    const NS = "http://www.w3.org/2000/svg";
+    const pathMap = pathMapRef.current;
+    const BASE = 18;      // px from node boundary along edge path to first slot
+    const SLOT_STEP = 11; // px between slots for multiple bindings on same arc
+    const DOT_R = 4;      // circle mark radius
+    const SQ_SZ = 4.5;   // half-size of square mark
+
+    for (const side of ["output", "input"] as const) {
+      // Process solos (arcs.length === 1) first so they occupy slot 0
+      const bindings = [...bindingsData.filter(b => b.type === side)]
+        .sort((a, b) => a.arcs.length - b.arcs.length);
+
+      const arcNextSlot = new Map<string, number>();
+
+      for (const binding of bindings) {
+        const isOutput = side === "output";
+        // pathKeys include bo_type for SVG path lookup;
+        // slotKeys omit bo_type so different object types on the same node pair
+        // share a slot counter and get different offsets instead of overlapping.
+        const pathKeys = binding.arcs.map(arc =>
+          isOutput
+            ? `${binding.resource}|${arc.other_resource}|${arc.bo_type}`
+            : `${arc.other_resource}|${binding.resource}|${arc.bo_type}`
+        );
+        const slotKeys = binding.arcs.map(arc =>
+          isOutput
+            ? `${binding.resource}|${arc.other_resource}`
+            : `${arc.other_resource}|${binding.resource}`
+        );
+
+        const slot = Math.max(0, ...slotKeys.map(k => arcNextSlot.get(k) ?? 0));
+        for (const key of slotKeys) arcNextSlot.set(key, slot + 1);
+
+        // Dot positions on edge paths
+        const dots: { x: number; y: number; color: string; is_gapped: boolean; mark: "dot" | "square" }[] = [];
+        for (let i = 0; i < pathKeys.length; i++) {
+          const path = pathMap.get(pathKeys[i]);
+          if (!path) continue;
+          const len = path.getTotalLength();
+          const offset = Math.min(BASE + slot * SLOT_STEP, len * 0.45);
+          const pt = path.getPointAtLength(isOutput ? offset : len - offset);
+          dots.push({ x: pt.x, y: pt.y, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark });
+        }
+        if (dots.length === 0) continue;
+
+        // Connector: circular arc centred at node, radius = avg dot distance from node
+        if (dots.length >= 2) {
+          const nodePos = positions[binding.resource];
+          if (nodePos) {
+            const { x: cx, y: cy } = nodePos;
+            const withAngle = dots.map(d => ({
+              angle: Math.atan2(d.y - cy, d.x - cx),
+              dist: Math.sqrt((d.x - cx) ** 2 + (d.y - cy) ** 2),
+            }));
+            // Largest-gap sort so we sweep the short arc
+            const sorted = [...withAngle].sort((a, b) => a.angle - b.angle);
+            const n = sorted.length;
+            let maxGap = -1, gapIdx = 0;
+            for (let i = 0; i < n; i++) {
+              const gap = ((sorted[(i + 1) % n].angle - sorted[i].angle) + 2 * Math.PI) % (2 * Math.PI);
+              if (gap > maxGap) { maxGap = gap; gapIdx = i; }
+            }
+            const startIdx = (gapIdx + 1) % n;
+            const ordered = [...sorted.slice(startIdx), ...sorted.slice(0, startIdx)];
+            const R = ordered.reduce((s, d) => s + d.dist, 0) / ordered.length;
+            const first = ordered[0], last = ordered[ordered.length - 1];
+            const sx = cx + R * Math.cos(first.angle), sy = cy + R * Math.sin(first.angle);
+            const ex = cx + R * Math.cos(last.angle),  ey = cy + R * Math.sin(last.angle);
+            const arcSpan = ((last.angle - first.angle) + 2 * Math.PI) % (2 * Math.PI);
+            const largeArc = arcSpan > Math.PI ? 1 : 0;
+            const color = typeColorMap[binding.arcs[0].bo_type] ?? "#888";
+            const arc = document.createElementNS(NS, "path");
+            arc.setAttribute("d", `M${sx.toFixed(1)} ${sy.toFixed(1)} A${R.toFixed(1)} ${R.toFixed(1)} 0 ${largeArc} 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`);
+            arc.setAttribute("fill", "none");
+            arc.setAttribute("stroke", color);
+            arc.setAttribute("stroke-width", "1.5");
+            arc.setAttribute("stroke-linecap", "round");
+            arc.setAttribute("stroke-dasharray", binding.line_type === "dotted" ? "4 3" : "none");
+            arc.setAttribute("opacity", "0.9");
+            layer.appendChild(arc);
+          }
+        }
+
+        // Marks: filled = direct, hollow ring = gapped; circle = dot, square = square
+        // Each mark is rendered as a white halo first, then the colored shape on top.
+        const HALO = 2;
+        for (const dot of dots) {
+          if (dot.mark === "square") {
+            const halo = document.createElementNS(NS, "rect");
+            halo.setAttribute("x", (dot.x - SQ_SZ - HALO).toFixed(1));
+            halo.setAttribute("y", (dot.y - SQ_SZ - HALO).toFixed(1));
+            halo.setAttribute("width", ((SQ_SZ + HALO) * 2).toFixed(1));
+            halo.setAttribute("height", ((SQ_SZ + HALO) * 2).toFixed(1));
+            halo.setAttribute("fill", "white");
+            halo.setAttribute("opacity", "0.85");
+            layer.appendChild(halo);
+            const rect = document.createElementNS(NS, "rect");
+            rect.setAttribute("x", (dot.x - SQ_SZ).toFixed(1));
+            rect.setAttribute("y", (dot.y - SQ_SZ).toFixed(1));
+            rect.setAttribute("width", (SQ_SZ * 2).toFixed(1));
+            rect.setAttribute("height", (SQ_SZ * 2).toFixed(1));
+            rect.setAttribute("fill", dot.is_gapped ? "white" : dot.color);
+            rect.setAttribute("stroke", dot.color);
+            rect.setAttribute("stroke-width", dot.is_gapped ? "1.5" : "1");
+            rect.setAttribute("opacity", "0.95");
+            layer.appendChild(rect);
+          } else {
+            const halo = document.createElementNS(NS, "circle");
+            halo.setAttribute("cx", dot.x.toFixed(1));
+            halo.setAttribute("cy", dot.y.toFixed(1));
+            halo.setAttribute("r", String(DOT_R + HALO));
+            halo.setAttribute("fill", "white");
+            halo.setAttribute("opacity", "0.85");
+            layer.appendChild(halo);
+            const circle = document.createElementNS(NS, "circle");
+            circle.setAttribute("cx", dot.x.toFixed(1));
+            circle.setAttribute("cy", dot.y.toFixed(1));
+            circle.setAttribute("r", String(DOT_R));
+            circle.setAttribute("fill", dot.is_gapped ? "white" : dot.color);
+            circle.setAttribute("stroke", dot.color);
+            circle.setAttribute("stroke-width", dot.is_gapped ? "1.5" : "1");
+            circle.setAttribute("opacity", "0.95");
+            layer.appendChild(circle);
+          }
+        }
+      }
+    }
   });
 
   const playAnimation = () => {
@@ -1648,6 +1879,8 @@ function HandoverGraph({
     const saved = positionsRef?.current ?? {};
     if (nodes.every(n => saved[n.id])) {
       setPositions({ ...saved });
+      // Restore the viewBox the user had before unmounting (preserves zoom/pan)
+      if (savedViewBoxRef?.current) setViewBox(savedViewBoxRef.current);
       return;
     }
 
@@ -1717,7 +1950,9 @@ function HandoverGraph({
     let fw = Math.max((fmaxX - fminX) * 1.15, MIN_VB), fh = Math.max((fmaxY - fminY) * 1.15, MIN_VB);
     const ratio = size.width / (size.height || 1);
     if (fw / fh < ratio) fw = fh * ratio; else fh = fw / ratio;
-    setViewBox({ x: fminX - (fw - (fmaxX - fminX)) / 2, y: fminY - (fh - (fmaxY - fminY)) / 2, w: fw, h: fh });
+    const computedVb = { x: fminX - (fw - (fmaxX - fminX)) / 2, y: fminY - (fh - (fmaxY - fminY)) / 2, w: fw, h: fh };
+    setViewBox(computedVb);
+    if (savedViewBoxRef) savedViewBoxRef.current = computedVb;
   }, [nodes, edges, size]);
 
   const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
@@ -1994,37 +2229,42 @@ function HandoverGraph({
   }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight]);
 
   const zoomIn = () => {
-    setViewBox(vb => {
-      const nw = vb.w / 1.25, nh = vb.h / 1.25;
-      return { x: vb.x + (vb.w - nw) / 2, y: vb.y + (vb.h - nh) / 2, w: nw, h: nh };
-    });
+    const vb = viewBoxRef.current;
+    const nw = vb.w / 1.25, nh = vb.h / 1.25;
+    const newVb = { x: vb.x + (vb.w - nw) / 2, y: vb.y + (vb.h - nh) / 2, w: nw, h: nh };
+    setViewBox(newVb);
+    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
 
   const zoomOut = () => {
-    setViewBox(vb => {
-      const nw = vb.w * 1.25, nh = vb.h * 1.25;
-      return { x: vb.x - (nw - vb.w) / 2, y: vb.y - (nh - vb.h) / 2, w: nw, h: nh };
-    });
+    const vb = viewBoxRef.current;
+    const nw = vb.w * 1.25, nh = vb.h * 1.25;
+    const newVb = { x: vb.x - (nw - vb.w) / 2, y: vb.y - (nh - vb.h) / 2, w: nw, h: nh };
+    setViewBox(newVb);
+    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
 
   const fitToView = () => {
+    let newVb: { x: number; y: number; w: number; h: number };
     if (Object.keys(positions).length === 0) {
-      setViewBox({ x: 0, y: 0, w: size.width, h: size.height });
-      return;
+      newVb = { x: 0, y: 0, w: size.width, h: size.height };
+    } else {
+      const xs = Object.values(positions).map(p => p.x);
+      const ys = Object.values(positions).map(p => p.y);
+      const pad = NODE_R + 20;
+      const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
+      const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+      // Minimum size ensures self-loops (which arch ~NODE_R*2.4 above the node) remain visible.
+      const MIN_VB = NODE_R * 10;
+      let w = Math.max((maxX - minX) * 1.15, MIN_VB);
+      let h = Math.max((maxY - minY) * 1.15, MIN_VB);
+      const ratio = size.width / (size.height || 1);
+      if (w / h < ratio) w = h * ratio; else h = w / ratio;
+      newVb = { x: cx - w / 2, y: cy - h / 2, w, h };
     }
-    const xs = Object.values(positions).map(p => p.x);
-    const ys = Object.values(positions).map(p => p.y);
-    const pad = NODE_R + 20;
-    const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
-    const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    // Minimum size ensures self-loops (which arch ~NODE_R*2.4 above the node) remain visible.
-    const MIN_VB = NODE_R * 10;
-    let w = Math.max((maxX - minX) * 1.15, MIN_VB);
-    let h = Math.max((maxY - minY) * 1.15, MIN_VB);
-    const ratio = size.width / (size.height || 1);
-    if (w / h < ratio) w = h * ratio; else h = w / ratio;
-    setViewBox({ x: cx - w / 2, y: cy - h / 2, w, h });
+    setViewBox(newVb);
+    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
 
   // Node drag handlers
@@ -2403,6 +2643,8 @@ function HandoverGraph({
           });
           })()}
 
+          {/* C-net binding overlay — populated imperatively */}
+          <g ref={bindingsLayerRef} />
           {/* Animation dots layer — populated imperatively by updateDotLayer */}
           <g ref={dotsLayerRef} />
         </svg>
