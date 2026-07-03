@@ -1331,33 +1331,41 @@ function updateDotLayer(
     }
   }
 
-  // Draw connectors between all currently active dots of the same bo_id
+  // Draw a single polyline through all active dots of the same bo_id.
+  // Angular sort around the centroid with largest-gap traversal gives a
+  // non-crossing open line regardless of how the dots are arranged.
   if (boGroups) {
     const FADE_T = 0.35;
     for (const indices of boGroups.values()) {
       if (indices.length < 2) continue;
-      for (let i = 0; i < indices.length; i++) {
-        for (let j = i + 1; j < indices.length; j++) {
-          const a = dots[indices[i]], b = dots[indices[j]];
-          let opacity: number;
-          if (connectorMode === "fade") {
-            opacity = Math.max(0, 1 - (a.t + b.t) / 2 / FADE_T);
-            if (opacity <= 0) continue;
-          } else {
-            opacity = 0.6;
-          }
-          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          line.setAttribute("x1", String(a.px));
-          line.setAttribute("y1", String(a.py));
-          line.setAttribute("x2", String(b.px));
-          line.setAttribute("y2", String(b.py));
-          line.setAttribute("stroke", a.color);
-          line.setAttribute("stroke-width", "1.5");
-          line.setAttribute("opacity", String(opacity));
-          line.setAttribute("pointer-events", "none");
-          layer.appendChild(line);
-        }
+      const avgT = indices.reduce((s, i) => s + dots[i].t, 0) / indices.length;
+      let opacity: number;
+      if (connectorMode === "fade") {
+        opacity = Math.max(0, 1 - avgT / FADE_T);
+        if (opacity <= 0) continue;
+      } else {
+        opacity = 0.6;
       }
+      const cx = indices.reduce((s, i) => s + dots[i].px, 0) / indices.length;
+      const cy = indices.reduce((s, i) => s + dots[i].py, 0) / indices.length;
+      const byAngle = [...indices]
+        .map(i => ({ i, a: Math.atan2(dots[i].py - cy, dots[i].px - cx) }))
+        .sort((x, y) => x.a - y.a);
+      let maxGap = -1, startIdx = 0;
+      for (let k = 0; k < byAngle.length; k++) {
+        const gap = ((byAngle[(k + 1) % byAngle.length].a - byAngle[k].a) + 2 * Math.PI) % (2 * Math.PI);
+        if (gap > maxGap) { maxGap = gap; startIdx = (k + 1) % byAngle.length; }
+      }
+      const ordered = [...byAngle.slice(startIdx), ...byAngle.slice(0, startIdx)];
+      const d = ordered.map(({ i }, k) => `${k === 0 ? "M" : "L"}${dots[i].px} ${dots[i].py}`).join(" ");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+      path.setAttribute("stroke", dots[indices[0]].color);
+      path.setAttribute("stroke-width", "1.5");
+      path.setAttribute("fill", "none");
+      path.setAttribute("opacity", String(opacity));
+      path.setAttribute("pointer-events", "none");
+      layer.appendChild(path);
     }
   }
 
