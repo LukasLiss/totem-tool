@@ -38,8 +38,16 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const { selectedFile } = context;
   const [files, setFiles] = useState<any[]>([]);
   const [dashboards, setDashboards] = useState<any[]>([]);
+  // Bumped by the AI assistant (and other actors) after data mutations
+  const [refreshTick, setRefreshTick] = useState(0);
 
   console.log("Current selectedFile:", selectedFile);
+
+  useEffect(() => {
+    const onRefresh = () => setRefreshTick((tick) => tick + 1);
+    window.addEventListener("totem:refresh-data", onRefresh);
+    return () => window.removeEventListener("totem:refresh-data", onRefresh);
+  }, []);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -53,7 +61,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       }
     };
     fetchFiles();
-  }, []);
+  }, [refreshTick]);
 
   useEffect(() => {
     const fetchDashboards = async () => {
@@ -71,7 +79,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       }
     };
     fetchDashboards();
-  }, [selectedFile]);
+  }, [selectedFile, refreshTick]);
 
   return (
     <Sidebar variant="inset" collapsible="icon">

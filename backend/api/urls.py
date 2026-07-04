@@ -3,6 +3,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check
+from .ai import views as ai_views
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -16,4 +17,6 @@ urlpatterns = [
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
+    path("ai/chat/", ai_views.chat, name="ai_chat"),
+    path("ai/config/", ai_views.config, name="ai_config"),
 ]

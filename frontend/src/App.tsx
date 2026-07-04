@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
@@ -13,6 +13,7 @@ import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { AiChatWidget } from "./components/ai-chat/chat-widget";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -26,7 +27,11 @@ async function guestLogin() {
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
 }
 
+// Routes without an authenticated app shell — no chat widget there
+const CHAT_HIDDEN_ROUTES = ["/title", "/login", "/logout"];
+
 function AppRoutes({ selectedFile, setSelectedFile }) {
+  const location = useLocation();
   const [ready, setReady] = useState(!LOCAL_MODE);
   // Splash plays on every mount — including dev — until dismissed. Press Esc
   // or click anywhere to skip.
@@ -112,6 +117,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
               }
             />
           </Routes>
+          {!CHAT_HIDDEN_ROUTES.includes(location.pathname) && <AiChatWidget />}
         </div>
       </DashboardProvider>
     </SelectedFileContext.Provider>
