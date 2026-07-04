@@ -543,53 +543,62 @@ class OCHANDOVER(nx.MultiDiGraph):
         _ts = event_ts_dict or {}
         bo_type_map, raw = cls._bfs_bridges(eog_arcs, resource_event_set, max_gap)
 
+        # --- Output direction (src_obj_out): event-level dedup ---
         # Event-level Pass 2: per (bid, tgt_ev) keep bridge with latest source ts.
         # This drops orphan-repair source events superseded by the dead-end repair
         # source, preventing two bids that share the same orphan-repair source event
         # from landing on the same arc and producing a spurious square mark.
-        p2: dict[tuple[str, str], tuple[str, int]] = {}
+        out_p2: dict[tuple[str, str], tuple[str, int]] = {}
         for (src_ev, tgt_ev, bid), gap in raw.items():
             src_ts = _ts.get(src_ev, 0)
             k = (bid, tgt_ev)
-            if k not in p2 or src_ts > _ts.get(p2[k][0], 0):
-                p2[k] = (src_ev, gap)
+            if k not in out_p2 or src_ts > _ts.get(out_p2[k][0], 0):
+                out_p2[k] = (src_ev, gap)
 
         # Event-level Pass 1: per (src_ev, bid, tgt_res) keep bridge to earliest
         # target event — removes phantom extra targets from orphan repair arcs.
-        p1: dict[tuple[str, str, str], tuple[str, int]] = {}
-        for (bid, tgt_ev), (src_ev, gap) in p2.items():
+        out_p1: dict[tuple[str, str, str], tuple[str, int]] = {}
+        for (bid, tgt_ev), (src_ev, gap) in out_p2.items():
             tgt_ts = _ts.get(tgt_ev, 0)
             for tgt_res in event_resources_dict.get(tgt_ev, []):
                 k = (src_ev, bid, tgt_res)
-                if k not in p1 or tgt_ts < _ts.get(p1[k][0], 0):
-                    p1[k] = (tgt_ev, gap)
+                if k not in out_p1 or tgt_ts < _ts.get(out_p1[k][0], 0):
+                    out_p1[k] = (tgt_ev, gap)
 
-        # Build src_obj_out from pass-1 results.
         src_obj_out: dict[tuple, dict[str, bool]] = defaultdict(dict)
-        for (src_ev, bid, tgt_res), (_, gap) in p1.items():
+        for (src_ev, bid, tgt_res), (_, gap) in out_p1.items():
             is_gapped = gap > 0
             prev = src_obj_out[(src_ev, bid)].get(tgt_res)
             if prev is None or (prev and not is_gapped):
                 src_obj_out[(src_ev, bid)][tgt_res] = is_gapped
 
-        # Build tgt_obj_in from pass-2 results.
-        tgt_obj_in: dict[tuple, dict[str, bool]] = defaultdict(dict)
-        for (bid, tgt_ev), (src_ev, gap) in p2.items():
-            is_gapped = gap > 0
+        # --- Input direction (tgt_obj_in): resource-level dedup ---
+        # Resource-level Pass 2: per (src_res, tgt_res, bid, tgt_ev) keep bridge
+        # with latest source ts.  Using resource-level keys means two source events
+        # at DIFFERENT resources are treated as independent and are both preserved —
+        # this is required so that the same object arriving from two different
+        # resources simultaneously forms an input binding at the target.
+        in_p2: dict[tuple, tuple[str, int]] = {}
+        for (src_ev, tgt_ev, bid), gap in raw.items():
+            src_ts = _ts.get(src_ev, 0)
             for src_res in event_resources_dict.get(src_ev, []):
-                prev = tgt_obj_in[(tgt_ev, bid)].get(src_res)
-                if prev is None or (prev and not is_gapped):
-                    tgt_obj_in[(tgt_ev, bid)][src_res] = is_gapped
+                for tgt_res in event_resources_dict.get(tgt_ev, []):
+                    k = (src_res, tgt_res, bid, tgt_ev)
+                    if k not in in_p2 or src_ts > _ts.get(in_p2[k][0], 0):
+                        in_p2[k] = (src_ev, gap)
+
+        tgt_obj_in: dict[tuple, dict[str, bool]] = defaultdict(dict)
+        for (src_res, _, bid, tgt_ev), (src_ev, gap) in in_p2.items():
+            is_gapped = gap > 0
+            prev = tgt_obj_in[(tgt_ev, bid)].get(src_res)
+            if prev is None or (prev and not is_gapped):
+                tgt_obj_in[(tgt_ev, bid)][src_res] = is_gapped
 
         result: list[dict] = []
 
         def _line_type(arc_bo_sets: list[set]) -> str:
-            """solid if total bo_id sets form a chain of subsets; dotted if cross-cutting."""
-            intersection = arc_bo_sets[0].copy()
-            for s in arc_bo_sets[1:]:
-                intersection &= s
-            min_set = min(arc_bo_sets, key=len)
-            return "solid" if intersection == min_set else "dotted"
+            """solid if every arc carries exactly the same objects; dotted otherwise."""
+            return "solid" if all(s == arc_bo_sets[0] for s in arc_bo_sets[1:]) else "dotted"
 
         def _build(obj_map: dict, direction: str) -> None:
             # Build per-(event, type, source-res) arc traffic sets.
