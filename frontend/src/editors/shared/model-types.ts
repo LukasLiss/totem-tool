@@ -184,6 +184,12 @@ export type OcpnArc = {
   target: string;
   /** Variable arc (∈ F_var): consumes/produces a set of objects, drawn as double line. */
   variable?: boolean;
+  /**
+   * Optional bend points the drawn arc is routed through, in canvas
+   * coordinates. Pure layout hint (like node positions) — consumers that only
+   * read the net can safely ignore it.
+   */
+  waypoints?: XY[];
 };
 
 export type OcpnModelFile = {
@@ -485,11 +491,17 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
     let arcId = typeof entry.id === 'string' && entry.id ? entry.id : `arc-${index + 1}`;
     while (seenArcIds.has(arcId)) arcId = `${arcId}-dup`;
     seenArcIds.add(arcId);
+    // Waypoints are a layout hint only — be forgiving and keep just the
+    // well-formed points instead of rejecting the file.
+    const waypoints = Array.isArray(entry.waypoints)
+      ? entry.waypoints.filter(isXY).map((p) => ({ x: p.x, y: p.y }))
+      : [];
     arcs.push({
       id: arcId,
       source,
       target,
       variable: entry.variable === true,
+      waypoints: waypoints.length > 0 ? waypoints : undefined,
     });
   }
 

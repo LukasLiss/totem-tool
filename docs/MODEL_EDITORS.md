@@ -87,7 +87,9 @@ survive a round trip.
 Markers are drawn on the arcs (circle = exactly one object, square =
 multiple); markers of the same group are joined by a thin line (AND), while
 separate groups are XOR alternatives. Markers sharing a key within one group
-bind disjoint objects.
+bind disjoint objects. Clicking a marker opens its group in the side panel;
+**dragging a marker onto another marker** of the same activity side merges
+the two groups into one AND group.
 
 ## OCPN format (`"format": "ocpn"`)
 
@@ -98,6 +100,19 @@ that consume/produce a set of objects. `initial`/`final` mark the source/sink
 places of each object type. The editor automatically enforces well-formedness
 (Def. 5.2): per transition and object type, arcs are uniformly variable or
 uniformly non-variable.
+
+Arcs float: they attach wherever the node border faces the other endpoint
+(hover a node to reveal the four connectors that start a new arc; pressing
+anywhere else on the node moves it). Double-clicking an arc adds a **bend
+point** that can be dragged to route the arc; double-clicking a bend point
+removes it again. Bend points are saved as an optional `"waypoints"` array on
+the arc — a pure layout hint (like node positions) that consumers reading
+just the net can ignore:
+
+```json
+{ "id": "a1", "source": "o1", "target": "t_place",
+  "waypoints": [{ "x": 120, "y": 80 }] }
+```
 
 ```json
 {

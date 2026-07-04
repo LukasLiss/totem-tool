@@ -56,17 +56,20 @@ export const nodeFallbackSize = (kind: OccnNodeKind) =>
 
 /**
  * Render context shared by custom nodes and edges: object type colors, the
- * object types incident to each activity (for the striped fills) and the
- * perpendicular offset per arc so parallel arcs of a multigraph fan out.
+ * object types incident to each activity (for the striped fills), the
+ * perpendicular offset per arc so parallel arcs of a multigraph fan out, and
+ * the active object type (colors the connection-line preview).
  */
 export type OccnRenderContextValue = {
   typeColors: Record<string, string>;
   incidentTypes: Record<string, string[]>;
   parallelOffset: Record<string, number>;
+  activeType: string | null;
 };
 
 export const OccnRenderContext = createContext<OccnRenderContextValue>({
   typeColors: {},
   incidentTypes: {},
   parallelOffset: {},
+  activeType: null,
 });

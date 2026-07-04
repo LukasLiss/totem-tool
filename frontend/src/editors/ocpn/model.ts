@@ -46,41 +46,6 @@ export function nodeSize(node: OcpnFlowNode): { width: number; height: number } 
     : { width: TRANSITION_WIDTH, height: TRANSITION_HEIGHT };
 }
 
-const nodeCenter = (node: OcpnFlowNode) => {
-  const { width, height } = nodeSize(node);
-  return {
-    x: node.position.x + (node.measured?.width ?? width) / 2,
-    y: node.position.y + (node.measured?.height ?? height) / 2,
-  };
-};
-
-/**
- * Pick source/target handle ids (top/right/bottom/left) from the relative
- * position of the two endpoints. Used for loaded models and after auto
- * layout; interactively drawn arcs keep the handles the user chose.
- */
-export function assignArcHandles(
-  nodes: OcpnFlowNode[],
-  edges: ArcFlowEdge[],
-): ArcFlowEdge[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  return edges.map((edge) => {
-    const source = byId.get(edge.source);
-    const target = byId.get(edge.target);
-    if (!source || !target) return edge;
-    const s = nodeCenter(source);
-    const t = nodeCenter(target);
-    const dx = t.x - s.x;
-    const dy = t.y - s.y;
-    const horizontal = Math.abs(dx) >= Math.abs(dy);
-    return {
-      ...edge,
-      sourceHandle: horizontal ? (dx >= 0 ? 'right' : 'left') : dy >= 0 ? 'bottom' : 'top',
-      targetHandle: horizontal ? (dx >= 0 ? 'left' : 'right') : dy >= 0 ? 'top' : 'bottom',
-    };
-  });
-}
-
 /** Fallback layout for nodes without a stored position: a simple grid. */
 function fallbackPosition(index: number): { x: number; y: number } {
   const columns = 6;
@@ -135,10 +100,15 @@ export function modelToFlow(model: OcpnModelFile): FlowState {
     type: 'arc',
     source: arc.source,
     target: arc.target,
-    data: { variable: arc.variable === true, color: '#64748B', objectType: '' },
+    data: {
+      variable: arc.variable === true,
+      color: '#64748B',
+      objectType: '',
+      waypoints: arc.waypoints,
+    },
   }));
 
-  return { objectTypes, nodes, edges: assignArcHandles(nodes, edges) };
+  return { objectTypes, nodes, edges };
 }
 
 /** Serialize the editor state back into the JSON file format. */
@@ -177,6 +147,12 @@ export function flowToModel(
     source: edge.source,
     target: edge.target,
     variable: edge.data?.variable ? true : undefined,
+    // Layout hint only — omitted entirely when the arc has no bend points so
+    // consumers that only care about the net never see the field.
+    waypoints:
+      edge.data?.waypoints && edge.data.waypoints.length > 0
+        ? edge.data.waypoints.map((p) => ({ x: p.x, y: p.y }))
+        : undefined,
   }));
   return {
     format: OCPN_FORMAT,
@@ -264,7 +240,7 @@ export function normalizeTransitions(
   // group key → has variable arc?
   const groupHasVariable = new Map<string, boolean>();
   const groupKey = (edge: ArcFlowEdge) =>
-    `${arcTransitionId(edge, placeTypes)} ${arcObjectType(edge, placeTypes)}`;
+    `${arcTransitionId(edge, placeTypes)}\u0000${arcObjectType(edge, placeTypes)}`;
   for (const edge of edges) {
     if (!transitionIds.has(arcTransitionId(edge, placeTypes))) continue;
     const key = groupKey(edge);
@@ -315,7 +291,7 @@ export function exampleModel(): OcpnModelFile {
   return {
     format: OCPN_FORMAT,
     version: 1,
-    name: 'Order fulfilment (Fig. 4)',
+    name: 'Order fulfilment',
     objectTypes: [
       { name: 'Order', color: '#10B981' },
       { name: 'Item', color: '#2563EB' },

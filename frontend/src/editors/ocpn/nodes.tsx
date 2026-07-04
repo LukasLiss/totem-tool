@@ -6,6 +6,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 import {
   PLACE_SIZE,
@@ -21,16 +22,26 @@ const SOFT_SHADOW = '0 6px 16px rgba(15, 23, 42, 0.14)';
 const SELECTED_SHADOW = '0 0 0 3px rgba(37, 99, 235, 0.35), 0 6px 16px rgba(15, 23, 42, 0.14)';
 
 const HANDLE_CLASS =
-  '!size-2 !rounded-full !border-2 !border-white !bg-slate-400 hover:!bg-blue-600 transition-colors';
+  '!size-2.5 !rounded-full !border-2 !border-white !bg-slate-400 hover:!bg-blue-600';
 
-/** Four subtle handles (loose connection mode: every handle is a source). */
-function NodeHandles() {
+/**
+ * Four handles for STARTING arcs (loose connection mode: every handle is a
+ * source), shown while hovering or when the node is selected — same flow as
+ * the TOTeM editor. Pressing anywhere else on the node drags it. The drawn
+ * arc itself floats: it attaches wherever the border faces the other node.
+ */
+function NodeHandles({ show }: { show: boolean }) {
+  const className = cn(
+    HANDLE_CLASS,
+    'transition-opacity duration-150',
+    show ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+  );
   return (
     <>
-      <Handle id="top" type="source" position={Position.Top} className={HANDLE_CLASS} />
-      <Handle id="right" type="source" position={Position.Right} className={HANDLE_CLASS} />
-      <Handle id="bottom" type="source" position={Position.Bottom} className={HANDLE_CLASS} />
-      <Handle id="left" type="source" position={Position.Left} className={HANDLE_CLASS} />
+      <Handle id="top" type="source" position={Position.Top} className={className} />
+      <Handle id="right" type="source" position={Position.Right} className={className} />
+      <Handle id="bottom" type="source" position={Position.Bottom} className={className} />
+      <Handle id="left" type="source" position={Position.Left} className={className} />
     </>
   );
 }
@@ -58,7 +69,10 @@ export const PlaceNode = memo(function PlaceNode({
 }: NodeProps<PlaceFlowNode>) {
   const marked = data.initial || data.final;
   return (
-    <div style={{ position: 'relative', width: PLACE_SIZE, height: PLACE_SIZE }}>
+    <div
+      className="group"
+      style={{ position: 'relative', width: PLACE_SIZE, height: PLACE_SIZE }}
+    >
       <div
         style={{
           position: 'absolute',
@@ -85,7 +99,7 @@ export const PlaceNode = memo(function PlaceNode({
           <SquareGlyph size={15} />
         ) : null}
       </div>
-      <NodeHandles />
+      <NodeHandles show={selected === true} />
       <div
         style={{
           position: 'absolute',
@@ -113,7 +127,10 @@ export const TransitionNode = memo(function TransitionNode({
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <div style={{ position: 'relative', width: SILENT_WIDTH, height: SILENT_HEIGHT }}>
+          <div
+            className="group"
+            style={{ position: 'relative', width: SILENT_WIDTH, height: SILENT_HEIGHT }}
+          >
             <div
               style={{
                 position: 'absolute',
@@ -126,7 +143,7 @@ export const TransitionNode = memo(function TransitionNode({
                 boxShadow: selected ? SELECTED_SHADOW : SOFT_SHADOW,
               }}
             />
-            <NodeHandles />
+            <NodeHandles show={selected === true} />
           </div>
         </TooltipTrigger>
         <TooltipContent>silent transition (τ)</TooltipContent>
@@ -136,6 +153,7 @@ export const TransitionNode = memo(function TransitionNode({
 
   return (
     <div
+      className="group"
       style={{
         position: 'relative',
         minWidth: TRANSITION_WIDTH - 10,
@@ -180,7 +198,7 @@ export const TransitionNode = memo(function TransitionNode({
           ))}
         </div>
       )}
-      <NodeHandles />
+      <NodeHandles show={selected === true} />
     </div>
   );
 });

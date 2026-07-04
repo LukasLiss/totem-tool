@@ -34,16 +34,20 @@ import {
 import EditorShell from '@/editors/shared/EditorShell';
 import { nextFreeColor } from '@/editors/shared/colors';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
-import { parseOcpnModelFile, type OcpnModelFile } from '@/editors/shared/model-types';
+import {
+  parseOcpnModelFile,
+  type OcpnModelFile,
+  type XY,
+} from '@/editors/shared/model-types';
 import { loadEditorSession, saveEditorSession } from '@/editors/shared/sessionCache';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
-import { edgeTypes } from './ArcEdge';
+import { ArcConnectionLine, edgeTypes } from './ArcEdge';
+import { arcPathPoints, flowNodeBox, nearestSegmentIndex } from './geometry';
 import { layoutOcpn } from './layout';
 import {
   arcObjectType,
   arcTransitionId,
-  assignArcHandles,
   emptyModel,
   exampleModel,
   flowToModel,
@@ -58,7 +62,9 @@ import { OcpnSidePanel, type OcpnSelection } from './SidePanel';
 import {
   FALLBACK_TYPE_COLOR,
   isPlaceNode,
+  OcpnEdgeApiContext,
   type ArcFlowEdge,
+  type OcpnEdgeApi,
   type OcpnFlowNode,
   type OcpnObjectType,
   type PlaceFlowNode,
@@ -120,9 +126,13 @@ function OcpnEditorInner() {
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
 
+  // `history` gets a fresh identity every render; its methods are stable.
+  // Depending on the method keeps `record` (and everything memoized on it,
+  // like the edge API context value) stable across renders.
+  const pushHistory = history.record;
   const record = useCallback(
-    () => history.record(serializeRef.current()),
-    [history],
+    () => pushHistory(serializeRef.current()),
+    [pushHistory],
   );
 
   const applyModel = useCallback(
@@ -272,7 +282,7 @@ function OcpnEditorInner() {
         return {
           ...edge,
           type: 'arc',
-          data: { variable, color, objectType: type },
+          data: { variable, color, objectType: type, waypoints: edge.data?.waypoints },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             color,
@@ -477,13 +487,13 @@ function OcpnEditorInner() {
           arcObjectType(edge, placeTypes) === objectType &&
           edge.data?.variable === true,
       );
+      // No source/target handle: the arc floats and attaches wherever the
+      // node border faces the other endpoint.
       const edge: ArcFlowEdge = {
         id: nextFreeId('a', edges.map((e) => e.id)),
         type: 'arc',
         source: connection.source,
         target: connection.target,
-        sourceHandle: connection.sourceHandle ?? undefined,
-        targetHandle: connection.targetHandle ?? undefined,
         data: { variable: groupIsVariable, color: FALLBACK_TYPE_COLOR, objectType },
       };
       if (groupIsVariable) {
@@ -536,6 +546,104 @@ function OcpnEditorInner() {
       setSelected(null);
     },
     [record],
+  );
+
+  // -------------------------------------------------------------------------
+  // Arc bend points (double-click an arc to add, drag to move, double-click
+  // the point to remove; stored as a layout-only "waypoints" hint in the JSON)
+  // -------------------------------------------------------------------------
+
+  const waypointSnapshotRef = useRef<OcpnModelFile | null>(null);
+  // Whether the current bend-point drag actually changed a waypoint. The end
+  // handler must not compare serialized state: the pointermove commits are
+  // continuous-priority and may not have flushed when pointerup fires.
+  const waypointMovedRef = useRef(false);
+
+  const onEdgeDoubleClick = useCallback(
+    (event: React.MouseEvent, edge: ArcFlowEdge) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceNode = nodesRef.current.find((n) => n.id === edge.source);
+      const targetNode = nodesRef.current.find((n) => n.id === edge.target);
+      if (!sourceNode || !targetNode) return;
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const waypoints = edge.data?.waypoints ?? [];
+      // Insert into the segment of the current path closest to the click, so
+      // the arc keeps its shape and just gains a handle where clicked.
+      const points = arcPathPoints(
+        flowNodeBox(sourceNode),
+        isPlaceNode(sourceNode),
+        flowNodeBox(targetNode),
+        isPlaceNode(targetNode),
+        waypoints,
+      );
+      const insertAt = nearestSegmentIndex(points, position);
+      record();
+      setEdges((current) =>
+        current.map((e) =>
+          e.id === edge.id
+            ? {
+                ...e,
+                data: {
+                  ...e.data!,
+                  waypoints: [
+                    ...waypoints.slice(0, insertAt),
+                    position,
+                    ...waypoints.slice(insertAt),
+                  ],
+                },
+              }
+            : e,
+        ),
+      );
+    },
+    [record, screenToFlowPosition],
+  );
+
+  const edgeApi = useMemo<OcpnEdgeApi>(
+    () => ({
+      beginWaypointDrag: () => {
+        waypointSnapshotRef.current = serializeRef.current();
+        waypointMovedRef.current = false;
+      },
+      moveWaypoint: (edgeId: string, index: number, position: XY) => {
+        setEdges((current) =>
+          current.map((e) => {
+            if (e.id !== edgeId) return e;
+            const waypoints = [...(e.data?.waypoints ?? [])];
+            if (index < 0 || index >= waypoints.length) return e;
+            waypoints[index] = position;
+            // Ref write inside an updater is idempotent — safe under
+            // StrictMode double-invocation.
+            waypointMovedRef.current = true;
+            return { ...e, data: { ...e.data!, waypoints } };
+          }),
+        );
+      },
+      endWaypointDrag: () => {
+        const before = waypointSnapshotRef.current;
+        waypointSnapshotRef.current = null;
+        if (before && waypointMovedRef.current) pushHistory(before);
+        waypointMovedRef.current = false;
+      },
+      removeWaypoint: (edgeId: string, index: number) => {
+        record();
+        setEdges((current) =>
+          current.map((e) =>
+            e.id === edgeId
+              ? {
+                  ...e,
+                  data: {
+                    ...e.data!,
+                    waypoints: (e.data?.waypoints ?? []).filter((_, i) => i !== index),
+                  },
+                }
+              : e,
+          ),
+        );
+      },
+    }),
+    [pushHistory, record],
   );
 
   // -------------------------------------------------------------------------
@@ -792,7 +900,12 @@ function OcpnEditorInner() {
           return position ? { ...n, position } : n;
         });
       setNodes(mergePositions);
-      setEdges((current) => assignArcHandles(mergePositions(nodesRef.current), current));
+      // Hand-placed bend points rarely make sense for the fresh layout.
+      setEdges((current) =>
+        current.map((e) =>
+          e.data?.waypoints?.length ? { ...e, data: { ...e.data, waypoints: [] } } : e,
+        ),
+      );
       window.setTimeout(() => fitView({ padding: 0.2 }), 0);
     } catch {
       toast.error('Auto layout failed.');
@@ -849,48 +962,53 @@ function OcpnEditorInner() {
       }
     >
       <div ref={wrapperRef} className="relative h-full w-full">
-        <ReactFlow
-          nodes={displayNodes}
-          edges={displayEdges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          onConnectEnd={(_event, connectionState) => {
-            if (connectionState.isValid === false && connectionState.toNode) {
-              const problem = connectionProblem(
-                connectionState.fromNode?.id ?? null,
-                connectionState.toNode.id,
-              );
-              if (problem) toast.info(problem);
-            }
-          }}
-          onSelectionChange={onSelectionChange}
-          onBeforeDelete={onBeforeDelete}
-          onNodeDragStart={onNodeDragStart}
-          onNodeDragStop={onNodeDragStop}
-          fitView
-          deleteKeyCode={['Backspace', 'Delete']}
-          connectionMode={ConnectionMode.Loose}
-          connectionRadius={70}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} color="#CBD5E1" />
-          <Controls className="ocdfg-controls" showInteractive={false} />
-          <MiniMap
-            pannable
-            zoomable
-            className="!bg-white/90 rounded-lg border"
-            nodeColor={(node) =>
-              node.type === 'place'
-                ? ((node.data as PlaceFlowNode['data']).color ?? FALLBACK_TYPE_COLOR)
-                : (node.data as TransitionFlowNode['data']).silent
-                  ? '#0F172A'
-                  : '#E2E8F0'
-            }
-          />
-        </ReactFlow>
+        <OcpnEdgeApiContext.Provider value={edgeApi}>
+          <ReactFlow
+            nodes={displayNodes}
+            edges={displayEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            connectionLineComponent={ArcConnectionLine}
+            isValidConnection={isValidConnection}
+            onConnectEnd={(_event, connectionState) => {
+              if (connectionState.isValid === false && connectionState.toNode) {
+                const problem = connectionProblem(
+                  connectionState.fromNode?.id ?? null,
+                  connectionState.toNode.id,
+                );
+                if (problem) toast.info(problem);
+              }
+            }}
+            onSelectionChange={onSelectionChange}
+            onBeforeDelete={onBeforeDelete}
+            onNodeDragStart={onNodeDragStart}
+            onNodeDragStop={onNodeDragStop}
+            onEdgeDoubleClick={onEdgeDoubleClick}
+            fitView
+            deleteKeyCode={['Backspace', 'Delete']}
+            connectionMode={ConnectionMode.Loose}
+            connectionRadius={70}
+            zoomOnDoubleClick={false}
+          >
+            <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} color="#CBD5E1" />
+            <Controls className="ocdfg-controls" showInteractive={false} />
+            <MiniMap
+              pannable
+              zoomable
+              className="!bg-white/90 rounded-lg border"
+              nodeColor={(node) =>
+                node.type === 'place'
+                  ? ((node.data as PlaceFlowNode['data']).color ?? FALLBACK_TYPE_COLOR)
+                  : (node.data as TransitionFlowNode['data']).silent
+                    ? '#0F172A'
+                    : '#E2E8F0'
+              }
+            />
+          </ReactFlow>
+        </OcpnEdgeApiContext.Provider>
         {nodes.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="rounded-lg bg-white/80 px-5 py-3 text-center text-sm text-muted-foreground shadow-sm">

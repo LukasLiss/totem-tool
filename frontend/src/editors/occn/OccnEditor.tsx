@@ -46,6 +46,7 @@ import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 import { cn } from '@/lib/utils';
 
 import MarkerOverlay from './MarkerOverlay';
+import OccnConnectionLine from './OccnConnectionLine';
 import OccnEdgeComponent from './OccnEdge';
 import OccnNodeComponent from './OccnNode';
 import {
@@ -260,8 +261,8 @@ function OccnEditorInner() {
   }, [edges]);
 
   const renderContext = useMemo(
-    () => ({ typeColors, incidentTypes, parallelOffset }),
-    [typeColors, incidentTypes, parallelOffset],
+    () => ({ typeColors, incidentTypes, parallelOffset, activeType }),
+    [typeColors, incidentTypes, parallelOffset, activeType],
   );
 
   const nodesById = useMemo(() => {
@@ -878,6 +879,80 @@ function OccnEditorInner() {
     setFocusedGroup(ref);
   }, []);
 
+  /** Drag a marker onto another marker → merge their two groups into one. */
+  const mergeMarkerGroups = useCallback(
+    (from: GroupRef, to: GroupRef) => {
+      if (from.activity !== to.activity || from.side !== to.side) {
+        toast.info(
+          from.activity === to.activity
+            ? 'Input and output marker groups cannot be merged with each other.'
+            : 'Marker groups can only be merged within one activity — both markers must sit at arcs of the same activity.',
+        );
+        return;
+      }
+      if (from.groupIndex === to.groupIndex) return;
+      const groups = bindings[from.activity]?.[from.side];
+      const fromGroup = groups?.[from.groupIndex];
+      const toGroup = groups?.[to.groupIndex];
+      if (!fromGroup || !toGroup) return;
+
+      history.record(serialize());
+      // A group may hold at most one marker per arc. Identical markers merge
+      // silently; markers on the same arc with different constraints are
+      // combined as the intersection (the AND group must satisfy both).
+      const merged = [...toGroup];
+      let duplicates = 0;
+      let combined = 0;
+      for (const marker of fromGroup) {
+        const index = merged.findIndex(
+          (m) => m[0] === marker[0] && m[1] === marker[1],
+        );
+        if (index === -1) {
+          merged.push(marker);
+          continue;
+        }
+        const existing = merged[index];
+        if (
+          existing[2][0] === marker[2][0] &&
+          existing[2][1] === marker[2][1] &&
+          existing[3] === marker[3]
+        ) {
+          duplicates += 1;
+          continue;
+        }
+        const min = Math.max(existing[2][0], marker[2][0]);
+        const maxA = existing[2][1];
+        const maxB = marker[2][1];
+        let max = maxA === -1 ? maxB : maxB === -1 ? maxA : Math.min(maxA, maxB);
+        if (max !== -1 && max < min) max = min;
+        const key = existing[3] !== 0 ? existing[3] : marker[3];
+        merged[index] = [existing[0], existing[1], [min, max], key];
+        combined += 1;
+      }
+      updateGroups(from.activity, from.side, (current) =>
+        current
+          .map((group, index) => (index === to.groupIndex ? merged : group))
+          .filter((_, index) => index !== from.groupIndex),
+      );
+      const mergedIndex = to.groupIndex - (from.groupIndex < to.groupIndex ? 1 : 0);
+      selectGroup({ activity: from.activity, side: from.side, groupIndex: mergedIndex });
+      toast.success(
+        'Merged the two marker groups — their markers now bind together (AND).',
+      );
+      if (combined > 0) {
+        toast.info(
+          `${combined} marker${combined === 1 ? '' : 's'} on the same arc had different cardinalities — the ranges were intersected (undo to revert).`,
+        );
+      }
+      if (duplicates > 0) {
+        toast.info(
+          `${duplicates} identical marker${duplicates === 1 ? '' : 's'} dropped during the merge.`,
+        );
+      }
+    },
+    [bindings, history, serialize, updateGroups, selectGroup],
+  );
+
   // -------------------------------------------------------------------------
   // Shell actions
   // -------------------------------------------------------------------------
@@ -1123,6 +1198,7 @@ function OccnEditorInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            connectionLineComponent={OccnConnectionLine}
             onBeforeDelete={onBeforeDelete}
             onSelectionChange={onSelectionChange}
             onNodeDragStart={onNodeDragStart}
@@ -1154,6 +1230,7 @@ function OccnEditorInner() {
               parallelOffset={parallelOffset}
               focusedGroup={focusedGroup}
               onSelectGroup={selectGroup}
+              onMergeGroups={mergeMarkerGroups}
             />
           </ReactFlow>
         </OccnRenderContext.Provider>

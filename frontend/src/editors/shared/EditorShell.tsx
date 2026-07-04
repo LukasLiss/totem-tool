@@ -85,10 +85,39 @@ function ToolbarButton({
   );
 }
 
+/** File action button: icon-only below `md` (the tooltip still names it). */
+function FileButton({
+  label,
+  onClick,
+  variant,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  variant?: 'outline';
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant={variant} size="sm" className="h-8 max-md:w-8 max-md:px-0" onClick={onClick}>
+          {children}
+          <span className="max-md:sr-only">{label}</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
  * Shared frame for the three model editors: header with model name and
  * file actions, canvas area and an optional properties side panel.
  * Keeps the look and feel consistent across TOTeM / OCCN / OCPN.
+ *
+ * The header is responsive: it wraps into multiple rows on narrow screens,
+ * the model-name input shrinks and the file buttons collapse to icons, so
+ * every action stays visible and clickable on small monitors.
  */
 export function EditorShell({
   title,
@@ -110,58 +139,62 @@ export function EditorShell({
 
   return (
     <div className="flex flex-col w-full h-full min-h-0 bg-card text-card-foreground rounded-xl border shadow-sm overflow-hidden">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
-        <div className="min-w-44">
-          <div className="font-semibold leading-tight">{title}</div>
-          <div className="text-muted-foreground text-xs">{description}</div>
-        </div>
-        <Separator orientation="vertical" className="hidden sm:block h-8" />
-        <Input
-          value={modelName}
-          onChange={(event) => onModelNameChange(event.target.value)}
-          placeholder="Model name"
-          aria-label="Model name"
-          className="h-8 w-56 max-w-full"
-        />
-        <div className="ml-auto flex items-center gap-1">
-          {(undo || redo) && (
-            <>
-              {undo && (
-                <ToolbarButton label="Undo (Ctrl+Z)" onClick={undo.onClick} disabled={undo.disabled}>
-                  <Undo2 />
-                </ToolbarButton>
-              )}
-              {redo && (
-                <ToolbarButton label="Redo (Ctrl+Y)" onClick={redo.onClick} disabled={redo.disabled}>
-                  <Redo2 />
-                </ToolbarButton>
-              )}
-              <Separator orientation="vertical" className="mx-1 h-6" />
-            </>
-          )}
-          {onAutoLayout && (
-            <ToolbarButton label="Auto layout" onClick={onAutoLayout}>
-              <Wand2 />
-            </ToolbarButton>
-          )}
-          {onLoadExample && (
-            <Button variant="ghost" size="sm" className="h-8" onClick={onLoadExample}>
-              Example
-            </Button>
-          )}
-          <Separator orientation="vertical" className="mx-1 h-6" />
-          <Button variant="outline" size="sm" className="h-8" onClick={() => setConfirmNewOpen(true)}>
-            <FilePlus2 />
-            New
-          </Button>
-          <Button variant="outline" size="sm" className="h-8" onClick={onImport}>
-            <Upload />
-            Load JSON
-          </Button>
-          <Button size="sm" className="h-8" onClick={onExport}>
-            <Download />
-            Save JSON
-          </Button>
+      {/* Block wrapper on purpose: if the wrapping flex row were itself the
+          column-flex item, the browser would size it pre-wrap and a wrapped
+          second row would paint over (and block clicks into) the canvas. */}
+      <div className="shrink-0 border-b px-3 py-2.5 sm:px-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="min-w-0 max-w-full">
+            <div className="truncate font-semibold leading-tight">{title}</div>
+            <div className="hidden truncate text-muted-foreground text-xs sm:block">
+              {description}
+            </div>
+          </div>
+          <Separator orientation="vertical" className="hidden sm:block h-8" />
+          <Input
+            value={modelName}
+            onChange={(event) => onModelNameChange(event.target.value)}
+            placeholder="Model name"
+            aria-label="Model name"
+            className="h-8 w-32 min-w-24 max-w-full flex-1 lg:w-56 lg:flex-none"
+          />
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+            {(undo || redo) && (
+              <>
+                {undo && (
+                  <ToolbarButton label="Undo (Ctrl+Z)" onClick={undo.onClick} disabled={undo.disabled}>
+                    <Undo2 />
+                  </ToolbarButton>
+                )}
+                {redo && (
+                  <ToolbarButton label="Redo (Ctrl+Y)" onClick={redo.onClick} disabled={redo.disabled}>
+                    <Redo2 />
+                  </ToolbarButton>
+                )}
+                <Separator orientation="vertical" className="mx-1 h-6" />
+              </>
+            )}
+            {onAutoLayout && (
+              <ToolbarButton label="Auto layout" onClick={onAutoLayout}>
+                <Wand2 />
+              </ToolbarButton>
+            )}
+            {onLoadExample && (
+              <Button variant="ghost" size="sm" className="h-8" onClick={onLoadExample}>
+                Example
+              </Button>
+            )}
+            <Separator orientation="vertical" className="mx-1 h-6" />
+            <FileButton label="New" variant="outline" onClick={() => setConfirmNewOpen(true)}>
+              <FilePlus2 />
+            </FileButton>
+            <FileButton label="Load JSON" variant="outline" onClick={onImport}>
+              <Upload />
+            </FileButton>
+            <FileButton label="Save JSON" onClick={onExport}>
+              <Download />
+            </FileButton>
+          </div>
         </div>
       </div>
 
@@ -175,7 +208,7 @@ export function EditorShell({
           {children}
         </div>
         {sidePanel && (
-          <div className="w-72 shrink-0 border-l bg-background/50 overflow-y-auto">
+          <div className="w-60 lg:w-72 shrink-0 border-l bg-background/50 overflow-y-auto">
             {sidePanel}
           </div>
         )}

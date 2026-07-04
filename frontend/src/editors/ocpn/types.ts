@@ -1,4 +1,7 @@
+import { createContext } from 'react';
 import type { Edge, Node } from '@xyflow/react';
+
+import type { XY } from '@/editors/shared/model-types';
 
 /**
  * React Flow node/edge shapes used by the OCPN editor.
@@ -40,9 +43,25 @@ export type ArcEdgeData = {
   color: string;
   /** Derived: object type of the place endpoint. */
   objectType: string;
+  /** Bend points the arc is routed through (layout only, in flow coordinates). */
+  waypoints?: XY[];
 };
 
 export type ArcFlowEdge = Edge<ArcEdgeData, 'arc'>;
+
+/**
+ * Editor callbacks the custom arc edge uses for its bend-point interaction
+ * (drag to move, double-click to remove). Provided by OcpnEditor so the
+ * state changes flow through the editor's undo history.
+ */
+export type OcpnEdgeApi = {
+  beginWaypointDrag: () => void;
+  moveWaypoint: (edgeId: string, index: number, position: XY) => void;
+  endWaypointDrag: () => void;
+  removeWaypoint: (edgeId: string, index: number) => void;
+};
+
+export const OcpnEdgeApiContext = createContext<OcpnEdgeApi | null>(null);
 
 export const isPlaceNode = (node: OcpnFlowNode): node is PlaceFlowNode =>
   node.type === 'place';
