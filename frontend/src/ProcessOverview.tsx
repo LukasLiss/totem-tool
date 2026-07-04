@@ -8,6 +8,7 @@ import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
 import { EditorView } from "./editors/EditorView";
+import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
 
 export function ProcessOverview() {
@@ -21,6 +22,8 @@ export function ProcessOverview() {
         return <AnalysisView />;
       case 'editor':
         return <EditorView />;
+      case 'playout':
+        return <PlayoutView />;
       case 'dashboard':
         return <Grid />;
       default:

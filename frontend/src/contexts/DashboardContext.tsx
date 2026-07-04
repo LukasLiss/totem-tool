@@ -8,6 +8,7 @@ export type ViewMode =
   | { type: 'overview' }
   | { type: 'analysis'; component: AnalysisComponent }
   | { type: 'editor'; component: EditorComponent }
+  | { type: 'playout' }
   | { type: 'dashboard'; id: number };
 
 type DashboardContextType = {

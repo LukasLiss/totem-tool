@@ -24,6 +24,7 @@ import { getUserFiles } from "../api/fileApi"
 import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
 import { NavEditor } from "./nav-editor";
+import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
 import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -83,6 +84,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <NavOverview />
         <NavAnalysis />
         <NavEditor />
+        <NavPlayout />
         <NavDashboard
           dashboards={dashboards}
           refreshDashboards={async () => {

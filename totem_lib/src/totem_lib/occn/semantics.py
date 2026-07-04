@@ -815,7 +815,8 @@ class OCCausalNetSemantics:
             for rel_act_1_id, ot_id, rel_act_2_id in key_constraints_by_id:
                 objects1 = grouped_by_pred[rel_act_1_id].get(ot_id)
                 objects2 = grouped_by_pred[rel_act_2_id].get(ot_id)
-                if objects1 and objects2 and not objects1.isdisjoint(objects2):
+                # objects1/objects2 are tuples from itertools.combinations
+                if objects1 and objects2 and not set(objects1).isdisjoint(objects2):
                     # key constraint violated, move on to next binding
                     constraint_violated = True
                     break
