@@ -542,57 +542,24 @@ class OCHANDOVER(nx.MultiDiGraph):
         resource_event_set = set(event_resources_dict.keys())
         _ts = event_ts_dict or {}
         bo_type_map, raw = cls._bfs_bridges(eog_arcs, resource_event_set, max_gap)
+        canonical = cls._canonical_from_raw(raw, event_resources_dict, _ts)
 
-        # --- Output direction (src_obj_out): event-level dedup ---
-        # Event-level Pass 2: per (bid, tgt_ev) keep bridge with latest source ts.
-        # This drops orphan-repair source events superseded by the dead-end repair
-        # source, preventing two bids that share the same orphan-repair source event
-        # from landing on the same arc and producing a spurious square mark.
-        out_p2: dict[tuple[str, str], tuple[str, int]] = {}
-        for (src_ev, tgt_ev, bid), gap in raw.items():
-            src_ts = _ts.get(src_ev, 0)
-            k = (bid, tgt_ev)
-            if k not in out_p2 or src_ts > _ts.get(out_p2[k][0], 0):
-                out_p2[k] = (src_ev, gap)
-
-        # Event-level Pass 1: per (src_ev, bid, tgt_res) keep bridge to earliest
-        # target event — removes phantom extra targets from orphan repair arcs.
-        out_p1: dict[tuple[str, str, str], tuple[str, int]] = {}
-        for (bid, tgt_ev), (src_ev, gap) in out_p2.items():
-            tgt_ts = _ts.get(tgt_ev, 0)
-            for tgt_res in event_resources_dict.get(tgt_ev, []):
-                k = (src_ev, bid, tgt_res)
-                if k not in out_p1 or tgt_ts < _ts.get(out_p1[k][0], 0):
-                    out_p1[k] = (tgt_ev, gap)
-
+        # Expand canonical into per-(src_event, bid) output and input maps.
+        # Both directions use the same resource-level canonical: the resource-level
+        # passes resolve orphan-repair duplicates within each resource pair while
+        # preserving independent handovers from different source resources.
         src_obj_out: dict[tuple, dict[str, bool]] = defaultdict(dict)
-        for (src_ev, bid, tgt_res), (_, gap) in out_p1.items():
+        tgt_obj_in:  dict[tuple, dict[str, bool]] = defaultdict(dict)
+        for (src_ev, tgt_ev, bid), gap in canonical.items():
             is_gapped = gap > 0
-            prev = src_obj_out[(src_ev, bid)].get(tgt_res)
-            if prev is None or (prev and not is_gapped):
-                src_obj_out[(src_ev, bid)][tgt_res] = is_gapped
-
-        # --- Input direction (tgt_obj_in): resource-level dedup ---
-        # Resource-level Pass 2: per (src_res, tgt_res, bid, tgt_ev) keep bridge
-        # with latest source ts.  Using resource-level keys means two source events
-        # at DIFFERENT resources are treated as independent and are both preserved —
-        # this is required so that the same object arriving from two different
-        # resources simultaneously forms an input binding at the target.
-        in_p2: dict[tuple, tuple[str, int]] = {}
-        for (src_ev, tgt_ev, bid), gap in raw.items():
-            src_ts = _ts.get(src_ev, 0)
+            for tgt_res in event_resources_dict.get(tgt_ev, []):
+                prev = src_obj_out[(src_ev, bid)].get(tgt_res)
+                if prev is None or (prev and not is_gapped):
+                    src_obj_out[(src_ev, bid)][tgt_res] = is_gapped
             for src_res in event_resources_dict.get(src_ev, []):
-                for tgt_res in event_resources_dict.get(tgt_ev, []):
-                    k = (src_res, tgt_res, bid, tgt_ev)
-                    if k not in in_p2 or src_ts > _ts.get(in_p2[k][0], 0):
-                        in_p2[k] = (src_ev, gap)
-
-        tgt_obj_in: dict[tuple, dict[str, bool]] = defaultdict(dict)
-        for (src_res, _, bid, tgt_ev), (src_ev, gap) in in_p2.items():
-            is_gapped = gap > 0
-            prev = tgt_obj_in[(tgt_ev, bid)].get(src_res)
-            if prev is None or (prev and not is_gapped):
-                tgt_obj_in[(tgt_ev, bid)][src_res] = is_gapped
+                prev = tgt_obj_in[(tgt_ev, bid)].get(src_res)
+                if prev is None or (prev and not is_gapped):
+                    tgt_obj_in[(tgt_ev, bid)][src_res] = is_gapped
 
         result: list[dict] = []
 
@@ -793,6 +760,60 @@ class OCHANDOVER(nx.MultiDiGraph):
 
         return bo_type_map, raw
 
+    @staticmethod
+    def _canonical_from_raw(
+        raw: dict[tuple[str, str, str], int],
+        event_resources_dict: dict[str, list[str]],
+        event_ts_dict: dict[str, int],
+    ) -> dict[tuple[str, str, str], int]:
+        """
+        Apply resource-level two-pass deduplication to raw BFS bridges and return
+        a canonical bridge set {(src_ev, tgt_ev, bid): gap}.
+
+        Pass 2 — key (src_res, tgt_res, bid, tgt_ev): within each resource pair,
+        keep the bridge with the latest source timestamp.  Sources at different
+        resource pairs never compete, so independent handovers from different
+        source resources to the same target are both preserved.
+
+        Pass 1 — key (src_ev, src_res, tgt_res, bid): keep the bridge to the
+        earliest target event, removing phantom extra targets created by orphan
+        repair arcs.
+
+        The same canonical is correct for both handover computation and binding
+        computation:
+        - Orphan-repair duplicates within a resource pair are resolved by Pass 2
+          (dead-end repair source, being later, wins and the orphan-repair source
+          is dropped — so a bid no longer appears at the orphan-repair source
+          event and cannot collide with other bids there).
+        - Simultaneous arrivals from different resource pairs survive intact
+          because they have different Pass-2 keys.
+        """
+        # Pass 2: per (src_res, tgt_res, bid, tgt_ev) keep bridge with latest src ts.
+        p2: dict[tuple, tuple[str, int]] = {}
+        for (src_ev, tgt_ev, bid), gap in raw.items():
+            src_ts = event_ts_dict.get(src_ev, 0)
+            for src_res in event_resources_dict.get(src_ev, []):
+                for tgt_res in event_resources_dict.get(tgt_ev, []):
+                    k = (src_res, tgt_res, bid, tgt_ev)
+                    if k not in p2 or src_ts > event_ts_dict.get(p2[k][0], 0):
+                        p2[k] = (src_ev, gap)
+
+        # Pass 1: per (src_ev, src_res, tgt_res, bid) keep bridge to earliest tgt.
+        p1: dict[tuple, tuple[str, int]] = {}
+        for (src_res, tgt_res, bid, tgt_ev), (src_ev, gap) in p2.items():
+            tgt_ts = event_ts_dict.get(tgt_ev, 0)
+            k = (src_ev, src_res, tgt_res, bid)
+            if k not in p1 or tgt_ts < event_ts_dict.get(p1[k][0], 0):
+                p1[k] = (tgt_ev, gap)
+
+        # Reconstruct canonical (min gap when same bridge appears via multiple pairs).
+        canonical: dict[tuple[str, str, str], int] = {}
+        for (src_ev, *_, bid), (tgt_ev, gap) in p1.items():
+            key = (src_ev, tgt_ev, bid)
+            if key not in canonical or gap < canonical[key]:
+                canonical[key] = gap
+        return canonical
+
     @classmethod
     def _resource_pairs_from_eog(
         cls,
@@ -821,35 +842,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         }
 
         _bo_type_map, _raw = cls._bfs_bridges(eog_arcs, _resource_event_set, max_gap)
-
-        # Resource-level Pass 2: per (src_res, tgt_res, bid, tgt_ev) keep bridge
-        # with latest source ts — deduplicates parallel-repair sources for the
-        # same resource pair, while preserving independent handovers from different
-        # source resources to the same target.
-        _p2: dict[tuple, tuple[str, int]] = {}
-        for (_src_ev, _tgt_ev, _bid), _gap in _raw.items():
-            _src_ts = _event_ts_dict.get(_src_ev, 0)
-            for _src_res in _event_resources_dict.get(_src_ev, []):
-                for _tgt_res in _event_resources_dict.get(_tgt_ev, []):
-                    _k = (_src_res, _tgt_res, _bid, _tgt_ev)
-                    if _k not in _p2 or _src_ts > _event_ts_dict.get(_p2[_k][0], 0):
-                        _p2[_k] = (_src_ev, _gap)
-
-        # Resource-level Pass 1: per (src_ev, src_res, tgt_res, bid) keep bridge
-        # to earliest target event.
-        _p1: dict[tuple, tuple[str, int]] = {}
-        for (_src_res, _tgt_res, _bid, _tgt_ev), (_src_ev, _gap) in _p2.items():
-            _tgt_ts = _event_ts_dict.get(_tgt_ev, 0)
-            _k = (_src_ev, _src_res, _tgt_res, _bid)
-            if _k not in _p1 or _tgt_ts < _event_ts_dict.get(_p1[_k][0], 0):
-                _p1[_k] = (_tgt_ev, _gap)
-
-        # Reconstruct canonical (min gap when same bridge appears via multiple pairs).
-        _canonical: dict[tuple[str, str, str], int] = {}
-        for (_src_ev, *_, _bid), (_tgt_ev, _gap) in _p1.items():
-            _key = (_src_ev, _tgt_ev, _bid)
-            if _key not in _canonical or _gap < _canonical[_key]:
-                _canonical[_key] = _gap
+        _canonical = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
 
         # Expand canonical bridges to (src_event, tgt_event, src_res, tgt_res, bo_type)
         # rows.  All bo_ids sharing the same event-pair and type are accumulated.
