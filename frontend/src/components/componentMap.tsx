@@ -105,7 +105,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
     <div style={{ height: '100%', width: '100%',fontSize: node.font_size || 14 }}>
       {isEditMode ? (
         // Edit mode: Editable
-        <Card className="w-full h-full min-h-80 rounded-none">
+        <Card className="w-full h-full overflow-auto min-h-80 rounded-none">
           
           <CardContent>
             <Textarea
@@ -119,7 +119,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
         
       ) : (
         // Normal mode: Read-only
-        <Card className="w-full h-full min-h-80 rounded-none">
+        <Card className="w-full h-full overflow-auto min-h-80 rounded-none">
           <CardContent>
             <div>
               <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
@@ -173,7 +173,7 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
-      <Card className="w-full h-full rounded-none">
+      <Card className="w-full h-full overflow-auto rounded-none">
         <CardHeader>
           <CardDescription>
             Number of Events
@@ -219,7 +219,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
   };
 
   return (
-    <Card className="w-full h-full rounded-none">
+    <Card className="w-full h-full overflow-auto rounded-none">
       
 
       
@@ -346,7 +346,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     const leadingTypeIgnored = extraction === 'connected';
 
     return (
-      <Card className="w-full h-full rounded-none">
+      <Card className="w-full h-full overflow-auto rounded-none">
         <CardHeader>
           <CardTitle>Variants Explorer Settings</CardTitle>
         </CardHeader>
@@ -526,7 +526,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
   if (isEditMode) {
     // EDIT MODE: Show configuration placeholder
     return (
-      <Card className="w-full h-full rounded-none">
+      <Card className="w-full h-full overflow-auto rounded-none">
         <CardHeader>
           <CardTitle>Process Area Settings</CardTitle>
         </CardHeader>
@@ -698,7 +698,7 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   if (isEditMode) {
     // EDIT MODE: Show configuration controls
     return (
-      <Card className="w-full h-full rounded-none">
+      <Card className="w-full h-full overflow-auto rounded-none">
         <CardHeader>
           <CardTitle>OCDFG Settings</CardTitle>
         </CardHeader>
@@ -729,7 +729,7 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render OCDFGVisualizer
   return (
-    <div className="w-full h-full bg-white">
+    <div className="w-full h-full overflow-auto bg-white">
       <ReactFlowProvider>
         <OCDFGVisualizer
           height="100%"

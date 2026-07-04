@@ -200,131 +200,140 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 
   if (isEditMode) {
     return (
-      <div className="p-4 space-y-4 h-full overflow-y-auto">
-        <div>
-          <label className="block text-sm font-medium mb-1">Chart Title</label>
-          <Input
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>Pie Chart Component</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2">Chart Title</label>
+            <Input
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Enter chart title"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">SQL Query</label>
-          <Textarea
-            value={query}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="SELECT name AS label, count AS value FROM data"
-            rows={4}
-          />
-          <div className="flex gap-2 mt-2">
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">SQL Query</label>
+            <Textarea
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              placeholder="SELECT name AS label, count AS value FROM data"
+              rows={4}
+            />
+          <div className="flex justify-center gap-2 mt-2">
             <Button
               onClick={executeQueryManually}
               disabled={isLoading || !query.trim()}
               size="sm"
-            >
+              >
               {isLoading ? 'Executing...' : 'Execute Query'}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            Click "Execute Query" to see available columns and test your query
-          </p>
-        </div>
-        {availableColumns.length > 0 && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Available Columns</label>
-            <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
-              {availableColumns.join(', ')}
+            <p className="text-xs text-muted-foreground mt-1">
+              Click "Execute Query" to see available columns and test your query
+            </p>
+          </div>
+          {availableColumns.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Available Columns</label>
+              <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
+                {availableColumns.join(', ')}
+              </div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Label Column</label>
+              <Input
+                value={labelColumn}
+                onChange={(e) => handleLabelColumnChange(e.target.value)}
+                placeholder={availableColumns.length > 0 ? `e.g., ${availableColumns[0]}` : "Execute query first"}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Value Column</label>
+              <Input
+                value={valueColumn}
+                onChange={(e) => handleValueColumnChange(e.target.value)}
+                placeholder={availableColumns.length > 1 ? `e.g., ${availableColumns[1]}` : "Execute query first"}
+              />
             </div>
           </div>
-        )}
-        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Label Column</label>
+            <label className="block text-sm font-medium mb-1">Chart Type</label>
+            <div className="flex justify-center gap-2">
+              <Button
+                variant={chartType === 'pie' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleChartTypeChange('pie')}
+              >
+                Pie Chart
+              </Button>
+              <Button
+                variant={chartType === 'donut' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleChartTypeChange('donut')}
+              >
+                Donut Chart
+              </Button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Center Text (Donut)</label>
             <Input
-              value={labelColumn}
-              onChange={(e) => handleLabelColumnChange(e.target.value)}
-              placeholder={availableColumns.length > 0 ? `e.g., ${availableColumns[0]}` : "Execute query first"}
+              value={ringText}
+              onChange={(e) => handleRingTextChange(e.target.value)}
+              placeholder="Center text for donut chart"
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium mb-1">Value Column</label>
-            <Input
-              value={valueColumn}
-              onChange={(e) => handleValueColumnChange(e.target.value)}
-              placeholder={availableColumns.length > 1 ? `e.g., ${availableColumns[1]}` : "Execute query first"}
-            />
-          </div>
-        </div>
+        </CardContent>
+      </Card>
 
-        <div>
-          <label className="block text-sm font-medium mb-1">Chart Type</label>
-          <div className="flex gap-2">
-            <Button
-              variant={chartType === 'pie' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleChartTypeChange('pie')}
-            >
-              Pie Chart
-            </Button>
-            <Button
-              variant={chartType === 'donut' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleChartTypeChange('donut')}
-            >
-              Donut Chart
-            </Button>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">Center Text (Donut)</label>
-          <Input
-            value={ringText}
-            onChange={(e) => handleRingTextChange(e.target.value)}
-            placeholder="Center text for donut chart"
-          />
-        </div>
-
-        
-
-        
-      </div>
+      
     );
   }
 
   // VIEW MODE
   if (!selectedFile) {
     return (
+    <Card className="w-full h-full rounded-none overflow-auto">
       <div className="flex items-center justify-center h-full text-muted-foreground">
         Please select a file to display the pie chart
       </div>
+    </Card>
     );
   }
 
   if (error) {
     return (
+    <Card className="w-full h-full rounded-none overflow-auto">
       <div className="flex items-center justify-center h-full text-red-600">
         Error: {error}
       </div>
+    </Card>
     );
   }
 
   if (isLoading) {
     return (
+    <Card className="w-full h-full rounded-none overflow-auto">
       <div className="flex items-center justify-center h-full">
         Loading chart data...
       </div>
+    </Card>
     );
   }
 
   if (chartData.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        No data to display. Configure the query and columns in edit mode.
-      </div>
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          No data to display. Configure the query and columns in edit mode.
+        </div>
+      </Card>
     );
   }
 
@@ -335,21 +344,21 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           <CardTitle>{title}</CardTitle>
         </CardHeader>
       )}
-      <CardContent className="flex-1 pb-0">
+      <CardContent className="flex-1 flex justify-center items-center pb-0 min-h-0">
         <ChartContainer
           config={chartConfig}
-          className="mx-auto aspect-square max-h-[250px]"
+          className="w-full h-full max-h-[450px]"
         >
           <PieChart>
               <ChartTooltip
                 cursor={false}
-                content={<ChartTooltipContent hideLabel />}
+                content={<ChartTooltipContent hideLabel  />}
               />
             <Pie
               data={chartData}
               dataKey={valueColumn}
               nameKey={labelColumn}
-              innerRadius={chartType === 'donut' ? 60 : 0}
+              innerRadius={chartType === 'donut' ? "50%" : 0}
               strokeWidth={5}
             >
               {chartType === 'donut' && ringText && (
@@ -373,7 +382,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
                           <tspan
                             x={viewBox.cx}
                             y={(viewBox.cy || 0) + 24}
-                            className="fill-muted-foreground"
+                            className="fill-muted-foreground break-normal"
                           >
                             {ringText}
                           </tspan>

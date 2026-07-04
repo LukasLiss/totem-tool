@@ -167,12 +167,12 @@ const SidePanel: React.FC = () => {
       </div>
 
       <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/variants-preview.png" width="100" height="50"/>
+        <img src="src/images/sql_query_icon.png" width="100" height="50"/>
         <div>SQL Query</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/variants-preview.png" width="100" height="50"/>
+        <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
         <div>Pie Chart</div>
       </div>
     </div>
