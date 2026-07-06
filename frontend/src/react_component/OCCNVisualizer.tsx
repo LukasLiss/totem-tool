@@ -13,9 +13,18 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon } from 'lucide-react';
+import {
+  PlusIcon,
+  MinusIcon,
+  ScanIcon,
+  LockIcon,
+  UnlockIcon,
+  NetworkIcon,
+  ArrowDownIcon,
+  ArrowRightIcon,
+} from 'lucide-react';
 import { mapTypesToColors } from '../utils/objectColors';
-import { occnToFlow, type OccnNet } from '../utils/occnTransform';
+import { occnToFlow, type OccnLayoutDirection, type OccnNet } from '../utils/occnTransform';
 import { layoutOccn } from '../utils/occnLayout';
 import OccnActivityNode from './OccnActivityNode';
 import OccnTerminalNode from './OccnTerminalNode';
@@ -31,6 +40,8 @@ interface OCCNVisualizerProps {
   typeColorOverrides?: Record<string, string>;
   /** Cap on rendered marker groups per activity side; the rest collapse into a "+N more" chip. */
   maxMarkerGroupsPerSide?: number;
+  /** Initial ELK layout direction; the in-canvas toggle takes over afterwards. */
+  initialLayoutDirection?: OccnLayoutDirection;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -45,6 +56,7 @@ function OCCNVisualizer({
   initialInteractionLocked = false,
   typeColorOverrides,
   maxMarkerGroupsPerSide,
+  initialLayoutDirection = 'LR',
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -57,6 +69,9 @@ function OCCNVisualizer({
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked);
   // Threshold applied to the fetch; the slider commits into this state.
   const [threshold, setThreshold] = useState(0);
+  const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
+  // Bumped by the "re-layout" button to rerun ELK after manual dragging.
+  const [layoutTick, setLayoutTick] = useState(0);
 
   const nodeTypes = useMemo(
     () => ({
@@ -118,20 +133,35 @@ function OCCNVisualizer({
     [net, typeColorOverrides],
   );
 
-  // Build + layout the flow graph whenever the net (or its colors) change.
+  // Build + layout the flow graph whenever the net (or its colors, direction,
+  // or the re-layout tick) change. ELK layout is async, so guard against a
+  // stale run resolving after the inputs changed.
   useEffect(() => {
     if (!net) {
       setNodes([]);
       setEdges([]);
       return;
     }
+    let cancelled = false;
     const { nodes: flowNodes, edges: flowEdges, groupSizes } = occnToFlow(net, typeColors, {
       maxMarkerGroupsPerSide,
+      direction: layoutDirection,
     });
-    setNodes(layoutOccn(flowNodes, net.edges, groupSizes));
-    setEdges(flowEdges);
-    window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
-  }, [net, typeColors, fitView, maxMarkerGroupsPerSide]);
+    layoutOccn(flowNodes, net.edges, groupSizes, layoutDirection)
+      .catch((err) => {
+        console.error('OCCN layout failed, rendering unpositioned nodes', err);
+        return flowNodes;
+      })
+      .then((laidOutNodes) => {
+        if (cancelled) return;
+        setNodes(laidOutNodes);
+        setEdges(flowEdges);
+        window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [net, typeColors, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
 
   const interactionsDisabled = interactionLocked;
 
@@ -150,7 +180,9 @@ function OCCNVisualizer({
         fitView
         fitViewOptions={{ padding: 0.15 }}
         proOptions={{ hideAttribution: true }}
-        minZoom={0.1}
+        // Dense logs at threshold 0 lay out tens of thousands of px tall;
+        // fitView cannot go below minZoom, so keep it low enough to fit.
+        minZoom={0.02}
         maxZoom={2.5}
         nodesDraggable={!interactionsDisabled}
         nodesConnectable={false}
@@ -258,6 +290,36 @@ function OCCNVisualizer({
               />
               <span style={{ fontSize: 11, color: '#475569', width: 28 }}>{threshold.toFixed(2)}</span>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() =>
+                setLayoutDirection((prev) => (prev === 'LR' ? 'TB' : 'LR'))
+              }
+              className="rounded-full h-9 w-9"
+              title={
+                layoutDirection === 'LR'
+                  ? 'Switch to top-to-bottom layout'
+                  : 'Switch to left-to-right layout'
+              }
+            >
+              {layoutDirection === 'LR' ? (
+                <ArrowRightIcon className="h-4 w-4" />
+              ) : (
+                <ArrowDownIcon className="h-4 w-4" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => setLayoutTick((tick) => tick + 1)}
+              className="rounded-full h-9 w-9"
+              title="Re-run automatic layout"
+            >
+              <NetworkIcon className="h-4 w-4" />
+            </Button>
             <Button
               type="button"
               variant="outline"

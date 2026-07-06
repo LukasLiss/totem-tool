@@ -39,12 +39,15 @@ export interface OccnNet {
 
 // --- React Flow node data types ---
 
+export type OccnLayoutDirection = 'LR' | 'TB';
+
 export type OccnActivityNodeData = {
   label: string;
   count: number;
   types: string[];
   background: string;
   textColor: string;
+  direction: OccnLayoutDirection;
 };
 
 export type OccnTerminalNodeData = {
@@ -52,6 +55,7 @@ export type OccnTerminalNodeData = {
   terminal: 'start' | 'end';
   objectType: string;
   fillColor: string;
+  direction: OccnLayoutDirection;
 };
 
 export type OccnMarkerRow = {
@@ -103,9 +107,13 @@ export const OVERFLOW_NODE_H = 26;
 export const DEFAULT_MAX_MARKER_GROUPS_PER_SIDE = 12;
 
 // Handle ids: edges silently vanish on a mismatch, so both the transform and
-// the node components import these.
+// the node components import these. Dependency handles move with the layout
+// direction (LR: left/right, TB: top/bottom); binding handles always stay
+// left/right because the marker columns inside a group are always horizontal.
 export const HANDLE_DEPENDENCY_IN = 'dependency_in';
 export const HANDLE_DEPENDENCY_OUT = 'dependency_out';
+export const HANDLE_BINDING_IN = 'binding_in';
+export const HANDLE_BINDING_OUT = 'binding_out';
 export const markerHandleId = (index: number) => `m${index}`;
 
 export function markerGroupHeight(group: OccnMarkerGroup): number {
@@ -146,6 +154,8 @@ export interface OccnFlowResult {
  */
 export interface OccnToFlowOptions {
   maxMarkerGroupsPerSide?: number;
+  /** Where dependency handles sit on activity nodes; must match the layouter's direction. */
+  direction?: OccnLayoutDirection;
 }
 
 export function occnToFlow(
@@ -154,6 +164,7 @@ export function occnToFlow(
   options?: OccnToFlowOptions,
 ): OccnFlowResult {
   const maxGroupsPerSide = options?.maxMarkerGroupsPerSide ?? DEFAULT_MAX_MARKER_GROUPS_PER_SIDE;
+  const direction = options?.direction ?? 'LR';
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const groupSizes: Record<string, { width: number; height: number }> = {};
@@ -255,6 +266,7 @@ export function occnToFlow(
           terminal,
           objectType,
           fillColor: colors[objectType] ?? '#94A3B8',
+          direction,
         } satisfies OccnTerminalNodeData,
       });
     } else {
@@ -272,6 +284,7 @@ export function occnToFlow(
           types,
           background,
           textColor: textColorForBackground(background),
+          direction,
         } satisfies OccnActivityNodeData,
       });
     }
@@ -307,9 +320,9 @@ export function occnToFlow(
           edges.push({
             id: `bind:${mgId}:${mi}`,
             source: side === 'input' ? mgId : actId,
-            sourceHandle: side === 'input' ? markerHandleId(mi) : HANDLE_DEPENDENCY_OUT,
+            sourceHandle: side === 'input' ? markerHandleId(mi) : HANDLE_BINDING_OUT,
             target: side === 'input' ? actId : mgId,
-            targetHandle: side === 'input' ? HANDLE_DEPENDENCY_IN : markerHandleId(mi),
+            targetHandle: side === 'input' ? HANDLE_BINDING_IN : markerHandleId(mi),
             type: 'straight',
             style: { stroke: color, strokeWidth: 1.2, opacity: 0.7 },
           });

@@ -4,6 +4,8 @@ import { textColorForBackground } from '../utils/objectColors';
 import {
   ACTIVITY_H,
   ACTIVITY_W,
+  HANDLE_BINDING_IN,
+  HANDLE_BINDING_OUT,
   HANDLE_DEPENDENCY_IN,
   HANDLE_DEPENDENCY_OUT,
   type OccnTerminalNodeData,
@@ -31,6 +33,10 @@ const OccnTerminalNode = memo(function OccnTerminalNode({
   const fillColor = data?.fillColor ?? '#1D4ED8';
   const label = data?.label ?? objectType;
   const textColor = useMemo(() => textColorForBackground(fillColor), [fillColor]);
+  // Dependency handles follow the layout direction; binding handles stay
+  // left/right to face the marker columns inside the group.
+  const depIn = data?.direction === 'TB' ? Position.Top : Position.Left;
+  const depOut = data?.direction === 'TB' ? Position.Bottom : Position.Right;
 
   const glyph = terminal === 'end' ? (
     <div
@@ -68,7 +74,8 @@ const OccnTerminalNode = memo(function OccnTerminalNode({
         boxShadow: '0 8px 18px rgba(15, 23, 42, 0.18)',
       }}
     >
-      <Handle type="target" position={Position.Left} id={HANDLE_DEPENDENCY_IN} style={handleStyle} />
+      <Handle type="target" position={depIn} id={HANDLE_DEPENDENCY_IN} style={handleStyle} />
+      <Handle type="target" position={Position.Left} id={HANDLE_BINDING_IN} style={handleStyle} />
       {glyph}
       <span
         style={{
@@ -85,7 +92,8 @@ const OccnTerminalNode = memo(function OccnTerminalNode({
       >
         {terminal === 'start' ? 'Start' : 'End'} · {objectType}
       </span>
-      <Handle type="source" position={Position.Right} id={HANDLE_DEPENDENCY_OUT} style={handleStyle} />
+      <Handle type="source" position={depOut} id={HANDLE_DEPENDENCY_OUT} style={handleStyle} />
+      <Handle type="source" position={Position.Right} id={HANDLE_BINDING_OUT} style={handleStyle} />
     </div>
   );
 });

@@ -3,6 +3,8 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import {
   ACTIVITY_H,
   ACTIVITY_W,
+  HANDLE_BINDING_IN,
+  HANDLE_BINDING_OUT,
   HANDLE_DEPENDENCY_IN,
   HANDLE_DEPENDENCY_OUT,
   type OccnActivityNodeData,
@@ -25,6 +27,10 @@ const OccnActivityNode = memo(function OccnActivityNode({
   const background = data?.background ?? '#CBD5F5';
   const textColor = data?.textColor ?? '#0F172A';
   const types = data?.types ?? [];
+  // Dependency handles follow the layout direction; binding handles stay
+  // left/right to face the marker columns inside the group.
+  const depIn = data?.direction === 'TB' ? Position.Top : Position.Left;
+  const depOut = data?.direction === 'TB' ? Position.Bottom : Position.Right;
 
   return (
     <div
@@ -44,7 +50,8 @@ const OccnActivityNode = memo(function OccnActivityNode({
         boxShadow: '0 8px 18px rgba(15, 23, 42, 0.14)',
       }}
     >
-      <Handle type="target" position={Position.Left} id={HANDLE_DEPENDENCY_IN} style={handleStyle} />
+      <Handle type="target" position={depIn} id={HANDLE_DEPENDENCY_IN} style={handleStyle} />
+      <Handle type="target" position={Position.Left} id={HANDLE_BINDING_IN} style={handleStyle} />
       <span
         style={{
           color: textColor,
@@ -62,7 +69,8 @@ const OccnActivityNode = memo(function OccnActivityNode({
         {label}
       </span>
       <span style={{ color: textColor, fontSize: 10, opacity: 0.85 }}>{count}</span>
-      <Handle type="source" position={Position.Right} id={HANDLE_DEPENDENCY_OUT} style={handleStyle} />
+      <Handle type="source" position={depOut} id={HANDLE_DEPENDENCY_OUT} style={handleStyle} />
+      <Handle type="source" position={Position.Right} id={HANDLE_BINDING_OUT} style={handleStyle} />
     </div>
   );
 });
