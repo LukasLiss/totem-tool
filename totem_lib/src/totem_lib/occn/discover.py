@@ -1367,7 +1367,7 @@ class SimpleOCCNet:
                         marker[0], marker[1], (marker[3][0], marker[3][1]), marker[2]
                     )
                 )
-            return OCCausalNet.MarkerGroup(markers)
+            return OCCausalNet.MarkerGroup(markers, support_count=marker_group[1])
 
         dependency_graph = self.dependencyGraph
         input_bindings = {
@@ -1382,6 +1382,7 @@ class SimpleOCCNet:
             dependency_graph,
             output_bindings,
             input_bindings,
+            activity_count=dict(self.activityCount),
             relative_occurrence_threshold=relativeOccurenceThreshold,
         )
 
