@@ -1,6 +1,6 @@
 import pytest
 from collections import Counter
-from totem_lib import OCCausalNetSemantics, OCCausalNetState
+from totem_lib import OCCausalNet, OCCausalNetSemantics, OCCausalNetState
 from tests.assets.example_occns import (
     occn_basic,
     occn_basic_2,
@@ -961,3 +961,156 @@ class TestOCCausalNetSemantics:
             OCCausalNetSemantics.bind_activity(internal_b, state)
         except TypeError:
             pytest.fail("bind_activity failed to accept/convert InternalBinding tuple")
+
+
+class TestEnabledBindingsForObjects:
+    """Tests for enabled_bindings_for_objects and the key-constraint
+    handling of enabled_bindings it builds on."""
+
+    def _net_with_keyed_img(self):
+        marker_groups = {
+            "START_order": {
+                "omg": [
+                    [("a", "order", (1, 1), 0), ("b", "order", (1, 1), 0)],
+                ],
+            },
+            "a": {
+                "img": [[("START_order", "order", (1, 1), 0)]],
+                "omg": [[("s", "order", (1, 1), 0)]],
+            },
+            "b": {
+                "img": [[("START_order", "order", (1, 1), 0)]],
+                "omg": [[("s", "order", (1, 1), 0)]],
+            },
+            "s": {
+                # same key 3: the objects consumed from a and from b must
+                # be disjoint
+                "img": [
+                    [("a", "order", (1, 1), 3), ("b", "order", (1, 1), 3)],
+                ],
+                "omg": [[("END_order", "order", (1, -1), 0)]],
+            },
+            "END_order": {
+                "img": [[("s", "order", (1, -1), 0)]],
+            },
+        }
+        return OCCausalNet.from_dict(marker_groups)
+
+    def test_enabled_bindings_respects_img_key_constraints(self):
+        # both o1 and o2 have obligations from a AND from b toward s;
+        # bindings consuming the same object via both markers are invalid
+        occn = self._net_with_keyed_img()
+        state = OCCausalNetState(
+            {
+                "s": Counter(
+                    [
+                        ("a", "o1", "order"),
+                        ("b", "o1", "order"),
+                        ("a", "o2", "order"),
+                        ("b", "o2", "order"),
+                    ]
+                )
+            }
+        )
+        bindings = OCCausalNetSemantics.enabled_bindings(occn, "s", state)
+        assert len(bindings) > 0
+        for _, consumed, _ in bindings:
+            per_pred = {pred: objs for pred, ((_, objs),) in consumed}
+            assert set(per_pred["a"]).isdisjoint(per_pred["b"])
+
+    def test_for_objects_matches_enabled_bindings_filtered(self):
+        # enabled_bindings_for_objects must equal the exact-object subset
+        # of enabled_bindings
+        occn = self._net_with_keyed_img()
+        state = OCCausalNetState(
+            {
+                "s": Counter(
+                    [
+                        ("a", "o1", "order"),
+                        ("b", "o1", "order"),
+                        ("a", "o2", "order"),
+                        ("b", "o2", "order"),
+                    ]
+                )
+            }
+        )
+
+        def consumed_objects(binding):
+            _, consumed, _ = binding
+            return {
+                obj
+                for _, per_type in consumed
+                for _, objs in per_type
+                for obj in objs
+            }
+
+        objects = {"o1", "o2"}
+        expected = {
+            binding
+            for binding in OCCausalNetSemantics.enabled_bindings(occn, "s", state)
+            if consumed_objects(binding) == objects
+        }
+        actual = set(
+            OCCausalNetSemantics.enabled_bindings_for_objects(
+                occn, "s", state, objects
+            )
+        )
+        assert actual == expected
+        assert len(actual) > 0
+
+    def test_for_objects_multi_type_matches_enabled_bindings_filtered(self):
+        occn = occn_multi_ot_multi_marker()
+        state = OCCausalNetState(
+            {
+                "a": Counter(
+                    [
+                        ("START_order", "o1", "order"),
+                        ("START_order", "o2", "order"),
+                        ("START_item", "i1", "item"),
+                        ("START_item", "i2", "item"),
+                        ("START_item", "i3", "item"),
+                    ]
+                )
+            }
+        )
+
+        def consumed_objects(binding):
+            _, consumed, _ = binding
+            return {
+                obj
+                for _, per_type in consumed
+                for _, objs in per_type
+                for obj in objs
+            }
+
+        all_bindings = OCCausalNetSemantics.enabled_bindings(occn, "a", state)
+        for objects in ({"o1", "i1"}, {"o1", "i1", "i2"}, {"o1", "o2", "i1"}):
+            expected = {
+                binding
+                for binding in all_bindings
+                if consumed_objects(binding) == objects
+            }
+            actual = set(
+                OCCausalNetSemantics.enabled_bindings_for_objects(
+                    occn, "a", state, objects
+                )
+            )
+            assert actual == expected
+
+    def test_for_objects_returns_empty_for_unbindable_objects(self):
+        occn = self._net_with_keyed_img()
+        state = OCCausalNetState({"s": Counter([("a", "o1", "order")])})
+        # o2 has no obligation toward s
+        assert (
+            OCCausalNetSemantics.enabled_bindings_for_objects(
+                occn, "s", state, {"o1", "o2"}
+            )
+            == ()
+        )
+        # empty object set never binds
+        assert (
+            OCCausalNetSemantics.enabled_bindings_for_objects(
+                occn, "s", state, set()
+            )
+            == ()
+        )
