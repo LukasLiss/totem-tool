@@ -616,6 +616,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     relative_occurrence_threshold=item.get('relative_occurrence_threshold', 0.0),
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    layout_direction=item.get('layout_direction', 'LR'),
+                    object_types=item.get('object_types') or '',
                 )
             # Add more as needed
 

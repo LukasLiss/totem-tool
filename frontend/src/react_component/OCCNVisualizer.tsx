@@ -42,6 +42,10 @@ interface OCCNVisualizerProps {
   maxMarkerGroupsPerSide?: number;
   /** Initial ELK layout direction; the in-canvas toggle takes over afterwards. */
   initialLayoutDirection?: OccnLayoutDirection;
+  /** Initial relative occurrence threshold; the in-canvas slider takes over afterwards. */
+  initialThreshold?: number;
+  /** Restrict discovery to these object types; empty/undefined = all types. */
+  objectTypes?: string[];
 }
 
 function resolveHeightValue(height: string | number) {
@@ -57,6 +61,8 @@ function OCCNVisualizer({
   typeColorOverrides,
   maxMarkerGroupsPerSide,
   initialLayoutDirection = 'LR',
+  initialThreshold = 0,
+  objectTypes,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -68,7 +74,7 @@ function OCCNVisualizer({
   const [loading, setLoading] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked);
   // Threshold applied to the fetch; the slider commits into this state.
-  const [threshold, setThreshold] = useState(0);
+  const [threshold, setThreshold] = useState(initialThreshold);
   const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
   // Bumped by the "re-layout" button to rerun ELK after manual dragging.
   const [layoutTick, setLayoutTick] = useState(0);
@@ -92,6 +98,9 @@ function OCCNVisualizer({
     [],
   );
 
+  // Normalized to a string so the fetch effect doesn't re-run on array identity.
+  const objectTypesParam = (objectTypes ?? []).map((t) => t.trim()).filter(Boolean).join(',');
+
   // Fetch the serialized net. A `data` prop bypasses the fetch entirely.
   useEffect(() => {
     if (data) {
@@ -108,7 +117,9 @@ function OCCNVisualizer({
     setError(null);
     axios
       .get<OccnNet>(
-        `http://127.0.0.1:8000/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}`,
+        `http://127.0.0.1:8000/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
+          objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
+        }`,
       )
       .then(({ data: payload }) => {
         if (cancelled) return;
@@ -126,7 +137,7 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data, fileId, threshold]);
+  }, [data, fileId, threshold, objectTypesParam]);
 
   const typeColors = useMemo(
     () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),
