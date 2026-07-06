@@ -1622,79 +1622,96 @@ function HandoverGraph({
     const SQ_SZ = 4.5;   // half-size of square mark
 
     for (const side of ["output", "input"] as const) {
-      // Process solos (arcs.length === 1) first so they occupy slot 0
+      // Process solos (arcs.length === 1) first so they occupy the inner slots
       const bindings = [...bindingsData.filter(b => b.type === side)]
         .sort((a, b) => a.arcs.length - b.arcs.length);
 
-      const arcNextSlot = new Map<string, number>();
+      // Per-node slot counter: each binding at a node gets a unique slot → unique radius.
+      // This prevents solo dots from landing at the same radius as a multi-arc ring.
+      const nodeNextSlot = new Map<string, number>();
 
       for (const binding of bindings) {
         const isOutput = side === "output";
-        // pathKeys include bo_type for SVG path lookup;
-        // slotKeys omit bo_type so different object types on the same node pair
-        // share a slot counter and get different offsets instead of overlapping.
+
         const pathKeys = binding.arcs.map(arc =>
           isOutput
             ? `${binding.resource}|${arc.other_resource}|${arc.bo_type}`
             : `${arc.other_resource}|${binding.resource}|${arc.bo_type}`
         );
-        const slotKeys = binding.arcs.map(arc =>
-          isOutput
-            ? `${binding.resource}|${arc.other_resource}`
-            : `${arc.other_resource}|${binding.resource}`
-        );
 
-        const slot = Math.max(0, ...slotKeys.map(k => arcNextSlot.get(k) ?? 0));
-        for (const key of slotKeys) arcNextSlot.set(key, slot + 1);
+        const slot = nodeNextSlot.get(binding.resource) ?? 0;
+        nodeNextSlot.set(binding.resource, slot + 1);
 
-        // Dot positions on edge paths
-        const dots: { x: number; y: number; color: string; is_gapped: boolean; mark: "dot" | "square" }[] = [];
+        // totalR = nodeRadius + BASE + slot*SLOT_STEP, measured from node center.
+        // Computed once from the first available path (node radius is constant for a
+        // circular node, so all edges from the same node give the same boundaryDist).
+        const slotOffset = BASE + slot * SLOT_STEP;
+        const nodePos = positions[binding.resource];
+        let totalR = slotOffset;
+        if (nodePos) {
+          const { x: cx0, y: cy0 } = nodePos;
+          for (const pk of pathKeys) {
+            const p = pathMap.get(pk);
+            if (!p) continue;
+            const plen = p.getTotalLength();
+            const ptB = p.getPointAtLength(isOutput ? 0 : plen);
+            totalR = Math.sqrt((ptB.x - cx0) ** 2 + (ptB.y - cy0) ** 2) + slotOffset;
+            break;
+          }
+        }
+
+        // Dot positions: project along edge direction at fixed totalR from node center.
+        const dots: { x: number; y: number; angle: number; color: string; is_gapped: boolean; mark: "dot" | "square" }[] = [];
         for (let i = 0; i < pathKeys.length; i++) {
           const path = pathMap.get(pathKeys[i]);
           if (!path) continue;
           const len = path.getTotalLength();
-          const offset = Math.min(BASE + slot * SLOT_STEP, len * 0.45);
-          const pt = path.getPointAtLength(isOutput ? offset : len - offset);
-          dots.push({ x: pt.x, y: pt.y, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark });
+
+          let px: number, py: number, angle: number;
+          if (nodePos) {
+            const { x: cx, y: cy } = nodePos;
+            const sample = Math.min(8, len * 0.15);
+            const ptDir = path.getPointAtLength(isOutput ? sample : len - sample);
+            angle = Math.atan2(ptDir.y - cy, ptDir.x - cx);
+            px = cx + totalR * Math.cos(angle);
+            py = cy + totalR * Math.sin(angle);
+          } else {
+            const offset = Math.min(slotOffset, len * 0.45);
+            const pt = path.getPointAtLength(isOutput ? offset : len - offset);
+            px = pt.x; py = pt.y; angle = 0;
+          }
+          dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark });
         }
         if (dots.length === 0) continue;
 
-        // Connector: circular arc centred at node, radius = avg dot distance from node
-        if (dots.length >= 2) {
-          const nodePos = positions[binding.resource];
-          if (nodePos) {
-            const { x: cx, y: cy } = nodePos;
-            const withAngle = dots.map(d => ({
-              angle: Math.atan2(d.y - cy, d.x - cx),
-              dist: Math.sqrt((d.x - cx) ** 2 + (d.y - cy) ** 2),
-            }));
-            // Largest-gap sort so we sweep the short arc
-            const sorted = [...withAngle].sort((a, b) => a.angle - b.angle);
-            const n = sorted.length;
-            let maxGap = -1, gapIdx = 0;
-            for (let i = 0; i < n; i++) {
-              const gap = ((sorted[(i + 1) % n].angle - sorted[i].angle) + 2 * Math.PI) % (2 * Math.PI);
-              if (gap > maxGap) { maxGap = gap; gapIdx = i; }
-            }
-            const startIdx = (gapIdx + 1) % n;
-            const ordered = [...sorted.slice(startIdx), ...sorted.slice(0, startIdx)];
-            const R = ordered.reduce((s, d) => s + d.dist, 0) / ordered.length;
-            const first = ordered[0], last = ordered[ordered.length - 1];
-            const sx = cx + R * Math.cos(first.angle), sy = cy + R * Math.sin(first.angle);
-            const ex = cx + R * Math.cos(last.angle),  ey = cy + R * Math.sin(last.angle);
-            const arcSpan = ((last.angle - first.angle) + 2 * Math.PI) % (2 * Math.PI);
-            const largeArc = arcSpan > Math.PI ? 1 : 0;
-            const color = typeColorMap[binding.arcs[0].bo_type] ?? "#888";
-            const arc = document.createElementNS(NS, "path");
-            arc.setAttribute("d", `M${sx.toFixed(1)} ${sy.toFixed(1)} A${R.toFixed(1)} ${R.toFixed(1)} 0 ${largeArc} 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`);
-            arc.setAttribute("fill", "none");
-            arc.setAttribute("stroke", color);
-            arc.setAttribute("stroke-width", "1.5");
-            arc.setAttribute("stroke-linecap", "round");
-            arc.setAttribute("stroke-dasharray", binding.line_type === "dotted" ? "4 3" : "none");
-            arc.setAttribute("opacity", "0.9");
-            layer.appendChild(arc);
+        // Connector: circular arc centred at node at exactly totalR.
+        // Largest-gap sort so we sweep the short arc.
+        if (dots.length >= 2 && nodePos) {
+          const { x: cx, y: cy } = nodePos;
+          const sorted = [...dots].sort((a, b) => a.angle - b.angle);
+          const n = sorted.length;
+          let maxGap = -1, gapIdx = 0;
+          for (let i = 0; i < n; i++) {
+            const gap = ((sorted[(i + 1) % n].angle - sorted[i].angle) + 2 * Math.PI) % (2 * Math.PI);
+            if (gap > maxGap) { maxGap = gap; gapIdx = i; }
           }
+          const startIdx = (gapIdx + 1) % n;
+          const ordered = [...sorted.slice(startIdx), ...sorted.slice(0, startIdx)];
+          const first = ordered[0], last = ordered[ordered.length - 1];
+          const sx = cx + totalR * Math.cos(first.angle), sy = cy + totalR * Math.sin(first.angle);
+          const ex = cx + totalR * Math.cos(last.angle),  ey = cy + totalR * Math.sin(last.angle);
+          const arcSpan = ((last.angle - first.angle) + 2 * Math.PI) % (2 * Math.PI);
+          const largeArc = arcSpan > Math.PI ? 1 : 0;
+          const color = typeColorMap[binding.arcs[0].bo_type] ?? "#888";
+          const arc = document.createElementNS(NS, "path");
+          arc.setAttribute("d", `M${sx.toFixed(1)} ${sy.toFixed(1)} A${totalR.toFixed(1)} ${totalR.toFixed(1)} 0 ${largeArc} 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`);
+          arc.setAttribute("fill", "none");
+          arc.setAttribute("stroke", color);
+          arc.setAttribute("stroke-width", "1.5");
+          arc.setAttribute("stroke-linecap", "round");
+          arc.setAttribute("stroke-dasharray", binding.line_type === "dotted" ? "4 3" : "none");
+          arc.setAttribute("opacity", "0.9");
+          layer.appendChild(arc);
         }
 
         // Marks: filled = direct, hollow ring = gapped; circle = dot, square = square
