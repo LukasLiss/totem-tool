@@ -13,22 +13,6 @@ import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
-import { ReactFlowProvider } from "@xyflow/react";
-import OCCNVisualizer from "./react_component/OCCNVisualizer";
-
-// Dev-only harness for the OCCN visualizer until its dashboard integration
-// lands (#156). Open http://localhost:5173/occn-dev?file_id=<id>.
-function OccnDevView() {
-  const fileIdParam = new URLSearchParams(window.location.search).get("file_id");
-  const fileId = fileIdParam ? Number(fileIdParam) : undefined;
-  return (
-    <div style={{ height: "100vh", width: "100vw", background: "#FFFFFF" }}>
-      <ReactFlowProvider>
-        <OCCNVisualizer fileId={fileId} height="100%" />
-      </ReactFlowProvider>
-    </div>
-  );
-}
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -121,9 +105,6 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route path="/overview" element={<ProcessOverview />} />
             <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
-            {import.meta.env.DEV && (
-              <Route path="/occn-dev" element={<OccnDevView />} />
-            )}
             <Route
               path="/"
               element={
