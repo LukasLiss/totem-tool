@@ -15,6 +15,7 @@ import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
 import LogStatistics from '@/components/LogStatistics';
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -37,6 +38,21 @@ export function DevDashboard() {
             <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
           </ReactFlowProvider>
         </div>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              Object-Centric Causal Net
+            </CardTitle>
+            <CardDescription>
+              Causal net with activity bindings and automatic layout
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="h-[640px] p-0">
+            <ReactFlowProvider>
+              <OCCNVisualizer height="100%" fileId={selectedFile?.id} />
+            </ReactFlowProvider>
+          </CardContent>
+        </Card>
         <Card className="@container/card">
           <CardHeader className="items-center relative z-10 justify-between">
             <CardTitle>
