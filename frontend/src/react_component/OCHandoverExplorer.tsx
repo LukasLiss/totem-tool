@@ -1643,15 +1643,16 @@ function HandoverGraph({
         nodeNextSlot.set(binding.resource, slot + 1);
 
         // totalR = nodeRadius + BASE + slot*SLOT_STEP, measured from node center.
-        // Computed once from the first available path (node radius is constant for a
-        // circular node, so all edges from the same node give the same boundaryDist).
+        // Computed from the first non-self-loop path (self-loop paths can't reliably
+        // give node radius since they start and end at the same node).
         const slotOffset = BASE + slot * SLOT_STEP;
         const nodePos = positions[binding.resource];
         let totalR = slotOffset;
         if (nodePos) {
           const { x: cx0, y: cy0 } = nodePos;
-          for (const pk of pathKeys) {
-            const p = pathMap.get(pk);
+          for (let i = 0; i < pathKeys.length; i++) {
+            if (binding.arcs[i].other_resource === binding.resource) continue; // skip self-loops
+            const p = pathMap.get(pathKeys[i]);
             if (!p) continue;
             const plen = p.getTotalLength();
             const ptB = p.getPointAtLength(isOutput ? 0 : plen);
@@ -1660,25 +1661,31 @@ function HandoverGraph({
           }
         }
 
-        // Dot positions: project along edge direction at fixed totalR from node center.
+        // Dot positions.
+        // Regular edges: project at fixed totalR from node center along the edge direction,
+        //   so every dot is exactly on the arc.
+        // Self-loops: follow the path at slotOffset from the endpoint — the path curves
+        //   back to the same node so there is no meaningful radial direction to project along.
         const dots: { x: number; y: number; angle: number; color: string; is_gapped: boolean; mark: "dot" | "square" }[] = [];
         for (let i = 0; i < pathKeys.length; i++) {
           const path = pathMap.get(pathKeys[i]);
           if (!path) continue;
           const len = path.getTotalLength();
+          const isSelfLoop = binding.arcs[i].other_resource === binding.resource;
 
           let px: number, py: number, angle: number;
-          if (nodePos) {
+          if (nodePos && !isSelfLoop) {
             const { x: cx, y: cy } = nodePos;
-            const sample = Math.min(8, len * 0.15);
-            const ptDir = path.getPointAtLength(isOutput ? sample : len - sample);
-            angle = Math.atan2(ptDir.y - cy, ptDir.x - cx);
+            const ptBoundary = path.getPointAtLength(isOutput ? 0 : len);
+            angle = Math.atan2(ptBoundary.y - cy, ptBoundary.x - cx);
             px = cx + totalR * Math.cos(angle);
             py = cy + totalR * Math.sin(angle);
           } else {
+            // Self-loop or no node position: place dot on the path
             const offset = Math.min(slotOffset, len * 0.45);
             const pt = path.getPointAtLength(isOutput ? offset : len - offset);
-            px = pt.x; py = pt.y; angle = 0;
+            px = pt.x; py = pt.y;
+            angle = nodePos ? Math.atan2(pt.y - nodePos.y, pt.x - nodePos.x) : 0;
           }
           dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark });
         }
