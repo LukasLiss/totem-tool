@@ -647,3 +647,102 @@ def test_contributions_are_consistent_with_precision():
     )
     for detail in result.context_details:
         assert detail.escaping == detail.enabled_model - detail.enabled_log
+
+
+def test_max_states_none_computes_exact_result():
+    ocel = make_ocel(
+        events=[
+            ("e1", "r", 1, ["o1", "o2"]),
+            ("e2", "i", 2, ["o1"]),
+            ("e3", "n", 3, ["o2"]),
+            ("e4", "archive", 4, ["o1", "o2"]),
+        ],
+        objects=[("o1", "order"), ("o2", "order")],
+    )
+    capped = occn_precision(ocel, feedback_net(with_key=False))
+    exact = occn_precision(ocel, feedback_net(with_key=False), max_states=None)
+    assert exact.num_state_capped_replays == 0
+    assert exact.precision == pytest.approx(capped.precision)
+    assert exact.precision == pytest.approx((1 + 1 + 1 + 1 / 3) / 4)
+
+
+def test_editor_json_with_unbounded_cardinalities_and_keys():
+    # the editor JSON path with max = -1 markers and a shared-key group
+    ocel = make_ocel(
+        events=[
+            ("e1", "r", 1, ["o1", "o2"]),
+            ("e2", "i", 2, ["o1"]),
+            ("e3", "n", 3, ["o2"]),
+            ("e4", "archive", 4, ["o1", "o2"]),
+        ],
+        objects=[("o1", "order"), ("o2", "order")],
+    )
+    as_json = editor_json(feedback_net(with_key=True))
+    result = occn_precision(ocel, as_json)
+    assert result.precision == pytest.approx(1.0)
+
+
+def test_replay_consumes_obligations_from_multiple_predecessors():
+    # 'a' produces obligations for the same order toward b AND s (AND
+    # split); s consumes the obligations from a and from b at once
+    net = {
+        "START_order": {"omg": [[("a", "order", (1, 1), 0)]]},
+        "a": {
+            "img": [[("START_order", "order", (1, 1), 0)]],
+            "omg": [
+                [("b", "order", (1, 1), 1), ("s", "order", (1, 1), 2)],
+            ],
+        },
+        "b": {
+            "img": [[("a", "order", (1, 1), 0)]],
+            "omg": [[("s", "order", (1, 1), 0)]],
+        },
+        "s": {
+            "img": [
+                [("a", "order", (1, 1), 1), ("b", "order", (1, 1), 2)],
+            ],
+            "omg": [[("END_order", "order", (1, 1), 0)]],
+        },
+        "END_order": {"img": [[("s", "order", (1, 1), 0)]]},
+    }
+    ocel = make_ocel(
+        events=[
+            ("e1", "a", 1, ["o1"]),
+            ("e2", "b", 2, ["o1"]),
+            ("e3", "s", 3, ["o1"]),
+        ],
+        objects=[("o1", "order")],
+    )
+    result = occn_precision(ocel, net)
+    # e1: en = {a}; e2: s not yet enabled (needs b's obligation) -> {b};
+    # e3: {s}; everything observed
+    assert result.precision == pytest.approx(1.0)
+    assert result.num_skipped_events == 0
+
+
+def test_profile_granularity_multiple_object_types():
+    ocel = make_ocel(
+        events=[
+            ("e1", "load", 1, ["p1", "b1", "b2"]),
+            ("e2", "liftoff", 2, ["p1"]),
+            ("e3", "unload", 3, ["p1", "b1", "b2"]),
+            ("e4", "pickup", 4, ["b1"]),
+            ("e5", "pickup", 5, ["b2"]),
+        ],
+        objects=[("p1", "plane"), ("b1", "baggage"), ("b2", "baggage")],
+    )
+    result = occn_precision(ocel, airline_net(), granularity="profile")
+    # e1: en_model = {load w/ 1 baggage, load w/ 2 baggage}          -> 1/2
+    # e2: en_model = {liftoff, pickup w/ 1 baggage}                  -> 1/2
+    # e3: en_model = {unload w/ 1 baggage, unload w/ 2, pickup w/ 1} -> 1/3
+    # e4, e5: en_model = {pickup w/ 1 baggage}                       -> 1, 1
+    assert result.precision == pytest.approx((0.5 + 0.5 + 1 / 3 + 1 + 1) / 5)
+    load_context = next(
+        d for d in result.context_details if d.event_ids == ("e1",)
+    )
+    assert load_context.enabled_model == frozenset(
+        {
+            ("load", (("baggage", 1), ("plane", 1))),
+            ("load", (("baggage", 2), ("plane", 1))),
+        }
+    )

@@ -505,7 +505,10 @@ class OCCausalNetSemantics:
         for (pred, obj_id, ot), _count in state[act].items():
             if obj_id in objects:
                 preds_per_object[obj_id].add(pred)
-                object_types[obj_id] = ot
+                assert object_types.setdefault(obj_id, ot) == ot, (
+                    f"Object {obj_id!r} has obligations under two different "
+                    f"object types ({object_types[obj_id]!r} and {ot!r})"
+                )
 
         if set(preds_per_object.keys()) != set(objects):
             # some object has no outstanding obligation toward act
@@ -956,10 +959,12 @@ class OCCausalNetSemantics:
                 continue
 
             # Check key constraints
+            # (.get on the outer defaultdict as well: a plain [] access would
+            # insert empty dicts that leak into the consumed tuples below)
             constraint_violated = False
             for rel_act_1_id, ot_id, rel_act_2_id in key_constraints_by_id:
-                objects1 = grouped_by_pred[rel_act_1_id].get(ot_id)
-                objects2 = grouped_by_pred[rel_act_2_id].get(ot_id)
+                objects1 = grouped_by_pred.get(rel_act_1_id, {}).get(ot_id)
+                objects2 = grouped_by_pred.get(rel_act_2_id, {}).get(ot_id)
                 # objects1/objects2 are tuples of object ids
                 if objects1 and objects2 and not set(objects1).isdisjoint(objects2):
                     # key constraint violated, move on to next binding

@@ -48,7 +48,9 @@ The *state* of an OCCN is a multiset of pending obligations
 $s \in \mathcal{B}(N \times \mathcal{U}_{obj} \times N)$: $(n, o, n')$ means
 activity $l(n')$ still has to happen for object $o$ as a causal consequence of
 $n$. A *binding* $b = (n, C, P)$ executes the activity of node $n$, consuming
-the obligations $C$ and producing the obligations $P$; it must satisfy one
+the obligations $C$ (pairs $(n', o)$ of a predecessor node and an object) and
+producing the obligations $P$ (pairs $(o, n')$ of an object and a successor
+node); it must satisfy one
 input and one output marker group of $n$ (cardinalities and key
 disjointness), and for visible activities the objects of $C$ and $P$
 coincide. Executing a binding in state $s$ yields
@@ -98,8 +100,9 @@ $$\mathit{context}_e(ot) \;=\; [\, \circ e{\downarrow}o \;\mid\; o \in
 
 Objects of $e$ that occur for the first time in $e$ contribute the empty
 prefix $\langle\rangle$. The context is invariant under renaming of objects
-and abstracts from the interleaving of causally unrelated events — two events
-with equal contexts have (up to object identities) the same causal history.
+and abstracts both from the interleaving of causally unrelated events and
+from how objects are grouped into events — two events with equal contexts
+have, up to renaming of objects, the same per-object activity histories.
 
 ## 3 Enabled Log and Model Behavior
 
@@ -112,34 +115,41 @@ $$\mathit{en}_L(e) \;=\; \{\, \pi_{act}(e') \mid e' \in E \,\wedge\,
 
 Note that $\pi_{act}(e) \in \mathit{en}_L(e)$ always holds.
 
-On the model side we consider every state the OCCN can be in after exhibiting
-the context. A binding sequence *matches* a context if, per object type, the
-multiset of visible activity sequences of its objects equals the context
-(start and end bindings are invisible and do not contribute; objects that
-appear only in invisible bindings contribute empty prefixes, mirroring the
-fresh objects of the event).
+On the model side we consider the states the OCCN can be in after exhibiting
+the causal history of the event. Following the algorithm of Adams & van der
+Aalst, the model is put into these states by *replaying the observed preset*:
+every preset event is executed as a binding of its activity involving exactly
+its objects, in log order, and every involved object is introduced by a start
+binding.
 
-**Definition 6 (Context states).**
-For an accepting OCCN and an event $e$,
+**Definition 6 (Replay states of an event).**
+A binding sequence $\sigma$ *replays* an event $e$ if it consists of (i) one
+start binding per object of
+$\bigcup_{e' \in \circ e \cup \{e\}} \pi_{obj}(e')$, each placed before the
+first binding involving its object, and (ii) for every preset event
+$e' \in \circ e$, in log order, one visible binding $(n, C, P)$ with
+$l(n) = \pi_{act}(e')$ whose consumed objects are exactly $\pi_{obj}(e')$.
+The *replay states* of $e$ are
 
-$$\mathit{states}(\mathit{OCCN}, \mathit{context}_e) \;=\;
+$$\mathit{states}(\mathit{OCCN}, e) \;=\;
 \{\, s \;\mid\; [\,] \xrightarrow{\;\sigma\;} s \,\wedge\, \sigma
-\text{ matches } \mathit{context}_e \,\}$$
+\text{ replays } e \,\}.$$
 
-is the set of states reachable from the empty state by a binding sequence
-matching the context.
-
-Because the choice of marker groups and of the produced obligations is not
-visible in the events, one context generally matches many binding sequences
-and, thus, many states — this replaces the role of the silent transitions in
-the object-centric Petri net setting.
+Because the choice of the marker groups and of the produced obligations is
+not visible in the events, one event generally has many replaying binding
+sequences and, thus, many replay states — this search over invisible binding
+choices replaces the search over silent transitions in the object-centric
+Petri net setting. The placement of the start bindings does not matter: start
+bindings commute with the bindings of other objects, so any placement before
+the object's first event reaches the same states.
 
 **Definition 7 (Enabled model activities).**
 The behavior the model allows for the context of $e$ is the set of visible
-activities enabled in any context state:
+activities enabled in any replay state of any event with this context:
 
-$$\mathit{en}_M(e) \;=\; \{\, l(n) \in \mathcal{U}_{A} \;\mid\; \exists\, s
-\in \mathit{states}(\mathit{OCCN}, \mathit{context}_e)\; \exists\, b = (n, C,
+$$\mathit{en}_M(e) \;=\; \{\, l(n) \in \mathcal{U}_{A} \;\mid\; \exists\, e'
+\in E\!: \mathit{context}_{e'} = \mathit{context}_e \;\wedge\; \exists\, s
+\in \mathit{states}(\mathit{OCCN}, e')\; \exists\, b = (n, C,
 P)\!: s \xrightarrow{b} s' \,\}.$$
 
 Artificial start and end activities are excluded: they are not observable in
@@ -148,6 +158,21 @@ that this restriction loses nothing (see Proposition 1): executing end
 bindings only removes obligations, and starting additional objects is fixed
 by the context (the context determines the involved objects, including the
 fresh ones with empty prefixes).
+
+**Remark (relation to an oracle over all matching sequences).**
+One could define the context states more liberally as all states reachable by
+*any* binding sequence whose per-object visible activity sequences reproduce
+the context — regardless of how the objects are grouped into bindings. This
+is the OCCN analogue of the states-oracle of Adams & van der Aalst (their
+Definition 10). Definition 6 under-approximates this oracle by replaying only
+the event groupings observed in the log, exactly as the paper's Algorithm 1
+does for object-centric Petri nets. In OCCNs the grouping of objects into one
+binding can affect the reachable states (cardinalities and keys apply per
+binding), so the two notions can differ; we deliberately measure the model
+against the executions the log testifies. A consequence worth knowing when
+interpreting results: $\mathit{en}_M$ is determined by the *observed* events
+of a context (Definition 7 takes a union over them), so it can grow as more
+events with the same context are observed.
 
 **Proposition 1 (Monotonicity).**
 Let $s_1 \le s_2$ (multiset inclusion of pending obligations). Then every
@@ -172,9 +197,9 @@ search without affecting the result.
 
 **Definition 8 (Precision).**
 Let $E_f = \{ e \in E \mid \mathit{en}_M(e) \neq \emptyset \}$ be the
-*replayable* events — the events whose context matches at least one binding
-sequence enabling visible behavior. The precision of $\mathit{OCCN}$ with
-respect to $L$ is
+*replayable* events — the events for whose context at least one replay
+enables visible behavior. The precision of $\mathit{OCCN}$ with respect to
+$L$ is
 
 $$\mathit{precision}(L, \mathit{OCCN}) \;=\; \frac{1}{|E_f|} \sum_{e \in E_f}
 \frac{|\mathit{en}_L(e) \cap \mathit{en}_M(e)|}{|\mathit{en}_M(e)|}.$$
@@ -220,8 +245,9 @@ $\mathit{en}^{p}_M$ remain finite and rename-invariant.
 
 ## 5 Algorithm
 
-The implementation computes both sides of Definition 8 per *unique context*
-(events with equal contexts share $\mathit{en}_L$ and $\mathit{en}_M$).
+The implementation computes $\mathit{en}_L$ and $\mathit{en}_M$ per *unique
+context*: events with equal contexts share both sets, and $\mathit{en}_M$ is
+the union of the replay behavior over the context's events (Definition 7).
 
 ```
 Input:  OCEL L, OCCN, granularity, max_states
@@ -284,10 +310,10 @@ cap bounds the antichain size per replay; capped replays are treated as
 non-replayable, and their number is reported so the approximation is visible
 in the result.
 
-The overall complexity is $O(|E|^2/w)$ for the log side plus, per unique
-canonical replay key, a state-space search that is exponential in the number
-of interacting objects in the worst case but bounded by
-$\mathit{max\_states}$.
+The overall complexity is $O(|E|^2/w)$ for the presets plus the total size
+of all contexts on the log side, plus, per unique canonical replay key, a
+state-space search that is exponential in the number of interacting objects
+in the worst case but bounded by $\mathit{max\_states}$.
 
 ## 6 Worked Example
 
@@ -303,34 +329,38 @@ Log (one process execution):
 $\langle$ *load*$(p_1, b_1, b_2)$, *liftoff*$(p_1)$,
 *unload*$(p_1, b_1, b_2)$, *pickup*$(b_1)$, *pickup*$(b_2)$ $\rangle$.
 
-| event $e$ | $\mathit{context}_e$ | $\mathit{en}_L$ | $\mathit{en}_M$ | term |
+| event(s) $e$ | $\mathit{context}_e$ | $\mathit{en}_L$ | $\mathit{en}_M$ | term |
 |---|---|---|---|---|
 | load | plane $[\langle\rangle]$, baggage $[\langle\rangle^2]$ | {load} | {load} | $1$ |
 | liftoff | plane $[\langle l\rangle]$, baggage $[\langle l\rangle^2]$ | {liftoff} | {liftoff, pickup} | $1/2$ |
 | unload | plane $[\langle l,lo\rangle]$, baggage $[\langle l\rangle^2]$ | {unload} | {unload, pickup} | $1/2$ |
-| pickup $b_1$ | plane $[\langle l,lo,u\rangle]$, baggage $[\langle l,u\rangle^2]$ | {pickup} | {pickup} | $1$ |
-| pickup $b_2$ | plane $[\langle l,lo,u\rangle]$, baggage $[\langle l,u\rangle,\langle l,u,p\rangle]$ | {pickup} | {pickup} | $1$ |
+| pickup $b_1$, pickup $b_2$ | plane $[\langle l,lo,u\rangle]$, baggage $[\langle l,u\rangle^2]$ | {pickup} | {pickup} | $1$ (×2 events) |
 
-(with $l$ = load, $lo$ = liftoff, $u$ = unload, $p$ = pickup). After the
+(with $l$ = load, $lo$ = liftoff, $u$ = unload). After the
 context of *liftoff*, the model can be in a state where a baggage obligation
 points at *pickup*, so *pickup* is enabled in the model — but no event with
 this context is a pickup in the log: *pickup* escapes. The precision is
-$(1 + \tfrac12 + \tfrac12 + 1 + 1)/5 = 0.8$. Note that the two pickup events
-do *not* share the liftoff context: picking up $b_1$ causally requires
-*unload* and thus *liftoff*, so its context differs.
+$(1 + \tfrac12 + \tfrac12 + 1 + 1)/5 = 0.8$. Note that the pickup events do
+*not* share the liftoff context — picking up baggage causally requires
+*unload* and thus *liftoff* here — but they do share one context with each
+other: pickup $b_1$ is not in the preset of pickup $b_2$, because the two
+events share no object and there is no directed path between them in the
+event-object graph.
 
 ## 7 Properties and Design Decisions
 
-- **Faithful generalization.** Restricted to nets without cardinalities
-  beyond $(1,1)$/$(1,\infty)$ and without key groups, the notion coincides
-  with the escaping-edges construction for object-centric Petri nets: the
-  context definitions are identical, and enumerating the invisible binding
-  choices of the OCCN plays the role of searching over silent transitions.
-- **Only observed contexts are measured.** Like its Petri net counterpart,
-  the measure evaluates the model in the states the log actually visits. A
-  loop that the model allows to run longer than any observed execution
-  penalizes precision only in the contexts that occur; behavior after
-  unobserved contexts is not sampled.
+- **Faithful generalization.** The construction generalizes the
+  escaping-edges *algorithm* of Adams & van der Aalst: the context
+  definitions are identical, the observed events are replayed, and
+  enumerating the invisible binding choices of the OCCN plays the role of
+  searching over silent transitions. Both algorithms under-approximate their
+  respective all-matching-sequences oracle by replaying only the observed
+  event groupings (see the remark after Definition 7).
+- **Only observed contexts and groupings are measured.** Like its Petri net
+  counterpart, the measure evaluates the model in the states the log actually
+  visits. A loop that the model allows to run longer than any observed
+  execution penalizes precision only in the contexts that occur; behavior
+  after unobserved contexts or unobserved object groupings is not sampled.
 - **Termination is not compared.** Whether the model could *stop* where the
   log continues (or vice versa) is invisible to the measure, since end
   activities are artificial. This mirrors the Petri net notion, where
@@ -340,11 +370,17 @@ do *not* share the liftoff context: picking up $b_1$ causally requires
   (through the reachable states); the profile granularity of Definition 9
   makes them count directly. Both granularities are reported with the same
   diagnostics (escaping behavior per context).
-- **Skipped events.** Events with non-replayable contexts are excluded from
-  the average but reported (`num_skipped_events`), as are replays aborted by
-  the state cap (`num_state_capped_replays`). A large skipped share signals
-  that fitness, not precision, is the model's problem — precision values are
-  then based on the remaining events.
+- **Skipped events and the state cap.** Events with non-replayable contexts
+  are excluded from the average but reported (`num_skipped_events`). A large
+  skipped share signals that fitness, not precision, is the model's problem —
+  precision values are then based on the remaining events. Replays aborted by
+  the `max_states` cap (reported per unique cached replay in
+  `num_state_capped_replays`) contribute no model behavior; their events are
+  skipped only if no other event of the same context contributes behavior,
+  otherwise they are averaged against the remaining, possibly smaller
+  $\mathit{en}_M$. Results with a non-zero capped count are therefore
+  approximations and should be read together with these counters;
+  `max_states=None` computes the exact value.
 - **Determinism.** The measure is a function of the log and the model; the
   implementation fixes the tie-breaking of equal timestamps (log order), so
   results are reproducible.
@@ -374,7 +410,13 @@ for detail in result.context_details:
         print(detail.event_ids, "->", sorted(detail.escaping))
 ```
 
-The OCCN can be passed as an `OCCausalNet`, as the JSON of the visual OCCN
-editor (see `docs/MODEL_EDITORS.md`; the `markerGroups` field uses the
+The OCCN can be passed as an `OCCausalNet`, as the JSON saved by the visual
+OCCN editor (introduced in PR #243; its `markerGroups` field uses the
 `OCCausalNet.from_dict` format), as a plain marker-groups dict, as a JSON
 string, or as a path to a JSON file.
+
+Note on runtime: with a very permissive model (e.g., an OCCN discovered from
+the full P2P example log at threshold 0), the computation takes several
+minutes with the default `max_states=1000` and reports the replays it had to
+cap. Lower `max_states` for speed, raise it (or pass `None`) for exactness,
+or restrict the computation with `event_ids`.

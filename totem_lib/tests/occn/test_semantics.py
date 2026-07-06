@@ -1114,3 +1114,61 @@ class TestEnabledBindingsForObjects:
             )
             == ()
         )
+
+    def test_enabled_bindings_no_phantom_empty_groups(self):
+        # regression: the key-constraint check used to materialize empty
+        # defaultdict entries that leaked into the consumed tuples as
+        # phantom groups like ('b', ()), breaking deduplication
+        marker_groups = {
+            "START_order": {
+                "omg": [
+                    [("a", "order", (1, 1), 0), ("b", "order", (1, 1), 0)],
+                ],
+            },
+            "a": {
+                "img": [[("START_order", "order", (1, 1), 0)]],
+                "omg": [[("d", "order", (1, 1), 0)]],
+            },
+            "b": {
+                "img": [[("START_order", "order", (1, 1), 0)]],
+                "omg": [[("d", "order", (1, 1), 0)]],
+            },
+            "d": {
+                # first img: both markers optional, sharing key 7
+                # second img: plain marker for a
+                "img": [
+                    [("a", "order", (0, -1), 7), ("b", "order", (0, -1), 7)],
+                    [("a", "order", (1, -1), 0)],
+                ],
+                "omg": [[("END_order", "order", (1, -1), 0)]],
+            },
+            "END_order": {
+                "img": [[("d", "order", (1, -1), 0)]],
+            },
+        }
+        occn = OCCausalNet.from_dict(marker_groups)
+        state = OCCausalNetState({"d": Counter([("a", "o1", "order")])})
+
+        bindings = OCCausalNetSemantics.enabled_bindings(occn, "d", state)
+        # both imgs generate the same consumption, which must deduplicate
+        assert len(bindings) == 1
+        for _, consumed, produced in bindings:
+            for _, per_type in consumed:
+                assert per_type, "empty predecessor group in consumed"
+                for _, objs in per_type:
+                    assert objs, "empty object tuple in consumed"
+
+    def test_for_objects_rejects_conflicting_object_types(self):
+        occn = self._net_with_keyed_img()
+        # ill-typed state: the same object id under two object types
+        state = OCCausalNetState(
+            {
+                "s": Counter(
+                    [("a", "x", "order"), ("b", "x", "container")]
+                )
+            }
+        )
+        with pytest.raises(AssertionError, match="two different"):
+            OCCausalNetSemantics.enabled_bindings_for_objects(
+                occn, "s", state, {"x"}
+            )

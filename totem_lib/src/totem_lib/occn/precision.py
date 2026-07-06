@@ -138,13 +138,14 @@ def occn_precision(
     max_states : Optional[int]
         Safety cap for the number of (maximal) states tracked during one
         context replay; guarantees termination since exploring all binding
-        choices is exponential in the worst case. Replays exceeding the cap
-        are treated as non-replayable, their events are skipped, and the
-        number of capped replays is reported in `num_state_capped_replays`.
-        Larger caps explore more model behavior (fewer skipped events, but
-        potentially lower precision values as more escaping behavior is
-        found). Pass None for the exact, uncapped computation.
-        Default: 1000.
+        choices is exponential in the worst case. A capped replay contributes
+        no model behavior; its events are skipped only if no other event of
+        the same context contributes behavior, otherwise they are averaged
+        against the remaining (possibly smaller) enabled model behavior. The
+        number of capped replays (counted per unique cached replay) is
+        reported in `num_state_capped_replays`; results with a non-zero
+        count are approximations. Larger caps explore more model behavior.
+        Pass None for the exact, uncapped computation. Default: 1000.
 
     Returns
     -------
