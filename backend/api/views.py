@@ -20,6 +20,7 @@ from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
+from collections import OrderedDict
 import networkx as nx
 
 
@@ -2297,6 +2298,17 @@ def NewOCDFGViewSet(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+# OCCN discovery dominates request time (seconds to ~1 min per log) while
+# thresholding is a cheap marker filter, so cache the threshold-0 base net per
+# (file, object-type filter) and apply the requested threshold per request —
+# the pattern discover_occn's own docstring recommends. In-process cache: it
+# is cleared on backend restart/reload and sized small because nets can be
+# large in memory.
+_OCCN_CACHE_MAX_ENTRIES = 4
+_occn_base_cache = OrderedDict()
+_occn_cache_lock = threading.Lock()
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def OCCNViewSet(request):
@@ -2340,9 +2352,23 @@ def OCCNViewSet(request):
 
     try:
         parameters = {"object_types": object_type_filter} if object_type_filter else None
+        cache_key = (int(file_id), tuple(object_type_filter) if object_type_filter else None)
 
-        with _with_ocel_db(user_file) as db:
-            occn = discover_occn(db, relativeOccuranceThreshold=threshold, parameters=parameters)
+        with _occn_cache_lock:
+            base_occn = _occn_base_cache.get(cache_key)
+            if base_occn is not None:
+                _occn_base_cache.move_to_end(cache_key)
+
+        if base_occn is None:
+            with _with_ocel_db(user_file) as db:
+                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            with _occn_cache_lock:
+                _occn_base_cache[cache_key] = base_occn
+                _occn_base_cache.move_to_end(cache_key)
+                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                    _occn_base_cache.popitem(last=False)
+
+        occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
 
         result = serialize_occn(occn)
         return Response(result, status=status.HTTP_200_OK)

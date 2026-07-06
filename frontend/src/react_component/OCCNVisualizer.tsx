@@ -297,7 +297,7 @@ function OCCNVisualizer({
                 step={0.05}
                 defaultValue={[threshold]}
                 onValueCommit={(value) => setThreshold(value[0] ?? 0)}
-                disabled={data != null}
+                disabled={data != null || loading}
               />
               <span style={{ fontSize: 11, color: '#475569', width: 28 }}>{threshold.toFixed(2)}</span>
             </div>
