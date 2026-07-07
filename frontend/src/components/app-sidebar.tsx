@@ -82,7 +82,6 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         <NavOverview />
         <NavAnalysis />
-        <NavEditor />
         <NavDashboard
           dashboards={dashboards}
           refreshDashboards={async () => {
@@ -97,6 +96,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             }
           }}
         />
+        <NavEditor />
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
