@@ -18,7 +18,9 @@ import {
   FileJson,
   FlaskConical,
   FolderOpen,
+  Minus,
   Play,
+  Plus,
   Square,
   Workflow,
 } from 'lucide-react';
@@ -44,14 +46,15 @@ import {
 import { loadEditorSession } from '@/editors/shared/sessionCache';
 import { exampleModel as ocpnExample } from '@/editors/ocpn/model';
 import { buildOccnExample } from '@/editors/occn/model';
-import { variantsToJson, variantsToOcel } from './engine/ocel';
-import type { PlayoutProgress, PlayoutResult, PlayoutVariant } from './engine/types';
+import { exportPlayoutOcel, runPlayout } from '@/api/playoutApi';
 import {
-  buildActivityLimits,
+  bumpAllLimits,
   limitRowsFor,
+  variantsToJson,
   type PlayoutModelSource,
   type PlayoutRequest,
-  type PlayoutWorkerMessage,
+  type PlayoutResult,
+  type PlayoutVariant,
 } from './model';
 
 const DEFAULT_TIMEOUT_S = 5;
@@ -66,9 +69,12 @@ export function PlayoutView() {
   const [rowLimits, setRowLimits] = useState<Record<string, number>>({});
   const [timeoutS, setTimeoutS] = useState(DEFAULT_TIMEOUT_S);
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<PlayoutProgress | null>(null);
+  const [elapsedS, setElapsedS] = useState(0);
   const [result, setResult] = useState<PlayoutResult | null>(null);
-  const workerRef = useRef<Worker | null>(null);
+  /** Object counts as sent with the run that produced `result`. */
+  const [runObjectCounts, setRunObjectCounts] = useState<Record<string, number>>({});
+  const [exporting, setExporting] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const limitRows = useMemo(() => (source ? limitRowsFor(source) : []), [source]);
   const typeColors = useMemo(() => {
@@ -77,20 +83,27 @@ export function PlayoutView() {
     return colors;
   }, [source]);
 
-  const stopWorker = useCallback(() => {
-    workerRef.current?.terminate();
-    workerRef.current = null;
+  const stopRun = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setRunning(false);
   }, []);
-  useEffect(() => stopWorker, [stopWorker]);
+  useEffect(() => stopRun, [stopRun]);
+
+  // Elapsed-seconds ticker while the backend request is in flight.
+  useEffect(() => {
+    if (!running) return;
+    setElapsedS(0);
+    const id = setInterval(() => setElapsedS((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const adoptSource = (next: PlayoutModelSource) => {
-    stopWorker();
+    stopRun();
     setSource(next);
     setObjectCounts(Object.fromEntries(next.model.objectTypes.map((t) => [t.name, 1])));
     setRowLimits(Object.fromEntries(limitRowsFor(next).map((row) => [row.key, 1])));
     setResult(null);
-    setProgress(null);
   };
 
   const loadFromEditor = (format: 'ocpn' | 'occn') => {
@@ -148,53 +161,54 @@ export function PlayoutView() {
     }
   };
 
-  const run = () => {
+  const run = async () => {
     if (!source) return;
     const totalObjects = Object.values(objectCounts).reduce((a, b) => a + b, 0);
     if (totalObjects === 0) {
       toast.error('At least one object is needed for a playout.');
       return;
     }
-    stopWorker();
+    stopRun();
     setResult(null);
-    setProgress(null);
+    setElapsedS(0);
+    setRunObjectCounts(objectCounts);
     setRunning(true);
 
     const request: PlayoutRequest = {
-      source,
+      modelFormat: source.format,
+      model: source.model,
       objectsPerType: objectCounts,
-      activityLimits: buildActivityLimits(source, rowLimits, objectCounts),
-      timeoutMs: Math.max(1, timeoutS) * 1000,
+      activityLimits: rowLimits,
+      timeoutS: Math.max(1, timeoutS),
       maxStoredVariants: MAX_STORED_VARIANTS,
       maxStates: MAX_STATES,
     };
-    const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-    workerRef.current = worker;
-    worker.onmessage = (e: MessageEvent<PlayoutWorkerMessage>) => {
-      const message = e.data;
-      if (message.type === 'progress') {
-        setProgress(message.progress);
-      } else if (message.type === 'done') {
-        setResult(message.result);
-        stopWorker();
-      } else {
-        toast.error(message.message);
-        stopWorker();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const playoutResult = await runPlayout(request, controller.signal);
+      setResult(playoutResult);
+    } catch (err) {
+      if (!controller.signal.aborted) toast.error(apiErrorMessage(err));
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setRunning(false);
       }
-    };
-    worker.onerror = (e) => {
-      toast.error(`Playout failed: ${e.message}`);
-      stopWorker();
-    };
-    worker.postMessage(request);
+    }
   };
 
-  const exportOcel = () => {
-    if (!source || !result) return;
-    downloadJson(
-      `${toFilename(source.model.name, 'playout')}-playout-log`,
-      variantsToOcel(result.variants),
-    );
+  const exportOcel = async () => {
+    if (!source || !result || exporting) return;
+    setExporting(true);
+    try {
+      const ocel = await exportPlayoutOcel(result.variants);
+      downloadJson(`${toFilename(source.model.name, 'playout')}-playout-log`, ocel);
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
   };
 
   const exportVariants = () => {
@@ -204,8 +218,10 @@ export function PlayoutView() {
       variantsToJson(result.variants, {
         modelName: source.model.name,
         modelFormat: source.format,
-        objectsPerType: objectCounts,
-        activityLimits: buildActivityLimits(source, rowLimits, objectCounts),
+        // The counts the run was started with — the inputs may have been
+        // edited since, but the metadata must describe this result.
+        objectsPerType: runObjectCounts,
+        activityLimits: result.effectiveActivityLimits,
         variantCount: result.variantCount,
         exhaustive: result.exhaustive,
       }),
@@ -324,7 +340,54 @@ export function PlayoutView() {
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium mb-2">Max occurrences per activity</h3>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h3 className="text-sm font-medium">Max occurrences per activity</h3>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <span>All</span>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="size-6"
+                      aria-label="Decrease all activity limits"
+                      data-testid="bump-all-down"
+                      disabled={limitRows.length === 0}
+                      onClick={() =>
+                        setRowLimits((prev) =>
+                          bumpAllLimits(
+                            prev,
+                            limitRows.map((row) => row.key),
+                            -1,
+                            0,
+                            20,
+                          ),
+                        )
+                      }
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="size-6"
+                      aria-label="Increase all activity limits"
+                      data-testid="bump-all-up"
+                      disabled={limitRows.length === 0}
+                      onClick={() =>
+                        setRowLimits((prev) =>
+                          bumpAllLimits(
+                            prev,
+                            limitRows.map((row) => row.key),
+                            1,
+                            0,
+                            20,
+                          ),
+                        )
+                      }
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </Button>
+                  </span>
+                </div>
                 <div className="flex flex-col gap-1.5">
                   {limitRows.map((row) => (
                     <label key={row.key} className="flex items-center gap-2 text-sm">
@@ -366,7 +429,7 @@ export function PlayoutView() {
                 <span className="text-muted-foreground">seconds</span>
               </label>
               {running ? (
-                <Button variant="destructive" size="sm" onClick={stopWorker}>
+                <Button variant="destructive" size="sm" onClick={stopRun}>
                   <Square className="w-4 h-4" /> Cancel
                 </Button>
               ) : (
@@ -376,7 +439,7 @@ export function PlayoutView() {
               )}
               {running && (
                 <span className="text-sm text-muted-foreground tabular-nums">
-                  Searching… {progress ? formatProgress(progress) : ''}
+                  Searching… {elapsedS}s
                 </span>
               )}
             </div>
@@ -419,7 +482,7 @@ export function PlayoutView() {
                 variant="outline"
                 size="sm"
                 onClick={exportOcel}
-                disabled={result.variants.length === 0}
+                disabled={result.variants.length === 0 || exporting}
               >
                 <Download className="w-4 h-4" /> Export OCEL 2.0 log
               </Button>
@@ -451,8 +514,10 @@ function clamp(value: string, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-function formatProgress(p: PlayoutProgress): string {
-  return `${p.variantCount.toLocaleString()} variants · ${p.statesExplored.toLocaleString()} states · ${(p.elapsedMs / 1000).toFixed(0)}s`;
+/** Prefer the backend's {error} message, then the axios/Error message. */
+function apiErrorMessage(err: unknown): string {
+  const error = err as { response?: { data?: { error?: string } }; message?: string };
+  return error.response?.data?.error ?? error.message ?? String(err);
 }
 
 function summaryLine(result: PlayoutResult): string {
