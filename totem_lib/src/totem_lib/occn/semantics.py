@@ -456,6 +456,154 @@ class OCCausalNetSemantics:
         return tuple(final_bindings)
     
     @classmethod
+    def enabled_bindings_for_objects(
+        cls,
+        occn: OCCausalNet,
+        act: Activity,
+        state: OCCausalNetState,
+        objects: Set[ObjectID],
+    ) -> Tuple[InternalBinding, ...]:
+        """
+        Computes all enabled bindings for an activity that involve exactly
+        the given objects: every given object is consumed via at least one
+        obligation and no other objects are involved. This corresponds to
+        the bindings that can explain an observed event `(act, objects)`.
+
+        Unlike `enabled_bindings`, which enumerates every subset of the
+        outstanding obligations, this method only branches where an object
+        can be consumed from several predecessors at once, which makes it
+        suitable for replaying events with many objects.
+
+        Parameters
+        ----------
+        occn : OCCausalNet
+            The object-centric causal net
+        act : Activity
+            The activity to bind. Must not be a START activity (START
+            activities do not consume obligations); use
+            `enabled_bindings_start_activity` for those.
+        state : OCCausalNetState
+            The current state of the OCCN
+        objects : Set[ObjectID]
+            The objects the binding must consume, each via at least one
+            outstanding obligation toward `act`.
+
+        Returns
+        -------
+        Tuple[InternalBinding, ...]
+            All enabled bindings of `act` involving exactly `objects`.
+        """
+        assert not act.startswith("START_"), (
+            "Use enabled_bindings_start_activity for START activities."
+        )
+        if not objects:
+            return ()
+
+        # Candidate predecessors per object: obligations toward act
+        preds_per_object = defaultdict(set)
+        object_types = {}
+        for (pred, obj_id, ot), _count in state[act].items():
+            if obj_id in objects:
+                preds_per_object[obj_id].add(pred)
+                assert object_types.setdefault(obj_id, ot) == ot, (
+                    f"Object {obj_id!r} has obligations under two different "
+                    f"object types ({object_types[obj_id]!r} and {ot!r})"
+                )
+
+        if set(preds_per_object.keys()) != set(objects):
+            # some object has no outstanding obligation toward act
+            return ()
+
+        ordered_objects = sorted(objects)
+
+        possible_consumed = set()
+        for img in occn.input_marker_groups[act]:
+            img_dict = img.dict_representation
+
+            # forbidden predecessor pairs per object type (shared keys)
+            forbidden_pairs = defaultdict(set)
+            for act_1, ot, act_2 in img.key_constraints:
+                forbidden_pairs[ot].add(frozenset((act_1, act_2)))
+
+            # per object: the non-empty, key-consistent sets of
+            # predecessors it may be consumed from under this img
+            per_object_choices = []
+            img_applicable = True
+            for obj in ordered_objects:
+                ot = object_types[obj]
+                candidates = sorted(
+                    pred
+                    for pred in preds_per_object[obj]
+                    if ot in img_dict.get(pred, ())
+                )
+                choices = [
+                    subset
+                    for size in range(1, len(candidates) + 1)
+                    for subset in itertools.combinations(candidates, size)
+                    if all(
+                        frozenset(pair) not in forbidden_pairs[ot]
+                        for pair in itertools.combinations(subset, 2)
+                    )
+                ]
+                if not choices:
+                    img_applicable = False
+                    break
+                per_object_choices.append((obj, ot, choices))
+            if not img_applicable:
+                continue
+
+            for assignment in itertools.product(
+                *(choices for _, _, choices in per_object_choices)
+            ):
+                grouped = defaultdict(lambda: defaultdict(set))
+                for (obj, ot, _), subset in zip(per_object_choices, assignment):
+                    for pred in subset:
+                        grouped[pred][ot].add(obj)
+
+                # every marker of the img must be within its cardinalities
+                counts_ok = all(
+                    min_count
+                    <= len(grouped.get(pred, {}).get(ot, ()))
+                    <= max_count
+                    for pred, ot_map in img_dict.items()
+                    for ot, (min_count, max_count) in ot_map.items()
+                )
+                if not counts_ok:
+                    continue
+
+                consumed_tuple = tuple(
+                    (
+                        pred,
+                        tuple(
+                            (ot, tuple(sorted(objs)))
+                            for ot, objs in sorted(ot_map.items())
+                        ),
+                    )
+                    for pred, ot_map in sorted(grouped.items())
+                )
+                possible_consumed.add(consumed_tuple)
+
+        # combine with all possible produced tuples (as in enabled_bindings)
+        final_bindings = []
+        memo_produced = {}
+        memo_ot_assignments = {}
+        for consumed in possible_consumed:
+            if act.startswith("END_"):
+                possible_produced_for_consumed = {None}
+            else:
+                possible_produced_for_consumed = cls.__generate_produced_for_consumed(
+                    occn,
+                    act,
+                    consumed,
+                    memo_produced,
+                    memo_ot_assignments,
+                )
+            for produced in possible_produced_for_consumed:
+                final_bindings.append((act, consumed, produced))
+
+        return tuple(final_bindings)
+
+    @classmethod
     def enabled_bindings_start_activity(
         cls,
         occn: OCCausalNet,
@@ -811,11 +959,13 @@ class OCCausalNetSemantics:
                 continue
 
             # Check key constraints
+            # (.get on the outer defaultdict as well: a plain [] access would
+            # insert empty dicts that leak into the consumed tuples below)
             constraint_violated = False
             for rel_act_1_id, ot_id, rel_act_2_id in key_constraints_by_id:
-                objects1 = grouped_by_pred[rel_act_1_id].get(ot_id)
-                objects2 = grouped_by_pred[rel_act_2_id].get(ot_id)
-                # objects1/objects2 are tuples from itertools.combinations
+                objects1 = grouped_by_pred.get(rel_act_1_id, {}).get(ot_id)
+                objects2 = grouped_by_pred.get(rel_act_2_id, {}).get(ot_id)
+                # objects1/objects2 are tuples of object ids
                 if objects1 and objects2 and not set(objects1).isdisjoint(objects2):
                     # key constraint violated, move on to next binding
                     constraint_violated = True

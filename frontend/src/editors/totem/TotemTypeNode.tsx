@@ -53,14 +53,22 @@ const TotemTypeNode = memo(function TotemTypeNode({
       <div
         style={{
           position: 'absolute',
-          inset: '0 0 auto 0',
-          height: 5,
-          borderRadius: '14px 14px 0 0',
-          background: color,
-          opacity: 0.75,
+          inset: 0,
+          borderRadius: 14,
+          overflow: 'hidden',
           pointerEvents: 'none',
         }}
-      />
+      >
+        <div
+          style={{
+            position: 'absolute',
+            inset: '0 0 auto 0',
+            height: 5,
+            background: color,
+            opacity: 0.75,
+          }}
+        />
+      </div>
       <div
         style={{
           fontSize: 15,
