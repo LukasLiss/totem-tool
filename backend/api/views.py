@@ -4,8 +4,8 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
-from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
+from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -29,7 +29,7 @@ from django.core.cache import cache
 import os
 from hashlib import sha1
 import json
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 
 
 TOTEM_MOCK = {
@@ -403,6 +403,37 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class ProjectAssetViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectAssetSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        queryset = ProjectAsset.objects.filter(
+            project__users=self.request.user,
+        ).select_related("project", "created_by")
+
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+
+        asset_type = self.request.query_params.get("asset_type")
+        if asset_type:
+            queryset = queryset.filter(asset_type=asset_type)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        asset_type = request.query_params.get("asset_type")
+        if asset_type and asset_type not in ProjectAsset.AssetType.values:
+            return Response(
+                {"asset_type": "Unsupported asset type."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().list(request, *args, **kwargs)
+
 
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
