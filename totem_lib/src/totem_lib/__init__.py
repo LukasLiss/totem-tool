@@ -5,7 +5,7 @@ from .ocel import (
     filter_dead_objects
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
-from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
+from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars, discover_ocpn_db
 from .occn import (
     OCCausalNet,
     OCCausalNetState,
@@ -27,6 +27,7 @@ __all__ = [
     "CCDFG",
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
+    "discover_ocpn_db",
     "discover_oc_petri_net_polars",
     "Edit",
     "EditCosts",

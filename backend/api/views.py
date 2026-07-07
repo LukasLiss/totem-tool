@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCPNComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -18,6 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 import networkx as nx
@@ -306,6 +307,74 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=["get"])
+    def discover_ocpn(self, request, pk=None):
+        """Discovers an Object-Centric Petri Net from the event log.
+
+        Runs the DuckDB-backed OCPN discovery of totem_lib (inductive
+        miner per object type + merge, following van der Aalst & Berti).
+        Query params:
+          - timeout_s: abort with HTTP 408 after this many seconds
+            (default 30; <= 0 disables the timeout).
+          - object_types: optional comma-separated subset of object types.
+        Returns the OCPN in the "format: ocpn" JSON exchange format.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            timeout_s = float(request.query_params.get("timeout_s", "30.0"))
+            if timeout_s <= 0:
+                timeout_s = None  # disable
+        except (TypeError, ValueError):
+            timeout_s = 30.0
+
+        raw_object_types = request.query_params.get("object_types")
+        object_type_filter = None
+        if raw_object_types:
+            object_type_filter = sorted(
+                t.strip() for t in raw_object_types.split(",") if t.strip()
+            ) or None
+
+        # The discovered model only depends on the log and the selected
+        # object types, not on the timeout budget — cache accordingly.
+        types_key = ",".join(object_type_filter) if object_type_filter else "all"
+        cache_key = f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            return Response(cached_result, status=status.HTTP_200_OK)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                model = discover_ocpn_db(
+                    db,
+                    object_types=object_type_filter,
+                    timeout_s=timeout_s,
+                    name=os.path.splitext(os.path.basename(user_file.file.name))[0],
+                )
+        except TimeoutError as e:
+            return Response(
+                {
+                    "error": str(e),
+                    "code": "timeout",
+                    "timeout_s": timeout_s,
+                    "hint": "Increase the timeout or restrict the discovery "
+                            "to fewer object types.",
+                },
+                status=status.HTTP_408_REQUEST_TIMEOUT,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"An error occurred during OCPN discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        result = {"ocpn": model}
+        cache.set(cache_key, result, timeout=3600)
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
         """Returns basic statistics of the event log."""
         try:
@@ -461,6 +530,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(OCDottedChartComponent.objects.get(id=comp.id))
             elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCPNComponent':
+                components.append(OCPNComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -602,6 +673,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                     layout_direction=item.get('layout_direction', 'TB'),
+                )
+            elif component_name == 'OCPNComponent':
+                OCPNComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    automatic_loading=item.get('automatic_loading', False),
+                    timeout_s=item.get('timeout_s', 30.0),
                 )
             # Add more as needed
 

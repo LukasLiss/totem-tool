@@ -143,6 +143,23 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .ocpn-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "OC Petri Net",
+        component_name: "OCPNComponent",
+        automatic_loading: false,
+        timeout_s: 30,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -214,6 +231,26 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>Object-Centric DFG (Variants)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item ocpn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OC Petri Net preview"
+          className="rounded-md bg-white"
+        >
+          <circle cx="14" cy="18" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
+          <circle cx="14" cy="38" r="7" fill="none" stroke="#10b981" strokeWidth="2" />
+          <rect x="40" y="18" width="20" height="16" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
+          <circle cx="86" cy="26" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
+          <line x1="21" y1="18" x2="40" y2="24" stroke="#2563eb" strokeWidth="2" />
+          <line x1="21" y1="38" x2="40" y2="30" stroke="#10b981" strokeWidth="2" />
+          <line x1="60" y1="26" x2="79" y2="26" stroke="#475569" strokeWidth="2" />
+        </svg>
+        <div>OC Petri Net</div>
       </div>
     </div>
   );

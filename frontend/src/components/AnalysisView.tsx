@@ -14,6 +14,7 @@ import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
+import OCPNVisualizer from "@/react_component/OCPNVisualizer";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
@@ -85,6 +86,28 @@ export function AnalysisView() {
                   maxPoints={10000}
                   showControls={true}
                   className="min-h-[700px]"
+                />
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case 'ocPetriNet':
+        return (
+          <div className="w-full max-w-7xl">
+            <Card>
+              <CardHeader>
+                <CardTitle>OC Petri Net</CardTitle>
+                <CardDescription>
+                  Object-Centric Petri Net discovered from the event log
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[700px] p-0">
+                <OCPNVisualizer
+                  height="100%"
+                  fileId={selectedFile?.id}
+                  autoStart={true}
+                  showControls={true}
                 />
               </CardContent>
             </Card>
