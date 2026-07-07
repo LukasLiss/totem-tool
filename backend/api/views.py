@@ -434,6 +434,14 @@ class ProjectAssetViewSet(viewsets.ModelViewSet):
             )
         return super().list(request, *args, **kwargs)
 
+    @action(detail=True, methods=["get"])
+    def download(self, request, pk=None):
+        asset = self.get_object()
+        response = Response(asset.content_json, status=status.HTTP_200_OK)
+        filename = f"{slugify(asset.name) or 'model-asset'}.json"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
 
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer

@@ -299,6 +299,81 @@ class ProjectAssetApiTests(TestCase):
         self.other_project.users.add(self.other_user)
         self.client.force_authenticate(user=self.user)
 
+    def _create_asset(self, project, name, asset_type):
+        schema = "totem" if asset_type == ProjectAsset.AssetType.TOTEM else "occn"
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=asset_type,
+            content_json={"schema": schema, "version": 1},
+        )
+
+    def test_list_assets_only_returns_accessible_project_assets(self):
+        own_asset = self._create_asset(
+            self.project,
+            "Own model",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        self._create_asset(
+            self.other_project,
+            "Foreign model",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.get("/api/assets/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], own_asset.pk)
+
+    def test_list_assets_filters_by_project(self):
+        second_project = Project.objects.create(name="Project C")
+        second_project.users.add(self.user)
+        first_asset = self._create_asset(
+            self.project,
+            "First model",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        second_asset = self._create_asset(
+            second_project,
+            "Second model",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        first_response = self.client.get(f"/api/assets/?project={self.project.pk}")
+        second_response = self.client.get(f"/api/assets/?project={second_project.pk}")
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in first_response.data], [first_asset.pk])
+        self.assertEqual([item["id"] for item in second_response.data], [second_asset.pk])
+
+    def test_list_assets_filters_by_asset_type(self):
+        totem_asset = self._create_asset(
+            self.project,
+            "TOTeM model",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        occn_asset = self._create_asset(
+            self.project,
+            "OCCN model",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        totem_response = self.client.get("/api/assets/?asset_type=TOTEM")
+        occn_response = self.client.get("/api/assets/?asset_type=OCCN")
+
+        self.assertEqual(totem_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(occn_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in totem_response.data], [totem_asset.pk])
+        self.assertEqual([item["id"] for item in occn_response.data], [occn_asset.pk])
+
+    def test_list_assets_rejects_unsupported_asset_type_filter(self):
+        response = self.client.get("/api/assets/?asset_type=UNKNOWN")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_type", response.data)
+
     def test_create_asset_from_direct_content_json(self):
         response = self.client.post(
             "/api/assets/",
@@ -396,3 +471,30 @@ class ProjectAssetApiTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(ProjectAsset.objects.filter(pk=foreign_asset.pk).exists())
+
+    def test_download_asset_generates_json_response_from_content_json(self):
+        asset = self._create_asset(
+            self.project,
+            "Download Model",
+            ProjectAsset.AssetType.TOTEM,
+        )
+
+        response = self.client.get(f"/api/assets/{asset.pk}/download/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, asset.content_json)
+        self.assertEqual(
+            response["Content-Disposition"],
+            'attachment; filename="download-model.json"',
+        )
+
+    def test_download_asset_scoped_to_user_project(self):
+        foreign_asset = self._create_asset(
+            self.other_project,
+            "Foreign download",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.get(f"/api/assets/{foreign_asset.pk}/download/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
