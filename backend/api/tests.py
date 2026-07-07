@@ -2,7 +2,8 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
-from rest_framework.test import APIRequestFactory
+from rest_framework import status
+from rest_framework.test import APIClient, APIRequestFactory
 
 from .models import Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
@@ -285,3 +286,113 @@ class ProjectAssetSerializerTests(TestCase):
         self.assertNotIn("original_filename", data)
         self.assertNotIn("content_type", data)
         self.assertNotIn("size_bytes", data)
+
+
+class ProjectAssetApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="api-user")
+        self.other_user = User.objects.create_user(username="other-user")
+        self.project = Project.objects.create(name="Project A")
+        self.project.users.add(self.user)
+        self.other_project = Project.objects.create(name="Project B")
+        self.other_project.users.add(self.other_user)
+        self.client.force_authenticate(user=self.user)
+
+    def test_create_asset_from_direct_content_json(self):
+        response = self.client.post(
+            "/api/assets/",
+            {
+                "project": self.project.pk,
+                "name": "API TOTeM",
+                "asset_type": ProjectAsset.AssetType.TOTEM,
+                "content_json": {"schema": "totem", "version": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        asset = ProjectAsset.objects.get(pk=response.data["id"])
+        self.assertEqual(asset.content_json, {"schema": "totem", "version": 1})
+        self.assertEqual(asset.created_by, self.user)
+
+    def test_create_asset_from_uploaded_json_file(self):
+        upload = SimpleUploadedFile(
+            "model.json",
+            b'{"schema": "occn", "version": 1}',
+            content_type="application/json",
+        )
+
+        response = self.client.post(
+            "/api/assets/",
+            {
+                "project": self.project.pk,
+                "name": "API OCCN",
+                "asset_type": ProjectAsset.AssetType.OCCN,
+                "file": upload,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["content_json"], {"schema": "occn", "version": 1})
+
+    def test_retrieve_asset_scoped_to_user_project(self):
+        own_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Own model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json={"schema": "totem", "version": 1},
+        )
+        foreign_asset = ProjectAsset.objects.create(
+            project=self.other_project,
+            name="Foreign model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json={"schema": "totem", "version": 1},
+        )
+
+        own_response = self.client.get(f"/api/assets/{own_asset.pk}/")
+        foreign_response = self.client.get(f"/api/assets/{foreign_asset.pk}/")
+
+        self.assertEqual(own_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(foreign_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_create_asset_rejects_inaccessible_project(self):
+        response = self.client.post(
+            "/api/assets/",
+            {
+                "project": self.other_project.pk,
+                "name": "Foreign project model",
+                "asset_type": ProjectAsset.AssetType.TOTEM,
+                "content_json": {"schema": "totem", "version": 1},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("project", response.data)
+
+    def test_delete_asset_removes_database_row(self):
+        asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Delete me",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json={"schema": "occn", "version": 1},
+        )
+
+        response = self.client.delete(f"/api/assets/{asset.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ProjectAsset.objects.filter(pk=asset.pk).exists())
+
+    def test_delete_asset_scoped_to_user_project(self):
+        foreign_asset = ProjectAsset.objects.create(
+            project=self.other_project,
+            name="Foreign delete",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json={"schema": "occn", "version": 1},
+        )
+
+        response = self.client.delete(f"/api/assets/{foreign_asset.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(ProjectAsset.objects.filter(pk=foreign_asset.pk).exists())
