@@ -4,7 +4,14 @@ from .ocel import (
     convert_ocel_polars_to_pm4py,
     filter_dead_objects
 )
-from .totem import totemDiscovery, Totem, mlpaDiscovery
+from .totem import (
+    mlpaDiscovery,
+    Totem,
+    totemDiscovery,
+    totem_from_dict,
+    totem_to_dict,
+    validate_totem_dict,
+)
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics, discover_occn, occn_playout
 from .dfg import OCDFG, CCDFG
@@ -35,4 +42,7 @@ __all__ = [
     "process_execution_edit_distance",
     "Totem",
     "totemDiscovery",
+    "totem_from_dict",
+    "totem_to_dict",
+    "validate_totem_dict",
 ]
