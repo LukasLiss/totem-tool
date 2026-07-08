@@ -2,7 +2,7 @@ import React, { createContext, useState } from "react";
 
 export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
 
-export type EditorComponent = 'totem' | 'occn' | 'ocpn';
+export type EditorComponent = 'totem' | 'occn' | 'ocpn' | 'ocel';
 
 export type ViewMode =
   | { type: 'overview' }
