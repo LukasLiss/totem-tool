@@ -11,6 +11,7 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import {
   fetchProcessAreas,
   fetchSimulationDetails,
+  fetchSimulationProgress,
   runSimulation,
   fetchGraphEditDistance,
   saveSimulatedLog,
@@ -22,6 +23,7 @@ import {
   SimulationResult,
   SimulationDetailsResponse,
   SimulationMode,
+  SimulationProgress,
   VariantConstraints,
   CalendarProbability,
   CooldownDistribution,
@@ -78,39 +80,48 @@ const simulationDetailsCache: Record<string, SimulationDetailsResponse> = {};
 
 type Phase = "configure" | "details" | "running" | "results";
 
-/** Animated step progress indicator — cycles through steps on a timer. */
-const StepProgress: React.FC<{ steps: string[] }> = ({ steps }) => {
-  const [active, setActive] = useState(0);
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActive((prev) => Math.min(prev + 1, steps.length - 1));
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [steps.length]);
+// Steps for the animated progress indicator
+const DETAILS_STEPS = [
+  "Loading event log",
+  "Filtering event log by process area",
+  "Mining variants and arrival distributions",
+  "Discovering resource constraints",
+  "Computing resource cooldowns and allocation",
+  "Discovering resource calendars",
+];
 
-  return (
-    <Card>
-      <CardContent className="py-4">
-        <div className="space-y-2">
-          {steps.map((step, idx) => (
-            <div key={idx} className="flex items-center gap-2 text-xs">
-              {idx < active ? (
-                <span className="w-4 h-4 rounded-full bg-primary flex items-center justify-center text-white text-[10px]">✓</span>
-              ) : idx === active ? (
-                <span className="w-4 h-4 rounded-full border-2 border-primary animate-pulse" />
-              ) : (
-                <span className="w-4 h-4 rounded-full border border-muted-foreground/30" />
-              )}
-              <span className={idx <= active ? "text-foreground" : "text-muted-foreground"}>
-                {step}
-              </span>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
+const RUN_STEPS = [
+  "Loading event log",
+  "Building simulation model from configuration",
+  "Generating arrival schedule and simulating events",
+  "Preparing actual log for comparison",
+  "Computing evaluation metrics",
+  "Preparing simulated event log",
+];
+
+/** Step progress indicator driven by backend status updates. */
+const StepProgress: React.FC<{ steps: string[]; active: number }> = ({ steps, active }) => (
+  <Card>
+    <CardContent className="py-4">
+      <div className="space-y-2">
+        {steps.map((step, idx) => (
+          <div key={idx} className="flex items-center gap-2 text-xs">
+            {idx < active ? (
+              <span className="w-4 h-4 rounded-full bg-primary flex items-center justify-center text-white text-[10px]">✓</span>
+            ) : idx === active ? (
+              <span className="w-4 h-4 rounded-full border-2 border-primary animate-pulse" />
+            ) : (
+              <span className="w-4 h-4 rounded-full border border-muted-foreground/30" />
+            )}
+            <span className={idx <= active ? "text-foreground" : "text-muted-foreground"}>
+              {step}
+            </span>
+          </div>
+        ))}
+      </div>
+    </CardContent>
+  </Card>
+);
 
 // Render a unix timestamp (seconds, UTC) as a `yyyy-MM-ddTHH:mm` string 
 const unixToDatetimeLocal = (unix: number): string => {
@@ -164,6 +175,33 @@ export const SimulationDashboard: React.FC = () => {
   const [details, setDetails] = useState<SimulationDetailsResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState("");
+
+  // Live step progress of the in-flight details/run request (polled from backend)
+  const [detailsProgress, setDetailsProgress] = useState<SimulationProgress>({ steps: DETAILS_STEPS, current: 0 });
+  const [runProgress, setRunProgress] = useState<SimulationProgress>({ steps: RUN_STEPS, current: 0 });
+
+  // Poll the backend for step progress while a request is in flight.
+  // Returns a stop function; late poll responses after stop are discarded.
+  const startProgressPolling = (
+    progressId: string,
+    fallbackSteps: string[],
+    setProgress: React.Dispatch<React.SetStateAction<SimulationProgress>>,
+  ) => {
+    setProgress({ steps: fallbackSteps, current: 0 });
+    let stopped = false;
+    let inFlight = false;
+    const interval = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const p = await fetchSimulationProgress(progressId);
+      inFlight = false;
+      if (!stopped && p && p.steps.length > 0) setProgress(p);
+    }, 500);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  };
 
   // Editable constraints (per-variant + global)
   const [editedConstraints, setEditedConstraints] = useState<Record<number, VariantConstraints>>({});
@@ -385,15 +423,22 @@ export const SimulationDashboard: React.FC = () => {
       if (simulationDetailsCache[cacheKey]) {
         data = simulationDetailsCache[cacheKey];
       } else {
-        data = await fetchSimulationDetails({
-          file_id: fileId,
-          object_types: selectedObjectTypes,
-          activities: selectedActivities,
-          resource_types: resourceTypes.length > 0 ? resourceTypes : undefined,
-          support_threshold: supportThreshold,
-          min_occurrences_within: minOccurrencesWithin,
-          min_occurrences_across: minOccurrencesAcross,
-        });
+        const progressId = crypto.randomUUID();
+        const stopPolling = startProgressPolling(progressId, DETAILS_STEPS, setDetailsProgress);
+        try {
+          data = await fetchSimulationDetails({
+            file_id: fileId,
+            object_types: selectedObjectTypes,
+            activities: selectedActivities,
+            resource_types: resourceTypes.length > 0 ? resourceTypes : undefined,
+            support_threshold: supportThreshold,
+            min_occurrences_within: minOccurrencesWithin,
+            min_occurrences_across: minOccurrencesAcross,
+            progress_id: progressId,
+          });
+        } finally {
+          stopPolling();
+        }
         if (fileIdRef.current !== fileId) return;
         simulationDetailsCache[cacheKey] = data;
       }
@@ -507,6 +552,7 @@ export const SimulationDashboard: React.FC = () => {
       };
     }
 
+    const progressId = crypto.randomUUID();
     const config: SimulationConfig = {
       file_id: fileId,
       object_types: selectedObjectTypes,
@@ -520,8 +566,10 @@ export const SimulationDashboard: React.FC = () => {
       constraint_lookback_length: lookbackLength,
       mode,
       overrides,
+      progress_id: progressId,
     };
 
+    const stopPolling = startProgressPolling(progressId, RUN_STEPS, setRunProgress);
     try {
       const res = await runSimulation(config);
       if (fileIdRef.current !== fileId) return;
@@ -531,6 +579,8 @@ export const SimulationDashboard: React.FC = () => {
       if (fileIdRef.current !== fileId) return;
       setSimError(err.message || "Simulation failed");
       setPhase("details");
+    } finally {
+      stopPolling();
     }
   };
 
@@ -871,13 +921,7 @@ export const SimulationDashboard: React.FC = () => {
 
             {/* Action Buttons */}
             {detailsLoading && (
-              <StepProgress steps={[
-                "Filtering event log by process area",
-                "Mining variants and arrival distributions",
-                "Discovering resource constraints",
-                "Computing resource cooldowns",
-                "Discovering resource calendars",
-              ]} />
+              <StepProgress steps={detailsProgress.steps} active={detailsProgress.current} />
             )}
             {mode === "simple" ? (
               <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
@@ -1188,13 +1232,7 @@ export const SimulationDashboard: React.FC = () => {
               </p>
             </CardContent>
           </Card>
-          <StepProgress steps={[
-            "Building simulation model from configuration",
-            "Generating arrival schedule",
-            "Allocating resources and simulating events",
-            "Computing evaluation metrics",
-            "Preparing simulated event log",
-          ]} />
+          <StepProgress steps={runProgress.steps} active={runProgress.current} />
         </div>
       )}
 

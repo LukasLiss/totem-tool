@@ -56,6 +56,8 @@ export type SimulationConfig = {
   // Present once the details phase has been loaded; carries the reviewed/edited
   // constraints, calendars, cooldowns, allocation and arrival distributions.
   overrides?: SimulationOverrides;
+  // Client-generated id under which the backend publishes step progress
+  progress_id?: string;
 };
 
 export type CycleTimeSummary = {
@@ -197,6 +199,14 @@ export type SimulationDetailsRequest = {
   support_threshold?: number;
   min_occurrences_within?: number;
   min_occurrences_across?: number;
+  // Client-generated id under which the backend publishes step progress
+  progress_id?: string;
+};
+
+// Step progress of a long-running simulation request
+export type SimulationProgress = {
+  steps: string[];
+  current: number;
 };
 
 export async function fetchProcessAreas(fileId: number): Promise<ProcessAreasResponse> {
@@ -214,6 +224,18 @@ export async function fetchSimulationDetails(config: SimulationDetailsRequest): 
     return data;
   } catch (e) {
     throw toError(e, "HTTP error");
+  }
+}
+
+// Poll the step progress of an in-flight details/run request. 
+export async function fetchSimulationProgress(progressId: string): Promise<SimulationProgress | null> {
+  try {
+    const { data } = await axios.get(
+      `${BASE_URL}/simulation/progress/?progress_id=${encodeURIComponent(progressId)}`,
+    );
+    return data;
+  } catch {
+    return null;
   }
 }
 

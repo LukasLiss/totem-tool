@@ -2407,6 +2407,44 @@ def _export_ocel_to_json(ocel) -> str:
     return json.dumps(build_ocel2_json(ocel), ensure_ascii=False, indent=2)
 
 
+# Ordered step labels for the two long-running simulation requests.
+_SIM_RUN_STEPS = [
+    "Loading event log",
+    "Building simulation model from configuration",
+    "Generating arrival schedule and simulating events",
+    "Preparing actual log for comparison",
+    "Computing evaluation metrics",
+    "Preparing simulated event log",
+]
+
+_SIM_DETAILS_STEPS = [
+    "Loading event log",
+    "Filtering event log by process area",
+    "Mining variants and arrival distributions",
+    "Discovering resource constraints",
+    "Computing resource cooldowns and allocation",
+    "Discovering resource calendars",
+]
+
+
+def _report_progress(progress_id, steps, current):
+    """Publish progress of a long-running simulation request to the cache.
+
+    Args:
+        progress_id: Client-generated id sent with the request, or None/empty
+            to disable reporting.
+        steps: Ordered list of human-readable step labels.
+        current: Index of the step that just started (``len(steps)`` = done).
+    """
+    if not progress_id:
+        return
+    cache.set(
+        f"sim_progress_{progress_id}",
+        {"steps": list(steps), "current": current},
+        timeout=600,
+    )
+
+
 def _apply_simulation_overrides(simulation_model, overrides):
     """Apply the user's details-phase edits onto a freshly built model.
 
@@ -2508,6 +2546,7 @@ def run_simulation(request):
     model_activity_durations = request.data.get("model_activity_durations", True)
     mode = request.data.get("mode", "simple")  # "simple" or "advanced"
     overrides = request.data.get("overrides")  # user edits from the details phase
+    progress_id = request.data.get("progress_id")
 
     if not file_id:
         return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
@@ -2525,6 +2564,7 @@ def run_simulation(request):
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     # Load OCEL
+    _report_progress(progress_id, _SIM_RUN_STEPS, 0)
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
     if not ocel:
@@ -2537,6 +2577,7 @@ def run_simulation(request):
 
     try:
         # Build Process Area
+        _report_progress(progress_id, _SIM_RUN_STEPS, 1)
         process_area = ProcessArea(object_types=object_types, activities=activities)
 
         # Build simulation model based on mode
@@ -2565,6 +2606,7 @@ def run_simulation(request):
         )
 
         # Run simulation
+        _report_progress(progress_id, _SIM_RUN_STEPS, 2)
         sim_duration_s = int(sim_duration_days * 24 * 3600)
         with EvalTimer() as sim_timer:
             sim_log, finished_count, spawned_count = simulation_model.run(
@@ -2575,11 +2617,13 @@ def run_simulation(request):
             )
 
         # Filter original OCEL by process area for comparison
+        _report_progress(progress_id, _SIM_RUN_STEPS, 3)
         totem = totemDiscovery(ocel)
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
         # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
+        _report_progress(progress_id, _SIM_RUN_STEPS, 4)
         evaluation = None
         evaluation_error = None
         try:
@@ -2599,6 +2643,7 @@ def run_simulation(request):
         # collection lazily, when the user explicitly chooses to keep it (see
         # simulation_save_log). Keeping it out of the EventLog table avoids
         # cluttering the file list with every trial run.
+        _report_progress(progress_id, _SIM_RUN_STEPS, 5)
         _cleanup_sim_tmp()
         original_log = EventLog.objects.get(pk=file_id)
         original_name = os.path.splitext(os.path.basename(original_log.file.name))[0]
@@ -2640,12 +2685,31 @@ def run_simulation(request):
             "simulated_saved": False,
         }
 
+        _report_progress(progress_id, _SIM_RUN_STEPS, len(_SIM_RUN_STEPS))
         return Response(response_data, status=status.HTTP_200_OK)
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return Response({"error": f"Simulation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_simulation_progress(request):
+    """Return the current step progress of a long-running simulation request.
+
+    The frontend generates a ``progress_id``, sends it along with the
+    ``run_simulation`` / ``get_simulation_details`` request and polls this
+    endpoint while that request is in flight.
+    """
+    progress_id = request.query_params.get("progress_id")
+    if not progress_id:
+        return Response({"error": "Missing progress_id"}, status=status.HTTP_400_BAD_REQUEST)
+    state = cache.get(f"sim_progress_{progress_id}")
+    if state is None:
+        state = {"steps": [], "current": 0}
+    return Response(state, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
@@ -2908,6 +2972,7 @@ def get_simulation_details(request):
     support_threshold = request.data.get("support_threshold", 0.8)
     min_occurrences_within = request.data.get("min_occurrences_within", 5)
     min_occurrences_across = request.data.get("min_occurrences_across", 10)
+    progress_id = request.data.get("progress_id")
 
     if not file_id:
         return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
@@ -2919,6 +2984,7 @@ def get_simulation_details(request):
     except EventLog.DoesNotExist:
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
+    _report_progress(progress_id, _SIM_DETAILS_STEPS, 0)
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
     if not ocel:
@@ -2931,12 +2997,14 @@ def get_simulation_details(request):
 
     try:
         # Build process area and filter OCEL
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 1)
         process_area = ProcessArea(object_types=object_types, activities=activities)
         totem = totemDiscovery(ocel)
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
         # Compute variants
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 2)
         variants = find_object_variants_connected_component(filtered_ocel)
 
         # Compute arrival distribution
@@ -2946,6 +3014,7 @@ def get_simulation_details(request):
         res_dist = resource_distribution_of_variants(filtered_ocel, variants, ocel.obj_type_map)
 
         # Compute constraints
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 3)
         constraints = generate_resource_constraints(
             filtered_ocel, variants, support_threshold, min_occurrences_within, min_occurrences_across
         )
@@ -2995,6 +3064,7 @@ def get_simulation_details(request):
             })
 
         # Compute resource cooldown distribution
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 4)
         cooldown_dist = compute_resource_cooldown(ocel, object_types, activities)
         serialized_cooldowns = {}
         for act, type_stats in cooldown_dist.items():
@@ -3015,6 +3085,7 @@ def get_simulation_details(request):
         )
 
         # Compute resource calendars
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
         serialized_type_calendars = {}
         if resource_types:
             try:
@@ -3035,6 +3106,7 @@ def get_simulation_details(request):
             span_s = max(0, int(ts.max()) - filtered_start_unix)
             filtered_duration_days = max(1, math.ceil(span_s / 86400))
 
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, len(_SIM_DETAILS_STEPS))
         return Response({
             "variants": serialized_variants,
             "num_variants": len(variants),
