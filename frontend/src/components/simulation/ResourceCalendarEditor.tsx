@@ -2,6 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { CalendarProbability } from "@/api/simulationApi";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -9,21 +18,45 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const CHART_BLUE = "var(--chart-2, #2d62ef)";
 const EMPTY_CELL = "rgb(243, 244, 246)";
 
+/**
+ * A user-defined calendar that deviates from the type default and applies to an
+ * explicitly chosen set of resource instances (e.g. `Worker_1`, `Worker_3`).
+ * Resources not covered by any group fall back to their type calendar.
+ */
+export type CalendarOverrideGroup = {
+  id: string;
+  resourceIds: string[];
+  calendar: CalendarProbability;
+};
+
 type Props = {
   resourcePool: Record<string, number>;
   typeCalendars: Record<string, CalendarProbability>;
-  resourceCalendars: Record<string, CalendarProbability>;
   /** Discovered probability calendars per type (heatmap background / reset target). */
   discoveredTypeCalendars?: Record<string, CalendarProbability>;
-  /** Discovered probability calendars per individual resource id. */
-  discoveredResourceCalendars?: Record<string, CalendarProbability>;
+  /** User-defined per-resource-set calendar overrides. */
+  overrides: CalendarOverrideGroup[];
   onTypeCalendarUpdate: (resourceType: string, weekday: string, hours: number[]) => void;
-  onResourceCalendarUpdate: (resourceId: string, weekday: string, hours: number[]) => void;
+  setOverrides: React.Dispatch<React.SetStateAction<CalendarOverrideGroup[]>>;
 };
 
 /** Build a 24-element array with 1.0 in [start, end) and 0 elsewhere. */
 function rangeToHours(start: number, end: number): number[] {
   return Array.from({ length: 24 }, (_, h) => (h >= start && h < end ? 1 : 0));
+}
+
+/** Plain Mon–Fri 08:00–17:00 default calendar (weekend off). */
+function makeDefaultCalendar(): CalendarProbability {
+  const weekday = rangeToHours(8, 17);
+  const cal: CalendarProbability = {};
+  for (const d of WEEKDAYS) cal[d] = d === "Saturday" || d === "Sunday" ? Array(24).fill(0) : [...weekday];
+  return cal;
+}
+
+function cloneCalendar(src: CalendarProbability): CalendarProbability {
+  const out: CalendarProbability = {};
+  for (const d of WEEKDAYS) out[d] = [...(src[d] || Array(24).fill(0))];
+  return out;
 }
 
 /** Contiguous [start, end) segments of "on" (value > 0) hours. */
@@ -77,38 +110,65 @@ function meanOverMask(probs: number[] | undefined, mask: (h: number) => boolean)
 export const ResourceCalendarEditor: React.FC<Props> = ({
   resourcePool,
   typeCalendars,
-  resourceCalendars,
   discoveredTypeCalendars,
-  discoveredResourceCalendars,
+  overrides,
   onTypeCalendarUpdate,
-  onResourceCalendarUpdate,
+  setOverrides,
 }) => {
   const resourceTypes = Object.keys(resourcePool).filter((k) => resourcePool[k] > 0);
   const [selectedType, setSelectedType] = useState<string>(resourceTypes[0] || "");
-  const [expandedType, setExpandedType] = useState<string | null>(null);
-  const [selectedResourceId, setSelectedResourceId] = useState<string>("");
 
   if (resourceTypes.length === 0) return null;
 
   const currentCalendar = selectedType ? typeCalendars[selectedType] : null;
   const discoveredCalendar = selectedType ? discoveredTypeCalendars?.[selectedType] : undefined;
   const hasDiscovered = !!discoveredCalendar && hasNonTrivialData(discoveredCalendar);
-  const resourceCount = selectedType ? (resourcePool[selectedType] || 0) : 0;
-  const individualResourceIds = Array.from({ length: resourceCount }, (_, i) => `${selectedType}_${i + 1}`);
 
-  const currentResourceCalendar = selectedResourceId ? resourceCalendars[selectedResourceId] : null;
-  const discoveredResourceCalendar = selectedResourceId
-    ? discoveredResourceCalendars?.[selectedResourceId]
-    : undefined;
+  // All resource instances of the pool, grouped by type (e.g. Worker_1 … Worker_N).
+  const instancesByType = resourceTypes.map((t) => ({
+    type: t,
+    ids: Array.from({ length: resourcePool[t] }, (_, i) => `${t}_${i + 1}`),
+  }));
+
+  const addOverride = () => {
+    const seed = currentCalendar ? cloneCalendar(currentCalendar) : makeDefaultCalendar();
+    setOverrides((prev) => [
+      ...prev,
+      { id: `grp_${Date.now()}_${prev.length}`, resourceIds: [], calendar: seed },
+    ]);
+  };
+
+  const removeOverride = (id: string) =>
+    setOverrides((prev) => prev.filter((g) => g.id !== id));
+
+  const toggleResource = (id: string, rid: string) =>
+    setOverrides((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        const has = g.resourceIds.includes(rid);
+        return {
+          ...g,
+          resourceIds: has ? g.resourceIds.filter((r) => r !== rid) : [...g.resourceIds, rid],
+        };
+      }),
+    );
+
+  const updateOverrideDay = (id: string, weekday: string, hours: number[]) =>
+    setOverrides((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, calendar: { ...g.calendar, [weekday]: hours } } : g)),
+    );
 
   return (
     <Card>
       <CardHeader><CardTitle>Resource Calendar</CardTitle></CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          The colored background shows the <strong>discovered per-hour availability</strong> from the
-          event log — an untouched calendar keeps these probabilities and the simulation uses them
-          directly. Click or drag across the hours to pin fixed working times (always available). Reset (↺) restores the discovered probabilities.
+          By default every resource of a type follows its <strong>type calendar</strong>. The colored
+          background shows the <strong>discovered per-hour availability</strong> from the event log — an
+          untouched calendar keeps these probabilities and the simulation uses them directly. Click or
+          drag across the hours to pin fixed working times (always available); reset (↺) restores the
+          discovered probabilities. To give specific resources a different schedule, add a custom
+          calendar below.
         </p>
 
         {/* Resource Type selector */}
@@ -120,7 +180,7 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
                 key={rt}
                 variant={selectedType === rt ? "default" : "outline"}
                 className="cursor-pointer"
-                onClick={() => { setSelectedType(rt); setExpandedType(null); setSelectedResourceId(""); }}
+                onClick={() => setSelectedType(rt)}
               >
                 {rt} ({resourcePool[rt]})
               </Badge>
@@ -128,7 +188,7 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Type-level weekly schedule */}
+        {/* Type-level weekly schedule (the default for every resource of the type) */}
         {selectedType && currentCalendar && (
           <div className="space-y-3">
             <p className="text-xs font-medium">
@@ -147,80 +207,138 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Individual resources - collapsible */}
-        {selectedType && resourceCount > 0 && (
-          <div className="pt-2 border-t">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setExpandedType(expandedType === selectedType ? null : selectedType);
-                setSelectedResourceId("");
-              }}
-            >
-              {expandedType === selectedType ? "Hide Individual Resources" : `Individual Resources (${resourceCount})`}
+        {/* Custom calendars for specific resources */}
+        <div className="pt-3 border-t space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium">Custom calendars for specific resources</p>
+              <p className="text-[10px] text-muted-foreground">
+                Pick a set of resources and give them a schedule that deviates from their type calendar.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={addOverride}>
+              + Add custom calendar
             </Button>
           </div>
-        )}
 
-        {expandedType === selectedType && (
-          <div className="space-y-3 pl-3 border-l-2" style={{ borderColor: `color-mix(in srgb, ${CHART_BLUE} 30%, transparent)` }}>
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Select resource:</p>
-              <div className="flex flex-wrap gap-1">
-                {individualResourceIds.map((rid) => (
-                  <Badge
-                    key={rid}
-                    variant={selectedResourceId === rid ? "default" : "outline"}
-                    className="cursor-pointer text-xs"
-                    onClick={() => setSelectedResourceId(rid)}
+          {overrides.map((group) => {
+            // Resources already claimed by *other* groups cannot be picked here —
+            // each resource belongs to at most one override.
+            const claimedElsewhere = new Set<string>();
+            overrides.forEach((g) => {
+              if (g.id !== group.id) g.resourceIds.forEach((r) => claimedElsewhere.add(r));
+            });
+            const available = instancesByType
+              .map(({ type, ids }) => ({ type, ids: ids.filter((r) => !claimedElsewhere.has(r)) }))
+              .filter((x) => x.ids.length > 0);
+
+            return (
+              <div
+                key={group.id}
+                className="rounded border p-3 space-y-3"
+                style={{ borderColor: `color-mix(in srgb, ${CHART_BLUE} 30%, transparent)` }}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <ResourceMultiSelect
+                    instancesByType={available}
+                    selected={group.resourceIds}
+                    onToggle={(rid) => toggleResource(group.id, rid)}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground"
+                    onClick={() => removeOverride(group.id)}
                   >
-                    {rid}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+                    Remove
+                  </Button>
+                </div>
 
-            {selectedResourceId && (
-              <div className="space-y-3">
-                {currentResourceCalendar ? (
-                  <>
-                    <p className="text-xs font-medium">
-                      Schedule for <strong>{selectedResourceId}</strong> (overrides type):
-                    </p>
-                    <WeeklySchedule
-                      calendar={currentResourceCalendar}
-                      discovered={discoveredResourceCalendar}
-                      onChange={(weekday, hours) => onResourceCalendarUpdate(selectedResourceId, weekday, hours)}
-                    />
-                  </>
-                ) : (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Inherits <strong>{selectedType}</strong> schedule. Click to create override:
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (currentCalendar) {
-                          for (const day of WEEKDAYS) {
-                            const hours = currentCalendar[day] || Array(24).fill(0);
-                            onResourceCalendarUpdate(selectedResourceId, day, [...hours]);
-                          }
-                        }
-                      }}
-                    >
-                      Create custom schedule
-                    </Button>
+                {group.resourceIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {group.resourceIds.map((rid) => (
+                      <Badge key={rid} variant="secondary" className="text-[10px] gap-1">
+                        {rid}
+                        <button
+                          className="hover:text-foreground"
+                          onClick={() => toggleResource(group.id, rid)}
+                          title="Remove from set"
+                        >
+                          ×
+                        </button>
+                      </Badge>
+                    ))}
                   </div>
                 )}
+
+                {group.resourceIds.length === 0 ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Select at least one resource for this calendar to take effect.
+                  </p>
+                ) : (
+                  <WeeklySchedule
+                    calendar={group.calendar}
+                    onChange={(weekday, hours) => updateOverrideDay(group.id, weekday, hours)}
+                  />
+                )}
               </div>
-            )}
-          </div>
-        )}
+            );
+          })}
+        </div>
       </CardContent>
     </Card>
+  );
+};
+
+/** Multi-select over the pool's resource instances, grouped by type, in a popover. */
+const ResourceMultiSelect: React.FC<{
+  instancesByType: { type: string; ids: string[] }[];
+  selected: string[];
+  onToggle: (rid: string) => void;
+}> = ({ instancesByType, selected, onToggle }) => {
+  const [open, setOpen] = useState(false);
+  const label =
+    selected.length === 0
+      ? "Select resources…"
+      : `${selected.length} resource${selected.length === 1 ? "" : "s"} selected`;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="min-w-[14rem] justify-between">
+          <span className="truncate">{label}</span>
+          <span className="ml-2 text-xs opacity-60">▾</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search resources…" />
+          <CommandList>
+            <CommandEmpty>No resources available.</CommandEmpty>
+            {instancesByType.map(({ type, ids }) => (
+              <CommandGroup key={type} heading={type}>
+                {ids.map((rid) => {
+                  const isSel = selected.includes(rid);
+                  return (
+                    <CommandItem key={rid} value={rid} onSelect={() => onToggle(rid)}>
+                      <span
+                        className={`mr-2 inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm border text-[9px] ${
+                          isSel
+                            ? "bg-primary border-primary text-primary-foreground"
+                            : "border-muted-foreground/40"
+                        }`}
+                      >
+                        {isSel ? "✓" : ""}
+                      </span>
+                      {rid}
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 };
 

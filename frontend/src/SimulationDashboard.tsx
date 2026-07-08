@@ -18,6 +18,7 @@ import {
   ProcessAreaInfo,
   ProcessAreasResponse,
   SimulationConfig,
+  SimulationOverrides,
   SimulationResult,
   SimulationDetailsResponse,
   SimulationMode,
@@ -29,7 +30,10 @@ import {
 } from "@/api/simulationApi";
 import { toast } from "sonner";
 import { ArrivalDistributionEditor } from "@/components/simulation/ArrivalDistributionEditor";
-import { ResourceCalendarEditor } from "@/components/simulation/ResourceCalendarEditor";
+import {
+  ResourceCalendarEditor,
+  CalendarOverrideGroup,
+} from "@/components/simulation/ResourceCalendarEditor";
 import { ConstraintsEditorPanel } from "@/components/simulation/ConstraintsEditor";
 import { CooldownEditor } from "@/components/simulation/CooldownEditor";
 import {
@@ -165,11 +169,12 @@ export const SimulationDashboard: React.FC = () => {
   const [editedConstraints, setEditedConstraints] = useState<Record<number, VariantConstraints>>({});
   const [globalConstraints, setGlobalConstraints] = useState<VariantConstraints>({});
 
-  // Resource calendars (from details response)
+  // Resource calendars: one editable calendar per resource type (the default for
+  // every resource of that type), plus optional custom calendars for explicitly
+  // chosen sets of individual resources.
   const [typeCalendars, setTypeCalendars] = useState<Record<string, CalendarProbability>>({});
-  const [resourceCalendars, setResourceCalendars] = useState<Record<string, CalendarProbability>>({});
   const [discoveredTypeCalendars, setDiscoveredTypeCalendars] = useState<Record<string, CalendarProbability>>({});
-  const [discoveredResourceCalendars, setDiscoveredResourceCalendars] = useState<Record<string, CalendarProbability>>({});
+  const [calendarOverrides, setCalendarOverrides] = useState<CalendarOverrideGroup[]>([]);
 
   // Cooldowns and allocation strategy
   const [cooldowns, setCooldowns] = useState<CooldownDistribution>({});
@@ -227,9 +232,8 @@ export const SimulationDashboard: React.FC = () => {
     setEditedConstraints({});
     setGlobalConstraints({});
     setTypeCalendars({});
-    setResourceCalendars({});
     setDiscoveredTypeCalendars({});
-    setDiscoveredResourceCalendars({});
+    setCalendarOverrides([]);
     setCooldowns({});
     setAllocationStrategy({});
     setPhase("configure");
@@ -403,9 +407,8 @@ export const SimulationDashboard: React.FC = () => {
       });
       setEditedConstraints(initialConstraints);
 
-      // Store raw discovered calendars for reference display (heatmap background)
+      // Store raw discovered type calendars for reference display (heatmap background)
       setDiscoveredTypeCalendars(data.type_calendars || {});
-      setDiscoveredResourceCalendars(data.resource_calendars || {});
 
       // Initialize the editable calendars from the discovered probabilities:
       // Types without any discovered data fall back to a plain Mon–Fri 08:00–17:00 default.
@@ -433,7 +436,7 @@ export const SimulationDashboard: React.FC = () => {
             };
       }
       setTypeCalendars(mergedTypeCalendars);
-      setResourceCalendars(data.resource_calendars || {});
+      setCalendarOverrides([]);
 
       // Set cooldowns and allocation strategy
       setCooldowns(data.cooldown_distribution || {});
@@ -477,6 +480,33 @@ export const SimulationDashboard: React.FC = () => {
     setPhase("running");
     setSimError("");
 
+    // Once the details phase has been loaded, carry the reviewed/edited values
+    // so the backend simulates with them instead of re-discovering everything.
+    let overrides: SimulationOverrides | undefined;
+    if (details) {
+      const arrivalDistributions: Record<number, Record<string, Record<string, number>>> = {};
+      details.variants.forEach((v) => {
+        arrivalDistributions[v.id] = v.arrival_distribution.avg_arrivals_per_hour || {};
+      });
+      // Expand the custom calendar groups into a per-resource-instance map keyed
+      // by simulated resource id (e.g. "Worker_1"), which the engine gates on.
+      const resourceCalendars: Record<string, CalendarProbability> = {};
+      calendarOverrides.forEach((group) => {
+        group.resourceIds.forEach((rid) => {
+          resourceCalendars[rid] = group.calendar;
+        });
+      });
+      overrides = {
+        constraints: editedConstraints,
+        global_constraints: globalConstraints,
+        arrival_distributions: arrivalDistributions,
+        cooldowns,
+        allocation_strategy: allocationStrategy,
+        type_calendars: typeCalendars,
+        resource_calendars: resourceCalendars,
+      };
+    }
+
     const config: SimulationConfig = {
       file_id: fileId,
       object_types: selectedObjectTypes,
@@ -489,6 +519,7 @@ export const SimulationDashboard: React.FC = () => {
       resource_constraint_violation_degree: violationDegree,
       constraint_lookback_length: lookbackLength,
       mode,
+      overrides,
     };
 
     try {
@@ -980,25 +1011,19 @@ export const SimulationDashboard: React.FC = () => {
           </CollapsibleSection>
 
           {/* Resource Calendar */}
-          <CollapsibleSection title="Resource Calendar" description="Working hours per resource type">
+          <CollapsibleSection title="Resource Calendar" description="Type calendars + custom calendars for specific resources">
             <ResourceCalendarEditor
               resourcePool={resourcePool}
               typeCalendars={typeCalendars}
-              resourceCalendars={resourceCalendars}
               discoveredTypeCalendars={discoveredTypeCalendars}
-              discoveredResourceCalendars={discoveredResourceCalendars}
+              overrides={calendarOverrides}
               onTypeCalendarUpdate={(resourceType, weekday, hours) => {
                 setTypeCalendars((prev) => ({
                   ...prev,
                   [resourceType]: { ...prev[resourceType], [weekday]: hours },
                 }));
               }}
-              onResourceCalendarUpdate={(resourceId, weekday, hours) => {
-                setResourceCalendars((prev) => ({
-                  ...prev,
-                  [resourceId]: { ...prev[resourceId], [weekday]: hours },
-                }));
-              }}
+              setOverrides={setCalendarOverrides}
             />
           </CollapsibleSection>
 

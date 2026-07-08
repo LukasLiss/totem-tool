@@ -2407,6 +2407,77 @@ def _export_ocel_to_json(ocel) -> str:
     return json.dumps(build_ocel2_json(ocel), ensure_ascii=False, indent=2)
 
 
+def _apply_simulation_overrides(simulation_model, overrides):
+    """Apply the user's details-phase edits onto a freshly built model.
+
+    The frontend lets the user review and adjust the discovered constraints,
+    resource calendars, cooldowns, allocation strategy and per-variant arrival
+    distributions before running. Those edits are sent as ``overrides`` so the
+    simulation uses them instead of the values re-discovered from the log.
+
+    Args:
+        simulation_model: The freshly built OCProcessAreaSimulationModel.
+        overrides: The ``overrides`` dict from the request, or a falsy value to
+            leave the model untouched (re-discovered values are used).
+    """
+    if not overrides:
+        return
+
+    # --- Model-level overrides (not variant-keyed) ---
+    cooldowns = overrides.get("cooldowns")
+    if cooldowns is not None:
+        simulation_model.resource_cooldown_distribution = cooldowns
+
+    allocation = overrides.get("allocation_strategy")
+    if allocation is not None:
+        simulation_model.resource_allocation_strategy = allocation
+
+    type_calendars = overrides.get("type_calendars")
+    if type_calendars is not None:
+        simulation_model.type_calendars = type_calendars
+
+    resource_calendars = overrides.get("resource_calendars")
+    if resource_calendars is not None:
+        simulation_model.resource_calendars = resource_calendars
+
+    # --- Variant-keyed overrides (need the ordered variant list) ---
+    playout = simulation_model.playout_strategy
+    variants = list(getattr(playout, "variants", []) or [])
+    if not variants:
+        return
+
+    edited_constraints = overrides.get("constraints") or {}
+    global_constraints = overrides.get("global_constraints") or {}
+    if edited_constraints or global_constraints:
+        merged = {}
+        for idx, variant in enumerate(variants):
+            per_variant = edited_constraints.get(str(idx), {})
+            combined = {}
+            # Global constraints apply to every variant; a per-variant entry
+            # wins on conflicting (activity, other_activity) pairs.
+            for source in (global_constraints, per_variant):
+                for act, others in source.items():
+                    combined.setdefault(act, {}).update(others)
+            merged[variant] = combined
+        simulation_model.resource_constraints = merged
+
+    arrival_overrides = overrides.get("arrival_distributions") or {}
+    if arrival_overrides:
+        arrival_dist = playout.variant_arrival_distribution
+        for idx, variant in enumerate(variants):
+            per_variant = arrival_overrides.get(str(idx))
+            if per_variant is None:
+                continue
+            # JSON turns the hour keys into strings; the schedule generator looks
+            # them up by int hour, so convert them back.
+            converted = {
+                weekday: {int(hour): float(v) for hour, v in hours.items()}
+                for weekday, hours in per_variant.items()
+            }
+            dist = arrival_dist.setdefault(variant, {})
+            dist["avg_arrivals_per_hour"] = converted
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def run_simulation(request):
@@ -2436,6 +2507,7 @@ def run_simulation(request):
     lookback_length = request.data.get("constraint_lookback_length", None)
     model_activity_durations = request.data.get("model_activity_durations", True)
     mode = request.data.get("mode", "simple")  # "simple" or "advanced"
+    overrides = request.data.get("overrides")  # user edits from the details phase
 
     if not file_id:
         return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
@@ -2479,6 +2551,11 @@ def run_simulation(request):
             constraint_lookback_length=lookback_length,
             model_activity_durations=bool(model_activity_durations),
         )
+
+        # Apply the user's details-phase edits (constraints, calendars, cooldowns,
+        # allocation, arrival distributions) so the simulation uses them instead
+        # of the values just re-discovered from the log.
+        _apply_simulation_overrides(simulation_model, overrides)
 
         # Convert sim_start_unix to datetime
         start_datetime = (
@@ -2939,16 +3016,13 @@ def get_simulation_details(request):
 
         # Compute resource calendars
         serialized_type_calendars = {}
-        serialized_resource_calendars = {}
         if resource_types:
             try:
-                type_cals, res_cals = discover_resource_calendars(
+                type_cals = discover_resource_calendars(
                     filtered_ocel, resource_types, activities, ocel.obj_type_map
                 )
                 for rtype, cal in type_cals.items():
                     serialized_type_calendars[rtype] = cal.probability
-                for rid, cal in res_cals.items():
-                    serialized_resource_calendars[rid] = cal.probability
             except Exception as e:
                 print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
 
@@ -2967,7 +3041,7 @@ def get_simulation_details(request):
             "cooldown_distribution": serialized_cooldowns,
             "allocation_strategy": allocation_strategy,
             "type_calendars": serialized_type_calendars,
-            "resource_calendars": serialized_resource_calendars,
+            "resource_calendars": {},
             "log_start_unix": filtered_start_unix,
             "log_duration_days": filtered_duration_days,
         }, status=status.HTTP_200_OK)
@@ -2992,7 +3066,7 @@ def get_resource_calendars(request):
         "resource_types": ["ResourceType1", "ResourceType2"]
     }
 
-    Returns per-type and per-resource calendars as probability matrices (weekday x hour).
+    Returns per-type calendars as probability matrices (weekday x hour).
     """
     file_id = request.data.get("file_id")
     object_types = request.data.get("object_types", [])
@@ -3026,8 +3100,8 @@ def get_resource_calendars(request):
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
-        # Discover calendars
-        type_calendars, resource_calendars = discover_resource_calendars(
+        # Discover per-type calendars
+        type_calendars = discover_resource_calendars(
             filtered_ocel, resource_types, activities, ocel.obj_type_map
         )
 
@@ -3036,14 +3110,9 @@ def get_resource_calendars(request):
         for rtype, cal in type_calendars.items():
             serialized_type_calendars[rtype] = cal.probability
 
-        # Serialize individual resource calendars
-        serialized_resource_calendars = {}
-        for rid, cal in resource_calendars.items():
-            serialized_resource_calendars[rid] = cal.probability
-
         return Response({
             "type_calendars": serialized_type_calendars,
-            "resource_calendars": serialized_resource_calendars,
+            "resource_calendars": {},
         }, status=status.HTTP_200_OK)
 
     except Exception as e:

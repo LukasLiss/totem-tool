@@ -29,6 +29,17 @@ export type ProcessAreasResponse = {
 
 export type SimulationMode = "simple" | "advanced";
 
+// User edits made in the details phase, sent along with a run
+export type SimulationOverrides = {
+  constraints?: Record<number, VariantConstraints>;
+  global_constraints?: VariantConstraints;
+  arrival_distributions?: Record<number, Record<string, Record<string, number>>>;
+  cooldowns?: CooldownDistribution;
+  allocation_strategy?: AllocationStrategy;
+  type_calendars?: Record<string, CalendarProbability>;
+  resource_calendars?: Record<string, CalendarProbability>;
+};
+
 export type SimulationConfig = {
   file_id: number;
   object_types: string[];
@@ -42,6 +53,9 @@ export type SimulationConfig = {
   // When true, successor activities are delayed by inter-activity durations
   model_activity_durations: boolean;
   mode: SimulationMode;
+  // Present once the details phase has been loaded; carries the reviewed/edited
+  // constraints, calendars, cooldowns, allocation and arrival distributions.
+  overrides?: SimulationOverrides;
 };
 
 export type CycleTimeSummary = {
