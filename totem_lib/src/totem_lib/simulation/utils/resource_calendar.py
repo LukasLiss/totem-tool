@@ -14,6 +14,27 @@ WEEKDAYS = [
 HOURS_PER_DAY = 24
 
 
+def availability_probability(prob_by_weekday, timestamp_s: int) -> float:
+    """Availability probability of a calendar at a given Unix-second timestamp.
+
+    Args:
+        prob_by_weekday: A calendar's probability matrix ``{weekday: [24 floats]}``
+            (i.e. ``ResourceCalendar.probability``). May be falsy/empty.
+        timestamp_s: Unix timestamp in seconds (UTC).
+
+    Returns:
+        The probability in ``[0, 1]``; ``1.0`` when the calendar is empty or the
+        weekday/hour is missing (treated as "always available").
+    """
+    if not prob_by_weekday:
+        return 1.0
+    t = dt.datetime.fromtimestamp(timestamp_s, tz=dt.timezone.utc)
+    hours = prob_by_weekday.get(WEEKDAYS[t.weekday()])
+    if not hours:
+        return 1.0
+    return hours[t.hour]
+
+
 class ResourceCalendar:
     """
     A probabilistic resource calendar containing the resource availability information.
@@ -64,19 +85,15 @@ def discover_resource_calendars(
     resource_types: list[str],
     activities: list[str],
     obj_type_map: dict[str, str] | None = None,
-) -> tuple[dict[str, ResourceCalendar], dict[str, ResourceCalendar]]:
+) -> dict[str, ResourceCalendar]:
     """
-    Discovers probabilistic resource calendars from an Object-Centric Event Log.
+    Discovers a probabilistic availability calendar per resource type from an OCEL.
 
-    For each (weekday, hour) slot, computes:
+    For each (weekday, hour) slot the type calendar is the **average** availability
+    across the type's resources:
+        P_type(slot) = (sum_r  weeks r was active at slot) / (num_resources * total_weeks)
 
-        P(available) = number of weeks with at least one event / total observed weeks
-
-    Returns two sets of calendars:
-    - Per resource type: aggregated across all instances of that type.
-      Used during simulation to decide whether a resource type is available at a tick.
-    - Per individual resource ID: based on that specific resource's events.
-      Used for computing accurate cooldowns (filtering out off-hours).
+    A type whose resources are each present half the weeks reads ~0.5.
 
     Args:
         ocel: ObjectCentricEventLog (filtered, with process_area_resources in _attributes)
@@ -89,28 +106,27 @@ def discover_resource_calendars(
             log's ``obj_type_map`` here. Defaults to ``ocel.obj_type_map``.
 
     Returns:
-        (type_calendars, resource_calendars) where:
-        - type_calendars: dict mapping resource_type -> ProbabilisticResourceCalendar
-        - resource_calendars: dict mapping resource_id -> ProbabilisticResourceCalendar
+        dict mapping resource_type -> ResourceCalendar (the type average).
     """
     activities_set = set(activities)
     resource_types_set = set(resource_types)
 
     if ocel.events.is_empty():
-        return {}, {}
+        return {}
 
     sorted_events = ocel.events.sort("_timestampUnix")
     if obj_type_map is None:
         obj_type_map = ocel.obj_type_map
 
-    # Collect active weeks per resource type AND per individual resource ID
-    # active_weeks_by_type[resource_type][weekday][hour] = set of (year, iso_week)
-    # active_weeks_by_rid[resource_id][weekday][hour] = set of (year, iso_week)
-    active_weeks_by_type: dict[str, dict[str, list[set]]] = {
-        rtype: {day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS}
-        for rtype in resource_types
+    # Per type & slot, collect the distinct (resource_id, iso_week) pairs active
+    # there; the count is exactly the numerator of the type average. Plus the
+    # roster of resource ids per type (its denominator).
+    # active_pairs[rtype][weekday][hour] = set of (rid, (year, week))
+    active_pairs: dict[str, dict[str, list[set]]] = {
+        rt: {day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS}
+        for rt in resource_types
     }
-    active_weeks_by_rid: dict[str, dict[str, list[set]]] = {}
+    resource_ids_by_type: dict[str, set[str]] = {rt: set() for rt in resource_types}
 
     all_weeks: set[tuple[int, int]] = set()
 
@@ -131,52 +147,33 @@ def discover_resource_calendars(
 
         all_weeks.add(year_week)
 
-        seen_types = set()
         for rid in resources:
             rtype = obj_type_map.get(rid)
             if not rtype or rtype not in resource_types_set:
                 continue
 
-            # Per type (deduplicate: one event counts once per type)
-            if rtype not in seen_types:
-                active_weeks_by_type[rtype][weekday][hour].add(year_week)
-                seen_types.add(rtype)
-
-            # Per individual resource
-            if rid not in active_weeks_by_rid:
-                active_weeks_by_rid[rid] = {
-                    day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS
-                }
-            active_weeks_by_rid[rid][weekday][hour].add(year_week)
+            resource_ids_by_type[rtype].add(rid)
+            active_pairs[rtype][weekday][hour].add((rid, year_week))
 
     total_weeks = len(all_weeks)
     if total_weeks == 0:
-        return (
-            {rt: ResourceCalendar(rt, "type") for rt in resource_types},
-            {},
-        )
+        return {rt: ResourceCalendar(rt, "type") for rt in resource_types}
 
-    # Build per-type calendars
+    # Build per-type calendars as the average availability across the type's
+    # resources: mean_r P_resource(available).
     type_calendars = {}
     for rtype in resource_types:
         cal = ResourceCalendar(rtype, "type")
-        for day in WEEKDAYS:
-            for h in range(HOURS_PER_DAY):
-                n_active = len(active_weeks_by_type[rtype][day][h])
-                cal.probability[day][h] = n_active / total_weeks
+        rids = resource_ids_by_type.get(rtype, set())
+        if rids:
+            denom = len(rids) * total_weeks
+            slots = active_pairs[rtype]
+            for day in WEEKDAYS:
+                for h in range(HOURS_PER_DAY):
+                    cal.probability[day][h] = len(slots[day][h]) / denom
         type_calendars[rtype] = cal
 
-    # Build per-resource calendars
-    resource_calendars = {}
-    for rid, weeks_data in active_weeks_by_rid.items():
-        cal = ResourceCalendar(rid, "resource")
-        for day in WEEKDAYS:
-            for h in range(HOURS_PER_DAY):
-                n_active = len(weeks_data[day][h])
-                cal.probability[day][h] = n_active / total_weeks
-        resource_calendars[rid] = cal
-
-    return type_calendars, resource_calendars
+    return type_calendars
 
 
 def _extract_resources(
