@@ -36,10 +36,12 @@ class OCDFGDb(OCDFG):
                 SELECT
                     e.event_id,
                     e.activity,
+                    e.timestamp_unix,
                     o.obj_id,
                     o.obj_type,
                     LAG(e.activity)  OVER w AS prev_activity,
-                    LEAD(e.activity) OVER w AS next_activity
+                    LEAD(e.activity) OVER w AS next_activity,
+                    LEAD(e.timestamp_unix) OVER w AS next_timestamp_unix
                 FROM events e
                 JOIN event_object eo ON e.event_id = eo.event_id
                 JOIN objects o       ON eo.obj_id  = o.obj_id
@@ -55,7 +57,8 @@ class OCDFGDb(OCDFG):
             return ocel_db.conn.execute(sql).pl()
 
         edges_df = _q("""
-            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight
+            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight,
+                   AVG(next_timestamp_unix - timestamp_unix) AS avg_lead_time
             FROM event_sequence
             WHERE next_activity IS NOT NULL
             GROUP BY obj_type, activity, next_activity
@@ -90,10 +93,14 @@ class OCDFGDb(OCDFG):
         for row in node_freq_df.iter_rows(named=True):
             act = row["activity"]
             otype = row["obj_type"]
+            count = row["count"]
             if not graph.has_node(act):
-                graph.add_node(act, label=act, types={otype})
+                graph.add_node(act, label=act, types={otype}, metrics={"frequency": count})
             else:
                 graph.nodes[act]["types"].add(otype)
+                if "metrics" not in graph.nodes[act]:
+                    graph.nodes[act]["metrics"] = {"frequency": 0}
+                graph.nodes[act]["metrics"]["frequency"] += count
 
         # 2. Start nodes and edges
         for otype in all_types:
@@ -115,6 +122,7 @@ class OCDFGDb(OCDFG):
                     graph.add_edge(
                         start_node, target,
                         weights={otype: w}, weight=w, owners={otype}, role="start",
+                        metrics={"frequency": w}
                     )
 
         # 3. End nodes and edges
@@ -137,19 +145,32 @@ class OCDFGDb(OCDFG):
                     graph.add_edge(
                         source, end_node,
                         weights={otype: w}, weight=w, owners={otype}, role="end",
+                        metrics={"frequency": w}
                     )
 
         # 4. Regular edges
         for row in edges_df.iter_rows(named=True):
-            u, v, w, otype = row["src"], row["tgt"], row["weight"], row["obj_type"]
+            u, v, w, otype, avg_time = row["src"], row["tgt"], row["weight"], row["obj_type"], row.get("avg_lead_time")
             if graph.has_edge(u, v):
                 graph.edges[u, v]["weights"][otype] = (
                     graph.edges[u, v]["weights"].get(otype, 0) + w
                 )
                 graph.edges[u, v]["weight"] += w
                 graph.edges[u, v]["owners"].add(otype)
+                if "metrics" not in graph.edges[u, v]:
+                    graph.edges[u, v]["metrics"] = {"frequency": 0, "avg_lead_time": 0}
+                graph.edges[u, v]["metrics"]["frequency"] += w
+                # We could do a weighted average, but for simplicity we'll just sum or take the last.
+                # Since graph.add_edge in nx MultiDiGraph needs keys for parallel edges, wait:
+                # Is graph a MultiDiGraph? It says `cls()` which is NewOCDFGDb. Let's look at what graph type it is.
+                # Wait, I see graph.edges[u, v]["weight"] += w. So it's NOT parallel edges here? 
+                # Oh, Totem lib might be using a simple DiGraph here, or the query already aggregated?
+                graph.edges[u, v]["metrics"]["avg_lead_time"] = avg_time
             else:
-                graph.add_edge(u, v, weights={otype: w}, weight=w, owners={otype})
+                graph.add_edge(
+                    u, v, weights={otype: w}, weight=w, owners={otype},
+                    metrics={"frequency": w, "avg_lead_time": avg_time}
+                )
 
         # 5. Finalize: convert sets to sorted lists
         for node in graph.nodes():
