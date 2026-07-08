@@ -43,6 +43,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Stepper,
+  StepperItem,
+  StepperNav,
+  StepperTrigger,
+  StepperIndicator,
+  StepperSeparator,
+  StepperTitle,
+} from "@/components/ui/stepper";
 
 /** Collapsible card wrapper: shows title + description when collapsed. */
 const CollapsibleSection: React.FC<{
@@ -123,7 +132,69 @@ const StepProgress: React.FC<{ steps: string[]; active: number }> = ({ steps, ac
   </Card>
 );
 
-// Render a unix timestamp (seconds, UTC) as a `yyyy-MM-ddTHH:mm` string 
+/**
+ * Wizard-style step indicator across the top of the dashboard.
+ * Maps the current simulation `phase` onto discrete steps (Basics -> Details ->
+ * Results). **/
+
+const SimulationStepper: React.FC<{
+  phase: Phase;
+  mode: SimulationMode;
+  onGoConfigure: () => void;
+  onGoDetails: () => void;
+}> = ({ phase, mode, onGoConfigure, onGoDetails }) => {
+  const steps: { key: string; title: string }[] =
+    mode === "advanced"
+      ? [
+          { key: "configure", title: "Basics" },
+          { key: "results", title: "Results" },
+        ]
+      : [
+          { key: "configure", title: "Basics" },
+          { key: "details", title: "Details" },
+          { key: "results", title: "Results" },
+        ];
+
+  // "running" is a transient state that belongs to the final (Results) step.
+  const phaseKey = phase === "running" ? "results" : phase;
+  const activeIdx = steps.findIndex((s) => s.key === phaseKey);
+  const activeStep = (activeIdx < 0 ? 0 : activeIdx) + 1;
+
+  const handleValueChange = (step: number) => {
+    const target = steps[step - 1];
+    if (!target) return;
+    if (target.key === "configure") onGoConfigure();
+    else if (target.key === "details") onGoDetails();
+  };
+
+  return (
+    <Stepper value={activeStep} onValueChange={handleValueChange} className="mb-2">
+      <StepperNav className="gap-3">
+        {steps.map((step, idx) => {
+          const stepNumber = idx + 1;
+          return (
+            <StepperItem
+              key={step.key}
+              step={stepNumber}
+              loading={phase === "running" && stepNumber === activeStep}
+              // Only completed steps (before the active one) are navigable.
+              disabled={phase === "running" || stepNumber > activeStep}
+              className="not-last:flex-1"
+            >
+              <StepperTrigger className="gap-2.5">
+                <StepperIndicator>{stepNumber}</StepperIndicator>
+                <StepperTitle>{step.title}</StepperTitle>
+              </StepperTrigger>
+              {idx < steps.length - 1 && <StepperSeparator />}
+            </StepperItem>
+          );
+        })}
+      </StepperNav>
+    </Stepper>
+  );
+};
+
+// Render a unix timestamp (seconds, UTC) as a `yyyy-MM-ddTHH:mm` string
 const unixToDatetimeLocal = (unix: number): string => {
   const d = new Date(unix * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -638,6 +709,14 @@ export const SimulationDashboard: React.FC = () => {
           </Button>
         )}
       </div>
+
+      {/* Wizard step indicator */}
+      <SimulationStepper
+        phase={phase}
+        mode={mode}
+        onGoConfigure={() => { setPhase("configure"); setDetails(null); }}
+        onGoDetails={() => setPhase("details")}
+      />
 
       {/* Mode Selection */}
       {phase === "configure" && (
