@@ -2866,7 +2866,7 @@ def get_simulation_details(request):
         arrival_dist = compute_variant_arrival_distribution(filtered_ocel, variants)
 
         # Compute resource distribution
-        res_dist = resource_distribution_of_variants(filtered_ocel, variants)
+        res_dist = resource_distribution_of_variants(filtered_ocel, variants, ocel.obj_type_map)
 
         # Compute constraints
         constraints = generate_resource_constraints(
@@ -2943,7 +2943,7 @@ def get_simulation_details(request):
         if resource_types:
             try:
                 type_cals, res_cals = discover_resource_calendars(
-                    filtered_ocel, resource_types, activities
+                    filtered_ocel, resource_types, activities, ocel.obj_type_map
                 )
                 for rtype, cal in type_cals.items():
                     serialized_type_calendars[rtype] = cal.probability
@@ -3028,7 +3028,7 @@ def get_resource_calendars(request):
 
         # Discover calendars
         type_calendars, resource_calendars = discover_resource_calendars(
-            filtered_ocel, resource_types, activities
+            filtered_ocel, resource_types, activities, ocel.obj_type_map
         )
 
         # Serialize type calendars

@@ -63,6 +63,7 @@ def discover_resource_calendars(
     ocel,
     resource_types: list[str],
     activities: list[str],
+    obj_type_map: dict[str, str] | None = None,
 ) -> tuple[dict[str, ResourceCalendar], dict[str, ResourceCalendar]]:
     """
     Discovers probabilistic resource calendars from an Object-Centric Event Log.
@@ -81,6 +82,11 @@ def discover_resource_calendars(
         ocel: ObjectCentricEventLog (filtered, with process_area_resources in _attributes)
         resource_types: Object types to treat as resources
         activities: Activity names to consider
+        obj_type_map: Optional object-ID -> object-type map. Required when ``ocel``
+            is a filtered log: ``filter_by_process_area`` drops the resource objects
+            from the objects DataFrame, so ``ocel.obj_type_map`` can no longer resolve
+            the resource IDs stored in ``process_area_resources``. Pass the *unfiltered*
+            log's ``obj_type_map`` here. Defaults to ``ocel.obj_type_map``.
 
     Returns:
         (type_calendars, resource_calendars) where:
@@ -94,7 +100,8 @@ def discover_resource_calendars(
         return {}, {}
 
     sorted_events = ocel.events.sort("_timestampUnix")
-    obj_type_map = ocel.obj_type_map
+    if obj_type_map is None:
+        obj_type_map = ocel.obj_type_map
 
     # Collect active weeks per resource type AND per individual resource ID
     # active_weeks_by_type[resource_type][weekday][hour] = set of (year, iso_week)
@@ -145,14 +152,14 @@ def discover_resource_calendars(
     total_weeks = len(all_weeks)
     if total_weeks == 0:
         return (
-            {rt: ResourceCalendar(rt) for rt in resource_types},
+            {rt: ResourceCalendar(rt, "type") for rt in resource_types},
             {},
         )
 
     # Build per-type calendars
     type_calendars = {}
     for rtype in resource_types:
-        cal = ResourceCalendar(rtype)
+        cal = ResourceCalendar(rtype, "type")
         for day in WEEKDAYS:
             for h in range(HOURS_PER_DAY):
                 n_active = len(active_weeks_by_type[rtype][day][h])
@@ -162,7 +169,7 @@ def discover_resource_calendars(
     # Build per-resource calendars
     resource_calendars = {}
     for rid, weeks_data in active_weeks_by_rid.items():
-        cal = ResourceCalendar(rid)
+        cal = ResourceCalendar(rid, "resource")
         for day in WEEKDAYS:
             for h in range(HOURS_PER_DAY):
                 n_active = len(weeks_data[day][h])
