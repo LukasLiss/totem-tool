@@ -16,6 +16,7 @@ from totem_lib.simulation.utils.basic_simulation_statistics import (
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     variant_arrival_distribution as compute_variant_arrival_distribution,
 )
+from totem_lib.simulation.utils.resource_calendar import availability_probability
 from totem_lib.simulation.utils.resource_constraints import (
     generate_resource_constraints,
 )
@@ -274,6 +275,44 @@ def _earliest_future_ready(inst, tick, activity_delays):
         if ra > tick and (earliest is None or ra < earliest):
             earliest = ra
     return earliest
+
+
+class _CalendarGate:
+    """Decides whether a resource instance is available at a given tick.
+
+    Resources are gated by a probabilistic calendar: for each (resource, clock
+    hour) the on/off decision is drawn once (Bernoulli with the calendar's
+    probability for that weekday/hour) and cached for the whole hour, so a
+    resource does not flicker within an hour. An individual resource calendar
+    takes precedence over its type calendar; with neither, the resource is always
+    available.
+    
+    Calendars are the serialized ``{id: {weekday: [24 floats]}}`` probability
+    matrices (``ResourceCalendar.probability``).
+    """
+
+    def __init__(self, type_calendars, resource_calendars):
+        self.type_cals = type_calendars or {}
+        self.res_cals = resource_calendars or {}
+        self.active = bool(self.type_cals or self.res_cals)
+        self._shift: dict[str, tuple[int, bool]] = {}
+
+    def is_available(self, rid, res_type, hour_index, timestamp_s) -> bool:
+        if not self.active:
+            return True
+        cached = self._shift.get(rid)
+        if cached is not None and cached[0] == hour_index:
+            return cached[1]
+        calendar = self.res_cals.get(rid) or self.type_cals.get(res_type)
+        p = availability_probability(calendar, timestamp_s) if calendar else 1.0
+        if p >= 1.0:
+            value = True
+        elif p <= 0.0:
+            value = False
+        else:
+            value = random.random() < p
+        self._shift[rid] = (hour_index, value)
+        return value
 
 
 def _select_by_strategy(available_rids, strategy):
@@ -605,6 +644,8 @@ class OCProcessAreaSimulationModel:
         simulation_config,
         source_log_start_unix,
         activity_delays=None,
+        type_calendars=None,
+        resource_calendars=None,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
@@ -615,6 +656,8 @@ class OCProcessAreaSimulationModel:
         self.simulation_config = simulation_config
         self.source_log_start_unix = source_log_start_unix
         self.activity_delays = activity_delays or {}
+        self.type_calendars = type_calendars or {}
+        self.resource_calendars = resource_calendars or {}
 
     def run(
         self,
@@ -836,6 +879,12 @@ class VariantPlayoutStrategy:
         )
         simulation_config = simulation_model.simulation_config
 
+        # Calendar-based resource availability gating
+        calendar_gate = _CalendarGate(
+            simulation_model.type_calendars, simulation_model.resource_calendars
+        )
+        base_ts = int(start_datetime.timestamp())
+
         activity_delays = simulation_model.activity_delays or {}
         model_durations = bool(
             simulation_config.model_activity_durations and activity_delays
@@ -944,15 +993,19 @@ class VariantPlayoutStrategy:
                     resource_queues[res_type].append(res_id)
             blocked_resources -= freed
 
+            # Current clock hour, used for calendar-based shift gating.
+            hour_ts = base_ts + tick
+            hour_index = hour_ts // 3600
+
             # Phase C: Try executing enabled activities for each active instance.
-            # Only instances that are due this tick are examined; 
+            # Only instances that are due this tick are examined;
             next_active = []
             due_instances = []
             for inst in active_executions:
                 if inst["next_wake"] <= tick:
                     due_instances.append(inst)
                 else:
-                    next_active.append(inst)  
+                    next_active.append(inst)
             # Reshuffle instances to avoid FIFO bias
             random.shuffle(due_instances)
             for inst in due_instances:
@@ -1005,10 +1058,24 @@ class VariantPlayoutStrategy:
                                 needed_res_types[res_type] = n
                         needed_res_cache[node] = needed_res_types
 
+                    # Restrict to resources available this hour (calendar gating);
+                    # falls back to the full free pool when no calendars are set.
+                    if calendar_gate.active:
+                        available_queues = {
+                            t: [
+                                rid
+                                for rid in resource_queues.get(t, ())
+                                if calendar_gate.on_shift(rid, t, hour_index, hour_ts)
+                            ]
+                            for t in needed_res_types
+                        }
+                    else:
+                        available_queues = resource_queues
+
                     # Cheap availability pre-check: skip the full constraint
                     # allocation when a needed type plainly lacks free units
                     if any(
-                        len(resource_queues.get(t, ())) < cnt
+                        len(available_queues.get(t, ())) < cnt
                         for t, cnt in needed_res_types.items()
                     ):
                         resource_blocked = True
@@ -1019,7 +1086,7 @@ class VariantPlayoutStrategy:
                         activity,
                         variant_constraints,
                         inst["simulated_events"],
-                        resource_queues,
+                        available_queues,
                         resource_id_type_map,
                         allocation_strategy,
                         needed_res_types,
@@ -1137,6 +1204,11 @@ class VariantPlayoutStrategy:
                                 nf if nf is not None else sim_duration_s + tick_size_s
                             )
                             wake = cand if wake is None else min(wake, cand)
+                            if calendar_gate.active:
+                                next_hour = (hour_index + 1) * 3600 - base_ts
+                                wake = (
+                                    next_hour if wake is None else min(wake, next_hour)
+                                )
                         inst["next_wake"] = (
                             wake if wake is not None else tick + tick_size_s
                         )
@@ -1145,7 +1217,7 @@ class VariantPlayoutStrategy:
             active_executions = next_active
 
             # --- Advance the clock ---
-            # Jump to the earliest tick where something can actually happen: 
+            # Jump to the earliest tick where something can actually happen:
             if tick >= sim_duration_s:
                 break
             candidates = []
