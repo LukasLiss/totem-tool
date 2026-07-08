@@ -1065,7 +1065,7 @@ class VariantPlayoutStrategy:
                             t: [
                                 rid
                                 for rid in resource_queues.get(t, ())
-                                if calendar_gate.on_shift(rid, t, hour_index, hour_ts)
+                                if calendar_gate.is_available(rid, t, hour_index, hour_ts)
                             ]
                             for t in needed_res_types
                         }
