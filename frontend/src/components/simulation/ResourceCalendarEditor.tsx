@@ -1,44 +1,77 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import { CalendarProbability } from "@/api/simulationApi";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const CHART_BLUE = "var(--chart-2, #2d62ef)";
+const EMPTY_CELL = "rgb(243, 244, 246)";
 
 type Props = {
   resourcePool: Record<string, number>;
   typeCalendars: Record<string, CalendarProbability>;
   resourceCalendars: Record<string, CalendarProbability>;
-  /** Original discovered probability calendars (before user edits) for reference display */
+  /** Discovered probability calendars per type (heatmap background / reset target). */
   discoveredTypeCalendars?: Record<string, CalendarProbability>;
+  /** Discovered probability calendars per individual resource id. */
+  discoveredResourceCalendars?: Record<string, CalendarProbability>;
   onTypeCalendarUpdate: (resourceType: string, weekday: string, hours: number[]) => void;
   onResourceCalendarUpdate: (resourceId: string, weekday: string, hours: number[]) => void;
 };
-
-/** Extract contiguous working-hours range from a 24-element array. */
-function getWorkingRange(hours: number[]): [number, number] {
-  let start = -1;
-  let end = -1;
-  for (let h = 0; h < 24; h++) {
-    if (hours[h] > 0) {
-      if (start === -1) start = h;
-      end = h + 1;
-    }
-  }
-  return start === -1 ? [0, 0] : [start, end];
-}
 
 /** Build a 24-element array with 1.0 in [start, end) and 0 elsewhere. */
 function rangeToHours(start: number, end: number): number[] {
   return Array.from({ length: 24 }, (_, h) => (h >= start && h < end ? 1 : 0));
 }
 
-function formatHour(h: number): string {
-  return `${h.toString().padStart(2, "0")}:00`;
+/** Contiguous [start, end) segments of "on" (value > 0) hours. */
+function hoursToSegments(hours: number[]): [number, number][] {
+  const segments: [number, number][] = [];
+  let start = -1;
+  for (let h = 0; h < 24; h++) {
+    if (hours[h] > 0) {
+      if (start === -1) start = h;
+    } else if (start !== -1) {
+      segments.push([start, h]);
+      start = -1;
+    }
+  }
+  if (start !== -1) segments.push([start, 24]);
+  return segments;
+}
+
+function formatSegments(hours: number[]): string {
+  return hoursToSegments(hours)
+    .map(([s, e]) => `${s}–${e}`)
+    .join(", ");
+}
+
+function countHours(hours: number[]): number {
+  return hours.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
+}
+
+function arraysEqual(a?: number[], b?: number[]): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** Mean of `probs` over the hours flagged "on" in `mask`; null if none. */
+function meanOverMask(probs: number[] | undefined, mask: (h: number) => boolean): number | null {
+  if (!probs) return null;
+  let sum = 0;
+  let n = 0;
+  for (let h = 0; h < 24; h++) {
+    if (mask(h)) {
+      sum += probs[h] || 0;
+      n++;
+    }
+  }
+  return n === 0 ? null : sum / n;
 }
 
 export const ResourceCalendarEditor: React.FC<Props> = ({
@@ -46,6 +79,7 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   typeCalendars,
   resourceCalendars,
   discoveredTypeCalendars,
+  discoveredResourceCalendars,
   onTypeCalendarUpdate,
   onResourceCalendarUpdate,
 }) => {
@@ -58,18 +92,23 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
 
   const currentCalendar = selectedType ? typeCalendars[selectedType] : null;
   const discoveredCalendar = selectedType ? discoveredTypeCalendars?.[selectedType] : undefined;
-  const isDefaultCalendar = selectedType && (!discoveredCalendar || !hasNonTrivialData(discoveredCalendar));
+  const hasDiscovered = !!discoveredCalendar && hasNonTrivialData(discoveredCalendar);
   const resourceCount = selectedType ? (resourcePool[selectedType] || 0) : 0;
   const individualResourceIds = Array.from({ length: resourceCount }, (_, i) => `${selectedType}_${i + 1}`);
 
   const currentResourceCalendar = selectedResourceId ? resourceCalendars[selectedResourceId] : null;
+  const discoveredResourceCalendar = selectedResourceId
+    ? discoveredResourceCalendars?.[selectedResourceId]
+    : undefined;
 
   return (
     <Card>
       <CardHeader><CardTitle>Resource Calendar</CardTitle></CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Set working hours for each resource type. Individual resources inherit the type schedule unless overridden.
+          The colored background shows the <strong>discovered per-hour availability</strong> from the
+          event log — an untouched calendar keeps these probabilities and the simulation uses them
+          directly. Click or drag across the hours to pin fixed working times (always available). Reset (↺) restores the discovered probabilities.
         </p>
 
         {/* Resource Type selector */}
@@ -95,25 +134,16 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
             <p className="text-xs font-medium">
               Working hours for <strong>{selectedType}</strong>:
             </p>
-            {isDefaultCalendar && (
+            {!hasDiscovered && (
               <p className="text-xs text-yellow-600 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
                 No calendar data discovered from event log — using default (Mon–Fri 08:00–17:00).
               </p>
             )}
             <WeeklySchedule
               calendar={currentCalendar}
+              discovered={discoveredCalendar}
               onChange={(weekday, hours) => onTypeCalendarUpdate(selectedType, weekday, hours)}
             />
-
-            {/* Discovered probability heatmap if available */}
-            {discoveredCalendar && hasNonTrivialData(discoveredCalendar) ? (
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Discovered availability (from event log):</p>
-                <CalendarHeatmap calendar={discoveredCalendar} showProbabilities />
-              </div>
-            ) : (
-              <CalendarHeatmap calendar={currentCalendar} />
-            )}
           </div>
         )}
 
@@ -160,9 +190,9 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
                     </p>
                     <WeeklySchedule
                       calendar={currentResourceCalendar}
+                      discovered={discoveredResourceCalendar}
                       onChange={(weekday, hours) => onResourceCalendarUpdate(selectedResourceId, weekday, hours)}
                     />
-                    <CalendarHeatmap calendar={currentResourceCalendar} />
                   </>
                 ) : (
                   <div>
@@ -203,91 +233,29 @@ function hasNonTrivialData(cal: CalendarProbability): boolean {
   return false;
 }
 
-/** Weekly schedule editor: one row per weekday with a time-range slider. */
+/**
+ * Weekly schedule: one row per weekday. Each row shows a heatmap of the discovered
+ * per-hour availability; clicking/dragging across the hours paints fixed working
+ * times (binary), which allows arbitrary patterns including split shifts.
+ */
 const WeeklySchedule: React.FC<{
   calendar: CalendarProbability;
+  discovered?: CalendarProbability;
   onChange: (weekday: string, hours: number[]) => void;
-}> = ({ calendar, onChange }) => (
-  <div className="space-y-2">
-    {WEEKDAYS.map((day) => {
-      const hours = calendar[day] || Array(24).fill(0);
-      const [start, end] = getWorkingRange(hours);
-      const isActive = start !== end;
-
-      return (
-        <div key={day} className="flex items-center gap-2">
-          <button
-            className={`w-10 text-xs text-left font-medium transition-colors ${
-              isActive ? "" : "text-muted-foreground line-through"
-            }`}
-            onClick={() => {
-              if (isActive) {
-                onChange(day, Array(24).fill(0));
-              } else {
-                onChange(day, rangeToHours(8, 17));
-              }
-            }}
-            title={isActive ? "Click to set day off" : "Click to enable (8:00-17:00)"}
-          >
-            {day.slice(0, 3)}
-          </button>
-
-          <span className="text-[10px] text-muted-foreground w-10 text-right">
-            {isActive ? formatHour(start) : ""}
-          </span>
-          <Slider
-            value={isActive ? [start, end] : [0, 0]}
-            onValueChange={([newStart, newEnd]) => {
-              if (newStart === newEnd) {
-                onChange(day, Array(24).fill(0));
-              } else {
-                onChange(day, rangeToHours(newStart, newEnd));
-              }
-            }}
-            min={0}
-            max={24}
-            step={1}
-            className="flex-1"
-          />
-          <span className="text-[10px] text-muted-foreground w-10">
-            {isActive ? formatHour(end) : ""}
-          </span>
-          <span className="text-[10px] text-muted-foreground w-8 text-right">
-            {isActive ? `${end - start}h` : "off"}
-          </span>
-        </div>
-      );
-    })}
-  </div>
-);
-
-/** Compact heatmap: 7 days x 24 hours grid. */
-const CalendarHeatmap: React.FC<{
-  calendar: CalendarProbability;
-  showProbabilities?: boolean;
-}> = ({ calendar, showProbabilities }) => (
-  <div className="space-y-0.5">
+}> = ({ calendar, discovered, onChange }) => (
+  <div className="space-y-1.5">
     {WEEKDAYS.map((day) => (
-      <div key={day} className="flex items-center gap-1">
-        <span className="text-[9px] w-5 text-muted-foreground">{day.slice(0, 2)}</span>
-        <div className="flex-1 flex gap-px">
-          {(calendar[day] || HOURS.map(() => 0)).map((val, h) => (
-            <div
-              key={h}
-              className="flex-1 h-3 rounded-sm"
-              style={{
-                backgroundColor: val > 0
-                  ? `color-mix(in srgb, ${CHART_BLUE} ${Math.round(Math.max(20, val * 100))}%, transparent)`
-                  : "rgb(240, 240, 240)",
-              }}
-              title={`${day} ${h}:00 – ${showProbabilities ? `${(val * 100).toFixed(0)}% availability` : val > 0 ? "working" : "off"}`}
-            />
-          ))}
-        </div>
-      </div>
+      <DayScheduleRow
+        key={day}
+        day={day}
+        current={calendar[day] || Array(24).fill(0)}
+        discovered={discovered?.[day]}
+        onChange={(hours) => onChange(day, hours)}
+      />
     ))}
-    <div className="flex items-center gap-1">
-      <span className="w-5" />
+    {/* Hour axis */}
+    <div className="flex items-center gap-2 pt-0.5">
+      <span className="w-8" />
       <div className="flex-1 flex">
         {HOURS.map((h) => (
           <div key={h} className="flex-1 text-center text-[8px] text-muted-foreground">
@@ -295,8 +263,132 @@ const CalendarHeatmap: React.FC<{
           </div>
         ))}
       </div>
+      <span className="w-[5.5rem]" />
+      <span className="w-4" />
     </div>
   </div>
 );
+
+const DayScheduleRow: React.FC<{
+  day: string;
+  current: number[];
+  discovered?: number[];
+  onChange: (hours: number[]) => void;
+}> = ({ day, current, discovered, onChange }) => {
+  const hasDiscovered = !!discovered && discovered.some((v) => v > 0);
+  // A day is "manual" (fixed binary hours) once it diverges from the discovered
+  // probabilities, or whenever there is no discovered reference to fall back to.
+  const isManual = !hasDiscovered || !arraysEqual(current, discovered);
+
+  // Active drag state: the value being painted (1 = on, 0 = off) and the working
+  // array. Editing an untouched (auto) day starts from an empty schedule.
+  const paint = useRef<{ value: number; arr: number[] } | null>(null);
+
+  useEffect(() => {
+    const stop = () => {
+      paint.current = null;
+    };
+    window.addEventListener("pointerup", stop);
+    return () => window.removeEventListener("pointerup", stop);
+  }, []);
+
+  const beginPaint = (h: number) => {
+    const arr = isManual ? [...current] : Array(24).fill(0);
+    const value = isManual && current[h] > 0 ? 0 : 1;
+    arr[h] = value;
+    paint.current = { value, arr };
+    onChange([...arr]);
+  };
+
+  const extendPaint = (h: number) => {
+    const p = paint.current;
+    if (!p || p.arr[h] === p.value) return;
+    p.arr[h] = p.value;
+    onChange([...p.arr]);
+  };
+
+  const selected = (h: number) => isManual && current[h] > 0;
+  const mean = meanOverMask(
+    hasDiscovered ? discovered : undefined,
+    isManual ? (h) => current[h] > 0 : (h) => (discovered?.[h] || 0) > 0
+  );
+  const meanLabel = mean === null ? "" : `${Math.round(mean * 100)}%`;
+
+  const totalHours = countHours(current);
+  const rightLabel = !isManual
+    ? "probabilistic"
+    : totalHours === 0
+      ? "off"
+      : formatSegments(current);
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        className={`w-8 text-xs text-left font-medium transition-colors ${
+          isManual && totalHours === 0 ? "text-muted-foreground line-through" : ""
+        }`}
+        onClick={() => onChange(isManual && totalHours > 0 ? Array(24).fill(0) : rangeToHours(8, 17))}
+        title={isManual && totalHours > 0 ? "Set day off" : "Enable (08:00–17:00)"}
+      >
+        {day.slice(0, 3)}
+      </button>
+
+      {/* Paintable hour cells over the discovered-availability heatmap */}
+      <div className="flex-1 h-6 flex gap-px rounded-sm overflow-hidden select-none touch-none">
+        {HOURS.map((h) => {
+          const val = discovered?.[h] || 0;
+          const isSel = selected(h);
+          const bg = isSel
+            ? `color-mix(in srgb, ${CHART_BLUE} 80%, transparent)`
+            : isManual
+              ? val > 0
+                ? `color-mix(in srgb, ${CHART_BLUE} ${Math.round(Math.max(6, val * 35))}%, transparent)`
+                : EMPTY_CELL
+              : val > 0
+                ? `color-mix(in srgb, ${CHART_BLUE} ${Math.round(Math.max(12, val * 100))}%, transparent)`
+                : EMPTY_CELL;
+          return (
+            <div
+              key={h}
+              className="flex-1 h-full cursor-pointer"
+              style={{ backgroundColor: bg }}
+              title={
+                hasDiscovered
+                  ? `${day} ${h}:00 – ${(val * 100).toFixed(0)}% available${isSel ? " · working" : ""}`
+                  : `${day} ${h}:00${isSel ? " · working" : ""}`
+              }
+              onPointerDown={(e) => {
+                e.preventDefault();
+                beginPaint(h);
+              }}
+              onPointerEnter={(e) => {
+                if (e.buttons & 1) extendPaint(h);
+              }}
+            />
+          );
+        })}
+      </div>
+
+      <span className="w-[5.5rem] text-[10px] text-right text-muted-foreground tabular-nums truncate" title={rightLabel}>
+        {rightLabel}
+      </span>
+      <span className="w-4 flex items-center justify-center">
+        {isManual && hasDiscovered ? (
+          <button
+            className="text-[11px] text-muted-foreground hover:text-foreground leading-none"
+            onClick={() => onChange([...(discovered as number[])])}
+            title="Reset to discovered probabilities"
+          >
+            ↺
+          </button>
+        ) : meanLabel ? (
+          <span className="text-[9px] text-muted-foreground tabular-nums" title="Avg. discovered availability">
+            {meanLabel}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+};
 
 export default ResourceCalendarEditor;

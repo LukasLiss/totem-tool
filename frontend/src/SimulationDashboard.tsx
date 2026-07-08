@@ -169,6 +169,7 @@ export const SimulationDashboard: React.FC = () => {
   const [typeCalendars, setTypeCalendars] = useState<Record<string, CalendarProbability>>({});
   const [resourceCalendars, setResourceCalendars] = useState<Record<string, CalendarProbability>>({});
   const [discoveredTypeCalendars, setDiscoveredTypeCalendars] = useState<Record<string, CalendarProbability>>({});
+  const [discoveredResourceCalendars, setDiscoveredResourceCalendars] = useState<Record<string, CalendarProbability>>({});
 
   // Cooldowns and allocation strategy
   const [cooldowns, setCooldowns] = useState<CooldownDistribution>({});
@@ -228,6 +229,7 @@ export const SimulationDashboard: React.FC = () => {
     setTypeCalendars({});
     setResourceCalendars({});
     setDiscoveredTypeCalendars({});
+    setDiscoveredResourceCalendars({});
     setCooldowns({});
     setAllocationStrategy({});
     setPhase("configure");
@@ -401,32 +403,34 @@ export const SimulationDashboard: React.FC = () => {
       });
       setEditedConstraints(initialConstraints);
 
-      // Store raw discovered calendars for reference display
+      // Store raw discovered calendars for reference display (heatmap background)
       setDiscoveredTypeCalendars(data.type_calendars || {});
+      setDiscoveredResourceCalendars(data.resource_calendars || {});
 
-      // Initialize editable calendars: convert discovered probabilities to working-hour ranges
-      const PROB_THRESHOLD = 0.3;
+      // Initialize the editable calendars from the discovered probabilities:
+      // Types without any discovered data fall back to a plain Mon–Fri 08:00–17:00 default.
+      const WEEK = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
       const defaultWeekdayHours = Array.from({ length: 24 }, (_, h) => (h >= 8 && h < 17 ? 1 : 0));
       const defaultWeekendHours = Array(24).fill(0);
+      const cloneCalendar = (src: CalendarProbability): CalendarProbability => {
+        const out: CalendarProbability = {};
+        for (const day of WEEK) out[day] = [...(src[day] || Array(24).fill(0))];
+        return out;
+      };
+      const hasData = (cal?: CalendarProbability) =>
+        !!cal && WEEK.some((d) => (cal[d] || []).some((v) => v > 0));
+
       const mergedTypeCalendars: Record<string, CalendarProbability> = {};
       for (const rt of resourceTypes) {
         const discovered = data.type_calendars?.[rt];
-        if (discovered) {
-          // Convert probabilities to binary working hours using threshold
-          const converted: CalendarProbability = {};
-          for (const day of ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]) {
-            const probs = discovered[day] || Array(24).fill(0);
-            converted[day] = probs.map((p) => (p >= PROB_THRESHOLD ? 1 : 0));
-          }
-          mergedTypeCalendars[rt] = converted;
-        } else {
-          mergedTypeCalendars[rt] = {
-            Monday: [...defaultWeekdayHours], Tuesday: [...defaultWeekdayHours],
-            Wednesday: [...defaultWeekdayHours], Thursday: [...defaultWeekdayHours],
-            Friday: [...defaultWeekdayHours], Saturday: [...defaultWeekendHours],
-            Sunday: [...defaultWeekendHours],
-          };
-        }
+        mergedTypeCalendars[rt] = hasData(discovered)
+          ? cloneCalendar(discovered!)
+          : {
+              Monday: [...defaultWeekdayHours], Tuesday: [...defaultWeekdayHours],
+              Wednesday: [...defaultWeekdayHours], Thursday: [...defaultWeekdayHours],
+              Friday: [...defaultWeekdayHours], Saturday: [...defaultWeekendHours],
+              Sunday: [...defaultWeekendHours],
+            };
       }
       setTypeCalendars(mergedTypeCalendars);
       setResourceCalendars(data.resource_calendars || {});
@@ -982,6 +986,7 @@ export const SimulationDashboard: React.FC = () => {
               typeCalendars={typeCalendars}
               resourceCalendars={resourceCalendars}
               discoveredTypeCalendars={discoveredTypeCalendars}
+              discoveredResourceCalendars={discoveredResourceCalendars}
               onTypeCalendarUpdate={(resourceType, weekday, hours) => {
                 setTypeCalendars((prev) => ({
                   ...prev,
