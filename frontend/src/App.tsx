@@ -14,6 +14,8 @@ import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { setBypassCache } from "./interceptors/axios";
+import { getUserSettings } from "./api/settingsApi";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -74,6 +76,19 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
       cancelled = true;
     };
   }, []);
+
+  // Seed the global cache-bypass flag from the user's saved setting once we're
+  // authenticated. Guarded on an access token so we don't fire (and trigger a
+  // login redirect) on the pre-auth title/login screens.
+  useEffect(() => {
+    if (!ready) return;
+    if (!localStorage.getItem("access_token")) return;
+    getUserSettings()
+      .then((s) => setBypassCache(s.bypass_cache))
+      .catch(() => {
+        /* not logged in yet or settings unavailable — leave bypass off */
+      });
+  }, [ready]);
 
   if (!ready) {
     return (
