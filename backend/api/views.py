@@ -3019,7 +3019,7 @@ def get_simulation_details(request):
         if resource_types:
             try:
                 type_cals = discover_resource_calendars(
-                    filtered_ocel, resource_types, activities, ocel.obj_type_map
+                    ocel, resource_types, ocel.obj_type_map
                 )
                 for rtype, cal in type_cals.items():
                     serialized_type_calendars[rtype] = cal.probability
@@ -3056,21 +3056,17 @@ def get_simulation_details(request):
 @permission_classes([IsAuthenticated])
 def get_resource_calendars(request):
     """
-    Discover resource calendars for the given process area and resource types.
+    Discover resource calendars for the given resource types.
 
     Expected JSON body:
     {
         "file_id": int,
-        "object_types": ["Type1", "Type2"],
-        "activities": ["Act1", "Act2"],
         "resource_types": ["ResourceType1", "ResourceType2"]
     }
 
     Returns per-type calendars as probability matrices (weekday x hour).
     """
     file_id = request.data.get("file_id")
-    object_types = request.data.get("object_types", [])
-    activities = request.data.get("activities", [])
     resource_types = request.data.get("resource_types", [])
 
     if not file_id:
@@ -3094,15 +3090,9 @@ def get_resource_calendars(request):
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     try:
-        # Filter OCEL by process area
-        process_area = ProcessArea(object_types=object_types, activities=activities)
-        totem = totemDiscovery(ocel)
-        mlpa = mlpaDiscovery(totem)
-        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
-
         # Discover per-type calendars
         type_calendars = discover_resource_calendars(
-            filtered_ocel, resource_types, activities, ocel.obj_type_map
+            ocel, resource_types, ocel.obj_type_map
         )
 
         # Serialize type calendars

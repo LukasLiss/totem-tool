@@ -1,5 +1,4 @@
 import datetime as dt
-import json
 import random
 
 WEEKDAYS = [
@@ -83,12 +82,15 @@ class ResourceCalendar:
 def discover_resource_calendars(
     ocel,
     resource_types: list[str],
-    activities: list[str],
     obj_type_map: dict[str, str] | None = None,
 ) -> dict[str, ResourceCalendar]:
     """
     Discovers a probabilistic availability calendar per resource type from an OCEL.
 
+    Availability is a property of the resource itself, not of any single process
+    area, so it is measured across **all activities** in which the resource takes
+    part
+    
     For each (weekday, hour) slot the type calendar is the **average** availability
     across the type's resources:
         P_type(slot) = (sum_r  weeks r was active at slot) / (num_resources * total_weeks)
@@ -96,19 +98,15 @@ def discover_resource_calendars(
     A type whose resources are each present half the weeks reads ~0.5.
 
     Args:
-        ocel: ObjectCentricEventLog (filtered, with process_area_resources in _attributes)
-        resource_types: Object types to treat as resources
-        activities: Activity names to consider
-        obj_type_map: Optional object-ID -> object-type map. Required when ``ocel``
-            is a filtered log: ``filter_by_process_area`` drops the resource objects
-            from the objects DataFrame, so ``ocel.obj_type_map`` can no longer resolve
-            the resource IDs stored in ``process_area_resources``. Pass the *unfiltered*
-            log's ``obj_type_map`` here. Defaults to ``ocel.obj_type_map``.
+        ocel: Unfiltered ObjectCentricEventLog. Resources are identified from each
+            event's ``_objects`` by type, across every activity.
+        resource_types: Object types to treat as resources.
+        obj_type_map: Optional object-ID -> object-type map. Defaults to
+            ``ocel.obj_type_map``.
 
     Returns:
         dict mapping resource_type -> ResourceCalendar (the type average).
     """
-    activities_set = set(activities)
     resource_types_set = set(resource_types)
 
     if ocel.events.is_empty():
@@ -131,11 +129,11 @@ def discover_resource_calendars(
     all_weeks: set[tuple[int, int]] = set()
 
     for row in sorted_events.iter_rows(named=True):
-        activity = row["_activity"]
-        if activity not in activities_set:
-            continue
-
-        resources = _extract_resources(row, obj_type_map, resource_types_set)
+        resources = [
+            rid
+            for rid in (row["_objects"] or [])
+            if obj_type_map.get(rid) in resource_types_set
+        ]
         if not resources:
             continue
 
@@ -174,18 +172,3 @@ def discover_resource_calendars(
         type_calendars[rtype] = cal
 
     return type_calendars
-
-
-def _extract_resources(
-    row: dict, obj_type_map: dict, resource_types_set: set
-) -> list[str]:
-    """Extracts resource IDs from process_area_resources in the event's _attributes."""
-    if not row["_attributes"]:
-        return []
-    try:
-        attrs = json.loads(row["_attributes"])
-        resources = attrs.get("process_area_resources", [])
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-    return [rid for rid in resources if obj_type_map.get(rid) in resource_types_set]
