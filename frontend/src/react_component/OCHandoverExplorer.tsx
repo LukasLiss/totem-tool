@@ -2429,13 +2429,53 @@ function HandoverGraph({
     await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = svgUrl; });
     URL.revokeObjectURL(svgUrl);
 
-    // ── Graph-only canvas ──
+    // ── Graph-only canvas (graph + compact color legend, two columns) ──
+    const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
+    const COLOR_ROWS = 1 + Math.max(nodeTypes.length, boTypes.length);
+    const COLOR_PANEL_H = PAD + Math.ceil(COLOR_ROWS) * ROW_H + PAD;
+    const GRAPH_ONLY_H = GRAPH_H + COLOR_PANEL_H;
     const graphCanvas = document.createElement("canvas");
-    graphCanvas.width = EXPORT_W * DPR; graphCanvas.height = GRAPH_H * DPR;
+    graphCanvas.width = EXPORT_W * DPR; graphCanvas.height = GRAPH_ONLY_H * DPR;
     const gCtx = graphCanvas.getContext("2d")!;
     gCtx.scale(DPR, DPR);
-    gCtx.fillStyle = "white"; gCtx.fillRect(0, 0, EXPORT_W, GRAPH_H);
+    gCtx.fillStyle = "white"; gCtx.fillRect(0, 0, EXPORT_W, GRAPH_ONLY_H);
     gCtx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+
+    // Color legend panel
+    gCtx.fillStyle = "#F8FAFC";
+    gCtx.fillRect(0, GRAPH_H, EXPORT_W, COLOR_PANEL_H);
+    gCtx.strokeStyle = "#E2E8F0"; gCtx.lineWidth = 1;
+    gCtx.beginPath(); gCtx.moveTo(0, GRAPH_H); gCtx.lineTo(EXPORT_W, GRAPH_H); gCtx.stroke();
+
+    const colW = EXPORT_W / 2;
+    const gTop = GRAPH_H + PAD;
+
+    // Left column: Resources
+    let gly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("RESOURCES", PAD, gly + 9); gly += ROW_H;
+    nodeTypes.forEach(ot => {
+      const cy = gly + ROW_H / 2 - 2;
+      gCtx.beginPath(); gCtx.arc(PAD + 6, cy, 6, 0, Math.PI * 2);
+      gCtx.fillStyle = typeColorMap[ot] ?? "#94a3b8"; gCtx.fill();
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(ot, PAD + 18, cy + 4);
+      gly += ROW_H;
+    });
+
+    // Right column: Handover Object Types
+    const RX = colW + PAD;
+    let bly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("HANDOVER OBJECT TYPE", RX, bly + 9); bly += ROW_H;
+    boTypes.forEach(bt => {
+      const cy = bly + ROW_H / 2 - 2;
+      gCtx.fillStyle = typeColorMap[bt] ?? "#94a3b8";
+      gCtx.fillRect(RX, cy - 4, 16, 8);
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(bt, RX + 22, cy + 4);
+      bly += ROW_H;
+    });
 
     // ── Full canvas (graph + legend panel) ──
     const canvas = document.createElement("canvas");
@@ -2446,8 +2486,6 @@ function HandoverGraph({
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, EXPORT_W, TOTAL_H);
     ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
-
-      const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
 
       // ── Header strip ──
       ctx.fillStyle = "#F1F5F9";
