@@ -272,13 +272,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"totem_discovery_{user_file.pk}"
+            # Read optional tau threshold (default 0.5, clamped to [0, 1])
+            try:
+                tau = float(request.query_params.get("tau", 0.5))
+                tau = max(0.0, min(1.0, tau))
+            except (TypeError, ValueError):
+                tau = 0.5
+
+            # Cache key includes tau so different thresholds cache separately
+            cache_key = f"totem_discovery_{user_file.pk}_tau_{tau:.3f}"
             cached_result = cache.get(cache_key)
             if cached_result:
                 return Response(cached_result, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                totem = totemDiscovery_db(db)
+                totem = totemDiscovery_db(db, tau=tau)
             serialized = totem_to_dict(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
