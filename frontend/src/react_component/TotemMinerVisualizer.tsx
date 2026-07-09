@@ -254,7 +254,7 @@ function computeHierarchicalLayout(
   const numLayers = Math.max(...Array.from(layer.values())) + 1;
 
   const PADDING_Y = 50;
-  const layerY = (l: number) => PADDING_Y + l * LAYER_GAP;
+  const layerY = (l: number) => PADDING_Y + (numLayers - 1 - l) * LAYER_GAP;
 
   const positions = new Map<string, { x: number; y: number }>();
   const NODE_GAP = 60;
@@ -495,10 +495,39 @@ function TotemMinerVisualizer({
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    setZoom((z) => Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))));
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+
+    setZoom((z) => {
+      const newZoom = Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      setPan((p) => ({
+        x: cursorX - (cursorX - p.x) * (newZoom / z),
+        y: cursorY - (cursorY - p.y) * (newZoom / z),
+      }));
+      return newZoom;
+    });
   }, []);
-  const handleZoomIn = () => setZoom((z) => Math.min(5, z * 1.2));
-  const handleZoomOut = () => setZoom((z) => Math.max(0.15, z / 1.2));
+
+  const zoomToCenter = (factor: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    setZoom((z) => {
+      const newZoom = Math.max(0.15, Math.min(5, z * factor));
+      setPan((p) => ({
+        x: centerX - (centerX - p.x) * (newZoom / z),
+        y: centerY - (centerY - p.y) * (newZoom / z),
+      }));
+      return newZoom;
+    });
+  };
+
+  const handleZoomIn = () => zoomToCenter(1.2);
+  const handleZoomOut = () => zoomToCenter(1 / 1.2);
   const handleFit = () => {
     if (layoutNodes.length === 0) return;
     const xs = layoutNodes.map((n) => n.x);
@@ -578,7 +607,8 @@ function TotemMinerVisualizer({
       const curvature = edgeCurvatures.get(edge.id) ?? 0;
       const color = RELATION_COLOR[edge.relation] ?? '#64748b';
       const isConcurrent = edge.relation === 'P';
-      const isDashed = edge.relation === 'I';
+      const isIndependent = edge.relation === 'I';
+      const isDashed = isIndependent;
 
       // Clip endpoints to node borders
       const srcPt = clipToBorder(src.x, src.y, tgt.x, tgt.y, src.width / 2 + 1, NODE_H / 2 + 1);
@@ -616,15 +646,20 @@ function TotemMinerVisualizer({
             fill="none"
           />
 
-          {/* Source square terminator */}
-          <rect
-            x={srcPt.x - SQUARE_SIZE / 2}
-            y={srcPt.y - SQUARE_SIZE / 2}
-            width={SQUARE_SIZE}
-            height={SQUARE_SIZE}
-            fill={color}
-            transform={`rotate(${squareAngle}, ${srcPt.x}, ${srcPt.y})`}
-          />
+          {/* Arrowhead (Only for Independent relations) */}
+          {isIndependent && <path d={arrow} fill={color} />}
+
+          {/* Source square terminator (For all other relations) */}
+          {!isIndependent && (
+            <rect
+              x={srcPt.x - SQUARE_SIZE / 2}
+              y={srcPt.y - SQUARE_SIZE / 2}
+              width={SQUARE_SIZE}
+              height={SQUARE_SIZE}
+              fill={color}
+              transform={`rotate(${squareAngle}, ${srcPt.x}, ${srcPt.y})`}
+            />
+          )}
 
           {/* Parallel (P) double bars near source */}
           {isConcurrent && (
