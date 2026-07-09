@@ -164,6 +164,30 @@ print(len(valid_sequences))
 
 Try executing the code multiple times. The number of generated sequences should be between 0 and 20. Finding applicable branching factors is usually tricky.
 
+# Precision
+
+The precision of an OCCN with respect to an OCEL measures how much of the behavior allowed by the model is actually observed in the log (escaping-edges style). See `docs/OCCN_PRECISION.md` in the repository root for the formal definitions and the algorithm.
+
+```python
+from totem_lib import import_ocel, discover_occn, occn_precision
+
+ocel = import_ocel("example_data/ocel2-p2p.json")
+occn = discover_occn(ocel, relativeOccuranceThreshold=0)
+
+result = occn_precision(ocel, occn)
+print(result.precision)
+
+# Number of events whose context could not be replayed (excluded from the average)
+print(result.num_skipped_events, "of", result.num_events)
+
+# Model behavior never observed in the log, per context
+for detail in result.context_details:
+    if detail.escaping:
+        print(detail.event_ids, "->", sorted(detail.escaping))
+```
+
+The OCCN parameter also accepts the JSON format saved by the visual OCCN editor (introduced in PR #243), a plain marker-groups dict (`OCCausalNet.from_dict` format), a JSON string, or a file path. With `granularity="profile"`, over-permissive cardinalities and object distributions (key groups) reduce the precision as well. The `max_states` parameter (default 1000) bounds the per-context state space search; capped replays contribute no model behavior and are reported in `num_state_capped_replays` — results with a non-zero count are approximations (`max_states=None` computes the exact value).
+
 
 
 
