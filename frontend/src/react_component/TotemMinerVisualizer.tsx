@@ -418,7 +418,15 @@ function TotemMinerVisualizer({
     if (!rawData?.tempgraph) return { nodeIds: [], edges: [], colorMap: {} };
     const nodeIds = (rawData.tempgraph.nodes as string[]) ?? [];
     const edges = extractEdges(rawData.tempgraph, rawData.cardinalities ?? []);
-    const colorMap = mapTypesToColors(nodeIds);
+    const colorMap = mapTypesToColors(nodeIds, {
+      'Forklift': '#f59e0b',
+      'Vehicle': '#22c55e',
+      'Transport Document': '#ef4444',
+      'Customer Order': '#10b981',
+      'Container': '#2563eb',
+      'Handling Unit': '#7c3aed',
+      'Truck': '#06b6d4',
+    });
     return { nodeIds, edges, colorMap };
   }, [rawData]);
 
