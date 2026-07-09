@@ -1498,6 +1498,54 @@ function updateDotLayer(
   }
 }
 
+// ── ZIP helpers (store / no compression) ─────────────────────────────────────
+function _crc32(data: Uint8Array): number {
+  let c = -1;
+  for (let i = 0; i < data.length; i++) {
+    c ^= data[i];
+    for (let j = 0; j < 8; j++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+  }
+  return (~c) >>> 0;
+}
+
+function _buildZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
+  const enc = new TextEncoder();
+  const locals: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const { name, data } of files) {
+    const nb = enc.encode(name);
+    const crc = _crc32(data);
+    const sz = data.length;
+    const lh = new Uint8Array(30 + nb.length);
+    const lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+    lv.setUint16(8, 0, true);          // store
+    lv.setUint32(14, crc, true); lv.setUint32(18, sz, true); lv.setUint32(22, sz, true);
+    lv.setUint16(26, nb.length, true); lh.set(nb, 30);
+    const ch = new Uint8Array(46 + nb.length);
+    const cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(10, 0, true);         // store
+    cv.setUint32(16, crc, true); cv.setUint32(20, sz, true); cv.setUint32(24, sz, true);
+    cv.setUint16(28, nb.length, true); cv.setUint32(42, offset, true); ch.set(nb, 46);
+    locals.push(lh, data); central.push(ch);
+    offset += lh.length + sz;
+  }
+  const cdSize = central.reduce((s, c) => s + c.length, 0);
+  const cdStart = offset;
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, cdStart, true);
+  const all = [...locals, ...central, eocd];
+  const out = new Uint8Array(all.reduce((s, a) => s + a.length, 0));
+  let pos = 0; for (const a of all) { out.set(a, pos); pos += a.length; }
+  return out;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function HandoverGraph({
   nodes,
   edges,
@@ -2339,10 +2387,11 @@ function HandoverGraph({
 
   const handleMouseUp = () => setDragId(null);
 
-  const downloadGraph = () => {
+  const downloadGraph = async () => {
     const svg = svgRef.current;
     if (!svg) return;
     const EXPORT_W = 1600;
+    const DPR = 2;
     const vb = viewBoxRef.current;
     const GRAPH_H = Math.round(EXPORT_W * (vb.h / vb.w));
 
@@ -2351,20 +2400,21 @@ function HandoverGraph({
     const HEADER_H = 32;
 
     // Three-column boundaries
-    const LEG_END = Math.round(EXPORT_W * 0.37);   // ~592
-    const SET_X   = LEG_END + 24;                   // ~616
-    const SET_END  = Math.round(EXPORT_W * 0.60);   // ~960
-    const FILT_X   = SET_END + 24;                  // ~984
+    const LEG_END = Math.round(EXPORT_W * 0.37);
+    const SET_X   = LEG_END + 24;
+    const SET_END  = Math.round(EXPORT_W * 0.60);
+    const FILT_X   = SET_END + 24;
 
-    // Dynamic panel height: header + max(legend, settings, filters) rows
+    // Dynamic panel height
     const scaleRows = normalizationScope === "per_bo_type" ? boTypes.length : 1;
-    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + scaleRows; // res header + items + gap + bot header + items + gap + scale header + scale row(s)
-    const SETTINGS_ROWS = 5;  // header + 4 items
-    const FILTER_ROWS   = 9;  // header + 8 items
+    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + scaleRows;
+    const SETTINGS_ROWS = 5;
+    const FILTER_ROWS   = 9;
     const CONTENT_ROWS  = Math.ceil(Math.max(LEGEND_ROWS, SETTINGS_ROWS, FILTER_ROWS));
     const PANEL_H = HEADER_H + PAD + CONTENT_ROWS * ROW_H + PAD;
     const TOTAL_H = GRAPH_H + PANEL_H;
 
+    // Render SVG to image (shared by both canvases)
     const clone = svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     clone.setAttribute("width", String(EXPORT_W));
@@ -2374,22 +2424,28 @@ function HandoverGraph({
     bg.setAttribute("width", String(vb.w)); bg.setAttribute("height", String(vb.h));
     bg.setAttribute("fill", "white");
     clone.insertBefore(bg, clone.firstChild);
-
-    const svgStr = new XMLSerializer().serializeToString(clone);
-    const svgUrl = URL.createObjectURL(new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" }));
-
+    const svgUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" }));
     const img = new Image();
-    img.onload = () => {
-      const DPR = 2;
-      const canvas = document.createElement("canvas");
-      canvas.width = EXPORT_W * DPR; canvas.height = TOTAL_H * DPR;
-      const ctx = canvas.getContext("2d")!;
-      ctx.scale(DPR, DPR);
+    await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = svgUrl; });
+    URL.revokeObjectURL(svgUrl);
 
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, EXPORT_W, TOTAL_H);
-      ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
-      URL.revokeObjectURL(svgUrl);
+    // ── Graph-only canvas ──
+    const graphCanvas = document.createElement("canvas");
+    graphCanvas.width = EXPORT_W * DPR; graphCanvas.height = GRAPH_H * DPR;
+    const gCtx = graphCanvas.getContext("2d")!;
+    gCtx.scale(DPR, DPR);
+    gCtx.fillStyle = "white"; gCtx.fillRect(0, 0, EXPORT_W, GRAPH_H);
+    gCtx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+
+    // ── Full canvas (graph + legend panel) ──
+    const canvas = document.createElement("canvas");
+    canvas.width = EXPORT_W * DPR; canvas.height = TOTAL_H * DPR;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(DPR, DPR);
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, EXPORT_W, TOTAL_H);
+    ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
 
       const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
 
@@ -2524,15 +2580,20 @@ function HandoverGraph({
         fy += ROW_H;
       });
 
-      canvas.toBlob(blob => {
-        if (!blob) return;
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = `handover-graph-${new Date().toISOString().slice(0, 10)}.png`;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      }, "image/png");
-    };
-    img.src = svgUrl;
+    // Convert both canvases to Uint8Array and bundle into ZIP
+    const toBytes = (c: HTMLCanvasElement) => new Promise<Uint8Array>((res, rej) =>
+      c.toBlob(b => b ? b.arrayBuffer().then(ab => res(new Uint8Array(ab))).catch(rej) : rej(new Error("toBlob failed")), "image/png")
+    );
+    const date = new Date().toISOString().slice(0, 10);
+    const [fullBytes, graphBytes] = await Promise.all([toBytes(canvas), toBytes(graphCanvas)]);
+    const zip = _buildZip([
+      { name: `handover-graph-${date}.png`, data: fullBytes },
+      { name: `handover-graph-only-${date}.png`, data: graphBytes },
+    ]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([zip.buffer as ArrayBuffer], { type: "application/zip" }));
+    a.download = `handover-graph-${date}.zip`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   };
 
   return (
