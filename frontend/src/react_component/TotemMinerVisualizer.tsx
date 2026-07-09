@@ -599,7 +599,7 @@ function TotemMinerVisualizer({
 
   // ── Render edges ─────────────────────────────────────────────────────────────
   const renderedEdges = useMemo(() => {
-    return edges.map((edge) => {
+    const edgeData = edges.map((edge) => {
       const src = nodePos.get(edge.from);
       const tgt = nodePos.get(edge.to);
       if (!src || !tgt) return null;
@@ -617,8 +617,15 @@ function TotemMinerVisualizer({
       const path = bezierPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
       const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
 
-      // Midpoint bubble position
-      const midPt = bezierMid(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
+      const edgeDx = tgtPt.x - srcPt.x;
+      const edgeDy = tgtPt.y - srcPt.y;
+      const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
+      const perpX = -edgeDy / edgeLen;
+      const perpY = edgeDx / edgeLen;
+
+      // Stagger bubbles vertically based on horizontal angle to reduce overlap
+      const bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      const midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
       // Source and target label positions
       const srcT = 0.22;
@@ -626,110 +633,113 @@ function TotemMinerVisualizer({
       const srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
       const tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
       
-      const edgeDx = tgtPt.x - srcPt.x;
-      const edgeDy = tgtPt.y - srcPt.y;
-      const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
-      const perpX = -edgeDy / edgeLen;
-      const perpY = edgeDx / edgeLen;
-
-      // Square rotation angle
       const squareAngle = Math.atan2(edgeDy, edgeDx) * 180 / Math.PI;
 
-      return (
-        <g key={edge.id}>
-          {/* Arc path */}
+      return { edge, path, color, isConcurrent, isIndependent, isDashed, srcPt, tgtPt, arrow, midPt, srcL, tgtL, perpX, perpY, edgeDx, edgeDy, squareAngle };
+    }).filter(Boolean) as any[];
+
+    return (
+      <>
+        {/* Pass 1: Render all arcs so they sit behind decorations */}
+        {edgeData.map((d) => (
           <path
-            d={path}
-            stroke={color}
-            strokeWidth={isConcurrent ? 2 : 1.5}
-            strokeDasharray={isDashed ? '6 3' : undefined}
+            key={`path-${d.edge.id}`}
+            d={d.path}
+            stroke={d.color}
+            strokeWidth={d.isConcurrent ? 2 : 1.5}
+            strokeDasharray={d.isDashed ? '6 3' : undefined}
             fill="none"
           />
+        ))}
 
-          {/* Arrowhead (Only for Independent relations) */}
-          {isIndependent && <path d={arrow} fill={color} />}
+        {/* Pass 2: Render all terminators, text, and bubbles on top */}
+        {edgeData.map((d) => (
+          <g key={`dec-${d.edge.id}`}>
+            {/* Arrowhead (Only for Independent relations) */}
+            {d.isIndependent && <path d={d.arrow} fill={d.color} />}
 
-          {/* Source square terminator (For all other relations) */}
-          {!isIndependent && (
-            <rect
-              x={srcPt.x - SQUARE_SIZE / 2}
-              y={srcPt.y - SQUARE_SIZE / 2}
-              width={SQUARE_SIZE}
-              height={SQUARE_SIZE}
-              fill={color}
-              transform={`rotate(${squareAngle}, ${srcPt.x}, ${srcPt.y})`}
-            />
-          )}
-
-          {/* Parallel (P) double bars near source */}
-          {isConcurrent && (
-            <>
-              <line x1={srcPt.x + perpX * 5} y1={srcPt.y + perpY * 5} x2={srcPt.x + perpX * 5 + edgeDx * 0.1} y2={srcPt.y + perpY * 5 + edgeDy * 0.1} stroke={color} strokeWidth={1.8} />
-              <line x1={srcPt.x - perpX * 5} y1={srcPt.y - perpY * 5} x2={srcPt.x - perpX * 5 + edgeDx * 0.1} y2={srcPt.y - perpY * 5 + edgeDy * 0.1} stroke={color} strokeWidth={1.8} />
-            </>
-          )}
-
-          {/* Source label offset perpendicularly */}
-          {edge.sourceLabel && (
-            <text
-              x={srcL.x + perpX * 12}
-              y={srcL.y + perpY * 12}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={FONT_SIZE_LABEL}
-              fontFamily={NODE_FONT_FAMILY}
-              fontWeight="600"
-              fill={color}
-            >
-              {edge.sourceLabel}
-            </text>
-          )}
-
-          {/* Target label offset perpendicularly */}
-          {edge.targetLabel && (
-            <text
-              x={tgtL.x + perpX * 12}
-              y={tgtL.y + perpY * 12}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={FONT_SIZE_LABEL}
-              fontFamily={NODE_FONT_FAMILY}
-              fontWeight="600"
-              fill={color}
-            >
-              {edge.targetLabel}
-            </text>
-          )}
-
-          {/* Midpoint oval bubble (EC|LC) */}
-          {edge.bubbleLabel && (
-            <g>
-              <ellipse
-                cx={midPt.x}
-                cy={midPt.y}
-                rx={OVAL_RX}
-                ry={OVAL_RY}
-                fill="white"
-                stroke={color}
-                strokeWidth={1.2}
+            {/* Source square terminator (For all other relations) */}
+            {!d.isIndependent && (
+              <rect
+                x={d.srcPt.x - SQUARE_SIZE / 2}
+                y={d.srcPt.y - SQUARE_SIZE / 2}
+                width={SQUARE_SIZE}
+                height={SQUARE_SIZE}
+                fill={d.color}
+                transform={`rotate(${d.squareAngle}, ${d.srcPt.x}, ${d.srcPt.y})`}
               />
+            )}
+
+            {/* Parallel (P) double bars near source */}
+            {d.isConcurrent && (
+              <>
+                <line x1={d.srcPt.x + d.perpX * 5} y1={d.srcPt.y + d.perpY * 5} x2={d.srcPt.x + d.perpX * 5 + d.edgeDx * 0.1} y2={d.srcPt.y + d.perpY * 5 + d.edgeDy * 0.1} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.srcPt.x - d.perpX * 5} y1={d.srcPt.y - d.perpY * 5} x2={d.srcPt.x - d.perpX * 5 + d.edgeDx * 0.1} y2={d.srcPt.y - d.perpY * 5 + d.edgeDy * 0.1} stroke={d.color} strokeWidth={1.8} />
+              </>
+            )}
+
+            {/* Source label offset perpendicularly */}
+            {d.edge.sourceLabel && (
               <text
-                x={midPt.x}
-                y={midPt.y}
+                x={d.srcL.x + d.perpX * 12}
+                y={d.srcL.y + d.perpY * 12}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fontSize={FONT_SIZE_BUBBLE}
+                fontSize={FONT_SIZE_LABEL}
                 fontFamily={NODE_FONT_FAMILY}
                 fontWeight="600"
-                fill={color}
+                fill={d.color}
               >
-                {edge.bubbleLabel}
+                {d.edge.sourceLabel}
               </text>
-            </g>
-          )}
-        </g>
-      );
-    });
+            )}
+
+            {/* Target label offset perpendicularly */}
+            {d.edge.targetLabel && (
+              <text
+                x={d.tgtL.x + d.perpX * 12}
+                y={d.tgtL.y + d.perpY * 12}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={FONT_SIZE_LABEL}
+                fontFamily={NODE_FONT_FAMILY}
+                fontWeight="600"
+                fill={d.color}
+              >
+                {d.edge.targetLabel}
+              </text>
+            )}
+
+            {/* Midpoint oval bubble (EC|LC) */}
+            {d.edge.bubbleLabel && (
+              <g>
+                <ellipse
+                  cx={d.midPt.x}
+                  cy={d.midPt.y}
+                  rx={OVAL_RX}
+                  ry={OVAL_RY}
+                  fill="#ffffff"
+                  stroke={d.color}
+                  strokeWidth={1.2}
+                />
+                <text
+                  x={d.midPt.x}
+                  y={d.midPt.y}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={FONT_SIZE_BUBBLE}
+                  fontFamily={NODE_FONT_FAMILY}
+                  fontWeight="600"
+                  fill={d.color}
+                >
+                  {d.edge.bubbleLabel}
+                </text>
+              </g>
+            )}
+          </g>
+        ))}
+      </>
+    );
   }, [edges, nodePos, edgeCurvatures]);
 
   // ── Render nodes ─────────────────────────────────────────────────────────────
