@@ -1,11 +1,16 @@
+from contextlib import nullcontext
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory
+from totem_lib.totem import Totem, totem_to_dict
 
-from .models import Project, ProjectAsset
+from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
 
 
@@ -286,6 +291,57 @@ class ProjectAssetSerializerTests(TestCase):
         self.assertNotIn("original_filename", data)
         self.assertNotIn("content_type", data)
         self.assertNotIn("size_bytes", data)
+
+
+class EventLogTotemDiscoveryApiTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="totem-api-user")
+        self.project = Project.objects.create(name="Project A")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _totem(self):
+        return Totem(
+            tempgraph={
+                "nodes": {"Order", "Item"},
+                "D": {("Order", "Item")},
+                "Di": set(),
+                "I": set(),
+                "Ii": set(),
+                "P": set(),
+            },
+            cardinalities={
+                ("Order", "Item"): {"LC": "1..*", "EC": "0...*"},
+            },
+            type_relations={frozenset(("Order", "Item"))},
+            all_event_types={"Create Order", "Pick Item"},
+            object_type_to_event_types={
+                "Order": {"Create Order"},
+                "Item": {"Pick Item"},
+            },
+        )
+
+    def test_discover_totem_returns_canonical_totem_v1_json(self):
+        totem = self._totem()
+
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.totemDiscovery_db", return_value=totem),
+        ):
+            response = self.client.get(
+                f"/api/files/{self.event_log.pk}/discover_totem/"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, totem_to_dict(totem))
+        self.assertEqual(response.data["schema"], "totem")
+        self.assertEqual(response.data["version"], 1)
 
 
 class ProjectAssetApiTests(TestCase):
