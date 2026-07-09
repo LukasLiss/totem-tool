@@ -46,6 +46,8 @@ interface OCCNVisualizerProps {
   initialThreshold?: number;
   /** Restrict discovery to these object types; empty/undefined = all types. */
   objectTypes?: string[];
+  /** Hide the in-canvas title when the surrounding page already renders one. */
+  showTitle?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -63,6 +65,7 @@ function OCCNVisualizer({
   initialLayoutDirection = 'LR',
   initialThreshold = 0,
   objectTypes,
+  showTitle = true,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -225,14 +228,40 @@ function OCCNVisualizer({
 
       {showControls && (
         <>
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            maxHeight: 'calc(100% - 32px)',
+          }}
+        >
+          {showTitle && (
+            <div
+              style={{
+                background: 'transparent',
+                border: '1px solid transparent',
+                borderRadius: 12,
+                padding: '10px 14px',
+                boxShadow: 'none',
+                fontFamily: 'var(--font-primary, Inter, sans-serif)',
+                minWidth: 240,
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                Object-Centric Causal Net (OCCN)
+              </div>
+            </div>
+          )}
+
           {Object.keys(typeColors).length > 0 && (
             <div
               onPointerDown={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
               style={{
-                position: 'absolute',
-                top: 16,
-                left: 16,
                 background: '#FFFFFF',
                 border: '1px solid #E5E7EB',
                 borderRadius: 12,
@@ -265,6 +294,7 @@ function OCCNVisualizer({
               ))}
             </div>
           )}
+        </div>
 
           <div
             onPointerDown={(e) => e.stopPropagation()}

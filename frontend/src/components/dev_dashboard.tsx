@@ -49,7 +49,7 @@ export function DevDashboard() {
           </CardHeader>
           <CardContent className="h-[640px] p-0">
             <ReactFlowProvider>
-              <OCCNVisualizer height="100%" fileId={selectedFile?.id} />
+              <OCCNVisualizer height="100%" fileId={selectedFile?.id} showTitle={false} />
             </ReactFlowProvider>
           </CardContent>
         </Card>

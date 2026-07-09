@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import { useContext } from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -20,58 +20,71 @@ export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
 
-  if (viewMode.type !== 'analysis') return null;
+  if (viewMode.type !== "analysis") return null;
 
   const renderComponent = () => {
     switch (viewMode.component) {
-      case 'processArea':
+      case "processArea":
         return (
           <div className="w-full max-w-7xl">
             <ProcessArea fileId={selectedFile?.id} height={700} />
           </div>
         );
 
-      case 'ocdfg':
+      case "ocdfg":
         return (
           <div className="w-full max-w-7xl">
             <Card>
               <CardHeader>
                 <CardTitle>Object-Centric DFG</CardTitle>
-                <CardDescription>Directly-Follows Graph visualization</CardDescription>
+                <CardDescription>
+                  Directly-Follows Graph visualization
+                </CardDescription>
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
-                  <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
+                  <NewOCDFGVariantsVisualizer
+                    height="100%"
+                    fileId={selectedFile?.id}
+                  />
                 </ReactFlowProvider>
               </CardContent>
             </Card>
           </div>
         );
 
-      case 'occn':
+      case "occn":
         return (
           <div className="w-full max-w-7xl">
             <Card>
               <CardHeader>
                 <CardTitle>Object-Centric Causal Net</CardTitle>
-                <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
+                <CardDescription>
+                  Causal net with activity bindings and automatic layout
+                </CardDescription>
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
-                  <OCCNVisualizer height="100%" fileId={selectedFile?.id} />
+                  <OCCNVisualizer
+                    height="100%"
+                    fileId={selectedFile?.id}
+                    showTitle={false}
+                  />
                 </ReactFlowProvider>
               </CardContent>
             </Card>
           </div>
         );
 
-      case 'variants':
+      case "variants":
         return (
           <div className="w-full max-w-7xl">
             <Card className="@container/card">
               <CardHeader className="items-center relative z-10 justify-between">
                 <CardTitle>Variants Explorer</CardTitle>
-                <CardDescription>Object-centric variant analysis</CardDescription>
+                <CardDescription>
+                  Object-centric variant analysis
+                </CardDescription>
               </CardHeader>
               <CardContent className="p-0 pb-0">
                 <VariantsExplorer
@@ -84,13 +97,15 @@ export function AnalysisView() {
           </div>
         );
 
-      case 'dottedChart':
+      case "dottedChart":
         return (
           <div className="w-full max-w-7xl">
             <Card className="@container/card">
               <CardHeader className="items-center relative z-10 justify-between">
                 <CardTitle>OC Dotted Chart</CardTitle>
-                <CardDescription>Object-centric event distribution</CardDescription>
+                <CardDescription>
+                  Object-centric event distribution
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <DottedChart
