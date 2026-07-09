@@ -2113,6 +2113,12 @@ function HandoverGraph({
 
   const maxWeight = useMemo(() => Math.max(...edges.map(e => e.weight), 0.0001), [edges]);
 
+  const maxWeightPerType = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const e of edges) m[e.businessobject_type] = Math.max(m[e.businessobject_type] ?? 0.0001, e.weight);
+    return m;
+  }, [edges]);
+
   const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
   // header ~37px, slider row ~30px, slider overhead ~37px, bottom (search+chips+all/none+checklist) ~290px
@@ -2138,7 +2144,12 @@ function HandoverGraph({
       target: string;
     }> = [];
 
-    const strokeFor = (w: number) => Math.max(0.3, (w / maxWeight) * 6);
+    const strokeFor = (w: number, boType?: string) => {
+      const denom = normalizationScope === "per_bo_type" && boType
+        ? (maxWeightPerType[boType] ?? maxWeight)
+        : maxWeight;
+      return Math.max(0.3, (w / denom) * 6);
+    };
 
     edgeGroups.forEach((groupEdges, pairKey) => {
       const [srcId, tgtId] = pairKey.split("\x00");
@@ -2151,7 +2162,7 @@ function HandoverGraph({
         groupEdges.forEach((edge, idx) => {
           const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
           const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
-          const strokeWidth = strokeFor(edge.weight);
+          const strokeWidth = strokeFor(edge.weight, edge.businessobject_type);
 
           // Draw a cubic-bezier loop above the node; spread multiple loops by offset
           const spread = idx * NODE_R * 0.9;
@@ -2205,7 +2216,7 @@ function HandoverGraph({
       groupEdges.forEach((edge, idx) => {
         const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
         const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        const strokeWidth = strokeFor(edge.weight);
+        const strokeWidth = strokeFor(edge.weight, edge.businessobject_type);
 
         const n = groupEdges.length;
         let offset: number;
@@ -2250,7 +2261,7 @@ function HandoverGraph({
     });
 
     return result;
-  }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight]);
+  }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight, maxWeightPerType, normalizationScope]);
 
   const zoomIn = () => {
     const vb = viewBoxRef.current;
@@ -2346,7 +2357,8 @@ function HandoverGraph({
     const FILT_X   = SET_END + 24;                  // ~984
 
     // Dynamic panel height: header + max(legend, settings, filters) rows
-    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + 1; // res header + items + gap + bot header + items + gap + scale header + scale row
+    const scaleRows = normalizationScope === "per_bo_type" ? boTypes.length : 1;
+    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + scaleRows; // res header + items + gap + bot header + items + gap + scale header + scale row(s)
     const SETTINGS_ROWS = 5;  // header + 4 items
     const FILTER_ROWS   = 9;  // header + 8 items
     const CONTENT_ROWS  = Math.ceil(Math.max(LEGEND_ROWS, SETTINGS_ROWS, FILTER_ROWS));
@@ -2438,13 +2450,27 @@ function HandoverGraph({
 
       ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
       ctx.fillText("SCALE (WEIGHT OF THICKEST ARC)", PAD, ly + 9); ly += ROW_H;
-      const scaleCy = ly + ROW_H / 2 - 2;
-      ctx.save();
-      ctx.strokeStyle = "#374151"; ctx.lineWidth = 6; ctx.lineCap = "round";
-      ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
-      ctx.restore();
-      ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
-      ctx.fillText(`= ${maxWeight.toFixed(4)}`, PAD + 38, scaleCy + 4);
+      if (normalizationScope === "per_bo_type") {
+        boTypes.forEach(bt => {
+          const scaleCy = ly + ROW_H / 2 - 2;
+          ctx.save();
+          ctx.strokeStyle = typeColorMap[bt] ?? "#94a3b8"; ctx.lineWidth = 6; ctx.lineCap = "round";
+          ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
+          ctx.restore();
+          ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+          ctx.fillText(`${bt}  = ${(maxWeightPerType[bt] ?? 0).toFixed(4)}`, PAD + 38, scaleCy + 4);
+          ly += ROW_H;
+        });
+      } else {
+        const scaleCy = ly + ROW_H / 2 - 2;
+        ctx.save();
+        ctx.strokeStyle = "#374151"; ctx.lineWidth = 6; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
+        ctx.restore();
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(`= ${maxWeight.toFixed(4)}`, PAD + 38, scaleCy + 4);
+        ly += ROW_H;
+      }
 
       // ── GRAPH SETTINGS ──
       const normLabel = normalization ? (NORMALIZATION_LABELS[normalization] ?? normalization) : "—";
@@ -3217,19 +3243,39 @@ function HandoverGraph({
           <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
             Scale (weight of thickest arc)
           </p>
-          <div className="flex items-center gap-2">
-            <svg width="32" height="10" className="flex-shrink-0">
-              <line x1="3" y1="5" x2="29" y2="5" stroke="#374151" strokeWidth={6} strokeLinecap="round" />
-            </svg>
-            <Tooltip delayDuration={600}>
-              <TooltipTrigger asChild>
-                <span className="tabular-nums text-muted-foreground cursor-default">{maxWeight.toFixed(4)}</span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-[200px] text-xs">
-                Maximum normalized handover weight in this graph. The thickest arc corresponds to this value.
-              </TooltipContent>
-            </Tooltip>
-          </div>
+          {normalizationScope === "per_bo_type" ? (
+            <div className="flex flex-col gap-1">
+              {boTypes.map(bt => (
+                <div key={bt} className="flex items-center gap-2">
+                  <svg width="32" height="10" className="flex-shrink-0">
+                    <line x1="3" y1="5" x2="29" y2="5" stroke={typeColorMap[bt] ?? "#94a3b8"} strokeWidth={6} strokeLinecap="round" />
+                  </svg>
+                  <Tooltip delayDuration={600}>
+                    <TooltipTrigger asChild>
+                      <span className="tabular-nums text-muted-foreground cursor-default text-xs">{(maxWeightPerType[bt] ?? 0).toFixed(4)}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[200px] text-xs">
+                      Maximum normalized weight for "{bt}" arcs. Arc thicknesses within this type are relative to this value.
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <svg width="32" height="10" className="flex-shrink-0">
+                <line x1="3" y1="5" x2="29" y2="5" stroke="#374151" strokeWidth={6} strokeLinecap="round" />
+              </svg>
+              <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                  <span className="tabular-nums text-muted-foreground cursor-default">{maxWeight.toFixed(4)}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[200px] text-xs">
+                  Maximum normalized handover weight in this graph. The thickest arc corresponds to this value.
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
         </div>
       </div>
     </div>
