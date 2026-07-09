@@ -1,5 +1,4 @@
 import { useCallback, useState } from 'react';
-import { ReactFlowProvider } from '@xyflow/react';
 import {
   Card,
   CardAction,
@@ -9,15 +8,8 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import {
-  RefreshCcw,
-  ScanIcon,
-  ZoomOut,
-  ZoomIn,
-} from 'lucide-react';
-import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
-
-export type { TotemVisualizerControls } from './TotemVisualizer';
+import { RefreshCcw } from 'lucide-react';
+import TotemMinerVisualizer from './TotemMinerVisualizer';
 
 export type TotemMinerProps = {
   fileId?: number | string | null;
@@ -32,33 +24,26 @@ export default function TotemMiner({
   backendBaseUrl = 'http://localhost:8000',
   height = 600,
 }: TotemMinerProps) {
-  const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
-
-  const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
-    setTotemControls(controls);
-  }, []);
+  const [tau, setTau] = useState(0.5);
+  const [sliderTau, setSliderTau] = useState(0.5);
 
   const handleReload = useCallback(() => {
     setReloadSignal((prev) => prev + 1);
   }, []);
 
   const heightStyle = typeof height === 'number' ? `${height}px` : height;
-  const fillContainer = height === "100%";
+  const fillContainer = height === '100%';
 
   const visualizerContent = (
-    <ReactFlowProvider>
-      <TotemVisualizer
-        eventLogId={fileId}
-        height="100%"
-        backendBaseUrl={backendBaseUrl}
-        reloadSignal={reloadSignal}
-        title="Totem Miner"
-        embedded={true}
-        onControlsReady={handleControlsReady}
-        apiEndpointType="totem"
-      />
-    </ReactFlowProvider>
+    <TotemMinerVisualizer
+      eventLogId={fileId}
+      height="100%"
+      backendBaseUrl={backendBaseUrl}
+      reloadSignal={reloadSignal}
+      embedded={true}
+      tau={tau}
+    />
   );
 
   if (embedded) {
@@ -74,37 +59,35 @@ export default function TotemMiner({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <CardTitle>TOTeM Miner Visualizer</CardTitle>
-        <CardAction className="flex items-center gap-2">
-          {totemControls && (
-            <>
-              <div className="flex items-center gap-2">
-                <ZoomOut className="h-4 w-4 text-muted-foreground" />
-                <Slider
-                  min={totemControls.minScale}
-                  max={totemControls.maxScale}
-                  step={totemControls.scaleStep}
-                  value={[totemControls.processAreaScale]}
-                  onValueChange={(values) =>
-                    totemControls.onProcessAreaScaleChange(values?.[0] ?? totemControls.minScale)
-                  }
-                  className="w-[120px]"
-                />
-                <ZoomIn className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <Button
-                type="button"
-                variant={totemControls.autoZoomEnabled ? 'secondary' : 'outline'}
-                size="icon"
-                onClick={totemControls.onAutoZoomToggle}
-                className="rounded-full h-8 w-8"
-                title={totemControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
-              >
-                <ScanIcon className="h-4 w-4" />
-              </Button>
-              <div className="w-px h-6 bg-border" />
-            </>
-          )}
+        <CardTitle>TOTeM Model</CardTitle>
+        <CardAction className="flex items-center gap-4">
+          {/* τ slider */}
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[50px] text-right">
+              τ: {sliderTau.toFixed(2)}
+            </span>
+            <Slider
+              min={0.0}
+              max={1.0}
+              step={0.01}
+              value={[sliderTau]}
+              onValueChange={(values) => setSliderTau(values?.[0] ?? 0.5)}
+              onValueCommit={(values) => setTau(values?.[0] ?? 0.5)}
+              className="w-[120px]"
+            />
+          </div>
+
+          <div className="w-px h-6 bg-border" />
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {}}
+            disabled={!fileId}
+          >
+            Check Conformance
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
