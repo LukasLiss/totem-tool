@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent
+from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, NewOCDFGComponent, UserSettings
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -2288,3 +2288,25 @@ def cache_clear(request):
     from .cache_utils import clear_all_cache
     clear_all_cache()
     return Response({"status": "cleared"})
+
+
+# ---------------------------------------------------------------------------
+# Per-user settings
+# ---------------------------------------------------------------------------
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def user_settings(request):
+    """Read or update the current user's settings.
+
+    GET returns the settings (creating a default row on first access).
+    PATCH updates individual fields — currently only ``bypass_cache``.
+    """
+    settings_obj, _ = UserSettings.objects.get_or_create(user=request.user)
+
+    if request.method == "PATCH":
+        if "bypass_cache" in request.data:
+            settings_obj.bypass_cache = bool(request.data["bypass_cache"])
+            settings_obj.save(update_fields=["bypass_cache"])
+
+    return Response({"bypass_cache": settings_obj.bypass_cache})
