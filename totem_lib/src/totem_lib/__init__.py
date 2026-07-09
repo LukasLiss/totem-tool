@@ -13,7 +13,16 @@ from .totem import (
     validate_totem_dict,
 )
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
-from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics, discover_occn, occn_playout
+from .occn import (
+    discover_occn,
+    OCCausalNet,
+    OCCausalNetSemantics,
+    OCCausalNetState,
+    occn_from_dict,
+    occn_playout,
+    occn_to_dict,
+    validate_occn_dict,
+)
 from .dfg import OCDFG, CCDFG
 from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_distance
 
@@ -35,7 +44,9 @@ __all__ = [
     "OCCausalNet",
     "OCCausalNetSemantics",
     "OCCausalNetState",
+    "occn_from_dict",
     "occn_playout",
+    "occn_to_dict",
     "OCDFG",
     "ocpns_are_similar",
     "mlpaDiscovery",
@@ -44,5 +55,6 @@ __all__ = [
     "totemDiscovery",
     "totem_from_dict",
     "totem_to_dict",
+    "validate_occn_dict",
     "validate_totem_dict",
 ]
