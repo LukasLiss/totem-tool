@@ -3,8 +3,6 @@ import { MousePointerClick, Pencil, Plus, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
 import {
   ColorSwatches,
   CommitInput,
@@ -18,63 +16,43 @@ import { cn } from '@/lib/utils';
 
 import {
   FALLBACK_TYPE_COLOR,
+  type ActivityFlowNode,
   type ArcFlowEdge,
-  type OcpnObjectType,
-  type PlaceFlowNode,
-  type TransitionFlowNode,
+  type ControlFlowNode,
+  type OcdfgObjectType,
 } from './types';
 
 // ---------------------------------------------------------------------------
 // Selection descriptor computed by the editor
 // ---------------------------------------------------------------------------
 
-export type OcpnSelection =
-  | { kind: 'place'; node: PlaceFlowNode }
-  | { kind: 'transition'; node: TransitionFlowNode }
+export type OcdfgSelection =
+  | { kind: 'activity'; node: ActivityFlowNode }
+  | { kind: 'control'; node: ControlFlowNode }
   | {
       kind: 'arc';
       edge: ArcFlowEdge;
       sourceLabel: string;
       targetLabel: string;
-      objectType: string;
-      color: string;
+      /** True when an endpoint is a START/END node (type follows that node). */
+      typeLocked: boolean;
     };
 
 type SidePanelProps = {
-  objectTypes: OcpnObjectType[];
+  objectTypes: OcdfgObjectType[];
   activeType: string | null;
-  placeCounts: Record<string, number>;
-  selection: OcpnSelection | null;
+  arcCounts: Record<string, number>;
+  selection: OcdfgSelection | null;
   onSetActiveType: (name: string) => void;
   onAddType: () => void;
   onRenameType: (oldName: string, newName: string) => boolean;
   onChangeTypeColor: (name: string, color: string) => void;
   onDeleteType: (name: string) => void;
-  onChangePlaceType: (placeId: string, objectType: string) => void;
-  onSetPlaceFlag: (placeId: string, flag: 'initial' | 'final', value: boolean) => void;
-  onChangeTransitionLabel: (transitionId: string, label: string) => void;
-  onSetTransitionSilent: (transitionId: string, silent: boolean) => void;
-  onSetArcVariable: (arcId: string, variable: boolean) => void;
+  onChangeActivityLabel: (activityId: string, label: string) => void;
+  onChangeArcType: (arcId: string, objectType: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
 };
-
-function LabeledSwitch({
-  label,
-  checked,
-  onCheckedChange,
-}: {
-  label: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Notation legend
@@ -100,7 +78,7 @@ function NotationLegend() {
             <polygon points="8,6.5 16,11 8,15.5" fill="#fff" />
           </svg>
         }
-        text="Initial place (source, part of M_init)"
+        text="START node — where objects of a type begin"
       />
       <LegendRow
         glyph={
@@ -109,24 +87,30 @@ function NotationLegend() {
             <rect x={7.5} y={7.5} width={7} height={7} fill="#fff" />
           </svg>
         }
-        text="Final place (sink, part of M_final)"
+        text="END node — where objects of a type finish"
       />
       <LegendRow
         glyph={
           <svg width={36} height={14} viewBox="0 0 36 14">
-            <line x1={1} y1={7} x2={35} y2={7} stroke={accent} strokeWidth={7} />
-            <line x1={1} y1={7} x2={35} y2={7} stroke="#fff" strokeWidth={2.5} />
+            <line x1={1} y1={7} x2={30} y2={7} stroke={accent} strokeWidth={2.5} />
+            <polygon points="35,7 28,3.5 28,10.5" fill={accent} />
           </svg>
         }
-        text="Double line: variable arc (set of objects)"
+        text="Arc color: object type of the directly-follows relation"
       />
       <LegendRow
         glyph={
-          <svg width={28} height={18} viewBox="0 0 28 18">
-            <rect x={2} y={2} width={24} height={14} rx={5} fill="#0F172A" />
+          <svg width={30} height={22} viewBox="0 0 30 22">
+            <path
+              d="M 8,8 C 14,-4 26,4 18,12"
+              fill="none"
+              stroke={accent}
+              strokeWidth={2.5}
+            />
+            <polygon points="18,14 14,7 22,8" fill={accent} />
           </svg>
         }
-        text="Filled: silent transition (τ, no label)"
+        text="Self-loops: an activity directly follows itself"
       />
       <LegendRow
         glyph={
@@ -135,7 +119,7 @@ function NotationLegend() {
             <span className="size-[7px] rounded-full" style={{ background: '#2563EB' }} />
           </span>
         }
-        text="Dots: object types a transition touches"
+        text="Dots: object types an activity touches"
       />
     </PanelSection>
   );
@@ -148,7 +132,7 @@ function NotationLegend() {
 function ObjectTypeManager({
   objectTypes,
   activeType,
-  placeCounts,
+  arcCounts,
   onSetActiveType,
   onAddType,
   onRenameType,
@@ -158,7 +142,7 @@ function ObjectTypeManager({
   SidePanelProps,
   | 'objectTypes'
   | 'activeType'
-  | 'placeCounts'
+  | 'arcCounts'
   | 'onSetActiveType'
   | 'onAddType'
   | 'onRenameType'
@@ -180,8 +164,8 @@ function ObjectTypeManager({
     >
       {objectTypes.length === 0 && (
         <div className="text-xs text-muted-foreground">
-          No object types yet — every place needs one. Adding a place creates
-          one automatically.
+          No object types yet — every arc belongs to one. Drawing an arc or
+          adding a START/END node creates one automatically.
         </div>
       )}
       {objectTypes.map((type) => {
@@ -202,13 +186,13 @@ function ObjectTypeManager({
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-sm hover:underline"
-                title="Make this the active type for new places"
+                title="Make this the active type for new arcs and START/END nodes"
                 onClick={() => onSetActiveType(type.name)}
               >
                 {type.name}
               </button>
               <span className="text-[11px] text-muted-foreground">
-                {placeCounts[type.name] ?? 0} pl.
+                {arcCounts[type.name] ?? 0} arc{(arcCounts[type.name] ?? 0) === 1 ? '' : 's'}
               </span>
               <Button
                 variant="ghost"
@@ -246,7 +230,7 @@ function ObjectTypeManager({
                     onDeleteType(editingType.name);
                   }}
                 >
-                  Delete type & places
+                  Delete type & its arcs
                 </Button>
               </div>
             )}
@@ -255,7 +239,7 @@ function ObjectTypeManager({
       })}
       {objectTypes.length > 0 && (
         <div className="text-[11px] text-muted-foreground">
-          New places use the highlighted active type.
+          New arcs and START/END nodes use the highlighted active type.
         </div>
       )}
     </PanelSection>
@@ -266,7 +250,7 @@ function ObjectTypeManager({
 // Panel
 // ---------------------------------------------------------------------------
 
-export function OcpnSidePanel(props: SidePanelProps) {
+export function OcdfgSidePanel(props: SidePanelProps) {
   const { selection, objectTypes } = props;
 
   if (!selection) {
@@ -278,8 +262,8 @@ export function OcpnSidePanel(props: SidePanelProps) {
           icon={<MousePointerClick className="size-6" />}
           title="Nothing selected"
           lines={[
-            'Add places and transitions from the toolbar.',
-            'Drag between handles to draw arcs.',
+            'Add activities and START/END nodes from the toolbar.',
+            'Drag between handles to draw typed arcs.',
             'Select an element to edit its properties.',
           ]}
         />
@@ -287,69 +271,51 @@ export function OcpnSidePanel(props: SidePanelProps) {
     );
   }
 
-  if (selection.kind === 'place') {
+  if (selection.kind === 'activity') {
     const { node } = selection;
     return (
       <div>
-        <PanelSection title="Place">
-          <PanelField label="Id">
-            <div className="rounded-md border bg-muted/40 px-2 py-1.5 font-mono text-xs">
-              {node.id}
-            </div>
-          </PanelField>
-          <PanelField label="Object type">
-            <PanelSelect
-              value={node.data.objectType}
-              ariaLabel="Object type of the place"
-              onChange={(value) => props.onChangePlaceType(node.id, value)}
-              options={objectTypes.map((t) => ({ value: t.name, label: t.name }))}
+        <PanelSection title="Activity">
+          <PanelField label="Name">
+            <CommitInput
+              value={node.data.label}
+              placeholder="Activity name"
+              ariaLabel="Activity name"
+              onCommit={(label) => props.onChangeActivityLabel(node.id, label)}
             />
           </PanelField>
-          <LabeledSwitch
-            label="Initial (source)"
-            checked={node.data.initial}
-            onCheckedChange={(checked) => props.onSetPlaceFlag(node.id, 'initial', checked)}
-          />
-          <LabeledSwitch
-            label="Final (sink)"
-            checked={node.data.final}
-            onCheckedChange={(checked) => props.onSetPlaceFlag(node.id, 'final', checked)}
-          />
           <Button variant="destructive" size="sm" onClick={() => props.onDeleteNode(node.id)}>
-            Delete place
+            Delete activity
           </Button>
         </PanelSection>
       </div>
     );
   }
 
-  if (selection.kind === 'transition') {
+  if (selection.kind === 'control') {
     const { node } = selection;
     return (
       <div>
-        <PanelSection title="Transition">
-          <PanelField label="Label">
-            <CommitInput
-              value={node.data.label}
-              disabled={node.data.silent}
-              placeholder={node.data.silent ? 'τ (silent)' : 'Activity name'}
-              ariaLabel="Transition label"
-              onCommit={(label) => props.onChangeTransitionLabel(node.id, label)}
-            />
-          </PanelField>
-          <LabeledSwitch
-            label="Silent (τ)"
-            checked={node.data.silent}
-            onCheckedChange={(checked) => props.onSetTransitionSilent(node.id, checked)}
-          />
-          {node.data.silent && (
-            <div className="text-[11px] text-muted-foreground">
-              Silent transitions have no activity label — the label is kept and
-              restored when the switch is turned off.
-            </div>
-          )}
+        <PanelSection title={node.data.kind === 'start' ? 'START node' : 'END node'}>
+          <div>
+            <Badge
+              variant="outline"
+              style={{ borderColor: node.data.color, color: node.data.color }}
+            >
+              <span
+                className="mr-1 size-2 rounded-full"
+                style={{ background: node.data.color }}
+              />
+              {node.data.objectType}
+            </Badge>
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {node.data.kind === 'start'
+              ? 'Objects of this type start here — arcs only leave a START node.'
+              : 'Objects of this type finish here — arcs only enter an END node.'}
+          </div>
           <Button variant="destructive" size="sm" onClick={() => props.onDeleteNode(node.id)}>
-            Delete transition
+            Delete {node.data.kind === 'start' ? 'START' : 'END'} node
           </Button>
         </PanelSection>
       </div>
@@ -357,37 +323,40 @@ export function OcpnSidePanel(props: SidePanelProps) {
   }
 
   const { edge } = selection;
+  const color = edge.data?.color ?? FALLBACK_TYPE_COLOR;
   return (
     <div>
-      <PanelSection title="Arc">
+      <PanelSection title={edge.source === edge.target ? 'Arc (self-loop)' : 'Arc'}>
         <div className="flex flex-wrap items-center gap-1.5 text-sm">
           <span className="font-medium">{selection.sourceLabel}</span>
           <span className="text-muted-foreground">→</span>
           <span className="font-medium">{selection.targetLabel}</span>
         </div>
-        <div>
-          <Badge
-            variant="outline"
-            style={{
-              borderColor: selection.color || FALLBACK_TYPE_COLOR,
-              color: selection.color || FALLBACK_TYPE_COLOR,
-            }}
-          >
-            <span
-              className="mr-1 size-2 rounded-full"
-              style={{ background: selection.color || FALLBACK_TYPE_COLOR }}
+        <PanelField label="Object type">
+          {selection.typeLocked ? (
+            <div>
+              <Badge variant="outline" style={{ borderColor: color, color }}>
+                <span className="mr-1 size-2 rounded-full" style={{ background: color }} />
+                {edge.data?.objectType || 'unknown type'}
+              </Badge>
+            </div>
+          ) : (
+            <PanelSelect
+              value={edge.data?.objectType ?? ''}
+              ariaLabel="Object type of the arc"
+              onChange={(value) => props.onChangeArcType(edge.id, value)}
+              options={objectTypes.map((t) => ({ value: t.name, label: t.name }))}
             />
-            {selection.objectType || 'unknown type'}
-          </Badge>
-        </div>
-        <LabeledSwitch
-          label="Variable arc (set of objects)"
-          checked={edge.data?.variable === true}
-          onCheckedChange={(checked) => props.onSetArcVariable(edge.id, checked)}
-        />
+          )}
+        </PanelField>
+        {selection.typeLocked && (
+          <div className="text-[11px] text-muted-foreground">
+            Arcs at a START/END node always belong to that node's object type.
+          </div>
+        )}
         <div className="text-[11px] text-muted-foreground">
-          Well-formedness: all arcs between this transition and places of the
-          same object type share the variable flag.
+          Double-click the arc to add a bend point; drag it to route the arc,
+          double-click the point to remove it.
         </div>
         <Button variant="destructive" size="sm" onClick={() => props.onDeleteEdge(edge.id)}>
           Delete arc

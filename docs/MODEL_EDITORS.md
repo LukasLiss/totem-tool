@@ -1,15 +1,16 @@
 # Visual Model Editors
 
 The **Editor** category in the left side panel provides visual editors for the
-three object-centric model types supported by the TOTeM tool:
+object-centric model types supported by the TOTeM tool:
 
 | Editor | Model | Reference |
 | --- | --- | --- |
 | TOTeM Model | Temporal Object Type Model | Liss et al., *TOTeM: Temporal Object Type Model for Object-Centric Process Mining*, BPM 2024 |
 | OC Causal Net | Object-Centric Causal Net (OCCN) | Liss et al., *Object-Centric Causal Nets*, CAiSE 2025 |
 | OC Petri Net | Object-Centric Petri Net (OCPN) | van der Aalst & Berti, *Discovering Object-Centric Petri Nets*, Fundamenta Informaticae |
+| OC-DFG | Object-Centric Directly-Follows Graph | van der Aalst & Berti, *Discovering Object-Centric Petri Nets*, Fundamenta Informaticae (Sect. 4) |
 
-All three editors share the same workflow:
+All editors share the same workflow:
 
 - **Start from scratch** — add elements from the floating toolbar on the
   canvas, connect them by dragging between the small handles on node borders,
@@ -128,6 +129,50 @@ just the net can ignore:
   "arcs": [
     { "id": "a1", "source": "o1", "target": "t_place" },
     { "id": "a2", "source": "t_place", "target": "o2" }
+  ]
+}
+```
+
+## OC-DFG format (`"format": "ocdfg"`)
+
+An object-centric directly-follows graph: **activity** nodes plus one
+artificial **START** (▶) and **END** (■) node per object type, connected by
+**typed arcs** — every arc belongs to exactly one object type and is drawn in
+that type's color (a multigraph: the same two activities can be connected by
+one arc per type). Self-loops (an activity directly follows itself) are
+allowed and drawn as a loop next to the node. Arcs cannot leave an END node
+or enter a START node, and arcs at a START/END node always belong to that
+node's object type. There are no variable arcs.
+
+Arcs float and support the same **bend points** as the OCPN editor
+(double-click the arc to add, drag to route, double-click the point to
+remove; saved as the optional layout-only `"waypoints"` array). Parallel
+arcs between the same two nodes and stacked self-loops are routed apart
+automatically until you place your own bend points.
+
+```json
+{
+  "format": "ocdfg",
+  "version": 1,
+  "name": "Order fulfilment (OC-DFG)",
+  "objectTypes": [
+    { "name": "Order", "color": "#10B981" },
+    { "name": "Item", "color": "#2563EB" }
+  ],
+  "activities": [
+    { "id": "place", "label": "place order", "position": { "x": 300, "y": 170 } },
+    { "id": "pick", "label": "pick item", "position": { "x": 640, "y": 340 } }
+  ],
+  "starts": [
+    { "id": "start_Order", "objectType": "Order", "position": { "x": 40, "y": 70 } }
+  ],
+  "ends": [
+    { "id": "end_Order", "objectType": "Order", "position": { "x": 1620, "y": 70 } }
+  ],
+  "arcs": [
+    { "id": "a1", "source": "start_Order", "target": "place", "objectType": "Order" },
+    { "id": "a2", "source": "place", "target": "pick", "objectType": "Item" },
+    { "id": "a3", "source": "pick", "target": "pick", "objectType": "Item" }
   ]
 }
 ```
