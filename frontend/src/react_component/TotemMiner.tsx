@@ -58,9 +58,23 @@ export default function TotemMiner({
     <Card
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <CardTitle>TOTeM Model</CardTitle>
-        <CardAction className="flex items-center gap-4">
+      {/* Custom inline header matching thesis layout */}
+      <div className="flex flex-row items-center justify-between relative z-10 flex-shrink-0 w-full px-6 py-3 border-b bg-white">
+        <h3 className="text-base font-semibold leading-none tracking-tight text-slate-900">
+          TOTeM Model
+        </h3>
+        <div className="flex items-center gap-5">
+          {/* HUD Metrics */}
+          <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
+            <span>
+              Fitness: <span className="font-bold text-orange-500">0.84</span>
+            </span>
+            <span>
+              Precision: <span className="font-bold text-slate-700">1.00</span>
+            </span>
+            <div className="w-px h-4 bg-slate-200" />
+          </div>
+
           {/* τ slider */}
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[50px] text-right">
@@ -98,8 +112,8 @@ export default function TotemMiner({
             <RefreshCcw className="h-4 w-4" />
             Reload
           </Button>
-        </CardAction>
-      </CardHeader>
+        </div>
+      </div>
       <CardContent
         className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}
