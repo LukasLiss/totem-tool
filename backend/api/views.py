@@ -16,7 +16,7 @@ from django.db.models import Max
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
-from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
+from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
@@ -271,7 +271,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
-            serialized = _serialize_totem(totem)
+            serialized = totem_to_dict(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
@@ -819,67 +819,6 @@ def _layout_shim(db: OcelDuckDB):
 
 
 
-def _serialize_totem(totem: Totem) -> dict:
-    """
-    Convert a Totem object into a JSON-serializable structure matching the frontend contract.
-    """
-    tempgraph = {}
-    raw_tempgraph = getattr(totem, "tempgraph", {}) or {}
-
-    nodes = raw_tempgraph.get("nodes", [])
-    if isinstance(nodes, set):
-        tempgraph["nodes"] = sorted(nodes)
-    else:
-        tempgraph["nodes"] = list(nodes) if isinstance(nodes, (list, tuple)) else nodes
-
-    for relation, edges in raw_tempgraph.items():
-        if relation == "nodes":
-            continue
-        if isinstance(edges, set):
-            tempgraph[relation] = [list(edge) for edge in sorted(edges)]
-        elif isinstance(edges, list):
-            tempgraph[relation] = [list(edge) if isinstance(edge, tuple) else edge for edge in edges]
-        else:
-            tempgraph[relation] = edges
-
-    cardinalities = []
-    for (source, target), data in getattr(totem, "cardinalities", {}).items():
-        if not isinstance(data, dict):
-            continue
-        cardinalities.append({
-            "from": source,
-            "to": target,
-            "log_cardinality": data.get("LC"),
-            "event_cardinality": data.get("EC"),
-        })
-    cardinalities.sort(key=lambda item: (item["from"], item["to"]))
-
-    type_relations = []
-    for relation in getattr(totem, "type_relations", set()):
-        relation_list = sorted(list(relation)) if isinstance(relation, (set, frozenset)) else relation
-        type_relations.append(relation_list)
-    type_relations.sort()
-
-    all_event_types = sorted(getattr(totem, "all_event_types", []))
-
-    object_type_to_event_types = {}
-    for obj_type, events in getattr(totem, "object_type_to_event_types", {}).items():
-        if isinstance(events, set):
-            object_type_to_event_types[obj_type] = sorted(events)
-        elif isinstance(events, (list, tuple)):
-            object_type_to_event_types[obj_type] = list(events)
-        else:
-            object_type_to_event_types[obj_type] = []
-
-    return {
-        "tempgraph": tempgraph,
-        "cardinalities": cardinalities,
-        "type_relations": type_relations,
-        "all_event_types": all_event_types,
-        "object_type_to_event_types": object_type_to_event_types,
-    }
-
-
 def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
     """
     Convert MLPA output into a JSON-serializable structure for the frontend.
@@ -910,7 +849,7 @@ def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
         })
 
     # Also include the serialized totem data for edge information
-    totem_data = _serialize_totem(totem)
+    totem_data = totem_to_dict(totem)
 
     return {
         "layers": layers,
