@@ -1,15 +1,13 @@
 /**
  * TOTeM Miner Visualizer
  *
- * Renders the TOTeM temporal graph as a force-directed graph, matching the
- * thesis paper layout:
- *  - Each object type is a coloured rounded-rectangle node
- *  - Arcs are drawn with relation-specific colours/styles
- *  - Each arc carries:
- *      · A source-end label  (log_cardinality reformatted: "1..n" → "1,*")
- *      · A midpoint oval bubble  (event_cardinality | log_cardinality, e.g. "0|1")
- *      · A small filled square at the source endpoint
- *  - A HUD shows Fitness / Precision / τ
+ * Renders the TOTeM temporal graph as a hierarchical graph matching the thesis paper:
+ *  - Layered (Sugiyama-style) top-to-bottom layout based on D-relation direction
+ *  - Each object type is a coloured rounded-rectangle node (auto-width)
+ *  - Arcs styled by relation type (black=D, red=P, blue=I, dashed=I)
+ *  - Source label (e.g. "1,*" or "1") near arc origin
+ *  - Oval EC|LC cardinality bubble at arc midpoint
+ *  - Filled square terminator at arc source endpoint
  *  - Pan & zoom via SVG transform
  */
 
@@ -52,7 +50,6 @@ type TotemApiResponse = {
   object_type_to_event_types?: Record<string, string[]>;
 };
 
-/** Relation types used in tempgraph */
 type RelationType = 'D' | 'P' | 'I' | 'A' | 'Di' | string;
 
 type GraphEdge = {
@@ -60,10 +57,8 @@ type GraphEdge = {
   from: string;
   to: string;
   relation: RelationType;
-  /** log_cardinality reformatted for source label, e.g. "1,*" */
-  sourceLabel: string;
-  /** EC | LC bubble label, e.g. "0|1" */
-  bubbleLabel: string;
+  sourceLabel: string;   // near-source label e.g. "1,*"
+  bubbleLabel: string;   // midpoint oval e.g. "0|1"
 };
 
 type LayoutNode = {
@@ -107,7 +102,6 @@ type TotemMinerVisualizerProps = {
 
 const DEFAULT_BACKEND = 'http://localhost:8000';
 
-/** Colour per relation type (matching thesis: black for D/Di, red for P, blue for I, grey for A) */
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',
   Di: '#0f172a',
@@ -116,35 +110,51 @@ const RELATION_COLOR: Record<string, string> = {
   A: '#64748b',
 };
 
-const NODE_W = 110;
 const NODE_H = 36;
-const NODE_R = 8; // border-radius
-const OVAL_RX = 22;
+const NODE_PADDING_X = 16;
+const NODE_R = 6;
+const OVAL_RX = 20;
 const OVAL_RY = 10;
 const SQUARE_SIZE = 7;
+const FONT_SIZE_NODE = 12;
+const FONT_SIZE_LABEL = 10;
+const FONT_SIZE_BUBBLE = 9.5;
+const NODE_FONT_FAMILY = 'Inter, ui-sans-serif, system-ui, sans-serif';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Approximate char width at given font size (used for auto-sizing nodes)
+function estimateTextWidth(text: string, fontSize: number): number {
+  return text.length * fontSize * 0.62;
+}
 
-/** Convert backend cardinality string ("1..n", "0..1", "1..1") to compact form ("1,*", "0..1", "1") */
-function formatCardinality(raw: string | null): string {
+function nodeWidth(label: string): number {
+  return Math.max(80, estimateTextWidth(label, FONT_SIZE_NODE) + NODE_PADDING_X * 2);
+}
+
+// ─── Cardinality helpers ──────────────────────────────────────────────────────
+
+/** "1..n" → "1,*" | "1..1" → "1" | "0..1" → "0..1" */
+function formatCardinality(raw: string | null | undefined): string {
   if (!raw) return '';
   const s = raw.trim();
   if (s === '1..1' || s === '1') return '1';
-  if (s === '1..n' || s === '1..*' || s === '1..N') return '1,*';
-  if (s === '0..n' || s === '0..*' || s === '0..N') return '0,*';
-  if (s === '0..1') return '0..1';
-  // fallback: replace .. with , if it ends in n
-  return s.replace(/\.\.[nN]/, ',*');
+  if (s === '1..n' || s === '1..*' || s === '1..N' || s === '1,n' || s === '1,*') return '1,*';
+  if (s === '0..n' || s === '0..*' || s === '0..N' || s === '0,n' || s === '0,*') return '0,*';
+  if (s === '0..1' || s === '0,1') return '0..1';
+  return s.replace(/\.\.[nN]/, ',*').replace(/,n/, ',*');
 }
 
-/** Build a two-char bubble label from EC and LC, e.g. "0|1" */
-function bubbleLabel(ec: string | null, lc: string | null): string {
-  const ecShort = ec ? (ec.startsWith('0') ? '0' : '1') : '0';
-  const lcShort = lc ? (lc.startsWith('0') ? '0' : '1') : '0';
-  return `${ecShort}|${lcShort}`;
+/** Build compact "EC|LC" label from raw cardinality strings */
+function makeBubbleLabel(ec: string | null | undefined, lc: string | null | undefined): string {
+  const side = (v: string | null | undefined) => {
+    if (!v) return '0';
+    const s = v.trim();
+    return s.startsWith('0') ? '0' : '1';
+  };
+  return `${side(ec)}|${side(lc)}`;
 }
 
-/** Extract all edges from the tempgraph by relation key */
+// ─── Extract edges from tempgraph ────────────────────────────────────────────
+
 function extractEdges(
   tempgraph: TotemApiResponse['tempgraph'],
   cardinalities: TotemCardinality[],
@@ -167,150 +177,180 @@ function extractEdges(
         from,
         to,
         relation: key,
-        sourceLabel: formatCardinality(card?.log_cardinality ?? null),
-        bubbleLabel: bubbleLabel(
-          card?.event_cardinality ?? null,
-          card?.log_cardinality ?? null,
-        ),
+        sourceLabel: formatCardinality(card?.log_cardinality),
+        bubbleLabel: makeBubbleLabel(card?.event_cardinality, card?.log_cardinality),
       });
     });
   }
   return edges;
 }
 
-// ─── D3-style force layout (pure JS, no d3 import needed) ────────────────────
+// ─── Hierarchical layout (Sugiyama-style) ────────────────────────────────────
 
-type SimNode = { id: string; x: number; y: number; vx: number; vy: number; fx?: number; fy?: number };
-type SimEdge = { from: string; to: string };
-
-function runForceLayout(
+/**
+ * Assigns each node to a layer based on the longest path from a source node
+ * in the Dependent (D) edges subgraph. Nodes with no incoming D-edges are at
+ * layer 0 (top). Lays out nodes within each layer evenly spaced.
+ */
+function computeHierarchicalLayout(
   nodeIds: string[],
-  edges: SimEdge[],
+  edges: GraphEdge[],
   width: number,
   height: number,
-  iterations = 400,
+  nodeWidths: Map<string, number>,
 ): Map<string, { x: number; y: number }> {
   if (nodeIds.length === 0) return new Map();
 
-  const nodes: SimNode[] = nodeIds.map((id, i) => ({
-    id,
-    x: width / 2 + Math.cos((i / nodeIds.length) * 2 * Math.PI) * Math.min(width, height) * 0.35,
-    y: height / 2 + Math.sin((i / nodeIds.length) * 2 * Math.PI) * Math.min(width, height) * 0.35,
-    vx: 0,
-    vy: 0,
-  }));
+  // Use D edges for hierarchy; fall back to all edges if none exist
+  const dirEdges = edges.filter((e) => e.relation === 'D' || e.relation === 'Di');
+  const hierarchyEdges = dirEdges.length > 0 ? dirEdges : edges;
 
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  // Build adjacency + in-degree
+  const adj = new Map<string, string[]>(nodeIds.map((id) => [id, []]));
+  const inDegree = new Map<string, number>(nodeIds.map((id) => [id, 0]));
 
-  const REPULSION = 8000;
-  const SPRING_LENGTH = 180;
-  const SPRING_K = 0.04;
-  const DAMPING = 0.85;
-  const CENTER_GRAVITY = 0.01;
-  const cx = width / 2;
-  const cy = height / 2;
+  for (const e of hierarchyEdges) {
+    if (!adj.has(e.from) || !adj.has(e.to)) continue;
+    adj.get(e.from)!.push(e.to);
+    inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1);
+  }
 
-  for (let iter = 0; iter < iterations; iter++) {
-    // Repulsion between all pairs
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i];
-        const b = nodes[j];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const force = REPULSION / (dist * dist);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        a.vx -= fx;
-        a.vy -= fy;
-        b.vx += fx;
-        b.vy += fy;
+  // BFS: longest-path layer assignment
+  const layer = new Map<string, number>(nodeIds.map((id) => [id, 0]));
+  const queue = nodeIds.filter((id) => (inDegree.get(id) ?? 0) === 0);
+  const rem = new Map(inDegree);
+  const enqueued = new Set(queue);
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    const cur = layer.get(node) ?? 0;
+    for (const nb of adj.get(node) ?? []) {
+      const proposed = cur + 1;
+      if (proposed > (layer.get(nb) ?? 0)) layer.set(nb, proposed);
+      const r = (rem.get(nb) ?? 1) - 1;
+      rem.set(nb, r);
+      if (r <= 0 && !enqueued.has(nb)) {
+        enqueued.add(nb);
+        queue.push(nb);
       }
     }
+  }
+  // Any node not yet enqueued gets layer 0
+  for (const id of nodeIds) if (!enqueued.has(id)) layer.set(id, 0);
 
-    // Spring attraction along edges
-    for (const edge of edges) {
-      const a = nodeMap.get(edge.from);
-      const b = nodeMap.get(edge.to);
-      if (!a || !b) continue;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-      const stretch = dist - SPRING_LENGTH;
-      const force = SPRING_K * stretch;
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-      a.vx += fx;
-      a.vy += fy;
-      b.vx -= fx;
-      b.vy -= fy;
-    }
+  // Group nodes by layer
+  const byLayer = new Map<number, string[]>();
+  for (const id of nodeIds) {
+    const l = layer.get(id) ?? 0;
+    if (!byLayer.has(l)) byLayer.set(l, []);
+    byLayer.get(l)!.push(id);
+  }
+  // Sort each layer for stable ordering
+  for (const nodes of byLayer.values()) nodes.sort();
 
-    // Center gravity
-    for (const n of nodes) {
-      n.vx += (cx - n.x) * CENTER_GRAVITY;
-      n.vy += (cy - n.y) * CENTER_GRAVITY;
-    }
+  const numLayers = Math.max(...Array.from(layer.values())) + 1;
 
-    // Integrate
-    for (const n of nodes) {
-      n.vx *= DAMPING;
-      n.vy *= DAMPING;
-      n.x += n.vx;
-      n.y += n.vy;
+  const PADDING_Y = 70;
+  const PADDING_X = 60;
+  const usableH = Math.max(height - PADDING_Y * 2, 200);
+  const usableW = Math.max(width - PADDING_X * 2, 400);
+  const layerY = (l: number) =>
+    numLayers === 1 ? height / 2 : PADDING_Y + (l / (numLayers - 1)) * usableH;
+
+  const positions = new Map<string, { x: number; y: number }>();
+
+  for (const [l, nodes] of byLayer) {
+    const y = layerY(l);
+    // Total width needed for this layer
+    const totalNodeW = nodes.reduce((s, id) => s + (nodeWidths.get(id) ?? 80), 0);
+    const gap = nodes.length > 1 ? (usableW - totalNodeW) / (nodes.length - 1) : 0;
+    const startX = PADDING_X + (usableW - totalNodeW - gap * (nodes.length - 1)) / 2;
+    let curX = startX;
+    for (const id of nodes) {
+      const w = nodeWidths.get(id) ?? 80;
+      positions.set(id, { x: curX + w / 2, y });
+      curX += w + Math.max(gap, 30);
     }
   }
 
-  return new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  return positions;
 }
 
-// ─── Arc path utilities ───────────────────────────────────────────────────────
+// ─── Arc / geometry helpers ──────────────────────────────────────────────────
 
-/** Clip a line from (cx,cy) to (tx,ty) at the border of a rectangle centred at (cx,cy). */
+/** Point where the line from (cx,cy)→(tx,ty) exits a rectangle centred at (cx,cy). */
 function clipToBorder(
   cx: number, cy: number,
   tx: number, ty: number,
-  halfW: number, halfH: number,
+  hw: number, hh: number,
 ): { x: number; y: number } {
-  const dx = tx - cx;
-  const dy = ty - cy;
-  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return { x: cx, y: cy };
-  const scaleX = Math.abs(dx) > 0.001 ? halfW / Math.abs(dx) : Infinity;
-  const scaleY = Math.abs(dy) > 0.001 ? halfH / Math.abs(dy) : Infinity;
-  const scale = Math.min(scaleX, scaleY);
-  return { x: cx + dx * scale, y: cy + dy * scale };
+  const dx = tx - cx, dy = ty - cy;
+  if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return { x: cx, y: cy };
+  const sx = hw / Math.abs(dx || 1e-9);
+  const sy = hh / Math.abs(dy || 1e-9);
+  const s = Math.min(sx, sy);
+  return { x: cx + dx * s, y: cy + dy * s };
 }
 
-/** Midpoint of two points, offset perpendicularly by `offset` pixels. */
-function midpointOffset(
-  x1: number, y1: number,
-  x2: number, y2: number,
-  offset: number,
-): { x: number; y: number } {
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  return { x: mx - (dy / len) * offset, y: my + (dx / len) * offset };
-}
-
-/** Arrowhead path at point (tx,ty) pointing from (sx,sy) → (tx,ty). */
+/** Arrowhead polygon at (tx,ty) pointing from (sx,sy)→(tx,ty). */
 function arrowPath(sx: number, sy: number, tx: number, ty: number, size = 9): string {
-  const dx = tx - sx;
-  const dy = ty - sy;
+  const dx = tx - sx, dy = ty - sy;
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  const ux = dx / len;
-  const uy = dy / len;
-  const px = -uy;
-  const py = ux;
-  const ax = tx - ux * size;
-  const ay = ty - uy * size;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  const ax = tx - ux * size, ay = ty - uy * size;
   return `M ${tx} ${ty} L ${ax + px * size * 0.42} ${ay + py * size * 0.42} L ${ax - px * size * 0.42} ${ay - py * size * 0.42} Z`;
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+/** A quadratic bezier SVG path string with control point offset perpendicularly. */
+function bezierPath(
+  x1: number, y1: number,
+  x2: number, y2: number,
+  curvature = 0,
+): string {
+  if (Math.abs(curvature) < 0.5) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const cx = mx - (dy / len) * curvature;
+  const cy = my + (dx / len) * curvature;
+  return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
+}
+
+/** Point along a quadratic bezier at t=0.5 */
+function bezierMid(
+  x1: number, y1: number,
+  x2: number, y2: number,
+  curvature = 0,
+): { x: number; y: number } {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  if (Math.abs(curvature) < 0.5) return { x: mx, y: my };
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const cpx = mx - (dy / len) * curvature;
+  const cpy = my + (dx / len) * curvature;
+  // Bezier at t=0.5: 0.25*P0 + 0.5*CP + 0.25*P2
+  return {
+    x: 0.25 * x1 + 0.5 * cpx + 0.25 * x2,
+    y: 0.25 * y1 + 0.5 * cpy + 0.25 * y2,
+  };
+}
+
+/** Direction vector along quadratic bezier at t=0 (tangent at start). */
+function bezierStartTangent(
+  x1: number, y1: number,
+  x2: number, y2: number,
+  curvature = 0,
+): { dx: number; dy: number } {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const edx = x2 - x1, edy = y2 - y1;
+  const len = Math.sqrt(edx * edx + edy * edy) || 1;
+  const cpx = mx - (edy / len) * curvature;
+  const cpy = my + (edx / len) * curvature;
+  return { dx: cpx - x1, dy: cpy - y1 };
+}
+
+// ─── Main Component ──────────────────────────────────────────────────────────
 
 function TotemMinerVisualizer({
   eventLogId,
@@ -327,7 +367,7 @@ function TotemMinerVisualizer({
   const [error, setError] = useState<string | null>(null);
   const [rawData, setRawData] = useState<TotemApiResponse | null>(null);
 
-  // Pan & zoom state
+  // Pan & zoom
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panLocked, setPanLocked] = useState(false);
@@ -335,13 +375,12 @@ function TotemMinerVisualizer({
   const panStart = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0 });
 
-  const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
 
   const effectiveReloadSignal = reloadSignal ?? 0;
 
-  // ── Fetch data ──────────────────────────────────────────────────────────────
+  // ── Fetch ────────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!eventLogId) { setRawData(null); return; }
     setLoading(true);
@@ -362,119 +401,106 @@ function TotemMinerVisualizer({
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
 
-  // ── Container size observer ─────────────────────────────────────────────────
+  // ── Container size ───────────────────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const obs = new ResizeObserver(() => {
-      setSvgSize({ width: el.clientWidth, height: el.clientHeight });
-    });
+    const obs = new ResizeObserver(() =>
+      setSvgSize({ width: el.clientWidth, height: el.clientHeight }),
+    );
     obs.observe(el);
     setSvgSize({ width: el.clientWidth, height: el.clientHeight });
     return () => obs.disconnect();
   }, []);
 
-  // ── Build graph data ────────────────────────────────────────────────────────
-  const { nodes: nodeIds, edges, colorMap } = useMemo(() => {
-    if (!rawData?.tempgraph) return { nodes: [], edges: [], colorMap: {} };
-    const nodes = rawData.tempgraph.nodes as string[] ?? [];
+  // ── Build graph data ─────────────────────────────────────────────────────────
+  const { nodeIds, edges, colorMap } = useMemo(() => {
+    if (!rawData?.tempgraph) return { nodeIds: [], edges: [], colorMap: {} };
+    const nodeIds = (rawData.tempgraph.nodes as string[]) ?? [];
     const edges = extractEdges(rawData.tempgraph, rawData.cardinalities ?? []);
-    const colorMap = mapTypesToColors(nodes);
-    return { nodes, edges, colorMap };
+    const colorMap = mapTypesToColors(nodeIds);
+    return { nodeIds, edges, colorMap };
   }, [rawData]);
 
-  // ── Force layout ────────────────────────────────────────────────────────────
-  const layoutMap = useMemo(() => {
-    if (nodeIds.length === 0) return new Map<string, { x: number; y: number }>();
-    return runForceLayout(
-      nodeIds,
-      edges.map((e) => ({ from: e.from, to: e.to })),
-      svgSize.width,
-      svgSize.height,
-    );
-  }, [nodeIds, edges, svgSize.width, svgSize.height]);
+  // Node widths (auto-sized to label)
+  const widthMap = useMemo(
+    () => new Map(nodeIds.map((id) => [id, nodeWidth(id)])),
+    [nodeIds],
+  );
 
-  // Build positioned node objects
+  // ── Hierarchical layout ──────────────────────────────────────────────────────
+  const layoutMap = useMemo(
+    () => computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap),
+    [nodeIds, edges, svgSize.width, svgSize.height, widthMap],
+  );
+
   const layoutNodes: LayoutNode[] = useMemo(
     () =>
       nodeIds.map((id) => {
         const pos = layoutMap.get(id) ?? { x: 100, y: 100 };
         const color = colorMap[id] ?? '#2563eb';
         const textColor = textColorForBackground(color, { minContrast: 3.8, gradientSamples: [] });
-        return { id, x: pos.x, y: pos.y, width: NODE_W, height: NODE_H, color, textColor };
+        return { id, x: pos.x, y: pos.y, width: widthMap.get(id) ?? 80, height: NODE_H, color, textColor };
       }),
-    [nodeIds, layoutMap, colorMap],
+    [nodeIds, layoutMap, colorMap, widthMap],
   );
+
   const nodePos = useMemo(
     () => new Map(layoutNodes.map((n) => [n.id, n])),
     [layoutNodes],
   );
 
-  // ── Auto-fit on data load ───────────────────────────────────────────────────
+  // ── Auto-fit on layout change ────────────────────────────────────────────────
   useEffect(() => {
     if (layoutNodes.length === 0) return;
     const xs = layoutNodes.map((n) => n.x);
     const ys = layoutNodes.map((n) => n.y);
-    const minX = Math.min(...xs) - NODE_W / 2 - 40;
-    const maxX = Math.max(...xs) + NODE_W / 2 + 40;
-    const minY = Math.min(...ys) - NODE_H / 2 - 40;
-    const maxY = Math.max(...ys) + NODE_H / 2 + 40;
-    const graphW = maxX - minX;
-    const graphH = maxY - minY;
-    const scaleX = svgSize.width / graphW;
-    const scaleY = svgSize.height / graphH;
-    const newZoom = Math.min(scaleX, scaleY, 1.5);
-    const newPanX = (svgSize.width - graphW * newZoom) / 2 - minX * newZoom;
-    const newPanY = (svgSize.height - graphH * newZoom) / 2 - minY * newZoom;
+    const minX = Math.min(...xs) - 80;
+    const maxX = Math.max(...xs) + 80;
+    const minY = Math.min(...ys) - 60;
+    const maxY = Math.max(...ys) + 60;
+    const gW = maxX - minX;
+    const gH = maxY - minY;
+    const newZoom = Math.min(svgSize.width / gW, svgSize.height / gH, 1.6);
     setZoom(newZoom);
-    setPan({ x: newPanX, y: newPanY });
+    setPan({
+      x: (svgSize.width - gW * newZoom) / 2 - minX * newZoom,
+      y: (svgSize.height - gH * newZoom) / 2 - minY * newZoom,
+    });
   }, [layoutNodes, svgSize]);
 
-  // ── Zoom handlers ───────────────────────────────────────────────────────────
+  // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    setZoom((z) => Math.max(0.2, Math.min(4, z * factor)));
+    setZoom((z) => Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12))));
   }, []);
-
-  const handleZoomIn = () => setZoom((z) => Math.min(4, z * 1.2));
-  const handleZoomOut = () => setZoom((z) => Math.max(0.2, z / 1.2));
+  const handleZoomIn = () => setZoom((z) => Math.min(5, z * 1.2));
+  const handleZoomOut = () => setZoom((z) => Math.max(0.15, z / 1.2));
   const handleFit = () => {
     if (layoutNodes.length === 0) return;
     const xs = layoutNodes.map((n) => n.x);
     const ys = layoutNodes.map((n) => n.y);
-    const minX = Math.min(...xs) - NODE_W / 2 - 40;
-    const maxX = Math.max(...xs) + NODE_W / 2 + 40;
-    const minY = Math.min(...ys) - NODE_H / 2 - 40;
-    const maxY = Math.max(...ys) + NODE_H / 2 + 40;
-    const graphW = maxX - minX;
-    const graphH = maxY - minY;
-    const scaleX = svgSize.width / graphW;
-    const scaleY = svgSize.height / graphH;
-    const newZoom = Math.min(scaleX, scaleY, 1.5);
-    setZoom(newZoom);
+    const minX = Math.min(...xs) - 80, maxX = Math.max(...xs) + 80;
+    const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
+    const gW = maxX - minX, gH = maxY - minY;
+    const nz = Math.min(svgSize.width / gW, svgSize.height / gH, 1.6);
+    setZoom(nz);
     setPan({
-      x: (svgSize.width - graphW * newZoom) / 2 - minX * newZoom,
-      y: (svgSize.height - graphH * newZoom) / 2 - minY * newZoom,
+      x: (svgSize.width - gW * nz) / 2 - minX * nz,
+      y: (svgSize.height - gH * nz) / 2 - minY * nz,
     });
   };
 
-  // ── Pan handlers ─────────────────────────────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (panLocked) return;
-    if (e.button !== 0) return;
+    if (panLocked || e.button !== 0) return;
     isPanning.current = true;
     panStart.current = { x: e.clientX, y: e.clientY };
     panOrigin.current = { x: pan.x, y: pan.y };
   }, [pan, panLocked]);
-
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isPanning.current) return;
-    const dx = e.clientX - panStart.current.x;
-    const dy = e.clientY - panStart.current.y;
-    setPan({ x: panOrigin.current.x + dx, y: panOrigin.current.y + dy });
+    setPan({ x: panOrigin.current.x + e.clientX - panStart.current.x, y: panOrigin.current.y + e.clientY - panStart.current.y });
   }, []);
-
   const handleMouseUp = useCallback(() => { isPanning.current = false; }, []);
 
   // Expose controls
@@ -484,56 +510,85 @@ function TotemMinerVisualizer({
       onProcessAreaScaleChange: setZoom,
       autoZoomEnabled: !panLocked,
       onAutoZoomToggle: () => setPanLocked((v) => !v),
-      minScale: 0.2,
-      maxScale: 4,
-      scaleStep: 0.05,
+      minScale: 0.15, maxScale: 5, scaleStep: 0.05,
     });
   }, [zoom, panLocked, onControlsReady]);
 
-  // ── Resolve height ──────────────────────────────────────────────────────────
   const computedHeight = typeof height === 'number' ? `${height}px` : height;
 
-  // ── Render graph edges ──────────────────────────────────────────────────────
+  // ── Determine curvature per edge (same layer → curve, else straight) ─────────
+  const edgeCurvatures = useMemo(() => {
+    const layerOf = new Map<string, number>();
+    layoutNodes.forEach((n) => {
+      // Use y-position as proxy for layer index (higher y = deeper layer)
+      layerOf.set(n.id, Math.round(n.y));
+    });
+
+    // Count parallel edges between same node pair (for offset)
+    const pairCount = new Map<string, number>();
+    const pairIndex = new Map<string, number>();
+    for (const e of edges) {
+      const key = [e.from, e.to].sort().join('↔');
+      pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+    }
+    for (const e of edges) {
+      const key = [e.from, e.to].sort().join('↔');
+      const idx = pairIndex.get(key) ?? 0;
+      pairIndex.set(key, idx + 1);
+      const count = pairCount.get(key) ?? 1;
+      const sameLayer = layerOf.get(e.from) === layerOf.get(e.to);
+      // Curve same-layer edges or multi-edges
+      const baseCurve = sameLayer ? 60 : count > 1 ? 40 : 0;
+      const sign = idx % 2 === 0 ? 1 : -1;
+      pairIndex.set(e.id, baseCurve * sign);
+    }
+    return pairIndex;
+  }, [edges, layoutNodes]);
+
+  // ── Render edges ─────────────────────────────────────────────────────────────
   const renderedEdges = useMemo(() => {
     return edges.map((edge) => {
       const src = nodePos.get(edge.from);
       const tgt = nodePos.get(edge.to);
       if (!src || !tgt) return null;
 
+      const curvature = edgeCurvatures.get(edge.id) ?? 0;
       const color = RELATION_COLOR[edge.relation] ?? '#64748b';
-      const isConcurrent = edge.relation === 'P'; // parallel = double-bar arrowhead
+      const isConcurrent = edge.relation === 'P';
+      const isDashed = edge.relation === 'I';
 
-      // Clip line to node borders
-      const srcPt = clipToBorder(src.x, src.y, tgt.x, tgt.y, NODE_W / 2 + 2, NODE_H / 2 + 2);
-      const tgtPt = clipToBorder(tgt.x, tgt.y, src.x, src.y, NODE_W / 2 + 8, NODE_H / 2 + 8);
+      // Clip endpoints to node borders
+      const srcPt = clipToBorder(src.x, src.y, tgt.x, tgt.y, src.width / 2 + 1, NODE_H / 2 + 1);
+      const tgtPt = clipToBorder(tgt.x, tgt.y, src.x, src.y, tgt.width / 2 + 6, NODE_H / 2 + 6);
 
-      // Arrowhead at target
+      const path = bezierPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
       const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
 
-      // Bubble midpoint (slightly offset to avoid overlap)
-      const bubblePt = midpointOffset(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 0);
+      // Midpoint bubble position
+      const midPt = bezierMid(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
 
-      // Source label position (near source endpoint)
+      // Source label: 20% along arc
       const labelT = 0.22;
-      const labelX = srcPt.x + (tgtPt.x - srcPt.x) * labelT;
-      const labelY = srcPt.y + (tgtPt.y - srcPt.y) * labelT;
+      const lx = srcPt.x + (tgtPt.x - srcPt.x) * labelT;
+      const ly = srcPt.y + (tgtPt.y - srcPt.y) * labelT;
+      const edgeDx = tgtPt.x - srcPt.x;
+      const edgeDy = tgtPt.y - srcPt.y;
+      const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
+      const perpX = -edgeDy / edgeLen;
+      const perpY = edgeDx / edgeLen;
 
-      // Small offset for readability
-      const dx = tgtPt.x - srcPt.x;
-      const dy = tgtPt.y - srcPt.y;
-      const len = Math.sqrt(dx * dx + dy * dy) || 1;
-      const perpX = -dy / len;
-      const perpY = dx / len;
+      // Square rotation angle
+      const squareAngle = Math.atan2(edgeDy, edgeDx) * 180 / Math.PI;
 
       return (
         <g key={edge.id}>
-          {/* Main arc line */}
-          <line
-            x1={srcPt.x} y1={srcPt.y}
-            x2={tgtPt.x} y2={tgtPt.y}
+          {/* Arc path */}
+          <path
+            d={path}
             stroke={color}
             strokeWidth={isConcurrent ? 2 : 1.5}
-            strokeDasharray={edge.relation === 'I' ? '6 3' : undefined}
+            strokeDasharray={isDashed ? '6 3' : undefined}
+            fill="none"
           />
 
           {/* Arrowhead */}
@@ -546,47 +601,39 @@ function TotemMinerVisualizer({
             width={SQUARE_SIZE}
             height={SQUARE_SIZE}
             fill={color}
-            transform={`rotate(${Math.atan2(dy, dx) * 180 / Math.PI}, ${srcPt.x}, ${srcPt.y})`}
+            transform={`rotate(${squareAngle}, ${srcPt.x}, ${srcPt.y})`}
           />
 
-          {/* Parallel double-bar (P relation) */}
+          {/* Parallel (P) double bars near source */}
           {isConcurrent && (
             <>
-              <line
-                x1={srcPt.x + perpX * 5} y1={srcPt.y + perpY * 5}
-                x2={srcPt.x + perpX * 5 + dx * 0.08} y2={srcPt.y + perpY * 5 + dy * 0.08}
-                stroke={color} strokeWidth={2}
-              />
-              <line
-                x1={srcPt.x - perpX * 5} y1={srcPt.y - perpY * 5}
-                x2={srcPt.x - perpX * 5 + dx * 0.08} y2={srcPt.y - perpY * 5 + dy * 0.08}
-                stroke={color} strokeWidth={2}
-              />
+              <line x1={srcPt.x + perpX * 5} y1={srcPt.y + perpY * 5} x2={srcPt.x + perpX * 5 + edgeDx * 0.1} y2={srcPt.y + perpY * 5 + edgeDy * 0.1} stroke={color} strokeWidth={1.8} />
+              <line x1={srcPt.x - perpX * 5} y1={srcPt.y - perpY * 5} x2={srcPt.x - perpX * 5 + edgeDx * 0.1} y2={srcPt.y - perpY * 5 + edgeDy * 0.1} stroke={color} strokeWidth={1.8} />
             </>
           )}
 
-          {/* Source label (log cardinality), e.g. "1,*" */}
+          {/* Source label (log cardinality) offset perpendicularly */}
           {edge.sourceLabel && (
             <text
-              x={labelX + perpX * 11}
-              y={labelY + perpY * 11}
+              x={lx + perpX * 12}
+              y={ly + perpY * 12}
               textAnchor="middle"
               dominantBaseline="middle"
-              fontSize={10}
-              fontFamily="Inter, ui-sans-serif, system-ui, sans-serif"
-              fontWeight="500"
+              fontSize={FONT_SIZE_LABEL}
+              fontFamily={NODE_FONT_FAMILY}
+              fontWeight="600"
               fill={color}
             >
               {edge.sourceLabel}
             </text>
           )}
 
-          {/* Bubble (EC | LC) at midpoint */}
+          {/* Midpoint oval bubble (EC|LC) */}
           {edge.bubbleLabel && (
             <g>
               <ellipse
-                cx={bubblePt.x}
-                cy={bubblePt.y}
+                cx={midPt.x}
+                cy={midPt.y}
                 rx={OVAL_RX}
                 ry={OVAL_RY}
                 fill="white"
@@ -594,12 +641,12 @@ function TotemMinerVisualizer({
                 strokeWidth={1.2}
               />
               <text
-                x={bubblePt.x}
-                y={bubblePt.y}
+                x={midPt.x}
+                y={midPt.y}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                fontSize={9.5}
-                fontFamily="Inter, ui-sans-serif, system-ui, sans-serif"
+                fontSize={FONT_SIZE_BUBBLE}
+                fontFamily={NODE_FONT_FAMILY}
                 fontWeight="600"
                 fill={color}
               >
@@ -610,29 +657,29 @@ function TotemMinerVisualizer({
         </g>
       );
     });
-  }, [edges, nodePos]);
+  }, [edges, nodePos, edgeCurvatures]);
 
-  // ── Render nodes ────────────────────────────────────────────────────────────
+  // ── Render nodes ─────────────────────────────────────────────────────────────
   const renderedNodes = useMemo(() =>
     layoutNodes.map((n) => (
-      <g key={n.id} transform={`translate(${n.x - NODE_W / 2}, ${n.y - NODE_H / 2})`}>
+      <g key={n.id} transform={`translate(${n.x - n.width / 2}, ${n.y - NODE_H / 2})`}>
         <rect
-          width={NODE_W}
+          width={n.width}
           height={NODE_H}
           rx={NODE_R}
           ry={NODE_R}
           fill={n.color}
-          stroke="rgba(0,0,0,0.18)"
+          stroke="rgba(0,0,0,0.15)"
           strokeWidth={1}
         />
         <text
-          x={NODE_W / 2}
+          x={n.width / 2}
           y={NODE_H / 2}
           textAnchor="middle"
           dominantBaseline="middle"
-          fontSize={12}
-          fontWeight={600}
-          fontFamily="Inter, ui-sans-serif, system-ui, sans-serif"
+          fontSize={FONT_SIZE_NODE}
+          fontWeight={700}
+          fontFamily={NODE_FONT_FAMILY}
           fill={n.textColor}
         >
           {n.id}
@@ -642,19 +689,24 @@ function TotemMinerVisualizer({
     [layoutNodes],
   );
 
-  // ── Legend for relation types ────────────────────────────────────────────────
-  const relationTypes = useMemo(
-    () => [...new Set(edges.map((e) => e.relation))],
-    [edges],
-  );
+  // ── Legend ───────────────────────────────────────────────────────────────────
+  const relationTypes = useMemo(() => [...new Set(edges.map((e) => e.relation))], [edges]);
   const RELATION_LABEL: Record<string, string> = {
     D: 'Dependent', Di: 'Dependent (inv.)', P: 'Parallel', I: 'Independent', A: 'Abstract',
   };
 
-  const visualizerCore = (
+  // ── Core visualizer ──────────────────────────────────────────────────────────
+  const core = (
     <div
       ref={containerRef}
-      style={{ position: 'relative', width: '100%', height: computedHeight, background: '#f8fafc', overflow: 'hidden', cursor: panLocked ? 'default' : 'grab' }}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: computedHeight,
+        background: '#f8fafc',
+        overflow: 'hidden',
+        cursor: panLocked ? 'default' : isPanning.current ? 'grabbing' : 'grab',
+      }}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -663,9 +715,9 @@ function TotemMinerVisualizer({
     >
       {/* Empty state */}
       {!eventLogId && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(248,250,252,0.85)' }}>
+        <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, borderRadius: 12, border: '1px solid #e2e8f0', background: 'white', padding: '20px 28px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>TOTeM Miner</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>TOTeM Miner</span>
             <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Select an event log to discover its TOTeM model.</p>
           </div>
         </div>
@@ -673,88 +725,53 @@ function TotemMinerVisualizer({
 
       {/* Error */}
       {error && (
-        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 30, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 14px', color: '#991b1b', fontSize: 13 }}>
+        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 30, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 14px', color: '#991b1b', fontSize: 13, whiteSpace: 'nowrap' }}>
           {error}
         </div>
       )}
 
       {/* Loading */}
       {loading && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(4px)' }}>
+        <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(4px)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
-            <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid #2563eb', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+            <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
             <span style={{ fontSize: 13, fontWeight: 500, color: '#475569' }}>Discovering TOTeM model…</span>
           </div>
         </div>
       )}
 
-      {/* Top HUD: Fitness / Precision / τ */}
-      <div
-        style={{
-          position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 20, display: 'flex', alignItems: 'center', gap: 10,
-          background: 'rgba(255,255,255,0.94)', border: '1px solid #e2e8f0',
-          borderRadius: 9999, padding: '5px 14px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.07)', pointerEvents: 'none',
-          backdropFilter: 'blur(6px)', fontSize: 12,
-        }}
-      >
-        <span style={{ color: '#64748b', fontWeight: 500 }}>
-          Fitness:&nbsp;<span style={{ fontWeight: 700, color: fitness != null ? '#ea580c' : '#94a3b8' }}>
-            {fitness != null ? fitness.toFixed(2) : '—'}
-          </span>
-        </span>
-        <span style={{ color: '#e2e8f0' }}>|</span>
-        <span style={{ color: '#64748b', fontWeight: 500 }}>
-          Precision:&nbsp;<span style={{ fontWeight: 700, color: '#0f172a' }}>
-            {precision != null ? precision.toFixed(2) : '—'}
-          </span>
-        </span>
-        <span style={{ color: '#e2e8f0' }}>|</span>
-        <span style={{ color: '#64748b', fontWeight: 500 }}>
-          τ:&nbsp;<span style={{ fontWeight: 700, color: '#0f172a' }}>{tau.toFixed(2)}</span>
-        </span>
-      </div>
-
-      {/* SVG canvas */}
+      {/* SVG graph */}
       <svg
-        ref={svgRef}
         width={svgSize.width}
         height={svgSize.height}
         style={{ display: 'block', userSelect: 'none' }}
       >
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-          {/* Edges first (below nodes) */}
+        <defs>
+          <style>{`@keyframes totem-spin { to { transform: rotate(360deg); } }`}</style>
+        </defs>
+        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           {renderedEdges}
-          {/* Nodes on top */}
           {renderedNodes}
         </g>
       </svg>
 
-      {/* Bottom-right zoom controls */}
-      <div
-        style={{
-          position: 'absolute', bottom: 14, left: 14, zIndex: 20,
-          display: 'flex', flexDirection: 'column', gap: 4,
-        }}
-      >
-        {[
-          { icon: <ZoomIn size={15} />, action: handleZoomIn, title: 'Zoom in' },
-          { icon: <ZoomOut size={15} />, action: handleZoomOut, title: 'Zoom out' },
-          { icon: <Maximize2 size={15} />, action: handleFit, title: 'Fit view' },
-          { icon: panLocked ? <Lock size={15} /> : <Unlock size={15} />, action: () => setPanLocked((v) => !v), title: panLocked ? 'Unlock pan' : 'Lock pan' },
-        ].map((btn, i) => (
+      {/* Zoom controls — bottom left */}
+      <div style={{ position: 'absolute', bottom: 14, left: 14, zIndex: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {([
+          { icon: <ZoomIn size={14} />, action: handleZoomIn, title: 'Zoom in' },
+          { icon: <ZoomOut size={14} />, action: handleZoomOut, title: 'Zoom out' },
+          { icon: <Maximize2 size={14} />, action: handleFit, title: 'Fit' },
+          { icon: panLocked ? <Lock size={14} /> : <Unlock size={14} />, action: () => setPanLocked((v) => !v), title: panLocked ? 'Unlock pan' : 'Lock pan' },
+        ] as const).map((btn, i) => (
           <button
             key={i}
-            onClick={btn.action}
+            onClick={btn.action as () => void}
             title={btn.title}
             style={{
-              width: 30, height: 30, borderRadius: 6, border: '1px solid #e2e8f0',
-              background: 'rgba(255,255,255,0.92)', cursor: 'pointer',
+              width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0',
+              background: 'rgba(255,255,255,0.9)', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: '#475569', boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-              backdropFilter: 'blur(4px)',
             }}
           >
             {btn.icon}
@@ -762,29 +779,15 @@ function TotemMinerVisualizer({
         ))}
       </div>
 
-      {/* Bottom-right legend */}
+      {/* Legend — bottom right */}
       {relationTypes.length > 0 && (
-        <div
-          style={{
-            position: 'absolute', bottom: 14, right: 14, zIndex: 20,
-            background: 'rgba(255,255,255,0.92)', border: '1px solid #e2e8f0',
-            borderRadius: 8, padding: '8px 12px', fontSize: 11,
-            boxShadow: '0 1px 6px rgba(0,0,0,0.06)', backdropFilter: 'blur(4px)',
-            display: 'flex', flexDirection: 'column', gap: 4, pointerEvents: 'none',
-          }}
-        >
+        <div style={{ position: 'absolute', bottom: 14, right: 14, zIndex: 20, background: 'rgba(255,255,255,0.92)', border: '1px solid #e2e8f0', borderRadius: 8, padding: '7px 12px', fontSize: 11, boxShadow: '0 1px 6px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', gap: 5, pointerEvents: 'none' }}>
           {relationTypes.map((rel) => (
-            <div key={rel} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <div key={rel} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <svg width={24} height={10}>
-                <line x1={0} y1={5} x2={24} y2={5}
-                  stroke={RELATION_COLOR[rel] ?? '#64748b'}
-                  strokeWidth={rel === 'P' ? 2 : 1.5}
-                  strokeDasharray={rel === 'I' ? '4 2' : undefined}
-                />
+                <line x1={0} y1={5} x2={24} y2={5} stroke={RELATION_COLOR[rel] ?? '#64748b'} strokeWidth={rel === 'P' ? 2 : 1.5} strokeDasharray={rel === 'I' ? '4 2' : undefined} />
               </svg>
-              <span style={{ color: '#475569', fontWeight: 500 }}>
-                {RELATION_LABEL[rel] ?? rel}
-              </span>
+              <span style={{ color: '#475569', fontWeight: 500 }}>{RELATION_LABEL[rel] ?? rel}</span>
             </div>
           ))}
         </div>
@@ -792,7 +795,7 @@ function TotemMinerVisualizer({
     </div>
   );
 
-  if (embedded) return visualizerCore;
+  if (embedded) return core;
 
   return (
     <Card className="@container/card w-full flex flex-col">
@@ -805,9 +808,7 @@ function TotemMinerVisualizer({
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className="p-0 flex-1 min-h-0">
-        {visualizerCore}
-      </CardContent>
+      <CardContent className="p-0 flex-1 min-h-0">{core}</CardContent>
     </Card>
   );
 }
