@@ -57,7 +57,8 @@ type GraphEdge = {
   from: string;
   to: string;
   relation: RelationType;
-  sourceLabel: string;   // near-source label e.g. "1,*"
+  sourceLabel: string;   // near-source label e.g. "1"
+  targetLabel: string;   // near-target label e.g. "1..*"
   bubbleLabel: string;   // midpoint oval e.g. "0|1"
 };
 
@@ -137,10 +138,10 @@ function formatCardinality(raw: string | null | undefined): string {
   if (!raw) return '';
   const s = raw.trim();
   if (s === '1..1' || s === '1') return '1';
-  if (s === '1..n' || s === '1..*' || s === '1..N' || s === '1,n' || s === '1,*') return '1,*';
-  if (s === '0..n' || s === '0..*' || s === '0..N' || s === '0,n' || s === '0,*') return '0,*';
+  if (s === '1..n' || s === '1..*' || s === '1..N' || s === '1,n' || s === '1,*') return '1..*';
+  if (s === '0..n' || s === '0..*' || s === '0..N' || s === '0,n' || s === '0,*') return '0..*';
   if (s === '0..1' || s === '0,1') return '0..1';
-  return s.replace(/\.\.[nN]/, ',*').replace(/,n/, ',*');
+  return s.replace(/,[nN*]/, '..*').replace(/\.\.[nN]/, '..*');
 }
 
 /** Build compact "EC|LC" label from raw cardinality strings */
@@ -177,7 +178,8 @@ function extractEdges(
         from,
         to,
         relation: key,
-        sourceLabel: formatCardinality(card?.log_cardinality),
+        sourceLabel: '1',
+        targetLabel: formatCardinality(card?.log_cardinality),
         bubbleLabel: makeBubbleLabel(card?.event_cardinality, card?.log_cardinality),
       });
     });
@@ -248,28 +250,28 @@ function computeHierarchicalLayout(
   // Sort each layer for stable ordering
   for (const nodes of byLayer.values()) nodes.sort();
 
+  const LAYER_GAP = 110;
   const numLayers = Math.max(...Array.from(layer.values())) + 1;
 
-  const PADDING_Y = 70;
-  const PADDING_X = 60;
-  const usableH = Math.max(height - PADDING_Y * 2, 200);
-  const usableW = Math.max(width - PADDING_X * 2, 400);
-  const layerY = (l: number) =>
-    numLayers === 1 ? height / 2 : PADDING_Y + (l / (numLayers - 1)) * usableH;
+  const PADDING_Y = 50;
+  const layerY = (l: number) => PADDING_Y + l * LAYER_GAP;
 
   const positions = new Map<string, { x: number; y: number }>();
+  const NODE_GAP = 60;
 
   for (const [l, nodes] of byLayer) {
     const y = layerY(l);
     // Total width needed for this layer
     const totalNodeW = nodes.reduce((s, id) => s + (nodeWidths.get(id) ?? 80), 0);
-    const gap = nodes.length > 1 ? (usableW - totalNodeW) / (nodes.length - 1) : 0;
-    const startX = PADDING_X + (usableW - totalNodeW - gap * (nodes.length - 1)) / 2;
-    let curX = startX;
+    const layerW = totalNodeW + (nodes.length - 1) * NODE_GAP;
+    
+    // Center the layer horizontally around width / 2
+    let curX = (width / 2) - (layerW / 2);
+    
     for (const id of nodes) {
       const w = nodeWidths.get(id) ?? 80;
       positions.set(id, { x: curX + w / 2, y });
-      curX += w + Math.max(gap, 30);
+      curX += w + NODE_GAP;
     }
   }
 
@@ -317,23 +319,36 @@ function bezierPath(
   return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
 }
 
-/** Point along a quadratic bezier at t=0.5 */
+/** Point along a quadratic bezier at arbitrary t (0 to 1) */
+function bezierPoint(
+  x1: number, y1: number,
+  x2: number, y2: number,
+  curvature = 0,
+  t = 0.5,
+): { x: number; y: number } {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  if (Math.abs(curvature) < 0.5) {
+    return {
+      x: x1 + (x2 - x1) * t,
+      y: y1 + (y2 - y1) * t,
+    };
+  }
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const cpx = mx - (dy / len) * curvature;
+  const cpy = my + (dx / len) * curvature;
+  const u = 1 - t;
+  return {
+    x: u * u * x1 + 2 * u * t * cpx + t * t * x2,
+    y: u * u * y1 + 2 * u * t * cpy + t * t * y2,
+  };
+}
 function bezierMid(
   x1: number, y1: number,
   x2: number, y2: number,
   curvature = 0,
 ): { x: number; y: number } {
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  if (Math.abs(curvature) < 0.5) return { x: mx, y: my };
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy) || 1;
-  const cpx = mx - (dy / len) * curvature;
-  const cpy = my + (dx / len) * curvature;
-  // Bezier at t=0.5: 0.25*P0 + 0.5*CP + 0.25*P2
-  return {
-    x: 0.25 * x1 + 0.5 * cpx + 0.25 * x2,
-    y: 0.25 * y1 + 0.5 * cpy + 0.25 * y2,
-  };
+  return bezierPoint(x1, y1, x2, y2, curvature, 0.5);
 }
 
 /** Direction vector along quadratic bezier at t=0 (tangent at start). */
@@ -575,10 +590,12 @@ function TotemMinerVisualizer({
       // Midpoint bubble position
       const midPt = bezierMid(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
 
-      // Source label: 20% along arc
-      const labelT = 0.22;
-      const lx = srcPt.x + (tgtPt.x - srcPt.x) * labelT;
-      const ly = srcPt.y + (tgtPt.y - srcPt.y) * labelT;
+      // Source and target label positions
+      const srcT = 0.22;
+      const tgtT = 0.78;
+      const srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
+      const tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
+      
       const edgeDx = tgtPt.x - srcPt.x;
       const edgeDy = tgtPt.y - srcPt.y;
       const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
@@ -599,9 +616,6 @@ function TotemMinerVisualizer({
             fill="none"
           />
 
-          {/* Arrowhead */}
-          <path d={arrow} fill={color} />
-
           {/* Source square terminator */}
           <rect
             x={srcPt.x - SQUARE_SIZE / 2}
@@ -620,11 +634,11 @@ function TotemMinerVisualizer({
             </>
           )}
 
-          {/* Source label (log cardinality) offset perpendicularly */}
+          {/* Source label offset perpendicularly */}
           {edge.sourceLabel && (
             <text
-              x={lx + perpX * 12}
-              y={ly + perpY * 12}
+              x={srcL.x + perpX * 12}
+              y={srcL.y + perpY * 12}
               textAnchor="middle"
               dominantBaseline="middle"
               fontSize={FONT_SIZE_LABEL}
@@ -633,6 +647,22 @@ function TotemMinerVisualizer({
               fill={color}
             >
               {edge.sourceLabel}
+            </text>
+          )}
+
+          {/* Target label offset perpendicularly */}
+          {edge.targetLabel && (
+            <text
+              x={tgtL.x + perpX * 12}
+              y={tgtL.y + perpY * 12}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={FONT_SIZE_LABEL}
+              fontFamily={NODE_FONT_FAMILY}
+              fontWeight="600"
+              fill={color}
+            >
+              {edge.targetLabel}
             </text>
           )}
 
