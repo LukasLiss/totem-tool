@@ -451,7 +451,7 @@ function TotemMinerVisualizer({
   // Pan & zoom
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [panLocked, setPanLocked] = useState(false);
+  const [panLocked, setPanLocked] = useState(true);
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0 });
