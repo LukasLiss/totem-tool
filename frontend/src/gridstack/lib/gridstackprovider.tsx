@@ -118,9 +118,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
-        const root = (item as any)._reactRoot;
-        const node = (item as any).gridstackNode;
-        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        const contentEl = item.querySelector('.grid-stack-item-content') || item;
+        const root = (contentEl as any)._reactRoot;
+        const node = (contentEl as any).gridstackNode;
+        const component_name = (node as any)?.component_name || (contentEl as HTMLElement).dataset.componentName || item.dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -249,6 +250,21 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
         };
+      } else if (component_name === "OCDottedChartComponent") {
+        props = {
+          x_axis: (node as any).x_axis ?? "time",
+          y_axis: (node as any).y_axis ?? "activity",
+          color_by: (node as any).color_by ?? "activity",
+          shape_by: (node as any).shape_by ?? "none",
+          row_order: (node as any).row_order ?? "first_occurrence",
+          max_points: (node as any).max_points ?? 10000,
+        };
+      } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'TB',
+        };
       } else if (component_name === "PieChartComponent") {
         props = {
           query: (node as any).query ?? '',
@@ -337,6 +353,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "OCDottedChartComponent") {
+          content = "OC Dotted Chart";
+        } else if (item.component_name === "NewOCDFGComponent") {
+          content = "Object-Centric DFG (Arc Weight)";
+        } else if (item.component_name === "NewOCDFGVariantsComponent") {
+          content = "Object-Centric DFG (Variants)";
         } else if (item.component_name === "PieChartComponent") {
           content = "Pie Chart";
         } else {
@@ -376,6 +398,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // OCDottedChartComponent properties
+            x_axis: item.x_axis,
+            y_axis: item.y_axis,
+            color_by: item.color_by,
+            shape_by: item.shape_by,
+            row_order: item.row_order,
+            max_points: item.max_points,
+            layout_direction: item.layout_direction,
             // PieChartComponent properties
             query: item.query,
             ring_text: item.ring_text,
@@ -412,6 +442,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // OCDFGComponent properties
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // OCDottedChartComponent properties
+              (node as any).x_axis = item.x_axis;
+              (node as any).y_axis = item.y_axis;
+              (node as any).color_by = item.color_by;
+              (node as any).shape_by = item.shape_by;
+              (node as any).row_order = item.row_order;
+              (node as any).max_points = item.max_points;
+              (node as any).layout_direction = item.layout_direction;
               // PieChartComponent properties
               (node as any).query = item.query;
               (node as any).ring_text = item.ring_text;

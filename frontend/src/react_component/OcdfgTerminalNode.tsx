@@ -96,16 +96,16 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
     : resolveNumericDimension(rawHeight) ?? (isMinimal ? minimalFallback : BASE_SIZE);
   const effectiveSize = Math.max(4, Math.min(resolvedWidth, resolvedHeight));
   const scale = Math.max(0.2, Math.min(effectiveSize / BASE_SIZE, 2));
-  const paddingY = isMinimal ? 4 : Math.max(4, 14 * scale);
-  const paddingX = isMinimal ? 4 : Math.max(4, 10 * scale);
-  const gap = isMinimal ? 0 : Math.max(2, 8 * scale);
+  const paddingY = isMinimal ? 4 : Math.max(4, 8 * scale);
+  const paddingX = isMinimal ? 4 : Math.max(4, 8 * scale);
+  const gap = isMinimal ? 0 : Math.max(2, 4 * scale);
   const borderRadius = isMinimal ? 10 : Math.max(6, 18 * scale);
-  const symbolMax = isMinimal ? 24 : 30;
+  const symbolMax = isMinimal ? 24 : 24;
   const symbolBase = Math.min(effectiveSize * 0.65, symbolMax);
   const indicatorSize = Math.max(isMinimal ? 10 : 12, symbolBase);
   const indicatorRadius = Math.min(indicatorSize / 2, isMinimal ? 9 : 10);
-  const triangleHeight = Math.min(Math.max(6, effectiveSize * 0.38), isMinimal ? 14 : 18);
-  const triangleWidth = Math.min(Math.max(8, effectiveSize * 0.55), isMinimal ? 20 : 28);
+  const triangleHeight = Math.min(Math.max(5, effectiveSize * 0.25), isMinimal ? 14 : 12);
+  const triangleWidth = Math.min(Math.max(6, effectiveSize * 0.35), isMinimal ? 20 : 18);
   const fontSize = isMinimal ? 0 : Math.max(9, 11 * scale);
   const boxShadowY = isMinimal ? 4 * scale : 14 * scale;
   const boxShadowBlur = isMinimal ? 10 * Math.max(scale, 0.35) : 24 * Math.max(scale, 0.35);
@@ -126,6 +126,7 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
     padding: `${paddingY}px ${paddingX}px`,
     boxShadow: `0 ${boxShadowY}px ${boxShadowBlur}px rgba(15, 23, 42, 0.22)`,
     border: `${borderWidth}px solid rgba(15, 23, 42, 0.08)`,
+    pointerEvents: 'all',
   };
 
   const indicator =

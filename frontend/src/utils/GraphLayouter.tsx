@@ -285,31 +285,15 @@ function getLayoutSpacing(direction: 'TB' | 'LR' = 'TB', preset?: string) {
 }
 
 type OwnerEntry = {
-  owners?: string[];
-  ownerTypes?: string[];
+  objtypes?: string[];
 };
 
 const resolveOwnerTypes = (entry: OwnerEntry) => {
-  const values = entry.ownerTypes && entry.ownerTypes.length > 0
-    ? entry.ownerTypes
-    : entry.owners ?? [];
+  const values = entry.objtypes ?? [];
   return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
 };
 
 const resolveOwnerPairs = (entry: OwnerEntry) => {
-  const owners = entry.owners ?? [];
-  const ownerTypes = entry.ownerTypes ?? [];
-  if (owners.length > 0 && ownerTypes.length === owners.length) {
-    return owners
-      .map((owner, index) => ({ owner, type: ownerTypes[index] }))
-      .filter(
-        (pair): pair is { owner: string; type: string } =>
-          typeof pair.owner === 'string'
-          && pair.owner.length > 0
-          && typeof pair.type === 'string'
-          && pair.type.length > 0,
-      );
-  }
   return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
 };
 

@@ -30,7 +30,7 @@ export function Switcher() {
   console.log(selectedFile)
   const [files, setFiles] = useState<any[]>([]);
   const navigate = useNavigate();
-  const { setSelectedDashboard } = useContext(DashboardContext)
+  const { setViewMode } = useContext(DashboardContext)
 
 const displayName = selectedFile?.file
   ? selectedFile.file.split("/").pop()
@@ -84,7 +84,7 @@ const displayName = selectedFile?.file
                 key={project.id}
                 onClick={() => {
                   setSelectedFile(project);
-                  setSelectedDashboard(-1);
+                  setViewMode({ type: 'overview' });
                   console.log("Saved to context:", project);
                 }}
                 className="gap-2 p-2"

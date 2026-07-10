@@ -101,6 +101,28 @@ class OCDFGComponent(DashboardComponent):
     show_controls = models.BooleanField(default=True)
     initial_interaction_locked = models.BooleanField(default=True)
 
+
+class OCDottedChartComponent(DashboardComponent):
+    file_id = models.PositiveIntegerField(null=True, blank=True)
+    x_axis = models.CharField(max_length=255, default="time")
+    y_axis = models.CharField(max_length=255, default="activity")
+    color_by = models.CharField(max_length=255, default="activity")
+    shape_by = models.CharField(max_length=255, default="none")
+    row_order = models.CharField(max_length=32, default="first_occurrence")
+    max_points = models.PositiveIntegerField(default=10000)
+    show_minimap = models.BooleanField(default=True)
+    show_controls = models.BooleanField(default=True)
+
+
+class NewOCDFGComponent(DashboardComponent):
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)
+    layout_direction = models.CharField(
+        max_length=2,
+        choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
+        default='TB',
+    )
+
 class SQLQueryComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM data LIMIT 10")
 
