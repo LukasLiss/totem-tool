@@ -664,7 +664,8 @@ function TotemMinerVisualizer({
       };
 
       if (isInsideNode(bubbleT)) {
-         const candidates = [0.35, 0.65, 0.25, 0.75, 0.45, 0.55];
+         // Keep candidates safely away from srcT=0.22 and tgtT=0.78 so they don't overlap the numbers
+         const candidates = [0.35, 0.65, 0.4, 0.6, 0.45, 0.55];
          for (const cand of candidates) {
             if (!isInsideNode(cand)) {
                bubbleT = cand;
