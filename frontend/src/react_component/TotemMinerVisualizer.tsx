@@ -652,7 +652,27 @@ function TotemMinerVisualizer({
       const perpY = edgeDx / edgeLen;
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
-      const bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      
+      // Prevent bubble from rendering inside/behind a node (collision avoidance)
+      const isInsideNode = (t: number) => {
+        const pt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, t);
+        return layoutNodes.some(n => {
+           const w = n.width ?? 80;
+           return Math.abs(pt.x - n.x) < (w / 2 + 20) && Math.abs(pt.y - n.y) < (NODE_H / 2 + 15);
+        });
+      };
+
+      if (isInsideNode(bubbleT)) {
+         const candidates = [0.35, 0.65, 0.25, 0.75, 0.45, 0.55];
+         for (const cand of candidates) {
+            if (!isInsideNode(cand)) {
+               bubbleT = cand;
+               break;
+            }
+         }
+      }
+
       const midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
       // Source and target label positions
