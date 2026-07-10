@@ -559,22 +559,32 @@ function TotemMinerVisualizer({
   }, [layoutNodes, svgSize]);
 
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    if (panLocked) return;
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const cursorX = e.clientX - rect.left;
-    const cursorY = e.clientY - rect.top;
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    setZoom((z) => {
-      const newZoom = Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
-      setPan((p) => ({
-        x: cursorX - (cursorX - p.x) * (newZoom / z),
-        y: cursorY - (cursorY - p.y) * (newZoom / z),
-      }));
-      return newZoom;
-    });
+    const handleWheelRaw = (e: WheelEvent) => {
+      if (panLocked) return;
+      e.preventDefault();
+      
+      const rect = container.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+
+      setZoom((z) => {
+        const newZoom = Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        setPan((p) => ({
+          x: cursorX - (cursorX - p.x) * (newZoom / z),
+          y: cursorY - (cursorY - p.y) * (newZoom / z),
+        }));
+        return newZoom;
+      });
+    };
+
+    container.addEventListener('wheel', handleWheelRaw, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheelRaw);
+    };
   }, [panLocked]);
 
   const zoomToCenter = (factor: number) => {
@@ -948,7 +958,6 @@ function TotemMinerVisualizer({
         overflow: 'hidden',
         cursor: panLocked ? 'default' : isPanning.current ? 'grabbing' : 'grab',
       }}
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
