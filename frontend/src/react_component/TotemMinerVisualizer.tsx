@@ -627,6 +627,27 @@ function TotemMinerVisualizer({
 
   // ── Render edges ─────────────────────────────────────────────────────────────
   const renderedEdges = useMemo(() => {
+    // Keep track of occupied space to avoid overlaps
+    const occupiedRects: { x1: number; y1: number; x2: number; y2: number }[] = [];
+    
+    // Add all nodes as occupied
+    layoutNodes.forEach(n => {
+       occupiedRects.push({
+         x1: n.x - n.width/2 - 10,
+         y1: n.y - NODE_H/2 - 10,
+         x2: n.x + n.width/2 + 10,
+         y2: n.y + NODE_H/2 + 10
+       });
+    });
+
+    function isOccupied(cx: number, cy: number, w: number, h: number) {
+      const rx1 = cx - w/2;
+      const ry1 = cy - h/2;
+      const rx2 = cx + w/2;
+      const ry2 = cy + h/2;
+      return occupiedRects.some(r => !(rx2 < r.x1 || rx1 > r.x2 || ry2 < r.y1 || ry1 > r.y2));
+    }
+
     const edgeData = edges.map((edge) => {
       const src = nodePos.get(edge.from);
       const tgt = nodePos.get(edge.to);
@@ -653,39 +674,87 @@ function TotemMinerVisualizer({
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
       let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
+      const bubbleW = edge.bubbleLabel ? Math.max(40, estimateTextWidth(edge.bubbleLabel, FONT_SIZE_BUBBLE) + 16) : 0;
       
-      // Prevent bubble from rendering inside/behind a node (collision avoidance)
-      const isInsideNode = (t: number) => {
-        const pt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, t);
-        return layoutNodes.some(n => {
-           const w = n.width ?? 80;
-           return Math.abs(pt.x - n.x) < (w / 2 + 20) && Math.abs(pt.y - n.y) < (NODE_H / 2 + 15);
+      if (bubbleW > 0) {
+        const shifts = [0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
+        let sIdx = 0;
+        while (isOccupied(midPt.x, midPt.y, bubbleW, 24) && sIdx < shifts.length) {
+          const testT = Math.max(0.15, Math.min(0.85, (0.5 + (edgeDx / edgeLen) * 0.15) + shifts[sIdx]));
+          midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, testT);
+          sIdx++;
+        }
+        occupiedRects.push({
+          x1: midPt.x - bubbleW/2,
+          y1: midPt.y - 12,
+          x2: midPt.x + bubbleW/2,
+          y2: midPt.y + 12,
         });
-      };
-
-      if (isInsideNode(bubbleT)) {
-         // Keep candidates safely away from srcT=0.22 and tgtT=0.78 so they don't overlap the numbers
-         const candidates = [0.35, 0.65, 0.4, 0.6, 0.45, 0.55];
-         for (const cand of candidates) {
-            if (!isInsideNode(cand)) {
-               bubbleT = cand;
-               break;
-            }
-         }
       }
 
-      const midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
-
-      // Source and target label positions (fixed distance of ~35px from nodes)
-      const labelDist = 35;
-      const srcT = Math.min(0.4, labelDist / edgeLen);
-      const tgtT = Math.max(0.6, 1 - (labelDist / edgeLen));
-      const srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
-      const tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
+      // Source and target label positions
+      let srcT = 0.22;
+      let tgtT = 0.78;
+      let srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
+      let tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
       
+      let srcPerpSign = 1;
+      let tgtPerpSign = 1;
+
+      let srcLText = { x: srcL.x + perpX * 12 * srcPerpSign, y: srcL.y + perpY * 12 * srcPerpSign };
+      const srcW = edge.sourceLabel ? estimateTextWidth(edge.sourceLabel, FONT_SIZE_LABEL) + 10 : 0;
+      if (srcW > 0) {
+         if (isOccupied(srcLText.x, srcLText.y, srcW, 16)) {
+            srcPerpSign = -1; // try other side
+            srcLText = { x: srcL.x + perpX * 12 * srcPerpSign, y: srcL.y + perpY * 12 * srcPerpSign };
+            if (isOccupied(srcLText.x, srcLText.y, srcW, 16)) {
+               // try sliding
+               const shifts = [0.05, -0.05, 0.1, -0.1, 0.15, -0.15];
+               let sIdx = 0;
+               while (isOccupied(srcLText.x, srcLText.y, srcW, 16) && sIdx < shifts.length) {
+                 srcT = Math.max(0.05, Math.min(0.95, 0.22 + shifts[sIdx]));
+                 srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
+                 srcPerpSign = 1;
+                 srcLText = { x: srcL.x + perpX * 12 * srcPerpSign, y: srcL.y + perpY * 12 * srcPerpSign };
+                 if (!isOccupied(srcLText.x, srcLText.y, srcW, 16)) break;
+                 srcPerpSign = -1;
+                 srcLText = { x: srcL.x + perpX * 12 * srcPerpSign, y: srcL.y + perpY * 12 * srcPerpSign };
+                 sIdx++;
+               }
+            }
+         }
+         occupiedRects.push({ x1: srcLText.x - srcW/2, y1: srcLText.y - 8, x2: srcLText.x + srcW/2, y2: srcLText.y + 8 });
+      }
+
+      let tgtLText = { x: tgtL.x + perpX * 12 * tgtPerpSign, y: tgtL.y + perpY * 12 * tgtPerpSign };
+      const tgtW = edge.targetLabel ? estimateTextWidth(edge.targetLabel, FONT_SIZE_LABEL) + 10 : 0;
+      if (tgtW > 0) {
+         if (isOccupied(tgtLText.x, tgtLText.y, tgtW, 16)) {
+            tgtPerpSign = -1; // try other side
+            tgtLText = { x: tgtL.x + perpX * 12 * tgtPerpSign, y: tgtL.y + perpY * 12 * tgtPerpSign };
+            if (isOccupied(tgtLText.x, tgtLText.y, tgtW, 16)) {
+               // try sliding
+               const shifts = [0.05, -0.05, 0.1, -0.1, 0.15, -0.15];
+               let sIdx = 0;
+               while (isOccupied(tgtLText.x, tgtLText.y, tgtW, 16) && sIdx < shifts.length) {
+                 tgtT = Math.max(0.05, Math.min(0.95, 0.78 + shifts[sIdx]));
+                 tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
+                 tgtPerpSign = 1;
+                 tgtLText = { x: tgtL.x + perpX * 12 * tgtPerpSign, y: tgtL.y + perpY * 12 * tgtPerpSign };
+                 if (!isOccupied(tgtLText.x, tgtLText.y, tgtW, 16)) break;
+                 tgtPerpSign = -1;
+                 tgtLText = { x: tgtL.x + perpX * 12 * tgtPerpSign, y: tgtL.y + perpY * 12 * tgtPerpSign };
+                 sIdx++;
+               }
+            }
+         }
+         occupiedRects.push({ x1: tgtLText.x - tgtW/2, y1: tgtLText.y - 8, x2: tgtLText.x + tgtW/2, y2: tgtLText.y + 8 });
+      }
+
       const squareAngle = Math.atan2(edgeDy, edgeDx) * 180 / Math.PI;
 
-      return { edge, path, color, isConcurrent, isIndependent, isDashed, srcPt, tgtPt, arrow, midPt, srcL, tgtL, perpX, perpY, edgeDx, edgeDy, squareAngle };
+      return { edge, path, color, isConcurrent, isIndependent, isDashed, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, edgeDx, edgeDy, squareAngle, bubbleWidth: bubbleW };
     }).filter(Boolean) as any[];
 
     return (
@@ -730,8 +799,8 @@ function TotemMinerVisualizer({
             {/* Source label offset perpendicularly */}
             {d.edge.sourceLabel && (
               <text
-                x={d.srcL.x + d.perpX * 12}
-                y={d.srcL.y + d.perpY * 12}
+                x={d.srcLText.x}
+                y={d.srcLText.y}
                 textAnchor="middle"
                 dominantBaseline="middle"
                 fontSize={FONT_SIZE_LABEL}
@@ -746,8 +815,8 @@ function TotemMinerVisualizer({
             {/* Target label offset perpendicularly */}
             {d.edge.targetLabel && (
               <text
-                x={d.tgtL.x + d.perpX * 12}
-                y={d.tgtL.y + d.perpY * 12}
+                x={d.tgtLText.x}
+                y={d.tgtLText.y}
                 textAnchor="middle"
                 dominantBaseline="middle"
                 fontSize={FONT_SIZE_LABEL}
@@ -765,8 +834,8 @@ function TotemMinerVisualizer({
                 <ellipse
                   cx={d.midPt.x}
                   cy={d.midPt.y}
-                  rx={OVAL_RX}
-                  ry={OVAL_RY}
+                  rx={d.bubbleWidth / 2}
+                  ry={BUBBLE_H / 2}
                   fill="#ffffff"
                   stroke={d.color}
                   strokeWidth={1.2}
