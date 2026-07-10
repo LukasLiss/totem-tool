@@ -835,7 +835,7 @@ function TotemMinerVisualizer({
                   cx={d.midPt.x}
                   cy={d.midPt.y}
                   rx={d.bubbleWidth / 2}
-                  ry={BUBBLE_H / 2}
+                  ry={OVAL_RY}
                   fill="#ffffff"
                   stroke={d.color}
                   strokeWidth={1.2}
