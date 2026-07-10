@@ -676,9 +676,10 @@ function TotemMinerVisualizer({
 
       const midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
-      // Source and target label positions
-      const srcT = 0.22;
-      const tgtT = 0.78;
+      // Source and target label positions (fixed distance of ~35px from nodes)
+      const labelDist = 35;
+      const srcT = Math.min(0.4, labelDist / edgeLen);
+      const tgtT = Math.max(0.6, 1 - (labelDist / edgeLen));
       const srcL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, srcT);
       const tgtL = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tgtT);
       
