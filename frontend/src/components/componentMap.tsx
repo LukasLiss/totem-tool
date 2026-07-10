@@ -22,9 +22,20 @@ import VariantsExplorer, {
   type Extraction,
   type IsoStrategy,
 } from '@/react_component/VariantsExplorer';
-import ProcessArea from '../react_component/ProcessArea';
-import TotemMiner from '../react_component/TotemMiner';
-import ReactFlowComponent from '../react_component/ReactFlowComponent';
+import ProcessArea from '@/react_component/ProcessArea';
+import TotemMiner from '@/react_component/TotemMiner';
+import { ReactFlowProvider } from "@xyflow/react";
+import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
+import DottedChart from '@/react_component/DottedChart';
+import {
+  DottedChartControls,
+  type DottedChartConfig,
+} from '@/react_component/dottedChart/DottedChartControls';
+import {
+  axisOptionToParam,
+  type AxisOption,
+  type RowOrderOption,
+} from '@/react_component/dottedChart/dottedChartUtils';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import { Switch } from '@/components/ui/switch';
@@ -67,6 +78,15 @@ interface ComponentProps {
     // OCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
+    // OCDottedChartComponent properties
+    file_id?: number | null;
+    x_axis?: string;
+    y_axis?: string;
+    color_by?: string;
+    shape_by?: string;
+    row_order?: RowOrderOption;
+    max_points?: number;
+    show_minimap?: boolean;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -770,6 +790,106 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   );
 };
 
+const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
+  xAxis: { type: "time" },
+  yAxis: { type: "activity" },
+  colorBy: { type: "activity" },
+  shapeBy: { type: "none" },
+  rowOrder: "first_occurrence",
+  maxPoints: 10000,
+};
+
+// OCDottedChartComponent: Dashboard wrapper for Object-Centric Dotted Chart
+const OCDottedChartComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const effectiveFileId = selectedFile?.id;
+  const config = nodeToDottedChartConfig(node);
+
+  const handleConfigChange = (nextConfig: DottedChartConfig) => {
+    onUpdate?.({
+      x_axis: axisOptionToPersistedValue(nextConfig.xAxis),
+      y_axis: axisOptionToPersistedValue(nextConfig.yAxis),
+      color_by: axisOptionToPersistedValue(nextConfig.colorBy),
+      shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
+      row_order: nextConfig.rowOrder,
+      max_points: nextConfig.maxPoints,
+    } as any);
+  };
+
+  if (isEditMode) {
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>OC Dotted Chart Settings</CardTitle>
+          <CardDescription>Configure the dashboard widget.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4 overflow-auto">
+          <DottedChartControls
+            fileId={effectiveFileId}
+            config={config}
+            onConfigChange={handleConfigChange}
+          />
+          {!effectiveFileId && (
+            <p className="text-sm text-muted-foreground">
+              Select an event log in the application sidebar to render this widget.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="w-full h-full rounded-none overflow-auto">
+      <CardContent className="h-full p-0">
+        <DottedChart
+          fileId={effectiveFileId}
+          xAxis={config.xAxis}
+          yAxis={config.yAxis}
+          colorBy={config.colorBy}
+          shapeBy={config.shapeBy}
+          rowOrder={config.rowOrder}
+          maxPoints={config.maxPoints}
+          showControls={false}
+          showMinimap={true}
+          className="h-full"
+        />
+      </CardContent>
+    </Card>
+  );
+};
+
+function nodeToDottedChartConfig(node: ComponentProps["node"]): DottedChartConfig {
+  return {
+    xAxis: persistedValueToAxisOption(node.x_axis, DOTTED_CHART_DEFAULT_CONFIG.xAxis),
+    yAxis: persistedValueToAxisOption(node.y_axis, DOTTED_CHART_DEFAULT_CONFIG.yAxis),
+    colorBy: persistedValueToAxisOption(node.color_by, DOTTED_CHART_DEFAULT_CONFIG.colorBy),
+    shapeBy: persistedValueToAxisOption(node.shape_by, DOTTED_CHART_DEFAULT_CONFIG.shapeBy),
+    rowOrder: node.row_order ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrder,
+    maxPoints: node.max_points ?? DOTTED_CHART_DEFAULT_CONFIG.maxPoints,
+  };
+}
+
+function persistedValueToAxisOption(value: string | undefined, fallback: AxisOption): AxisOption {
+  if (!value) return fallback;
+  if (isBuiltinDottedChartAxis(value)) return { type: value };
+  return { type: "event_attribute", name: value };
+}
+
+function axisOptionToPersistedValue(axis: AxisOption): string {
+  return axis.type === "none" ? "none" : axisOptionToParam(axis) ?? "none";
+}
+
+function isBuiltinDottedChartAxis(
+  value: string
+): value is "time" | "timestamp" | "timestamp_unix" | "since_start" | "activity" | "none" {
+  return ["time", "timestamp", "timestamp_unix", "since_start", "activity", "none"].includes(value);
+}
+
 
 // NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
 const NewOCDFGComponent: React.FC<ComponentProps> = ({
@@ -976,6 +1096,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TotemMinerComponent,
   LogStatisticsComponent,
   OCDFGComponent,
+  OCDottedChartComponent,
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
 };

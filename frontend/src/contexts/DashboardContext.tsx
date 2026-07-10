@@ -1,10 +1,13 @@
 import React, { createContext, useState } from "react";
 
-export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants';
+export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
+
+export type EditorComponent = 'totem' | 'occn' | 'ocpn';
 
 export type ViewMode =
   | { type: 'overview' }
   | { type: 'analysis'; component: AnalysisComponent }
+  | { type: 'editor'; component: EditorComponent }
   | { type: 'dashboard'; id: number };
 
 type DashboardContextType = {

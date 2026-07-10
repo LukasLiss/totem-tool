@@ -6,8 +6,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { ReactFlowProvider } from "@xyflow/react";
+import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import ProcessArea from "@/react_component/ProcessArea";
@@ -16,6 +18,7 @@ import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisual
 
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
 
   return (
     <div>
@@ -49,6 +52,26 @@ export function DevDashboard() {
               colWidth={120}
               embedded={true}
             />
+          </CardContent>
+        </Card>
+        <Card className="@container/card">
+          <CardHeader className="items-center relative z-10 justify-between">
+            <CardTitle>
+              OC Dotted Chart
+            </CardTitle>
+            <CardDescription>
+              Object-centric event distribution
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex justify-center pb-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setViewMode({ type: "analysis", component: "dottedChart" })}
+              disabled={!selectedFile?.id}
+            >
+              Open OC Dotted Chart
+            </Button>
           </CardContent>
         </Card>
         <div className="bg-muted/50 min-h-[100vh] flex-1 rounded-xl md:min-h-min" />
