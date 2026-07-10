@@ -250,7 +250,7 @@ function computeHierarchicalLayout(
   // Sort each layer initially for stable ordering
   for (const nodes of byLayer.values()) nodes.sort();
 
-  const LAYER_GAP = 110;
+  const LAYER_GAP = 180;
   const numLayers = Math.max(...Array.from(layer.values())) + 1;
 
   // Run barycenter heuristic to minimize edge crossings
@@ -283,7 +283,7 @@ function computeHierarchicalLayout(
   const layerY = (l: number) => PADDING_Y + (numLayers - 1 - l) * LAYER_GAP;
 
   const positions = new Map<string, { x: number; y: number }>();
-  const NODE_GAP = 60;
+  const NODE_GAP = 120;
 
   for (const [l, nodes] of byLayer) {
     const y = layerY(l);
@@ -521,6 +521,7 @@ function TotemMinerVisualizer({
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    if (panLocked) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const cursorX = e.clientX - rect.left;
@@ -534,9 +535,10 @@ function TotemMinerVisualizer({
       }));
       return newZoom;
     });
-  }, []);
+  }, [panLocked]);
 
   const zoomToCenter = (factor: number) => {
+    if (panLocked) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const centerX = rect.width / 2;
