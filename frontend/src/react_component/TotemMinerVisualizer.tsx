@@ -300,6 +300,46 @@ function computeHierarchicalLayout(
       curX += w + NODE_GAP;
     }
   }
+  // ─── Post-process: avoid long edges perfectly overlapping intermediate nodes ───
+  let overlapFound = true;
+  let iterations = 0;
+  while (overlapFound && iterations < 10) {
+    overlapFound = false;
+    iterations++;
+    for (const e of hierarchyEdges) {
+      const srcPos = positions.get(e.from);
+      const tgtPos = positions.get(e.to);
+      if (!srcPos || !tgtPos) continue;
+      
+      const minY = Math.min(srcPos.y, tgtPos.y);
+      const maxY = Math.max(srcPos.y, tgtPos.y);
+      if (maxY - minY < LAYER_GAP * 1.5) continue; // Only long edges spanning > 1 layer
+      
+      const dx = tgtPos.x - srcPos.x;
+      const dy = tgtPos.y - srcPos.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      if (length === 0) continue;
+      
+      for (const [id, pos] of positions.entries()) {
+        if (id === e.from || id === e.to) continue;
+        // If node is between the source and target vertically
+        if (pos.y > minY + 10 && pos.y < maxY - 10) {
+          // Distance from node center to the line
+          const dist = Math.abs(dx * (srcPos.y - pos.y) - (srcPos.x - pos.x) * dy) / length;
+          const w = nodeWidths.get(id) ?? 80;
+          if (dist < w / 2 + 16) { // 16px buffer
+            overlapFound = true;
+            const l = layer.get(id);
+            if (l !== undefined) {
+               for (const nid of byLayer.get(l) || []) {
+                  positions.get(nid)!.x += 90;
+               }
+            }
+          }
+        }
+      }
+    }
+  }
 
   return positions;
 }
@@ -617,9 +657,8 @@ function TotemMinerVisualizer({
       pairIndex.set(key, idx + 1);
       const count = pairCount.get(key) ?? 1;
       const sameLayer = layerOf.get(e.from) === layerOf.get(e.to);
-      const layerSpan = Math.abs((layerOf.get(e.from) ?? 0) - (layerOf.get(e.to) ?? 0));
-      // Curve same-layer edges, multi-edges, or long edges that span across intermediate nodes
-      const baseCurve = sameLayer ? 60 : count > 1 ? 40 : layerSpan > 200 ? 70 : 0;
+      // Curve same-layer edges or multi-edges
+      const baseCurve = sameLayer ? 60 : count > 1 ? 40 : 0;
       const sign = idx % 2 === 0 ? 1 : -1;
       pairIndex.set(e.id, baseCurve * sign);
     }
