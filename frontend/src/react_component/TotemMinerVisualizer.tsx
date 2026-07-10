@@ -617,8 +617,9 @@ function TotemMinerVisualizer({
       pairIndex.set(key, idx + 1);
       const count = pairCount.get(key) ?? 1;
       const sameLayer = layerOf.get(e.from) === layerOf.get(e.to);
-      // Curve same-layer edges or multi-edges
-      const baseCurve = sameLayer ? 60 : count > 1 ? 40 : 0;
+      const layerSpan = Math.abs((layerOf.get(e.from) ?? 0) - (layerOf.get(e.to) ?? 0));
+      // Curve same-layer edges, multi-edges, or long edges that span across intermediate nodes
+      const baseCurve = sameLayer ? 60 : count > 1 ? 40 : layerSpan > 200 ? 70 : 0;
       const sign = idx % 2 === 0 ? 1 : -1;
       pairIndex.set(e.id, baseCurve * sign);
     }
