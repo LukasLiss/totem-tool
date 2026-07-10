@@ -178,7 +178,7 @@ function extractEdges(
         from,
         to,
         relation: key,
-        sourceLabel: '1',
+        sourceLabel: formatCardinality(card?.model_cardinality) || '1',
         targetLabel: formatCardinality(card?.log_cardinality),
         bubbleLabel: makeBubbleLabel(card?.event_cardinality, card?.log_cardinality),
       });
@@ -697,11 +697,11 @@ function TotemMinerVisualizer({
               />
             )}
 
-            {/* Parallel (P) double bars near source */}
+            {/* Parallel (P) double tick marks crossing the line near source */}
             {d.isConcurrent && (
               <>
-                <line x1={d.srcPt.x + d.perpX * 5} y1={d.srcPt.y + d.perpY * 5} x2={d.srcPt.x + d.perpX * 5 + d.edgeDx * 0.1} y2={d.srcPt.y + d.perpY * 5 + d.edgeDy * 0.1} stroke={d.color} strokeWidth={1.8} />
-                <line x1={d.srcPt.x - d.perpX * 5} y1={d.srcPt.y - d.perpY * 5} x2={d.srcPt.x - d.perpX * 5 + d.edgeDx * 0.1} y2={d.srcPt.y - d.perpY * 5 + d.edgeDy * 0.1} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.srcPt.x + d.edgeDx * Math.min(20, d.edgeLen * 0.08) + d.perpX * 6} y1={d.srcPt.y + d.edgeDy * Math.min(20, d.edgeLen * 0.08) + d.perpY * 6} x2={d.srcPt.x + d.edgeDx * Math.min(20, d.edgeLen * 0.08) - d.perpX * 6} y2={d.srcPt.y + d.edgeDy * Math.min(20, d.edgeLen * 0.08) - d.perpY * 6} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.srcPt.x + d.edgeDx * Math.min(28, d.edgeLen * 0.12) + d.perpX * 6} y1={d.srcPt.y + d.edgeDy * Math.min(28, d.edgeLen * 0.12) + d.perpY * 6} x2={d.srcPt.x + d.edgeDx * Math.min(28, d.edgeLen * 0.12) - d.perpX * 6} y2={d.srcPt.y + d.edgeDy * Math.min(28, d.edgeLen * 0.12) - d.perpY * 6} stroke={d.color} strokeWidth={1.8} />
               </>
             )}
 
