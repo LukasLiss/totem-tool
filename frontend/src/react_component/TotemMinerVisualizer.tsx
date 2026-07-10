@@ -247,11 +247,37 @@ function computeHierarchicalLayout(
     if (!byLayer.has(l)) byLayer.set(l, []);
     byLayer.get(l)!.push(id);
   }
-  // Sort each layer for stable ordering
+  // Sort each layer initially for stable ordering
   for (const nodes of byLayer.values()) nodes.sort();
 
   const LAYER_GAP = 110;
   const numLayers = Math.max(...Array.from(layer.values())) + 1;
+
+  // Run barycenter heuristic to minimize edge crossings
+  // Since l=0 is the top (root nodes) and l increases downwards,
+  // we traverse from l=1 to numLayers-1 and sort based on l-1
+  for (let l = 1; l < numLayers; l++) {
+    const parentLayer = byLayer.get(l - 1) || [];
+    const currentLayer = byLayer.get(l) || [];
+    
+    const parentIndex = new Map<string, number>();
+    parentLayer.forEach((id, idx) => parentIndex.set(id, idx));
+
+    const barycenter = new Map<string, number>();
+    for (const node of currentLayer) {
+      let sum = 0, count = 0;
+      for (const e of hierarchyEdges) {
+        if (e.to === node && parentIndex.has(e.from)) {
+          sum += parentIndex.get(e.from)!; count++;
+        } else if (e.from === node && parentIndex.has(e.to)) {
+          sum += parentIndex.get(e.to)!; count++;
+        }
+      }
+      barycenter.set(node, count > 0 ? sum / count : 0);
+    }
+
+    currentLayer.sort((a, b) => (barycenter.get(a) ?? 0) - (barycenter.get(b) ?? 0) || a.localeCompare(b));
+  }
 
   const PADDING_Y = 50;
   const layerY = (l: number) => PADDING_Y + (numLayers - 1 - l) * LAYER_GAP;
@@ -666,7 +692,6 @@ function TotemMinerVisualizer({
                 width={SQUARE_SIZE}
                 height={SQUARE_SIZE}
                 fill={d.color}
-                transform={`rotate(${d.squareAngle}, ${d.srcPt.x}, ${d.srcPt.y})`}
               />
             )}
 

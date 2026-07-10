@@ -96,15 +96,6 @@ export default function TotemMiner({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {}}
-            disabled={!fileId}
-          >
-            Check Conformance
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
             onClick={handleReload}
             disabled={!fileId}
             className="flex items-center gap-2"
