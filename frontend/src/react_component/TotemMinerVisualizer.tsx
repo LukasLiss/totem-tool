@@ -965,7 +965,7 @@ function TotemMinerVisualizer({
         position: 'relative',
         width: '100%',
         height: computedHeight,
-        background: '#f8fafc',
+        background: '#ffffff',
         overflow: 'hidden',
         cursor: panLocked ? 'default' : isPanning.current ? 'grabbing' : 'grab',
       }}
