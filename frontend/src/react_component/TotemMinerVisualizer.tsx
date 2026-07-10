@@ -237,8 +237,19 @@ function computeHierarchicalLayout(
       }
     }
   }
-  // Any node not yet enqueued gets layer 0
   for (const id of nodeIds) if (!enqueued.has(id)) layer.set(id, 0);
+
+  // Adjust layers for same-layer connected nodes to make their connections diagonal
+  for (const e of edges) {
+    const lFrom = layer.get(e.from) ?? 0;
+    const lTo = layer.get(e.to) ?? 0;
+    if (lFrom === lTo) {
+      const hasIncomingD = edges.some(edge => (edge.relation === 'D' || edge.relation === 'Di') && edge.to === e.from);
+      if (!hasIncomingD) {
+        layer.set(e.from, lTo + 1);
+      }
+    }
+  }
 
   // Group nodes by layer
   const byLayer = new Map<number, string[]>();
