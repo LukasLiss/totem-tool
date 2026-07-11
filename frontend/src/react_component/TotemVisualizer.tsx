@@ -25,7 +25,7 @@ type MlpaLayer = {
   areas: MlpaLayerArea[];
 };
 
-export type TotemApiResponse = {
+type TotemApiResponse = {
   layers?: MlpaLayer[];
   tempgraph: {
     nodes?: string[];
@@ -36,14 +36,14 @@ export type TotemApiResponse = {
   object_type_to_event_types?: Record<string, string[]>;
 };
 
-export type ProcessAreaDefinition = {
+type ProcessAreaDefinition = {
   id: string;
   level: number;
   label: string;
   objectTypes: string[];
 };
 
-export type ProcessLayer = {
+type ProcessLayer = {
   level: number;
   areas: ProcessAreaDefinition[];
 };
@@ -5070,7 +5070,7 @@ function getFilteredDetailData(
   };
 }
 
-export function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
+function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
   if (useBackendMlpa && data.layers && data.layers.length > 0) {
     return buildLayersFromBackend(data);
   }

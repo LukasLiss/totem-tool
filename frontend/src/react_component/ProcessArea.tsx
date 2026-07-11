@@ -9,9 +9,9 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { RefreshCcw } from 'lucide-react';
-import NewTotemVisualizer, { type TotemVisualizerControls } from './NewTotemVisualizer';
+import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
 
-export type { TotemVisualizerControls } from './NewTotemVisualizer';
+export type { TotemVisualizerControls } from './TotemVisualizer';
 
 export type ProcessAreaProps = {
   fileId?: number | string | null;
@@ -42,7 +42,7 @@ export default function ProcessArea({
 
   const visualizerContent = (
     <ReactFlowProvider>
-      <NewTotemVisualizer
+      <TotemVisualizer
         eventLogId={fileId}
         height="100%"
         backendBaseUrl={backendBaseUrl}
