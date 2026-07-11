@@ -2,6 +2,8 @@ import json
 import statistics
 from collections import defaultdict
 
+from .resource_calendar import available_seconds_between
+
 ALLOCATION_STRATEGIES = [
     "random",
     "FIFO",
@@ -10,7 +12,10 @@ ALLOCATION_STRATEGIES = [
 
 
 def resource_cooldown_distribution(
-    ocel, objects_to_analyze: list[str], activities: list[str]
+    ocel,
+    objects_to_analyze: list[str],
+    activities: list[str],
+    calendars: dict[str, dict] | None = None,
 ) -> dict:
     """
     For each activity in the list and each resource type in the list, computes the distribution of how long
@@ -20,10 +25,16 @@ def resource_cooldown_distribution(
     next event in which the same resource appears. To end an interval all activites are considered, not only the tracked ones.
     Although the simulation mainly uses filtered logs, this function considers the entire log to accuratly capture resource cooldowns.
 
+    When ``calendars`` is given, an interval's duration is the resource's
+    *available* (working) time in the gap rather than the raw wall-clock span:
+    the time the resource is simply not present (nights, weekends) is discounted.
+    
     Args:
         ocel: ObjectCentricEventLog
         objects_to_analyze: list of object types to consider as resources
         activities: list of activity names to analyse
+        calendars: Optional ``{resource_type: {weekday: [24 floats]}}`` calendar
+            probabilities. A type without an entry falls back to wall-clock time.
 
     Returns:
         dict: {
@@ -40,9 +51,10 @@ def resource_cooldown_distribution(
     """
 
     open_cooldowns: dict[str, tuple[int, str]] = {}
-    finished_intervals: dict[tuple[str, str], list[int]] = defaultdict(list)
+    finished_intervals: dict[tuple[str, str], list[float]] = defaultdict(list)
 
     activities_set = set(activities)
+    calendars = calendars or {}
 
     if ocel.events.is_empty():
         print(
@@ -65,9 +77,13 @@ def resource_cooldown_distribution(
             if obj_id in open_cooldowns:
                 # Any event closes an open interval, regardless of whether its activity is tracked
                 start_ts, start_act = open_cooldowns.pop(obj_id)
-                finished_intervals[(start_act, resource_type)].append(
-                    timestamp - start_ts
+                calendar = calendars.get(resource_type)
+                duration = (
+                    available_seconds_between(calendar, start_ts, timestamp)
+                    if calendar
+                    else timestamp - start_ts
                 )
+                finished_intervals[(start_act, resource_type)].append(duration)
 
             if activity in activities_set:
                 # Only tracked activities open a new interval

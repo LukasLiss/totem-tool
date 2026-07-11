@@ -22,6 +22,7 @@ from totem_lib.simulation.simulation import (
     OCProcessAreaSimulationConfiguration,
     OCProcessAreaSimulationModel,
     VariantPlayoutStrategy,
+    _CalendarGate,
 )
 from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 
@@ -316,6 +317,55 @@ def test_cooldown_delays_reuse_of_the_same_resource():
     assert all(gap < cooldown_s for gap in without_cd)
 
 
+def test_cooldown_burns_only_during_available_hours():
+    """A calendar off block *inside* a cooldown extends the wall-clock block.
+
+    The cooldown is working time, so an absence in the middle of it (here the
+    Worker is off Monday 11:00-12:00) must pause the countdown and push the reuse
+    past the off hour: a 2h cooldown starting in hour 10 frees the Worker at 13:00
+    (2 working hours 10-11 + 12-13), a 3h A->B gap, versus a flat 2h gap when the
+    Worker is always on. A generous pool removes contention so the gap is purely
+    the per-resource cooldown burn-down.
+    """
+    cooldown_s = 2 * HOUR
+    needed = _needs({"A": {"Worker": 1}, "B": {"Worker": 1}})
+    constraints_same = {"B": {"A": "same_resource"}}
+    cooldowns = {"A": {"Worker": {"mean_duration_s": cooldown_s}}}
+
+    on = [1.0] * 24
+    off_at_11 = [1.0] * 24
+    off_at_11[11] = 0.0
+    all_on = {"Worker": {day: list(on) for day in WEEKDAYS}}
+    off_block = {"Worker": {day: list(off_at_11) for day in WEEKDAYS}}
+
+    def run_with(type_calendars):
+        variant = _chain("A", "B")
+        model = _build_model(
+            variant,
+            needed=needed,
+            constraints={variant: constraints_same},
+            cooldowns=cooldowns,
+            type_calendars=type_calendars,
+        )
+        # Plenty of Workers -> no queueing; each B reuses its own A's Worker.
+        ocel, _, _ = _run(model, pool={"Worker": 50}, duration_s=5 * HOUR)
+        return [
+            acts["B"]["ts"] - acts["A"]["ts"]
+            for acts in _by_instance(ocel).values()
+            if "A" in acts and "B" in acts
+        ]
+
+    all_on_gaps = run_with(all_on)
+    off_block_gaps = run_with(off_block)
+
+    assert all_on_gaps and off_block_gaps
+    # Always on: the gap is the flat 2h cooldown (± tick jitter).
+    assert all(cooldown_s - 120 <= gap <= cooldown_s + 240 for gap in all_on_gaps)
+    # Off block inside the cooldown: the countdown skips the missing hour, so the
+    # Worker frees ~1h later and every reuse gap grows by roughly that hour.
+    assert min(off_block_gaps) > max(all_on_gaps) + HOUR - 240
+
+
 # --- arrival distribution ---
 
 
@@ -380,3 +430,46 @@ def test_activity_duration_model_delays_successor():
     assert on and off
     assert all(gap >= delay_s - 60 for gap in on)
     assert all(gap < delay_s for gap in off)
+
+
+# --- calendar gate: one realized schedule per (resource, hour) ---
+
+
+def test_gate_cooldown_end_skips_absent_hours():
+    """A deterministic (p in {0,1}) calendar: the cooldown burns present hours and
+    pauses on absent ones. Start Monday 10:00, hour 11 off, 2h cooldown -> the
+    Worker frees at 13:00 (working hours 10-11 and 12-13)."""
+    on = [1.0] * 24
+    on[11] = 0.0
+    cals = {"Worker": {day: list(on) for day in WEEKDAYS}}
+    gate = _CalendarGate(cals, {})
+    start = int(START.timestamp())  # Monday 10:00, hour-aligned
+    end = gate.cooldown_end("Worker_1", "Worker", start, 2 * HOUR)
+    assert end == start + 3 * HOUR
+
+
+def test_gate_cooldown_end_is_wallclock_without_a_calendar():
+    """No calendar for the resource (or an inactive gate) -> flat wall-clock."""
+    start = int(START.timestamp())
+    assert _CalendarGate({}, {}).cooldown_end("Worker_1", "Worker", start, 1234) == (
+        start + 1234
+    )
+    active_other = _CalendarGate({"Other": {day: [1.0] * 24 for day in WEEKDAYS}}, {})
+    assert active_other.cooldown_end("Worker_1", "Worker", start, 1234) == start + 1234
+
+
+def test_gate_hour_decision_is_stable_and_shared_with_cooldown():
+    """A fractional-p slot is drawn once per (resource, hour): repeated allocation
+    checks never re-flip within the hour, and the cooldown burn-down reuses the
+    exact same realized bit rather than drawing independently."""
+    cals = {"Worker": {day: [0.5] * 24 for day in WEEKDAYS}}
+    random.seed(7)
+    gate = _CalendarGate(cals, {})
+    start = int(START.timestamp())
+    hour = start // 3600
+    first = gate.is_available("Worker_1", "Worker", hour, start)
+    assert all(
+        gate.is_available("Worker_1", "Worker", hour, start) == first for _ in range(50)
+    )
+    gate.cooldown_end("Worker_1", "Worker", start, 5 * HOUR)
+    assert gate._shift[("Worker_1", hour)] == first

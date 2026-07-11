@@ -1,5 +1,30 @@
-from tests.assets.ocel_helpers import make_ocel as _make_ocel, event as _event, obj as _object
-from totem_lib.simulation.utils.resource_statistics import resource_cooldown_distribution
+import datetime as dt
+
+from tests.assets.ocel_helpers import (
+    make_ocel as _make_ocel,
+    event as _event,
+    obj as _object,
+)
+from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
+from totem_lib.simulation.utils.resource_statistics import (
+    resource_cooldown_distribution,
+)
+
+UTC = dt.timezone.utc
+
+
+def _ts(day: int = 1, hour: int = 0) -> int:
+    """Unix seconds for 2024-01-`day` `hour`:00 UTC (2024-01-01 is a Monday)."""
+    return int(dt.datetime(2024, 1, day, hour, tzinfo=UTC).timestamp())
+
+
+def _workday_calendar() -> dict:
+    """Mon–Fri 08:00–18:00 available (prob 1.0), everything else off."""
+    cal = {d: [0.0] * 24 for d in WEEKDAYS}
+    for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        for h in range(8, 18):
+            cal[d][h] = 1.0
+    return cal
 
 
 def test_basic_cooldown_single_resource():
@@ -149,7 +174,9 @@ def test_multiple_resources_different_types():
         ],
         [_object("r1", "Forklift"), _object("r2", "Crane")],
     )
-    result = resource_cooldown_distribution(ocel, ["Forklift", "Crane"], ["Load", "Unload"])
+    result = resource_cooldown_distribution(
+        ocel, ["Forklift", "Crane"], ["Load", "Unload"]
+    )
 
     assert result["Load"]["Forklift"]["mean_duration_s"] == 120
     assert result["Load"]["Crane"]["mean_duration_s"] == 120
@@ -230,3 +257,44 @@ def test_same_timestamp_results_in_zero_duration():
     )
     result = resource_cooldown_distribution(ocel, ["Worker"], ["Load", "Unload"])
     assert result["Load"]["Worker"]["mean_duration_s"] == 0
+
+
+# --- calendar-aware cooldowns: off hours discounted from occupation ---
+
+def test_cooldown_discounts_calendar_offhours():
+    """With a workday calendar the weekend absence is discounted from the cooldown.
+
+    Friday 16:00 -> Monday 09:00 spans ~65h wall-clock but only Fri 16-18 (2h)
+    plus Mon 08-09 (1h) of working time, so the occupation cooldown is 3h.
+    """
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", _ts(day=5, hour=16), ["r1"]),  # Friday 16:00
+            _event("e2", "Unload", _ts(day=8, hour=9), ["r1"]),  # Monday 09:00
+        ],
+        [_object("r1", "Worker")],
+    )
+    result = resource_cooldown_distribution(
+        ocel, ["Worker"], ["Load", "Unload"], calendars={"Worker": _workday_calendar()}
+    )
+    assert result["Load"]["Worker"]["mean_duration_s"] == 3 * 3600
+
+
+def test_cooldown_calendar_missing_type_falls_back_to_wallclock():
+    """A resource type without a calendar entry keeps the raw wall-clock gap."""
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", _ts(day=5, hour=16), ["r1"]),
+            _event("e2", "Unload", _ts(day=8, hour=9), ["r1"]),
+        ],
+        [_object("r1", "Worker")],
+    )
+    result = resource_cooldown_distribution(
+        ocel,
+        ["Worker"],
+        ["Load", "Unload"],
+        calendars={"OtherType": _workday_calendar()},
+    )
+    assert result["Load"]["Worker"]["mean_duration_s"] == _ts(day=8, hour=9) - _ts(
+        day=5, hour=16
+    )

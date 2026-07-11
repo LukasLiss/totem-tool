@@ -34,6 +34,43 @@ def availability_probability(prob_by_weekday, timestamp_s: int) -> float:
     return hours[t.hour]
 
 
+def available_seconds_between(prob_by_weekday, start_s: int, end_s: int) -> float:
+    """Expected available seconds in ``[start_s, end_s)`` under a calendar.
+
+    Weights every second by the calendar's availability probability for its
+    clock hour, so an hour with probability ``p`` contributes ``p * seconds``.
+    This is the working-time content of a wall-clock span: it discounts the
+    time a resource is simply not present (nights, weekends) rather than busy.
+
+    Used to discount a discovered cooldown gap to its expected occupation. The
+    playout then re-realizes that occupation stochastically (Bernoulli presence
+    per hour in ``_CalendarGate``), so the round trip holds in expectation.
+
+    Args:
+        prob_by_weekday: A calendar's probability matrix ``{weekday: [24 floats]}``.
+            Falsy/empty means "always available" → the full wall-clock span.
+        start_s: Start Unix timestamp in seconds (UTC), inclusive.
+        end_s: End Unix timestamp in seconds (UTC), exclusive.
+
+    Returns:
+        Expected available seconds in the span (``0.0`` if ``end_s <= start_s``).
+    """
+    if end_s <= start_s:
+        return 0.0
+    if not prob_by_weekday:
+        return float(end_s - start_s)
+
+    total = 0.0
+    cur = start_s
+    while cur < end_s:
+        hour_end = (cur // 3600) * 3600 + 3600
+        slice_end = min(hour_end, end_s)
+        p = availability_probability(prob_by_weekday, cur)
+        total += p * (slice_end - cur)
+        cur = slice_end
+    return total
+
+
 class ResourceCalendar:
     """
     A probabilistic resource calendar containing the resource availability information.

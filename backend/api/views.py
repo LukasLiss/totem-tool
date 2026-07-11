@@ -2422,8 +2422,8 @@ _SIM_DETAILS_STEPS = [
     "Filtering event log by process area",
     "Mining variants and arrival distributions",
     "Discovering resource constraints",
-    "Computing resource cooldowns and allocation",
     "Discovering resource calendars",
+    "Computing resource cooldowns and allocation",
 ]
 
 
@@ -2584,7 +2584,12 @@ def run_simulation(request):
         if mode == "advanced":
             simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(ocel, process_area)
         else:
-            simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(ocel, process_area)
+            # Resource types are the keys of the pool (disjoint from the process
+            # area's object types); pass them so cooldowns and calendars are
+            # discovered for the right types even without frontend overrides.
+            simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(
+                ocel, process_area, resource_types=list(resource_pool.keys())
+            )
 
         # Override config if provided
         simulation_model.simulation_config = OCProcessAreaSimulationConfiguration(
@@ -3063,9 +3068,28 @@ def get_simulation_details(request):
                 "constraints": var_constraints,
             })
 
-        # Compute resource cooldown distribution
+        # Compute resource calendars first — the cooldown discovery below uses
+        # them to discount each resource's off hours from its occupation times.
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 4)
-        cooldown_dist = compute_resource_cooldown(ocel, object_types, activities)
+        serialized_type_calendars = {}
+        if resource_types:
+            try:
+                type_cals = discover_resource_calendars(
+                    ocel, resource_types, ocel.obj_type_map
+                )
+                for rtype, cal in type_cals.items():
+                    serialized_type_calendars[rtype] = cal.probability
+            except Exception as e:
+                print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
+
+        # Compute resource cooldown distribution over the resource types (the
+        # object types that become resources), on the unfiltered log, discounting
+        # each resource's calendar off hours so cooldowns measure genuine
+        # occupation rather than absence.
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
+        cooldown_dist = compute_resource_cooldown(
+            ocel, resource_types, activities, calendars=serialized_type_calendars
+        )
         serialized_cooldowns = {}
         for act, type_stats in cooldown_dist.items():
             serialized_cooldowns[act] = {
@@ -3083,19 +3107,6 @@ def get_simulation_details(request):
         allocation_strategy = calculate_resource_allocation_strategy(
             filtered_ocel, cooldown_dist, ocel.obj_type_map
         )
-
-        # Compute resource calendars
-        _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
-        serialized_type_calendars = {}
-        if resource_types:
-            try:
-                type_cals = discover_resource_calendars(
-                    ocel, resource_types, ocel.obj_type_map
-                )
-                for rtype, cal in type_cals.items():
-                    serialized_type_calendars[rtype] = cal.probability
-            except Exception as e:
-                print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
 
         # Time window of the *filtered* log
         filtered_start_unix = None

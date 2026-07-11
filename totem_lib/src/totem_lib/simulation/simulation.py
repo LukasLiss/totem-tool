@@ -16,7 +16,10 @@ from totem_lib.simulation.utils.basic_simulation_statistics import (
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     variant_arrival_distribution as compute_variant_arrival_distribution,
 )
-from totem_lib.simulation.utils.resource_calendar import availability_probability
+from totem_lib.simulation.utils.resource_calendar import (
+    availability_probability,
+    discover_resource_calendars,
+)
 from totem_lib.simulation.utils.resource_constraints import (
     generate_resource_constraints,
 )
@@ -278,32 +281,45 @@ def _earliest_future_ready(inst, tick, activity_delays):
 
 
 class _CalendarGate:
-    """Decides whether a resource instance is available at a given tick.
+    """Realizes one probabilistic shift schedule per resource instance.
 
-    Resources are gated by a probabilistic calendar: for each (resource, clock
-    hour) the on/off decision is drawn once (Bernoulli with the calendar's
-    probability for that weekday/hour) and cached for the whole hour, so a
-    resource does not flicker within an hour. An individual resource calendar
-    takes precedence over its type calendar; with neither, the resource is always
-    available.
-    
+    A calendar states the *probability* a resource is present in a given
+    (weekday, hour) slot. The gate turns that into a single realized schedule:
+    for each ``(resource, absolute clock hour)`` the on/off decision is drawn
+    **once** (Bernoulli with the slot probability) and cached, so a resource can
+    never be "present" for one query and "absent" for another in the same hour.
+    This is used for resource allocation & cooldown elapsing.  An individual resource
+    calendar takes precedence over its type calendar; with neither, the resource
+    is always present.
+
     Calendars are the serialized ``{id: {weekday: [24 floats]}}`` probability
     matrices (``ResourceCalendar.probability``).
     """
+
+    # Safety cap for the hour-stepping burn-down below: stops runaway iteration
+    # on a (near-)zero calendar where presence accrues so slowly it would never
+    # exhaust the budget. ~5 years of hours.
+    _MAX_COOLDOWN_HOURS = 24 * 365 * 5
 
     def __init__(self, type_calendars, resource_calendars):
         self.type_cals = type_calendars or {}
         self.res_cals = resource_calendars or {}
         self.active = bool(self.type_cals or self.res_cals)
-        self._shift: dict[str, tuple[int, bool]] = {}
+        # One realized presence bit per (resource, absolute clock hour), shared by
+        # allocation and cooldown
+        self._shift: dict[tuple[str, int], bool] = {}
 
-    def is_available(self, rid, res_type, hour_index, timestamp_s) -> bool:
-        if not self.active:
-            return True
-        cached = self._shift.get(rid)
-        if cached is not None and cached[0] == hour_index:
-            return cached[1]
-        calendar = self.res_cals.get(rid) or self.type_cals.get(res_type)
+    def _calendar(self, rid, res_type):
+        """The calendar governing a resource instance (per-instance over type)."""
+        return self.res_cals.get(rid) or self.type_cals.get(res_type)
+
+    def _present(self, rid, res_type, hour_index, timestamp_s) -> bool:
+        """Realized presence of a resource in an absolute clock hour (cached)."""
+        key = (rid, hour_index)
+        cached = self._shift.get(key)
+        if cached is not None:
+            return cached
+        calendar = self._calendar(rid, res_type)
         p = availability_probability(calendar, timestamp_s) if calendar else 1.0
         if p >= 1.0:
             value = True
@@ -311,8 +327,39 @@ class _CalendarGate:
             value = False
         else:
             value = random.random() < p
-        self._shift[rid] = (hour_index, value)
+        self._shift[key] = value
         return value
+
+    def is_available(self, rid, res_type, hour_index, timestamp_s) -> bool:
+        if not self.active:
+            return True
+        return self._present(rid, res_type, hour_index, timestamp_s)
+
+    def cooldown_end(self, rid, res_type, start_s, work_seconds) -> int:
+        """Absolute second at which a cooldown of ``work_seconds`` finishes.
+
+        The cooldown is working time, so it burns only while the resource is
+        realized as present — consuming the same per-hour Bernoulli presence bits
+        as allocation. Hours the resource is absent pause the countdown, pushing
+        the reuse past the gap. Ungated (no calendar) → plain wall-clock advance.
+        """
+        if work_seconds <= 0:
+            return start_s
+        if not self.active or not self._calendar(rid, res_type):
+            return start_s + int(round(work_seconds))
+        remaining = float(work_seconds)
+        cur = start_s
+        for _ in range(self._MAX_COOLDOWN_HOURS):
+            hour_index = cur // 3600
+            hour_end = (hour_index + 1) * 3600
+            if self._present(rid, res_type, hour_index, cur):
+                avail = hour_end - cur
+                if avail >= remaining:
+                    return int(round(cur + remaining))
+                remaining -= avail
+            cur = hour_end
+        # Fallback for a (near-)zero calendar: add the remainder as wall clock.
+        return int(round(cur + remaining))
 
 
 def _select_by_strategy(available_rids, strategy):
@@ -671,15 +718,26 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_simple_simulation(cls, ocel, process_area):
+    def for_simple_simulation(cls, ocel, process_area, resource_types=None):
 
         # Discover ToTem Model and MLPA
         totem_model = totemDiscovery(ocel)
         mlpa = mlpaDiscovery(totem_model)
 
-        # Calculate Resource Cooldown Distribution
+        # Discover resource availability calendars
+        type_calendars = {}
+        if resource_types:
+            type_calendars = {
+                rtype: cal.probability
+                for rtype, cal in discover_resource_calendars(
+                    ocel, resource_types, ocel.obj_type_map
+                ).items()
+            }
+
+        # Calculate Resource Cooldown Distribution including the resource calendars 
+        cooldown_types = resource_types if resource_types else process_area.object_types
         resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, process_area.object_types, process_area.activities
+            ocel, cooldown_types, process_area.activities, calendars=type_calendars
         )
 
         # Filter event log on Process Area
@@ -727,6 +785,7 @@ class OCProcessAreaSimulationModel:
             OCProcessAreaSimulationConfiguration(),
             source_log_start_unix,
             activity_delays=activity_delays,
+            type_calendars=type_calendars,
         )
 
     @classmethod
@@ -1123,7 +1182,11 @@ class VariantPlayoutStrategy:
                                 if std_cd > 0
                                 else mean_cd
                             )
-                            blocked_resources.add((rid, tick + cd))
+                            cooldown_end = (
+                                calendar_gate.cooldown_end(rid, res_type, hour_ts, cd)
+                                - base_ts
+                            )
+                            blocked_resources.add((rid, cooldown_end))
 
                     # Record simulated event for constraint tracking
                     inst["simulated_events"].append(
