@@ -14,6 +14,7 @@ from totem_lib.simulation.utils.resource_calendar import (
     ResourceCalendar,
     available_seconds_between,
     discover_resource_calendars,
+    wall_clock_end_for_available,
 )
 
 UTC = dt.timezone.utc
@@ -177,3 +178,45 @@ def test_available_seconds_fractional_probability():
         cal, _ts(weekday=0, hour=10), _ts(weekday=0, hour=11)
     )
     assert got == 0.5 * 3600
+
+
+# --- wall_clock_end_for_available: inverse of available_seconds_between ---
+def test_wall_clock_end_empty_calendar_is_wallclock():
+    assert wall_clock_end_for_available(None, 0, 3600) == 3600
+    assert wall_clock_end_for_available({}, 100, 600) == 700
+
+
+def test_wall_clock_end_zero_or_negative_work_returns_start():
+    cal = _workday_calendar()
+    start = _ts(weekday=0, hour=9)
+    assert wall_clock_end_for_available(cal, start, 0) == start
+    assert wall_clock_end_for_available(cal, start, -50) == start
+
+
+def test_wall_clock_end_within_working_hours():
+    cal = _workday_calendar()
+    # Monday 09:00 + 2h available, all inside the working window -> Monday 11:00.
+    got = wall_clock_end_for_available(cal, _ts(weekday=0, hour=9), 2 * 3600)
+    assert got == _ts(weekday=0, hour=11)
+
+
+def test_wall_clock_end_spans_offhours_overnight():
+    cal = _workday_calendar()
+    # Monday 17:00 + 2h available: Mon 17-18 (1h), then skip to Tue 08-09 (1h).
+    got = wall_clock_end_for_available(cal, _ts(weekday=0, hour=17), 2 * 3600)
+    assert got == _ts(weekday=1, hour=9)
+
+def test_wall_clock_end_fractional_probability():
+    cal = {day: [0.0] * 24 for day in WEEKDAYS}
+    cal["Monday"][10] = 0.5
+    # 0.5h of available time accrues at rate 0.5 -> a full wall-clock hour.
+    got = wall_clock_end_for_available(cal, _ts(weekday=0, hour=10), 0.5 * 3600)
+    assert got == _ts(weekday=0, hour=11)
+
+
+def test_wall_clock_end_roundtrips_available_seconds_between():
+    cal = _workday_calendar()
+    start = _ts(weekday=4, hour=16)  # Friday 16:00
+    end = _ts(week=1, weekday=0, hour=9)  # next Monday 09:00
+    work = available_seconds_between(cal, start, end)
+    assert wall_clock_end_for_available(cal, start, work) == end

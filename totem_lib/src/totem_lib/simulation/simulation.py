@@ -759,7 +759,7 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map
+            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, type_calendars
         )
 
         # Calculate needed resources per activity.
@@ -1124,7 +1124,9 @@ class VariantPlayoutStrategy:
                             t: [
                                 rid
                                 for rid in resource_queues.get(t, ())
-                                if calendar_gate.is_available(rid, t, hour_index, hour_ts)
+                                if calendar_gate.is_available(
+                                    rid, t, hour_index, hour_ts
+                                )
                             ]
                             for t in needed_res_types
                         }

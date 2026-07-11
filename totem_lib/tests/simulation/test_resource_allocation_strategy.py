@@ -1,5 +1,14 @@
-from tests.assets.ocel_helpers import make_ocel, event as _event, obj
-from totem_lib.simulation.utils.resource_statistics import calculate_resource_allocation_strategy
+from tests.assets.ocel_helpers import event as _event
+from tests.assets.ocel_helpers import make_ocel, obj
+from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
+from totem_lib.simulation.utils.resource_statistics import (
+    calculate_resource_allocation_strategy,
+)
+
+
+def _flat_calendar(prob: float) -> dict:
+    """A Worker calendar with the same availability probability in every slot."""
+    return {"Worker": {day: [prob] * 24 for day in WEEKDAYS}}
 
 
 def test_fifo_strategy():
@@ -92,7 +101,7 @@ def test_cooldown_excludes_resource_from_candidates():
     }
     ocel = make_ocel(
         [
-            _event("e1", "LongTask",  0,  [], ["r1"]),  # r1 available again at t=200
+            _event("e1", "LongTask", 0, [], ["r1"]),  # r1 available again at t=200
             _event("e2", "ShortTask", 10, [], ["r2"]),  # r2 available again at t=10
             _event("e3", "ShortTask", 50, [], ["r2"]),  # r1 not available (200 > 50) → only r2 → FIFO
         ],
@@ -113,12 +122,16 @@ def test_two_resource_types_scored_independently():
             _event("e2", "A", 10,  [], ["w2", "c2"]),
             _event("e3", "A", 100, [], ["w1", "c2"]),  # w1=pos 0 (FIFO), c2=pos 1/last (LIFO)
         ],
-        [obj("w1", "Worker"), obj("w2", "Worker"), obj("c1", "Company"), obj("c2", "Company")],
+        [
+            obj("w1", "Worker"),
+            obj("w2", "Worker"),
+            obj("c1", "Company"),
+            obj("c2", "Company"),
+        ],
     )
     result = calculate_resource_allocation_strategy(ocel)
     assert result["Worker"] == "FIFO"
     assert result["Company"] == "LIFO"
-
 
 
 def test_majority_strategy_wins():
@@ -148,4 +161,55 @@ def test_majority_strategy_wins():
     result = calculate_resource_allocation_strategy(ocel)
     assert result["Worker"] == "FIFO"
 
-#TODO: Add test for handling, when resource is in usage but Events require it
+
+# --- calendar consistency ---
+def test_calendar_discounts_cooldown_to_wallclock():
+    """
+    The cooldown is calendar-discounted working time, so under a 0.5 calendar a
+    100s cooldown stretches to 200s wall-clock. r1 does LongTask at t=0; at t=150
+    it is still cooling (idle again at t=200, not t=100), so it is not a candidate
+    and the event goes unscored. Without the calendar r1 is idle at t=100 and the
+    event scores FIFO.
+    """
+    cooldowns = {
+        "LongTask": {"Worker": {"mean_duration_s": 100}},
+        "ShortTask": {"Worker": {"mean_duration_s": 0}},
+    }
+    ocel = make_ocel(
+        [
+            _event("e1", "LongTask", 0, [], ["r1"]),
+            _event("e2", "ShortTask", 150, [], ["r1"]),
+        ],
+        [obj("r1", "Worker")],
+    )
+    assert calculate_resource_allocation_strategy(ocel, cooldowns) == {"Worker": "FIFO"}
+    assert (
+        calculate_resource_allocation_strategy(
+            ocel, cooldowns, calendars=_flat_calendar(0.5)
+        )
+        == {}
+    )
+
+
+def test_calendar_offshift_type_not_scored():
+    """
+    A resource type that is never present (all-zero calendar) is excluded as a
+    candidate at every event, so no queue position is ever scored. The same log
+    without a calendar scores FIFO.
+    """
+    ocel = make_ocel(
+        [
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
+            _event("e3", "A", 100, [], ["r1"]),
+        ],
+        [obj("r1", "Worker"), obj("r2", "Worker")],
+    )
+    assert calculate_resource_allocation_strategy(ocel) == {"Worker": "FIFO"}
+    assert (
+        calculate_resource_allocation_strategy(ocel, calendars=_flat_calendar(0.0))
+        == {}
+    )
+
+
+# TODO: Add test for handling, when resource is in usage but Events require it

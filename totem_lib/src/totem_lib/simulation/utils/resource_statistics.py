@@ -2,7 +2,11 @@ import json
 import statistics
 from collections import defaultdict
 
-from .resource_calendar import available_seconds_between
+from .resource_calendar import (
+    availability_probability,
+    available_seconds_between,
+    wall_clock_end_for_available,
+)
 
 ALLOCATION_STRATEGIES = [
     "random",
@@ -105,7 +109,10 @@ def resource_cooldown_distribution(
 
 
 def calculate_resource_allocation_strategy(
-    ocel, resource_cooldowns: dict = None, resource_type_map: dict = None
+    ocel,
+    resource_cooldowns: dict = None,
+    resource_type_map: dict = None,
+    calendars: dict[str, dict] | None = None,
 ) -> dict:
     """
     Analyzes the event log to determine the most likely resource allocation strategy per resource type.
@@ -114,6 +121,15 @@ def calculate_resource_allocation_strategy(
     ordered by the time each resource last became free. For each event, it
     checks at which position in the idle queue the actually assigned resource sits:
     position 0 → FIFO, last position → LIFO, anywhere else → random.
+
+    When ``calendars`` is given, the replay is made consistent with the calendar in
+    two ways, matching what the playout allocation actually sees:
+    - **Cooldowns are calendar-discounted working time.** A resource's next-idle
+      time is the wall-clock end at which its (available-seconds) cooldown accrues
+      under the calendar.
+    - **Off-shift resources are not candidates.** A resource type that is never
+      present (probability 0) at the event's clock hour is excluded from the idle
+      queue-position computation, so it does not distort the FIFO/LIFO index.
 
     Args:
         ocel: ObjectCentricEventLog — typically the filtered OCEL (contains process_area_resources in _attributes).
@@ -124,6 +140,8 @@ def calculate_resource_allocation_strategy(
         resource_type_map: Optional. A dict mapping resource_id -> resource_type, used to resolve
                            the type of resources in process_area_resources. Needed, as algorithm also runs on filtered OCELs
                            where the resource types are no longer directly visible
+        calendars: Optional ``{resource_type: {weekday: [24 floats]}}`` calendar
+                   probabilities. A type without an entry falls back to wall-clock time.
     Returns:
         dict: {resource_type: strategy} where strategy is one of ALLOCATION_STRATEGIES
     """
@@ -131,6 +149,7 @@ def calculate_resource_allocation_strategy(
         resource_cooldowns = {}
     if resource_type_map is None:
         resource_type_map = ocel.obj_type_map
+    calendars = calendars or {}
 
     # scores[resource_type][strategy] = hit count
     scores: dict[str, dict[str, int]] = defaultdict(
@@ -164,10 +183,19 @@ def calculate_resource_allocation_strategy(
                 resources_by_type[rt] = rid
 
         for rt, actual_rid in resources_by_type.items():
+            calendar = calendars.get(rt)
+            # A type that is never present at this clock hour (probability 0) cannotbe a candidate
+            type_present = (
+                calendar is None or availability_probability(calendar, timestamp) > 0
+            )
             # Candidate queue: resources that are in idle at this timestamp, sorted FIFO-first (earliest free first)
-            candidates = sorted(
-                [(ts, rid) for ts, rid in idle_queue[rt] if ts <= timestamp],
-                key=lambda x: x[0],
+            candidates = (
+                sorted(
+                    [(ts, rid) for ts, rid in idle_queue[rt] if ts <= timestamp],
+                    key=lambda x: x[0],
+                )
+                if type_present
+                else []
             )
             candidate_ids = [rid for _, rid in candidates]
 
@@ -190,7 +218,14 @@ def calculate_resource_allocation_strategy(
                 .get(rt, {})
                 .get("mean_duration_s", 0)
             )
-            idle_queue[rt].append((int(timestamp + mean_cooldown), actual_rid))
+            # The cooldown is calendar-discounted working time; convert it back to
+            # the wall-clock second the resource becomes idle again under the calendar.
+            available_at = (
+                wall_clock_end_for_available(calendar, int(timestamp), mean_cooldown)
+                if calendar
+                else int(timestamp + mean_cooldown)
+            )
+            idle_queue[rt].append((available_at, actual_rid))
 
     # Pick the strategy with the highest score per resource type
     result: dict[str, str] = {}

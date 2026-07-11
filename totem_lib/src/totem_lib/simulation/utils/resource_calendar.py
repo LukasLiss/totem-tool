@@ -71,6 +71,58 @@ def available_seconds_between(prob_by_weekday, start_s: int, end_s: int) -> floa
     return total
 
 
+# Safety cap for the hour-stepping burn-down below: stops runaway iteration on a
+# (near-)zero calendar where available time accrues so slowly it would never reach
+# the target. ~5 years of hours.
+_MAX_ACCRUAL_HOURS = HOURS_PER_DAY * 365 * 5
+
+
+def wall_clock_end_for_available(
+    prob_by_weekday, start_s: int, work_seconds: float
+) -> int:
+    """Wall-clock second at which ``work_seconds`` of available time accrue.
+
+    Deterministic inverse of :func:`available_seconds_between`: advances wall-clock
+    time from ``start_s``, accumulating each hour's probability-weighted available
+    seconds, until ``work_seconds`` is reached. Off-hours (low/zero probability)
+    stretch the span; nights and weekends push the end further out.
+
+    This is the counterpart to the playout's realized (Bernoulli) burn-down
+    in ``_CalendarGate.cooldown_end``: it is used when analysing history — e.g. to
+    re-express a calendar-discounted cooldown (measured in available seconds) back as
+    the wall-clock time a resource becomes idle again — where no realized shift schedule
+    exists and a deterministic estimate is wanted.
+
+    Args:
+        prob_by_weekday: A calendar's probability matrix ``{weekday: [24 floats]}``.
+            Falsy/empty means "always available" → ``start_s + work_seconds``.
+        start_s: Start Unix timestamp in seconds (UTC).
+        work_seconds: Available seconds to accumulate (``<= 0`` returns ``start_s``).
+
+    Returns:
+        The Unix second (UTC) at which the accumulated available time reaches
+        ``work_seconds`` (rounded to the nearest second). For a (near-)zero calendar
+        that never accrues enough, the remainder is added as wall clock after the cap.
+    """
+    if work_seconds <= 0:
+        return start_s
+    if not prob_by_weekday:
+        return start_s + int(round(work_seconds))
+
+    remaining = float(work_seconds)
+    cur = start_s
+    for _ in range(_MAX_ACCRUAL_HOURS):
+        hour_end = (cur // 3600) * 3600 + 3600
+        p = availability_probability(prob_by_weekday, cur)
+        avail = p * (hour_end - cur)
+        if avail >= remaining:
+            # Finishes inside this hour
+            return int(round(cur + remaining / p))
+        remaining -= avail
+        cur = hour_end
+    return int(round(cur + remaining))
+
+
 class ResourceCalendar:
     """
     A probabilistic resource calendar containing the resource availability information.
