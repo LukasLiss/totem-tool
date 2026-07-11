@@ -79,6 +79,8 @@ def build_evaluation_payload(
     simulated_ocel,
     *,
     cooldown_distribution: dict | None = None,
+    actual_obj_type_map: dict | None = None,
+    simulated_obj_type_map: dict | None = None,
     include_graph_edit_distance: bool = False,
     graph_edit_timeout_s: float = 5.0,
 ) -> dict:
@@ -88,6 +90,8 @@ def build_evaluation_payload(
 
     GED is off by default — it is expensive and only useful as a reference
     number in paper-style runs.
+
+    The resource metrics resolve resource ids to types via the object type map.
     """
     # ── Counts & sizes ──
     counts = count_summary_distance(actual_ocel, simulated_ocel)
@@ -152,11 +156,24 @@ def build_evaluation_payload(
     )
 
     # ── Resources ──
-    res_dist_actual = resource_distribution(actual_ocel)
-    res_dist_sim = resource_distribution(simulated_ocel)
-    res_dist_diff = resource_distribution_distance(actual_ocel, simulated_ocel)
-    util_actual = resource_utilization_rate(actual_ocel, cooldown_distribution=cooldown_distribution)
-    util_sim = resource_utilization_rate(simulated_ocel, cooldown_distribution=cooldown_distribution)
+    res_dist_actual = resource_distribution(actual_ocel, obj_type_map=actual_obj_type_map)
+    res_dist_sim = resource_distribution(simulated_ocel, obj_type_map=simulated_obj_type_map)
+    res_dist_diff = resource_distribution_distance(
+        actual_ocel,
+        simulated_ocel,
+        actual_obj_type_map=actual_obj_type_map,
+        simulated_obj_type_map=simulated_obj_type_map,
+    )
+    util_actual = resource_utilization_rate(
+        actual_ocel,
+        cooldown_distribution=cooldown_distribution,
+        obj_type_map=actual_obj_type_map,
+    )
+    util_sim = resource_utilization_rate(
+        simulated_ocel,
+        cooldown_distribution=cooldown_distribution,
+        obj_type_map=simulated_obj_type_map,
+    )
 
     resource_rows = []
     for rt in sorted(set(res_dist_diff)):

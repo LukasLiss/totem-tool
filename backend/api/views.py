@@ -2633,9 +2633,17 @@ def run_simulation(request):
         evaluation_error = None
         try:
             cooldown_dist = getattr(simulation_model, "resource_cooldown_distribution", None)
+
+            sim_resource_type_map = {
+                f"{rtype}_{i + 1}": rtype
+                for rtype, count in resource_pool.items()
+                for i in range(int(count))
+            }
             evaluation = build_evaluation_payload(
                 filtered_ocel, sim_log,
                 cooldown_distribution=cooldown_dist,
+                actual_obj_type_map=ocel.obj_type_map,
+                simulated_obj_type_map=sim_resource_type_map,
             )
             evaluation["runtime"] = {"simulation_s": sim_timer.elapsed_s}
         except Exception as eval_err:

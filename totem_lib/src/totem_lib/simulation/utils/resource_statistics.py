@@ -32,7 +32,7 @@ def resource_cooldown_distribution(
     When ``calendars`` is given, an interval's duration is the resource's
     *available* (working) time in the gap rather than the raw wall-clock span:
     the time the resource is simply not present (nights, weekends) is discounted.
-    
+
     Args:
         ocel: ObjectCentricEventLog
         objects_to_analyze: list of object types to consider as resources

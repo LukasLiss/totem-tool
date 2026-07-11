@@ -15,7 +15,7 @@ from collections import defaultdict
 from scipy.stats import wasserstein_distance
 
 
-def _events_with_resources(ocel) -> list[dict]:
+def _events_with_resources(ocel, obj_type_map: dict | None = None) -> list[dict]:
     """
     Returns a list of {timestamp, activity, resources: [(rid, rtype), ...]}
     dicts, one per event.
@@ -23,7 +23,8 @@ def _events_with_resources(ocel) -> list[dict]:
     Resources are read from the ``process_area_resources`` attribute when
     present.
     """
-    obj_type_map = ocel.obj_type_map
+    if obj_type_map is None:
+        obj_type_map = ocel.obj_type_map
     out = []
 
     rows = ocel.events.select(["_timestampUnix", "_activity", "_attributes"]).iter_rows(
@@ -56,10 +57,16 @@ def _events_with_resources(ocel) -> list[dict]:
     return out
 
 
-def resource_distribution(ocel) -> dict[str, dict]:
+def resource_distribution(ocel, obj_type_map: dict | None = None) -> dict[str, dict]:
     """
     Per resource type, the number of distinct resources used and the
     participation count per individual resource.
+
+    Args:
+        ocel:         log to evaluate.
+        obj_type_map: optional resource-id -> type map (see
+                      ``_events_with_resources``); defaults to
+                      ``ocel.obj_type_map``.
 
     Returns:
         ``{res_type: {
@@ -68,7 +75,7 @@ def resource_distribution(ocel) -> dict[str, dict]:
             "events_per_resource":     {rid: count},
         }}``.
     """
-    events = _events_with_resources(ocel)
+    events = _events_with_resources(ocel, obj_type_map)
 
     per_type_rids: dict[str, set] = defaultdict(set)
     per_type_event_count: dict[str, int] = defaultdict(int)
@@ -94,10 +101,24 @@ def resource_distribution(ocel) -> dict[str, dict]:
     return result
 
 
-def resource_distribution_distance(actual_ocel, simulated_ocel) -> dict[str, dict]:
+def resource_distribution_distance(
+    actual_ocel,
+    simulated_ocel,
+    actual_obj_type_map: dict | None = None,
+    simulated_obj_type_map: dict | None = None,
+) -> dict[str, dict]:
     """
     Per resource type, compares the distribution of "events per resource"
     between actual and simulated log via 1-Wasserstein distance
+
+    Args:
+        actual_ocel:            reference log.
+        simulated_ocel:         simulated log.
+        actual_obj_type_map:    optional resource-id -> type map for the actual
+                                log; defaults to ``actual_ocel.obj_type_map``.
+        simulated_obj_type_map: optional resource-id -> type map for the
+                                simulated log; defaults to
+                                ``simulated_ocel.obj_type_map``.
 
     Returns:
         ``{res_type: {
@@ -106,8 +127,8 @@ def resource_distribution_distance(actual_ocel, simulated_ocel) -> dict[str, dic
             "events_per_resource_1wd": float,
         }}``.
     """
-    actual_dist = resource_distribution(actual_ocel)
-    sim_dist = resource_distribution(simulated_ocel)
+    actual_dist = resource_distribution(actual_ocel, actual_obj_type_map)
+    sim_dist = resource_distribution(simulated_ocel, simulated_obj_type_map)
 
     result = {}
     for rtype in sorted(set(actual_dist) | set(sim_dist)):
@@ -135,6 +156,7 @@ def resource_utilization_rate(
     ocel,
     cooldown_distribution: dict | None = None,
     observation_window_s: int | None = None,
+    obj_type_map: dict | None = None,
 ) -> dict:
     """
     Resource utilization = (busy time) / (observation window).
@@ -143,6 +165,9 @@ def resource_utilization_rate(
         ocel:                  log to evaluate.
         cooldown_distribution: optional, dict of dicts of dicts with mean cooldown durations
         observation_window_s:  optional window length in seconds
+        obj_type_map:          optional resource-id -> type map (see
+                               ``_events_with_resources``); defaults to
+                               ``ocel.obj_type_map``.
 
     Returns:
         ``{
@@ -153,7 +178,7 @@ def resource_utilization_rate(
                                           "n_resources": int}},
         }``
     """
-    events = _events_with_resources(ocel)
+    events = _events_with_resources(ocel, obj_type_map)
     if not events:
         return {"observation_window_s": 0, "per_resource": {}, "per_type": {}}
 

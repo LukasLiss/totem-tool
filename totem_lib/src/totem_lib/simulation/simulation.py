@@ -734,7 +734,7 @@ class OCProcessAreaSimulationModel:
                 ).items()
             }
 
-        # Calculate Resource Cooldown Distribution including the resource calendars 
+        # Calculate Resource Cooldown Distribution including the resource calendars
         cooldown_types = resource_types if resource_types else process_area.object_types
         resource_cooldown_dist = resource_cooldown_distribution(
             ocel, cooldown_types, process_area.activities, calendars=type_calendars

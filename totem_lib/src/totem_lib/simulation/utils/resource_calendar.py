@@ -206,7 +206,7 @@ def discover_resource_calendars(
         obj_type_map = ocel.obj_type_map
 
     # Per type & slot, collect the distinct (resource_id, iso_week) pairs active
-    # there; 
+    # there;
     # active_pairs[rtype][weekday][hour] = set of (rid, (year, week))
     active_pairs: dict[str, dict[str, list[set]]] = {
         rt: {day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS}
