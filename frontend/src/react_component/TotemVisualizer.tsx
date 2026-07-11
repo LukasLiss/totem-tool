@@ -119,7 +119,7 @@ type VerticalSlot = 'top' | 'center' | 'bottom'; // For left/right sides (3 posi
 
 type AttachmentSlot = {
   side: NodeSide;
-  slot: HorizontalSlot | VerticalSlot;
+  slot: HorizontalSlot | VerticalSlot | number;
 };
 
 // Slot positions as fractions of the node dimension
@@ -733,23 +733,27 @@ function getAttachmentPoint(node: NodePosition, attachment: AttachmentSlot): Poi
 
   switch (attachment.side) {
     case 'top': {
-      const slot = attachment.slot as HorizontalSlot;
-      const offsetX = HORIZONTAL_SLOT_POSITIONS[slot] * node.width;
+      const offsetX = typeof attachment.slot === 'number' 
+        ? attachment.slot * node.width 
+        : HORIZONTAL_SLOT_POSITIONS[attachment.slot as HorizontalSlot] * node.width;
       return { x: node.centerX + offsetX, y: node.centerY - halfH };
     }
     case 'bottom': {
-      const slot = attachment.slot as HorizontalSlot;
-      const offsetX = HORIZONTAL_SLOT_POSITIONS[slot] * node.width;
+      const offsetX = typeof attachment.slot === 'number' 
+        ? attachment.slot * node.width 
+        : HORIZONTAL_SLOT_POSITIONS[attachment.slot as HorizontalSlot] * node.width;
       return { x: node.centerX + offsetX, y: node.centerY + halfH };
     }
     case 'left': {
-      const slot = attachment.slot as VerticalSlot;
-      const offsetY = VERTICAL_SLOT_POSITIONS[slot] * node.height;
+      const offsetY = typeof attachment.slot === 'number' 
+        ? attachment.slot * node.height 
+        : VERTICAL_SLOT_POSITIONS[attachment.slot as VerticalSlot] * node.height;
       return { x: node.centerX - halfW, y: node.centerY + offsetY };
     }
     case 'right': {
-      const slot = attachment.slot as VerticalSlot;
-      const offsetY = VERTICAL_SLOT_POSITIONS[slot] * node.height;
+      const offsetY = typeof attachment.slot === 'number' 
+        ? attachment.slot * node.height 
+        : VERTICAL_SLOT_POSITIONS[attachment.slot as VerticalSlot] * node.height;
       return { x: node.centerX + halfW, y: node.centerY + offsetY };
     }
   }
@@ -1001,6 +1005,28 @@ function assignPort(
   if (index === -1) return 'center';
 
   // Assign ports based on sorted position
+  const unconstrainedCount = sorted.length;
+  
+  if (unconstrainedCount > (centerTaken ? 2 : 3)) {
+    // Dynamically distribute edges to prevent port overlap
+    const maxOffset = 0.35; // Maximum fraction from center
+    
+    if (centerTaken) {
+      // Avoid the exact center
+      const step = (maxOffset * 2) / Math.max(1, unconstrainedCount - 1);
+      let offset = -maxOffset + index * step;
+      // If it's too close to center, push it away slightly
+      if (Math.abs(offset) < 0.1) {
+        offset = offset < 0 ? -0.15 : 0.15;
+      }
+      return offset;
+    } else {
+      // Distribute evenly across the side
+      const step = (maxOffset * 2) / Math.max(1, unconstrainedCount - 1);
+      return -maxOffset + index * step;
+    }
+  }
+
   if (side === 'left' || side === 'right') {
     // Vertical slots: top, center, bottom
     if (centerTaken) {
