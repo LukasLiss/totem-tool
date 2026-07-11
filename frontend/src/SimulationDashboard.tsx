@@ -179,13 +179,13 @@ const SimulationStepper: React.FC<{
               loading={phase === "running" && stepNumber === activeStep}
               // Only completed steps (before the active one) are navigable.
               disabled={phase === "running" || stepNumber > activeStep}
-              className="not-last:flex-1"
+              className="items-start not-last:flex-1"
             >
-              <StepperTrigger className="gap-2.5">
+              <StepperTrigger className="flex-col gap-1.5">
                 <StepperIndicator>{stepNumber}</StepperIndicator>
-                <StepperTitle>{step.title}</StepperTitle>
+                <StepperTitle className="text-center">{step.title}</StepperTitle>
               </StepperTrigger>
-              {idx < steps.length - 1 && <StepperSeparator />}
+              {idx < steps.length - 1 && <StepperSeparator className="mt-[11px]" />}
             </StepperItem>
           );
         })}
