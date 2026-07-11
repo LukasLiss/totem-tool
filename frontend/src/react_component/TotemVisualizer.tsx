@@ -25,7 +25,7 @@ type MlpaLayer = {
   areas: MlpaLayerArea[];
 };
 
-type TotemApiResponse = {
+export type TotemApiResponse = {
   layers?: MlpaLayer[];
   tempgraph: {
     nodes?: string[];
@@ -36,14 +36,14 @@ type TotemApiResponse = {
   object_type_to_event_types?: Record<string, string[]>;
 };
 
-type ProcessAreaDefinition = {
+export type ProcessAreaDefinition = {
   id: string;
   level: number;
   label: string;
   objectTypes: string[];
 };
 
-type ProcessLayer = {
+export type ProcessLayer = {
   level: number;
   areas: ProcessAreaDefinition[];
 };
@@ -2323,7 +2323,10 @@ function recalculateEdgeDecorations(
 
   if (pathNeedsUpdate) {
     segment.path = buildCurvedPathFromWaypoints(updatedWaypoints, curveOptions);
-    segment.debugWaypoints = updatedWaypoints;
+    // Do NOT overwrite debugWaypoints with the trimmed updatedWaypoints.
+    // Preserving the original node-boundary endpoints allows the overlap pass
+    // to clamp correctly, preventing decorations from drifting/dangling in space
+    // when recalculated after the shift.
   }
 }
 
@@ -3138,7 +3141,7 @@ function computeEdgeSegments(
       relation: edge.relation,
       path,
       color: edge.color,
-      debugWaypoints: routeWaypoints ? [...routeWaypoints] : undefined,
+      debugWaypoints: routeWaypoints ? [...routeWaypoints] : [startPoint, collisionPoint],
     };
 
     if (edge.relation === 'P') {
@@ -3461,6 +3464,243 @@ function computeEdgeSegments(
     }
 
     segments.push(segment);
+  });
+
+  // ============================================================
+  // POST-PROCESSING PASS: Resolve collinear segment overlaps
+  // ============================================================
+  
+  // Clone all waypoints first to avoid mutating shared objects
+  segments.forEach((seg) => {
+    if (seg.debugWaypoints) {
+      seg.debugWaypoints = seg.debugWaypoints.map((wp) => ({ ...wp }));
+    }
+  });
+
+  // Collect all vertical and horizontal segments from non-area-detail edges
+  const verticalSegments: Array<{
+    x: number;
+    yMin: number;
+    yMax: number;
+    edgeId: string;
+    index: number;
+    seg: EdgeSegment;
+    source: NodePosition;
+    target: NodePosition;
+  }> = [];
+
+  const horizontalSegments: Array<{
+    y: number;
+    xMin: number;
+    xMax: number;
+    edgeId: string;
+    index: number;
+    seg: EdgeSegment;
+    source: NodePosition;
+    target: NodePosition;
+  }> = [];
+
+  segments.forEach((seg) => {
+    if (seg.relation === 'A') return; // Skip area detail edges
+    const wps = seg.debugWaypoints;
+    if (!wps || wps.length < 2) return;
+
+    const edge = edges.find((e) => e.id === seg.id);
+    if (!edge) return;
+    const source = positions[edge.from];
+    const target = positions[edge.to];
+    if (!source || !target) return;
+
+    for (let i = 0; i < wps.length - 1; i++) {
+      const p1 = wps[i];
+      const p2 = wps[i + 1];
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+
+      if (Math.abs(dx) < 2) {
+        // Vertical segment
+        verticalSegments.push({
+          x: (p1.x + p2.x) / 2,
+          yMin: Math.min(p1.y, p2.y),
+          yMax: Math.max(p1.y, p2.y),
+          edgeId: seg.id,
+          index: i,
+          seg,
+          source,
+          target,
+        });
+      } else if (Math.abs(dy) < 2) {
+        // Horizontal segment
+        horizontalSegments.push({
+          y: (p1.y + p2.y) / 2,
+          xMin: Math.min(p1.x, p2.x),
+          xMax: Math.max(p1.x, p2.x),
+          edgeId: seg.id,
+          index: i,
+          seg,
+          source,
+          target,
+        });
+      }
+    }
+  });
+
+  // Group and color vertical segments
+  const vGroups: typeof verticalSegments[] = [];
+  verticalSegments.forEach((vSeg) => {
+    let placed = false;
+    for (const group of vGroups) {
+      if (Math.abs(group[0].x - vSeg.x) < 5) {
+        group.push(vSeg);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      vGroups.push([vSeg]);
+    }
+  });
+
+  // Assign shifts to vertical segments in each group
+  const modifiedSegmentIds = new Set<string>();
+  vGroups.forEach((group) => {
+    if (group.length < 2) return;
+
+    group.sort((a, b) => a.yMin - b.yMin);
+
+    // Greedy coloring
+    const colors: number[] = new Array(group.length).fill(-1);
+    for (let i = 0; i < group.length; i++) {
+      const current = group[i];
+      const usedColors = new Set<number>();
+      for (let j = 0; j < i; j++) {
+        const other = group[j];
+        const overlap = Math.min(current.yMax, other.yMax) - Math.max(current.yMin, other.yMin);
+        if (overlap > 15 && current.edgeId !== other.edgeId) {
+          usedColors.add(colors[j]);
+        }
+      }
+      let color = 0;
+      while (usedColors.has(color)) {
+        color++;
+      }
+      colors[i] = color;
+    }
+
+    // Apply X-shifts based on color/slot
+    group.forEach((vSeg, idx) => {
+      const color = colors[idx];
+      if (color === 0) return; // No shift for slot 0
+
+      const direction = color % 2 === 1 ? 1 : -1;
+      const magnitude = Math.floor((color + 1) / 2) * 12; // 12px shift steps
+      const shiftX = direction * magnitude;
+
+      const wps = vSeg.seg.debugWaypoints!;
+      const i = vSeg.index;
+
+      wps[i].x += shiftX;
+      wps[i + 1].x += shiftX;
+
+      // Clamp start point to source node boundary if shifted
+      if (i === 0) {
+        const minX = vSeg.source.centerX - vSeg.source.width / 2 + 4;
+        const maxX = vSeg.source.centerX + vSeg.source.width / 2 - 4;
+        wps[0].x = Math.max(minX, Math.min(maxX, wps[0].x));
+      }
+      // Clamp end point to target node boundary if shifted
+      if (i + 1 === wps.length - 1) {
+        const minX = vSeg.target.centerX - vSeg.target.width / 2 + 4;
+        const maxX = vSeg.target.centerX + vSeg.target.width / 2 - 4;
+        wps[wps.length - 1].x = Math.max(minX, Math.min(maxX, wps[wps.length - 1].x));
+      }
+
+      modifiedSegmentIds.add(vSeg.seg.id);
+    });
+  });
+
+  // Group and color horizontal segments
+  const hGroups: typeof horizontalSegments[] = [];
+  horizontalSegments.forEach((hSeg) => {
+    let placed = false;
+    for (const group of hGroups) {
+      if (Math.abs(group[0].y - hSeg.y) < 5) {
+        group.push(hSeg);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      hGroups.push([hSeg]);
+    }
+  });
+
+  // Assign shifts to horizontal segments in each group
+  hGroups.forEach((group) => {
+    if (group.length < 2) return;
+
+    group.sort((a, b) => a.xMin - b.xMin);
+
+    // Greedy coloring
+    const colors: number[] = new Array(group.length).fill(-1);
+    for (let i = 0; i < group.length; i++) {
+      const current = group[i];
+      const usedColors = new Set<number>();
+      for (let j = 0; j < i; j++) {
+        const other = group[j];
+        const overlap = Math.min(current.xMax, other.xMax) - Math.max(current.xMin, other.xMin);
+        if (overlap > 15 && current.edgeId !== other.edgeId) {
+          usedColors.add(colors[j]);
+        }
+      }
+      let color = 0;
+      while (usedColors.has(color)) {
+        color++;
+      }
+      colors[i] = color;
+    }
+
+    // Apply Y-shifts based on color/slot
+    group.forEach((hSeg, idx) => {
+      const color = colors[idx];
+      if (color === 0) return; // No shift for slot 0
+
+      const direction = color % 2 === 1 ? 1 : -1;
+      const magnitude = Math.floor((color + 1) / 2) * 12; // 12px shift steps
+      const shiftY = direction * magnitude;
+
+      const wps = hSeg.seg.debugWaypoints!;
+      const i = hSeg.index;
+
+      wps[i].y += shiftY;
+      wps[i + 1].y += shiftY;
+
+      // Clamp start point to source node boundary if shifted
+      if (i === 0) {
+        const minY = hSeg.source.centerY - hSeg.source.height / 2 + 4;
+        const maxY = hSeg.source.centerY + hSeg.source.height / 2 - 4;
+        wps[0].y = Math.max(minY, Math.min(maxY, wps[0].y));
+      }
+      // Clamp end point to target node boundary if shifted
+      if (i + 1 === wps.length - 1) {
+        const minY = hSeg.target.centerY - hSeg.target.height / 2 + 4;
+        const maxY = hSeg.target.centerY + hSeg.target.height / 2 - 4;
+        wps[wps.length - 1].y = Math.max(minY, Math.min(maxY, wps[wps.length - 1].y));
+      }
+
+      modifiedSegmentIds.add(hSeg.seg.id);
+    });
+  });
+
+  // Finally, regenerate path strings and recalculate decorations for modified segments only
+  segments.forEach((seg) => {
+    if (seg.relation === 'A' || !seg.debugWaypoints || !modifiedSegmentIds.has(seg.id)) return;
+
+    const isFlowingZCurve = seg.debugWaypoints.length >= 4;
+    const curveOpts = isFlowingZCurve ? FLOWING_S_CURVE : undefined;
+
+    seg.path = buildCurvedPathFromWaypoints(seg.debugWaypoints, curveOpts);
+    recalculateEdgeDecorations(seg, seg.debugWaypoints, seg.relation, edgeScale, curveOpts);
   });
 
   return segments;
@@ -3917,8 +4157,31 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
             total += colDiff * 0.4;
           }
         }
+        // Penalize horizontal edge length to prefer shorter, more vertical paths
+        if (sourceCol !== undefined && targetCol !== undefined) {
+          total += Math.abs(sourceCol - targetCol) * 0.05;
+        }
       }
     });
+
+    // Penalize empty columns (gaps) inside process areas to keep nodes compact
+    areasByLevel.forEach((areas) => {
+      areas.forEach((area) => {
+        const areaCols = area.nodeIds
+          .map((nodeId) => columns[nodeId])
+          .filter((c): c is number => c !== undefined);
+        if (areaCols.length > 0) {
+          const minCol = Math.min(...areaCols);
+          const maxCol = Math.max(...areaCols);
+          const span = maxCol - minCol + 1;
+          const gaps = span - areaCols.length;
+          if (gaps > 0) {
+            total += gaps * 0.5;
+          }
+        }
+      });
+    });
+
     return total;
   };
 
@@ -4807,7 +5070,7 @@ function getFilteredDetailData(
   };
 }
 
-function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
+export function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
   if (useBackendMlpa && data.layers && data.layers.length > 0) {
     return buildLayersFromBackend(data);
   }
