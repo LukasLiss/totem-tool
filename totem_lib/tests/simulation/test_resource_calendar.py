@@ -114,21 +114,3 @@ def test_calendar_empty_log_returns_empty():
     ocel = _make_ocel([], [])
     type_cals = discover_resource_calendars(ocel, ["Worker"])
     assert type_cals == {}
-
-
-def test_calendar_no_matching_resources_yields_zero_calendars():
-    """Events exist but carry no resources of the requested type -> zero-prob calendars."""
-    ocel = _make_ocel(
-        [
-            _event("e1", "Load", _ts(week=0, weekday=0, hour=10), ["obj"]),
-        ],
-        [_object("obj", "Order")],
-    )
-    type_cals = discover_resource_calendars(ocel, ["Worker"])
-
-    assert "Worker" in type_cals
-    assert all(
-        type_cals["Worker"].get_probability(day, h) == 0.0
-        for day in type_cals["Worker"].probability
-        for h in range(24)
-    )

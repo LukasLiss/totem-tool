@@ -51,7 +51,7 @@ class ResourceCalendar:
         self.identifier = identifier
         self.type = type
         self.probability: dict[str, list[float]] = {
-            day: [0.0] * HOURS_PER_DAY for day in WEEKDAYS
+            day: [1.0] * HOURS_PER_DAY for day in WEEKDAYS
         }
 
     def get_probability(self, weekday: str, hour: int) -> float:
@@ -90,7 +90,7 @@ def discover_resource_calendars(
     Availability is a property of the resource itself, not of any single process
     area, so it is measured across **all activities** in which the resource takes
     part
-    
+
     For each (weekday, hour) slot the type calendar is the **average** availability
     across the type's resources:
         P_type(slot) = (sum_r  weeks r was active at slot) / (num_resources * total_weeks)
@@ -117,8 +117,7 @@ def discover_resource_calendars(
         obj_type_map = ocel.obj_type_map
 
     # Per type & slot, collect the distinct (resource_id, iso_week) pairs active
-    # there; the count is exactly the numerator of the type average. Plus the
-    # roster of resource ids per type (its denominator).
+    # there; 
     # active_pairs[rtype][weekday][hour] = set of (rid, (year, week))
     active_pairs: dict[str, dict[str, list[set]]] = {
         rt: {day: [set() for _ in range(HOURS_PER_DAY)] for day in WEEKDAYS}
