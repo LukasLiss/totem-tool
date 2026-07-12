@@ -14,7 +14,8 @@ export interface OccnMarker {
   object_type: string;
   min_count: number;
   max_count: number | null; // null = unbounded (∞)
-  marker_key: string;
+  /** Same convention as the editor: 0 = no key, shared >0 = disjoint objects. */
+  marker_key: number;
 }
 
 export interface OccnMarkerGroup {
@@ -94,20 +95,16 @@ function capGroups(
 
 /**
  * Backend marker → editor tuple. `max_count: null` (∞) becomes the editor's
- * -1 sentinel; string marker keys are renumbered 1,2,3… per group (0 = no
- * key), which preserves the key-badge semantics (badges appear when ≥2
- * markers of a group share a non-zero key).
+ * -1 sentinel; marker keys already share the editor's int convention
+ * (0 = no key) and pass through unchanged.
  */
 function toEditorGroup(group: OccnMarkerGroup): EditorOccnMarker[] {
-  const keyNumbers = new Map<string, number>();
-  return group.markers.map((m): EditorOccnMarker => {
-    let keyNum = 0;
-    if (m.marker_key !== '') {
-      keyNum = keyNumbers.get(m.marker_key) ?? keyNumbers.size + 1;
-      keyNumbers.set(m.marker_key, keyNum);
-    }
-    return [m.related_activity, m.object_type, [m.min_count, m.max_count ?? -1], keyNum];
-  });
+  return group.markers.map((m): EditorOccnMarker => [
+    m.related_activity,
+    m.object_type,
+    [m.min_count, m.max_count ?? -1],
+    m.marker_key,
+  ]);
 }
 
 export function occnNetToEditorGraph(
