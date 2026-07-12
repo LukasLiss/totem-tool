@@ -57,8 +57,20 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
   const perpY = tangent.x * (ARROW_WIDTH / 2);
   const arrowPoints = `${tip.x},${tip.y} ${backX + perpX},${backY + perpY} ${backX - perpX},${backY - perpY}`;
 
+  // The discovery visualizer sets dependenceMeasure; the editor leaves it
+  // undefined, so editor arcs get no tooltip (behavior unchanged).
+  const tooltip =
+    data?.dependenceMeasure === undefined
+      ? null
+      : `${data?.objectType ?? ''}${
+          data?.dependenceMeasure != null
+            ? ` — dependence: ${data.dependenceMeasure.toFixed(2)}`
+            : ''
+        }`;
+
   return (
-    <>
+    <g>
+      {tooltip && <title>{tooltip}</title>}
       {selected && (
         <path
           d={path}
@@ -70,7 +82,7 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
       )}
       <BaseEdge id={id} path={path} style={{ stroke: color, strokeWidth: 2 }} />
       <polygon points={arrowPoints} fill={color} style={{ pointerEvents: 'none' }} />
-    </>
+    </g>
   );
 });
 

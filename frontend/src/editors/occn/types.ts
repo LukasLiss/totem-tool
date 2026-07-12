@@ -11,11 +11,17 @@ export type OccnNodeData = {
   kind: OccnNodeKind;
   /** Object type of START/END pseudo activities. */
   objectType?: string;
+  /** Occurrence count shown under the label (discovery visualizer only). */
+  count?: number;
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;
 
-export type OccnEdgeData = { objectType: string };
+export type OccnEdgeData = {
+  objectType: string;
+  /** Tooltip value from discovery (visualizer only; editor leaves it unset). */
+  dependenceMeasure?: number | null;
+};
 
 export type OccnEdge = Edge<OccnEdgeData, 'occnArc'>;
 

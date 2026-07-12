@@ -33,6 +33,10 @@ type MarkerDrag = {
  * Markers support two pointer gestures: a plain click selects the marker's
  * group, and dragging a marker onto another marker of the same activity side
  * merges the two groups (the drag shows a dashed preview line).
+ *
+ * `interactive={false}` (the read-only discovery visualizer) disables both
+ * gestures but keeps pointer events on so the `<title>` tooltips still work;
+ * `markerTitle` lets that caller enrich the tooltip (e.g. support counts).
  */
 const MarkerOverlay = memo(function MarkerOverlay({
   nodes,
@@ -41,6 +45,8 @@ const MarkerOverlay = memo(function MarkerOverlay({
   typeColors,
   parallelOffset,
   focusedGroup,
+  interactive = true,
+  markerTitle,
   onSelectGroup,
   onMergeGroups,
 }: {
@@ -50,8 +56,10 @@ const MarkerOverlay = memo(function MarkerOverlay({
   typeColors: Record<string, string>;
   parallelOffset: Record<string, number>;
   focusedGroup: GroupRef | null;
-  onSelectGroup: (ref: GroupRef) => void;
-  onMergeGroups: (from: GroupRef, to: GroupRef) => void;
+  interactive?: boolean;
+  markerTitle?: (vis: MarkerVis) => string;
+  onSelectGroup?: (ref: GroupRef) => void;
+  onMergeGroups?: (from: GroupRef, to: GroupRef) => void;
 }) {
   const { markers, lines } = useMemo(
     () => computeMarkerLayout({ nodes, edges, bindings, typeColors, parallelOffset }),
@@ -105,7 +113,18 @@ const MarkerOverlay = memo(function MarkerOverlay({
     }
   };
 
-  const interactionProps = (vis: MarkerVis) => ({
+  const titleFor = (vis: MarkerVis) =>
+    markerTitle?.(vis) ?? defaultMarkerTitle(vis.ref.side, vis.marker[0], vis.marker[1]);
+
+  const interactionProps = (vis: MarkerVis) => {
+    if (!interactive) {
+      // Pointer events stay on so the SVG <title> tooltip is reachable.
+      return { style: { pointerEvents: 'all', cursor: 'default' } as const };
+    }
+    return staticInteractionProps(vis);
+  };
+
+  const staticInteractionProps = (vis: MarkerVis) => ({
     [MARKER_REF_ATTR]: JSON.stringify([
       vis.ref.activity,
       vis.ref.side,
@@ -158,10 +177,10 @@ const MarkerOverlay = memo(function MarkerOverlay({
       const active = dragRef.current;
       updateDrag(null);
       if (!active) {
-        onSelectGroup(pending.vis.ref);
+        onSelectGroup?.(pending.vis.ref);
         return;
       }
-      if (active.target) onMergeGroups(active.from, active.target);
+      if (active.target) onMergeGroups?.(active.from, active.target);
     },
     onPointerCancel: (event: React.PointerEvent) => {
       if (pendingRef.current?.pointerId !== event.pointerId) return;
@@ -250,7 +269,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
-                  <title>{markerTitle(vis.ref.side, vis.marker[0], vis.marker[1])}</title>
+                  <title>{titleFor(vis)}</title>
                 </circle>
               ) : (
                 <rect
@@ -263,7 +282,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
-                  <title>{markerTitle(vis.ref.side, vis.marker[0], vis.marker[1])}</title>
+                  <title>{titleFor(vis)}</title>
                 </rect>
               )}
               {vis.cardinality && (
@@ -308,7 +327,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
   );
 });
 
-function markerTitle(side: 'img' | 'omg', related: string, objectType: string) {
+function defaultMarkerTitle(side: 'img' | 'omg', related: string, objectType: string) {
   return side === 'img'
     ? `input marker — from ${related} (${objectType}). Click to edit, drag onto another input marker of this activity to merge the groups.`
     : `output marker — to ${related} (${objectType}). Click to edit, drag onto another output marker of this activity to merge the groups.`;

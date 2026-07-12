@@ -117,11 +117,18 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
       }}
     >
       <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
-      <div
-        className="text-center font-semibold"
-        style={{ color: '#0F172A', fontSize: 14, lineHeight: 1.2, maxWidth: 200 }}
-      >
-        {data.label}
+      <div className="text-center">
+        <div
+          className="font-semibold"
+          style={{ color: '#0F172A', fontSize: 14, lineHeight: 1.2, maxWidth: 200 }}
+        >
+          {data.label}
+        </div>
+        {data.count != null && (
+          <div style={{ color: '#0F172A', fontSize: 10, opacity: 0.75 }}>
+            ×{data.count}
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Right} className={HANDLE_CLASS} />
     </div>
