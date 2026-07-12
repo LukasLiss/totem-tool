@@ -5,8 +5,6 @@ import {
   useReactFlow,
   applyNodeChanges,
   applyEdgeChanges,
-  type Node,
-  type Edge,
   type NodeChange,
   type EdgeChange,
 } from '@xyflow/react';
@@ -24,12 +22,28 @@ import {
   ArrowRightIcon,
 } from 'lucide-react';
 import { mapTypesToColors } from '../utils/objectColors';
-import { occnToFlow, type OccnLayoutDirection, type OccnNet } from '../utils/occnTransform';
-import { layoutOccn } from '../utils/occnLayout';
-import OccnActivityNode from './OccnActivityNode';
-import OccnTerminalNode from './OccnTerminalNode';
-import OccnMarkerGroupNode from './OccnMarkerGroupNode';
-import OccnEdge from './OccnEdge';
+import {
+  occnNetToEditorGraph,
+  groupSupportKey,
+  DEFAULT_MAX_MARKER_GROUPS_PER_SIDE,
+  type OccnEditorGraph,
+  type OccnLayoutDirection,
+  type OccnNet,
+} from '../utils/occnTransform';
+// Rendering is shared with the OCCN editor (one visual language across the
+// tool): same node/edge components, markers-on-arcs overlay and ELK layout.
+import { computeIncidentTypes, computeParallelOffsets } from '@/editors/occn/derive';
+import MarkerOverlay from '@/editors/occn/MarkerOverlay';
+import type { MarkerVis } from '@/editors/occn/markers';
+import { elkLayeredPositions } from '@/editors/occn/model';
+import OccnEdgeComponent from '@/editors/occn/OccnEdge';
+import OccnNodeComponent from '@/editors/occn/OccnNode';
+import {
+  OccnRenderContext,
+  type OccnEdge as EditorOccnEdge,
+  type OccnNode as EditorOccnNode,
+} from '@/editors/occn/types';
+import OccnOverflowBadges from './OccnOverflowBadges';
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -38,7 +52,7 @@ interface OCCNVisualizerProps {
   showControls?: boolean;
   initialInteractionLocked?: boolean;
   typeColorOverrides?: Record<string, string>;
-  /** Cap on rendered marker groups per activity side; the rest collapse into a "+N more" chip. */
+  /** Cap on rendered marker groups per activity side; the rest collapse into "+N" chips. */
   maxMarkerGroupsPerSide?: number;
   /** Initial ELK layout direction; the in-canvas toggle takes over afterwards. */
   initialLayoutDirection?: OccnLayoutDirection;
@@ -71,8 +85,9 @@ function OCCNVisualizer({
   const { fitView } = reactFlow;
 
   const [net, setNet] = useState<OccnNet | null>(data ?? null);
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [graph, setGraph] = useState<OccnEditorGraph | null>(null);
+  const [nodes, setNodes] = useState<EditorOccnNode[]>([]);
+  const [edges, setEdges] = useState<EditorOccnEdge[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked);
@@ -82,22 +97,17 @@ function OCCNVisualizer({
   // Bumped by the "re-layout" button to rerun ELK after manual dragging.
   const [layoutTick, setLayoutTick] = useState(0);
 
-  const nodeTypes = useMemo(
-    () => ({
-      occnActivity: OccnActivityNode,
-      occnTerminal: OccnTerminalNode,
-      occnMarkerGroup: OccnMarkerGroupNode,
-    }),
-    [],
-  );
-  const edgeTypes = useMemo(() => ({ occn: OccnEdge }), []);
+  const nodeTypes = useMemo(() => ({ occn: OccnNodeComponent }), []);
+  const edgeTypes = useMemo(() => ({ occnArc: OccnEdgeComponent }), []);
 
   const onNodesChange = useCallback(
-    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    (changes: NodeChange<EditorOccnNode>[]) =>
+      setNodes((nds) => applyNodeChanges(changes, nds)),
     [],
   );
   const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+    (changes: EdgeChange<EditorOccnEdge>[]) =>
+      setEdges((eds) => applyEdgeChanges(changes, eds)),
     [],
   );
 
@@ -147,66 +157,136 @@ function OCCNVisualizer({
     [net, typeColorOverrides],
   );
 
-  // Build + layout the flow graph whenever the net (or its colors, direction,
-  // or the re-layout tick) change. ELK layout is async, so guard against a
-  // stale run resolving after the inputs changed.
+  // Convert + layout whenever the net (or direction, or the re-layout tick)
+  // changes. ELK layout is async, so guard against a stale run resolving
+  // after the inputs changed.
   useEffect(() => {
     if (!net) {
+      setGraph(null);
       setNodes([]);
       setEdges([]);
       return;
     }
     let cancelled = false;
-    const { nodes: flowNodes, edges: flowEdges, groupSizes } = occnToFlow(net, typeColors, {
-      maxMarkerGroupsPerSide,
-      direction: layoutDirection,
-    });
-    layoutOccn(flowNodes, net.edges, groupSizes, layoutDirection)
+    const nextGraph = occnNetToEditorGraph(net, { maxMarkerGroupsPerSide });
+    // Extra spacing vs. the editor default: arcs carry markers and self-loops
+    // arc ~70px+ above the nodes.
+    elkLayeredPositions(
+      nextGraph.nodes.map((n) => ({ id: n.id, kind: n.data.kind })),
+      nextGraph.edges,
+      {
+        direction: layoutDirection === 'TB' ? 'DOWN' : 'RIGHT',
+        layerGap: 150,
+        nodeGap: 70,
+      },
+    )
       .catch((err) => {
         console.error('OCCN layout failed, rendering unpositioned nodes', err);
-        return flowNodes;
+        return {} as Record<string, { x: number; y: number }>;
       })
-      .then((laidOutNodes) => {
+      .then((positions) => {
         if (cancelled) return;
-        setNodes(laidOutNodes);
-        setEdges(flowEdges);
+        setGraph(nextGraph);
+        setNodes(
+          nextGraph.nodes.map((node) => ({
+            ...node,
+            position: positions[node.id] ?? { x: 0, y: 0 },
+          })),
+        );
+        setEdges(nextGraph.edges);
         window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
       });
     return () => {
       cancelled = true;
     };
-  }, [net, typeColors, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
+  }, [net, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
+
+  const renderContext = useMemo(
+    () => ({
+      typeColors,
+      incidentTypes: computeIncidentTypes(edges, net?.object_types ?? []),
+      parallelOffset: computeParallelOffsets(edges),
+      activeType: null,
+    }),
+    [typeColors, edges, net],
+  );
+
+  const markerTitle = useCallback(
+    (vis: MarkerVis) => {
+      const [related, objectType, [min, max]] = vis.marker;
+      const cardinality = `${min}..${max === -1 ? '∞' : max}`;
+      const base =
+        vis.ref.side === 'img'
+          ? `Input marker — from ${related} (${objectType}), cardinality ${cardinality}`
+          : `Output marker — to ${related} (${objectType}), cardinality ${cardinality}`;
+      const support = graph?.groupSupport.get(
+        groupSupportKey(vis.ref.activity, vis.ref.side, vis.ref.groupIndex),
+      );
+      return support != null ? `${base} — group support: ${support}` : base;
+    },
+    [graph],
+  );
 
   const interactionsDisabled = interactionLocked;
 
   return (
     <div
+      data-occn-readonly
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
       className={interactionsDisabled ? 'interactions-disabled' : ''}
     >
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.15 }}
-        proOptions={{ hideAttribution: true }}
-        // Dense logs at threshold 0 lay out tens of thousands of px tall;
-        // fitView cannot go below minZoom, so keep it low enough to fit.
-        minZoom={0.02}
-        maxZoom={2.5}
-        nodesDraggable={!interactionsDisabled}
-        nodesConnectable={false}
-        elementsSelectable={!interactionsDisabled}
-        panOnDrag={!interactionsDisabled}
-        zoomOnPinch={!interactionsDisabled}
-        zoomOnScroll={!interactionsDisabled}
-        zoomOnDoubleClick={!interactionsDisabled}
-        preventScrolling={!interactionsDisabled}
-      />
+      {/* The shared editor node renders connection handles; this view is read-only. */}
+      <style>{`
+        [data-occn-readonly] .react-flow__handle {
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `}</style>
+      <OccnRenderContext.Provider value={renderContext}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.15 }}
+          proOptions={{ hideAttribution: true }}
+          // Dense logs at threshold 0 lay out tens of thousands of px tall;
+          // fitView cannot go below minZoom, so keep it low enough to fit.
+          minZoom={0.02}
+          maxZoom={2.5}
+          nodesDraggable={!interactionsDisabled}
+          nodesConnectable={false}
+          elementsSelectable={!interactionsDisabled}
+          panOnDrag={!interactionsDisabled}
+          zoomOnPinch={!interactionsDisabled}
+          zoomOnScroll={!interactionsDisabled}
+          zoomOnDoubleClick={!interactionsDisabled}
+          preventScrolling={!interactionsDisabled}
+        >
+          {graph && (
+            <MarkerOverlay
+              nodes={nodes}
+              edges={edges}
+              bindings={graph.bindings}
+              typeColors={typeColors}
+              parallelOffset={renderContext.parallelOffset}
+              focusedGroup={null}
+              interactive={false}
+              markerTitle={markerTitle}
+            />
+          )}
+          {graph && (
+            <OccnOverflowBadges
+              nodes={nodes}
+              overflow={graph.overflow}
+              cap={maxMarkerGroupsPerSide ?? DEFAULT_MAX_MARKER_GROUPS_PER_SIDE}
+            />
+          )}
+        </ReactFlow>
+      </OccnRenderContext.Provider>
 
       {(loading || error) && (
         <div
