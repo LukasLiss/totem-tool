@@ -7,6 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import {
   fetchProcessAreas,
@@ -728,6 +729,15 @@ export const SimulationDashboard: React.FC = () => {
   const canLoadDetails = selectedObjectTypes.length > 0 && selectedActivities.length > 0;
   const canRun = canLoadDetails;
 
+  const loadDetailsHint =
+    selectedObjectTypes.length === 0 && selectedActivities.length === 0
+      ? "Select at least one object type and one activity to continue."
+      : selectedObjectTypes.length === 0
+        ? "Select at least one object type to continue."
+        : selectedActivities.length === 0
+          ? "Select at least one activity to continue."
+          : "";
+
   // --- Render ---
 
   if (!fileId) {
@@ -1063,16 +1073,25 @@ export const SimulationDashboard: React.FC = () => {
             {detailsLoading && (
               <StepProgress steps={detailsProgress.steps} active={detailsProgress.current} />
             )}
-            {mode === "simple" ? (
-              <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
-                onClick={handleLoadDetails}>
-                {detailsLoading ? "Loading details..." : "Load Simulation Details"}
-              </Button>
-            ) : (
-              <Button className="w-full" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
-                Run Advanced Simulation
-              </Button>
-            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Wrapper span keeps the tooltip firing even when the button is
+                    disabled (a disabled button emits no pointer events). */}
+                <span className="block w-full">
+                  {mode === "simple" ? (
+                    <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
+                      onClick={handleLoadDetails}>
+                      {detailsLoading ? "Loading details..." : "Load Simulation Details"}
+                    </Button>
+                  ) : (
+                    <Button className="w-full" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
+                      Run Advanced Simulation
+                    </Button>
+                  )}
+                </span>
+              </TooltipTrigger>
+              {loadDetailsHint && <TooltipContent>{loadDetailsHint}</TooltipContent>}
+            </Tooltip>
             {detailsError && <p className="text-destructive text-sm">{detailsError}</p>}
             {simError && <p className="text-destructive text-sm">{simError}</p>}
           </div>
