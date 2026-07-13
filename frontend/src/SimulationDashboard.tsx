@@ -95,21 +95,26 @@ const DETAILS_STEPS = [
   "Filtering event log by process area",
   "Mining variants and arrival distributions",
   "Discovering resource constraints",
-  "Computing resource cooldowns and allocation",
   "Discovering resource calendars",
+  "Computing resource cooldowns and allocation strategy",
 ];
 
 const RUN_STEPS = [
   "Loading event log",
   "Building simulation model from configuration",
-  "Generating arrival schedule and simulating events",
+  "Generating arrival schedule",
+  "Simulating events",
   "Preparing actual log for comparison",
   "Computing evaluation metrics",
   "Preparing simulated event log",
 ];
 
 /** Step progress indicator driven by backend status updates. */
-const StepProgress: React.FC<{ steps: string[]; active: number }> = ({ steps, active }) => (
+const StepProgress: React.FC<{ steps: string[]; active: number; percent?: number }> = ({
+  steps,
+  active,
+  percent,
+}) => (
   <Card>
     <CardContent className="py-4">
       <div className="space-y-2">
@@ -124,6 +129,11 @@ const StepProgress: React.FC<{ steps: string[]; active: number }> = ({ steps, ac
             )}
             <span className={idx <= active ? "text-foreground" : "text-muted-foreground"}>
               {step}
+              {idx === active && percent != null && (
+                <span className="text-muted-foreground">
+                  {" "}— {percent}% of simulated time elapsed
+                </span>
+              )}
             </span>
           </div>
         ))}
@@ -1311,7 +1321,11 @@ export const SimulationDashboard: React.FC = () => {
               </p>
             </CardContent>
           </Card>
-          <StepProgress steps={runProgress.steps} active={runProgress.current} />
+          <StepProgress
+            steps={runProgress.steps}
+            active={runProgress.current}
+            percent={runProgress.percent}
+          />
         </div>
       )}
 

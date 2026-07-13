@@ -712,9 +712,15 @@ class OCProcessAreaSimulationModel:
         resource_pool: dict,
         tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
+        progress_callback=None,
     ):
         return self.playout_strategy.run(
-            self, sim_duration_s, resource_pool, tick_size_s, start_datetime
+            self,
+            sim_duration_s,
+            resource_pool,
+            tick_size_s,
+            start_datetime,
+            progress_callback=progress_callback,
         )
 
     @classmethod
@@ -909,6 +915,7 @@ class VariantPlayoutStrategy:
         resource_pool: dict,
         tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
+        progress_callback=None,
     ) -> dict:
         """
         Runs the variant-based simulation.
@@ -919,6 +926,9 @@ class VariantPlayoutStrategy:
             resource_pool: {resource_type: count} — e.g. {'Forklift': 3, 'Crane': 2}
             tick_size_s: Clock tick size in seconds
             start_datetime: datetime of simulation start. Defaults to the filtered source log's first event
+            progress_callback: Optional callable invoked with the fraction of the
+                simulated time span elapsed (0.0-1.0) as the clock advances, so a
+                caller can report simulation progress.
 
         Returns:
             (ObjectCentricEventLog, finished_count, spawned_count)
@@ -980,6 +990,15 @@ class VariantPlayoutStrategy:
         # fast-forward over empty stretches straight to the next arrival's tick.
         tick = 0
         while True:
+            # Report how much of the simulated time span has elapsed. Throttling
+            # (e.g. only on whole-percent changes) is left to the callback.
+            if progress_callback is not None:
+                progress_callback(
+                    min(tick, sim_duration_s) / sim_duration_s
+                    if sim_duration_s
+                    else 1.0
+                )
+
             # Phase A: Spawn new instances from arrival schedule
             while schedule_idx < len(schedule) and schedule[schedule_idx][0] <= tick:
                 _, variant = schedule[schedule_idx]
@@ -1401,6 +1420,7 @@ class StateSpacePlayoutStrategy:
         resource_pool: dict,
         tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
+        progress_callback=None,
     ) -> dict:
         # TODO(advanced-simulation): mirror VariantPlayoutStrategy.run but spawn
         # instances from the state space + connected-component arrival distribution.

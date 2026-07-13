@@ -2411,7 +2411,8 @@ def _export_ocel_to_json(ocel) -> str:
 _SIM_RUN_STEPS = [
     "Loading event log",
     "Building simulation model from configuration",
-    "Generating arrival schedule and simulating events",
+    "Generating arrival schedule",
+    "Simulating events",
     "Preparing actual log for comparison",
     "Computing evaluation metrics",
     "Preparing simulated event log",
@@ -2423,11 +2424,11 @@ _SIM_DETAILS_STEPS = [
     "Mining variants and arrival distributions",
     "Discovering resource constraints",
     "Discovering resource calendars",
-    "Computing resource cooldowns and allocation",
+    "Computing resource cooldowns and allocation strategy",
 ]
 
 
-def _report_progress(progress_id, steps, current):
+def _report_progress(progress_id, steps, current, percent=None):
     """Publish progress of a long-running simulation request to the cache.
 
     Args:
@@ -2435,12 +2436,17 @@ def _report_progress(progress_id, steps, current):
             to disable reporting.
         steps: Ordered list of human-readable step labels.
         current: Index of the step that just started (``len(steps)`` = done).
+        percent: Optional 0-100 completion of the current step (e.g. the share
+            of simulated time elapsed during the "Simulating events" step).
     """
     if not progress_id:
         return
+    payload = {"steps": list(steps), "current": current}
+    if percent is not None:
+        payload["percent"] = percent
     cache.set(
         f"sim_progress_{progress_id}",
-        {"steps": list(steps), "current": current},
+        payload,
         timeout=600,
     )
 
@@ -2613,22 +2619,33 @@ def run_simulation(request):
         # Run simulation
         _report_progress(progress_id, _SIM_RUN_STEPS, 2)
         sim_duration_s = int(sim_duration_days * 24 * 3600)
+
+        _sim_progress_state = {"pct": -1}
+
+        def _on_sim_progress(fraction):
+            pct = int(max(0.0, min(1.0, fraction)) * 100)
+            if pct == _sim_progress_state["pct"]:
+                return
+            _sim_progress_state["pct"] = pct
+            _report_progress(progress_id, _SIM_RUN_STEPS, 3, percent=pct)
+
         with EvalTimer() as sim_timer:
             sim_log, finished_count, spawned_count = simulation_model.run(
                 sim_duration_s=sim_duration_s,
                 resource_pool=resource_pool,
                 tick_size_s=tick_size_s,
                 start_datetime=start_datetime,
+                progress_callback=_on_sim_progress,
             )
 
         # Filter original OCEL by process area for comparison
-        _report_progress(progress_id, _SIM_RUN_STEPS, 3)
+        _report_progress(progress_id, _SIM_RUN_STEPS, 4)
         totem = totemDiscovery(ocel)
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
         # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
-        _report_progress(progress_id, _SIM_RUN_STEPS, 4)
+        _report_progress(progress_id, _SIM_RUN_STEPS, 5)
         evaluation = None
         evaluation_error = None
         try:
@@ -2656,7 +2673,7 @@ def run_simulation(request):
         # collection lazily, when the user explicitly chooses to keep it (see
         # simulation_save_log). Keeping it out of the EventLog table avoids
         # cluttering the file list with every trial run.
-        _report_progress(progress_id, _SIM_RUN_STEPS, 5)
+        _report_progress(progress_id, _SIM_RUN_STEPS, 6)
         _cleanup_sim_tmp()
         original_log = EventLog.objects.get(pk=file_id)
         original_name = os.path.splitext(os.path.basename(original_log.file.name))[0]

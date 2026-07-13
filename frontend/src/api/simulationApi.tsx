@@ -207,6 +207,7 @@ export type SimulationDetailsRequest = {
 export type SimulationProgress = {
   steps: string[];
   current: number;
+  percent?: number;
 };
 
 export async function fetchProcessAreas(fileId: number): Promise<ProcessAreasResponse> {
