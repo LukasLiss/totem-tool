@@ -6,8 +6,11 @@ from tests.assets.ocel_helpers import (
     obj as _object,
 )
 from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
+import random
+
 from totem_lib.simulation.utils.resource_statistics import (
     resource_cooldown_distribution,
+    sample_cooldown,
 )
 
 UTC = dt.timezone.utc
@@ -34,7 +37,7 @@ def test_basic_cooldown_single_resource():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1"]),
+            _event("e1", "Load", 0, ["r1"]),
             _event("e2", "Unload", 100, ["r1"]),
         ],
         [_object("r1", "Worker")],
@@ -44,7 +47,8 @@ def test_basic_cooldown_single_resource():
     assert "Load" in result
     assert "Unload" not in result
     assert "Worker" in result["Load"]
-    assert result["Load"]["Worker"]["mean_duration_s"] == 100
+    assert result["Load"]["Worker"]["min_duration_s"] == 100
+    assert result["Load"]["Worker"]["max_duration_s"] == 100
     assert result["Load"]["Worker"]["sample_count"] == 1
 
 
@@ -57,15 +61,16 @@ def test_untracked_activity_closes_interval():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1"]),
-            _event("e2", "Drive",  50,  ["r1"]),
+            _event("e1", "Load", 0, ["r1"]),
+            _event("e2", "Drive", 50, ["r1"]),
             _event("e3", "Unload", 100, ["r1"]),
         ],
         [_object("r1", "Worker")],
     )
     result = resource_cooldown_distribution(ocel, ["Worker"], ["Load", "Unload"])
 
-    assert result["Load"]["Worker"]["mean_duration_s"] == 50
+    assert result["Load"]["Worker"]["min_duration_s"] == 50
+    assert result["Load"]["Worker"]["max_duration_s"] == 50
     assert "Unload" not in result
 
 
@@ -76,7 +81,7 @@ def test_untracked_object_type_skipped():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1", "r2"]),
+            _event("e1", "Load", 0, ["r1", "r2"]),
             _event("e2", "Unload", 100, ["r1", "r2"]),
         ],
         [_object("r1", "Forklift"), _object("r2", "Truck")],
@@ -94,13 +99,14 @@ def test_events_out_of_order_sorted_correctly():
     ocel = _make_ocel(
         [
             _event("e2", "Unload", 200, ["r1"]),
-            _event("e1", "Load",   100, ["r1"]),
+            _event("e1", "Load", 100, ["r1"]),
         ],
         [_object("r1", "Forklift")],
     )
     result = resource_cooldown_distribution(ocel, ["Forklift"], ["Load", "Unload"])
 
-    assert result["Load"]["Forklift"]["mean_duration_s"] == 100
+    assert result["Load"]["Forklift"]["min_duration_s"] == 100
+    assert result["Load"]["Forklift"]["max_duration_s"] == 100
 
 
 def test_resource_appears_only_once_not_in_result():
@@ -125,8 +131,8 @@ def test_multiple_resources_same_type_aggregated():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1"]),
-            _event("e2", "Load",   0,   ["r2"]),
+            _event("e1", "Load", 0, ["r1"]),
+            _event("e2", "Load", 0, ["r2"]),
             _event("e3", "Unload", 100, ["r1"]),
             _event("e4", "Unload", 200, ["r2"]),
         ],
@@ -136,7 +142,7 @@ def test_multiple_resources_same_type_aggregated():
 
     stats = result["Load"]["Forklift"]
     assert stats["sample_count"] == 2
-    assert stats["mean_duration_s"] == 150
+    assert sum(stats["bin_counts"]) == 2
     assert stats["min_duration_s"] == 100
     assert stats["max_duration_s"] == 200
 
@@ -150,16 +156,18 @@ def test_multiple_cooldown_intervals_same_resource():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1"]),
+            _event("e1", "Load", 0, ["r1"]),
             _event("e2", "Unload", 100, ["r1"]),
-            _event("e3", "Load",   300, ["r1"]),
+            _event("e3", "Load", 300, ["r1"]),
         ],
         [_object("r1", "Forklift")],
     )
     result = resource_cooldown_distribution(ocel, ["Forklift"], ["Load", "Unload"])
 
-    assert result["Load"]["Forklift"]["mean_duration_s"] == 100
-    assert result["Unload"]["Forklift"]["mean_duration_s"] == 200
+    assert result["Load"]["Forklift"]["min_duration_s"] == 100
+    assert result["Load"]["Forklift"]["max_duration_s"] == 100
+    assert result["Unload"]["Forklift"]["min_duration_s"] == 200
+    assert result["Unload"]["Forklift"]["max_duration_s"] == 200
 
 
 def test_multiple_resources_different_types():
@@ -169,7 +177,7 @@ def test_multiple_resources_different_types():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load",   0,   ["r1", "r2"]),
+            _event("e1", "Load", 0, ["r1", "r2"]),
             _event("e2", "Unload", 120, ["r1", "r2"]),
         ],
         [_object("r1", "Forklift"), _object("r2", "Crane")],
@@ -178,8 +186,11 @@ def test_multiple_resources_different_types():
         ocel, ["Forklift", "Crane"], ["Load", "Unload"]
     )
 
-    assert result["Load"]["Forklift"]["mean_duration_s"] == 120
-    assert result["Load"]["Crane"]["mean_duration_s"] == 120
+    assert result["Load"]["Forklift"]["min_duration_s"] == 120
+    assert result["Load"]["Forklift"]["max_duration_s"] == 120
+    assert result["Load"]["Crane"]["min_duration_s"] == 120
+    assert result["Load"]["Crane"]["max_duration_s"] == 120
+
 
 def test_empty_log_returns_empty_result():
     """
@@ -189,6 +200,7 @@ def test_empty_log_returns_empty_result():
     ocel = _make_ocel([], [])
     result = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])
     assert dict(result) == {}
+
 
 def test_empty_objects_to_analyze_returns_empty():
     """
@@ -205,6 +217,7 @@ def test_empty_objects_to_analyze_returns_empty():
     result = resource_cooldown_distribution(ocel, [], ["Load", "Unload"])
     assert dict(result) == {}
 
+
 def test_empty_activities_returns_empty():
     """
     Tests that an empty list of activities results in an empty distribution.
@@ -220,6 +233,7 @@ def test_empty_activities_returns_empty():
     result = resource_cooldown_distribution(ocel, ["Worker"], [])
     assert dict(result) == {}
 
+
 def test_multiple_intervals_same_activity_aggregated():
     """
     Tests that multiple cooldown intervals interrupted by other activities are correctly aggregated.
@@ -228,7 +242,7 @@ def test_multiple_intervals_same_activity_aggregated():
     """
     ocel = _make_ocel(
         [
-            _event("e1", "Load", 0,   ["r1"]),
+            _event("e1", "Load", 0, ["r1"]),
             _event("e2", "Move", 100, ["r1"]),
             _event("e3", "Load", 200, ["r1"]),
             _event("e4", "Move", 400, ["r1"]),
@@ -239,9 +253,10 @@ def test_multiple_intervals_same_activity_aggregated():
 
     stats = result["Load"]["Forklift"]
     assert stats["sample_count"] == 2
-    assert stats["mean_duration_s"] == 150
+    assert sum(stats["bin_counts"]) == 2
     assert stats["min_duration_s"] == 100
     assert stats["max_duration_s"] == 200
+
 
 def test_same_timestamp_results_in_zero_duration():
     """
@@ -256,10 +271,12 @@ def test_same_timestamp_results_in_zero_duration():
         [_object("r1", "Worker")],
     )
     result = resource_cooldown_distribution(ocel, ["Worker"], ["Load", "Unload"])
-    assert result["Load"]["Worker"]["mean_duration_s"] == 0
+    assert result["Load"]["Worker"]["min_duration_s"] == 0
+    assert result["Load"]["Worker"]["max_duration_s"] == 0
 
 
 # --- calendar-aware cooldowns: off hours discounted from occupation ---
+
 
 def test_cooldown_discounts_calendar_offhours():
     """With a workday calendar the weekend absence is discounted from the cooldown.
@@ -277,7 +294,8 @@ def test_cooldown_discounts_calendar_offhours():
     result = resource_cooldown_distribution(
         ocel, ["Worker"], ["Load", "Unload"], calendars={"Worker": _workday_calendar()}
     )
-    assert result["Load"]["Worker"]["mean_duration_s"] == 3 * 3600
+    assert result["Load"]["Worker"]["min_duration_s"] == 3 * 3600
+    assert result["Load"]["Worker"]["max_duration_s"] == 3 * 3600
 
 
 def test_cooldown_calendar_missing_type_falls_back_to_wallclock():
@@ -295,6 +313,76 @@ def test_cooldown_calendar_missing_type_falls_back_to_wallclock():
         ["Load", "Unload"],
         calendars={"OtherType": _workday_calendar()},
     )
-    assert result["Load"]["Worker"]["mean_duration_s"] == _ts(day=8, hour=9) - _ts(
-        day=5, hour=16
+    expected = _ts(day=8, hour=9) - _ts(day=5, hour=16)
+    assert result["Load"]["Worker"]["min_duration_s"] == expected
+    assert result["Load"]["Worker"]["max_duration_s"] == expected
+
+
+# --- empirical histogram + sampling ---
+
+
+def test_histogram_single_value_is_degenerate_bin():
+    """One interval yields a zero-width bin and sampling returns that value."""
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", 0, ["r1"]),
+            _event("e2", "Unload", 100, ["r1"]),
+        ],
+        [_object("r1", "Worker")],
     )
+    entry = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])["Load"]["Worker"]
+    assert entry["bin_edges"] == [100.0, 100.0]
+    assert entry["bin_counts"] == [1]
+    rng = random.Random(0)
+    assert all(sample_cooldown(entry, rng) == 100.0 for _ in range(20))
+
+
+def test_sample_cooldown_draws_within_observed_range():
+    """Samples from a multi-interval histogram stay within [min, max]."""
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", 0, ["r1"]),
+            _event("e2", "Load", 0, ["r2"]),
+            _event("e3", "Load", 0, ["r3"]),
+            _event("e4", "Unload", 100, ["r1"]),
+            _event("e5", "Unload", 300, ["r2"]),
+            _event("e6", "Unload", 900, ["r3"]),
+        ],
+        [_object(f"r{i}", "Worker") for i in (1, 2, 3)],
+    )
+    entry = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])["Load"]["Worker"]
+    assert entry["sample_count"] == 3
+    assert sum(entry["bin_counts"]) == 3
+    rng = random.Random(0)
+    draws = [sample_cooldown(entry, rng) for _ in range(200)]
+    assert all(100.0 <= d <= 900.0 for d in draws)
+
+
+def test_sample_cooldown_empty_entry_is_zero():
+    """An entry without a histogram yields no cooldown."""
+    assert sample_cooldown({}) == 0.0
+    assert sample_cooldown({"bin_edges": [], "bin_counts": []}) == 0.0
+
+
+def test_sample_cooldown_range_restricts_draw():
+    """A [select_min_s, select_max_s] band excludes values outside it."""
+    entry = {
+        "bin_edges": [0.0, 100.0, 200.0, 300.0],
+        "bin_counts": [10, 10, 10],
+        "select_min_s": 100.0,
+        "select_max_s": 200.0,
+    }
+    rng = random.Random(0)
+    draws = [sample_cooldown(entry, rng) for _ in range(300)]
+    assert all(100.0 <= d <= 200.0 for d in draws)
+
+
+def test_sample_cooldown_empty_range_is_zero():
+    """A band that overlaps no bin mass yields no cooldown."""
+    entry = {
+        "bin_edges": [0.0, 100.0],
+        "bin_counts": [5],
+        "select_min_s": 200.0,
+        "select_max_s": 300.0,
+    }
+    assert sample_cooldown(entry) == 0.0

@@ -1165,14 +1165,14 @@ export const SimulationDashboard: React.FC = () => {
             <CollapsibleSection title="Resource Cooldowns" description={`${Object.keys(cooldowns).length} activity cooldown(s)`}>
               <CooldownEditor
                 cooldowns={cooldowns}
-                onUpdate={(activity, resourceType, meanDuration, stdDuration) => {
+                onUpdate={(activity, resourceType, selectMin, selectMax) => {
                   setCooldowns((prev) => {
                     const updated = { ...prev };
                     updated[activity] = { ...updated[activity] };
                     updated[activity][resourceType] = {
                       ...updated[activity][resourceType],
-                      mean_duration_s: meanDuration,
-                      std_duration_s: stdDuration,
+                      select_min_s: selectMin,
+                      select_max_s: selectMax,
                     };
                     return updated;
                   });

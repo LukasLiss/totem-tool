@@ -3,7 +3,7 @@
 Each section drives the full ``VariantPlayoutStrategy.run`` and asserts that one
 model component (calendars, the resource pool, constraints + violation degree,
 cooldowns, the arrival distribution, activity durations) actually changes the
-simulated outcome in the expected way. 
+simulated outcome in the expected way.
 
 Determinism: runs are seeded and the scenarios are built so the asserted effect
 is structural (an activity can/cannot fire, a resource must/must not be reused),
@@ -29,6 +29,12 @@ from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 UTC = dt.timezone.utc
 START = dt.datetime(2024, 1, 1, 10, 0, tzinfo=UTC)  # Monday 10:00
 HOUR = 3600
+
+
+def _cd(value: float) -> dict:
+    """A degenerate (single-value) cooldown histogram: ``sample_cooldown`` always
+    returns ``value``, keeping cooldown-driven runs deterministic in tests."""
+    return {"bin_edges": [float(value), float(value)], "bin_counts": [1]}
 
 
 # --- test scaffolding ---
@@ -307,7 +313,7 @@ def test_cooldown_delays_reuse_of_the_same_resource():
             if "A" in acts and "B" in acts
         ]
 
-    with_cd = run_with({"A": {"Worker": {"mean_duration_s": cooldown_s}}})
+    with_cd = run_with({"A": {"Worker": _cd(cooldown_s)}})
     without_cd = run_with({})
 
     assert with_cd and without_cd
@@ -330,7 +336,7 @@ def test_cooldown_burns_only_during_available_hours():
     cooldown_s = 2 * HOUR
     needed = _needs({"A": {"Worker": 1}, "B": {"Worker": 1}})
     constraints_same = {"B": {"A": "same_resource"}}
-    cooldowns = {"A": {"Worker": {"mean_duration_s": cooldown_s}}}
+    cooldowns = {"A": {"Worker": _cd(cooldown_s)}}
 
     on = [1.0] * 24
     off_at_11 = [1.0] * 24

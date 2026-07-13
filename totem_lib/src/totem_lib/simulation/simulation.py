@@ -26,6 +26,7 @@ from totem_lib.simulation.utils.resource_constraints import (
 from totem_lib.simulation.utils.resource_statistics import (
     calculate_resource_allocation_strategy,
     resource_cooldown_distribution,
+    sample_cooldown,
 )
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
 
@@ -1196,13 +1197,7 @@ class VariantPlayoutStrategy:
 
                             # Schedule resource cooldown return
                             stats = cooldown_dist.get(activity, {}).get(res_type, {})
-                            mean_cd = stats.get("mean_duration_s", 0)
-                            std_cd = stats.get("std_duration_s", 0)
-                            cd = (
-                                max(0, random.gauss(mean_cd, std_cd))
-                                if std_cd > 0
-                                else mean_cd
-                            )
+                            cd = sample_cooldown(stats)
                             cooldown_end = (
                                 calendar_gate.cooldown_end(rid, res_type, hour_ts, cd)
                                 - base_ts

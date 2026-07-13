@@ -11,14 +11,20 @@ def _flat_calendar(prob: float) -> dict:
     return {"Worker": {day: [prob] * 24 for day in WEEKDAYS}}
 
 
+def _cd(value: float) -> dict:
+    """A degenerate (single-value) cooldown histogram: sampling always returns
+    ``value``, so cooldown-dependent replays stay deterministic in tests."""
+    return {"bin_edges": [float(value), float(value)], "bin_counts": [1]}
+
+
 def test_fifo_strategy():
     """
     r1 freed at t=0, r2 freed at t=10. Next event picks r1 (earliest) → FIFO.
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,   [], ["r1"]),
-            _event("e2", "A", 10,  [], ["r2"]),
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
             _event("e3", "A", 100, [], ["r1"]),  # r1 is at pos=0 (earliest freed) → FIFO
         ],
         [obj("r1", "Worker"), obj("r2", "Worker")],
@@ -33,8 +39,8 @@ def test_lifo_strategy():
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,   [], ["r1"]),
-            _event("e2", "A", 10,  [], ["r2"]),
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
             _event("e3", "A", 100, [], ["r2"]),  # r2 is at pos=1 (last) → LIFO
         ],
         [obj("r1", "Worker"), obj("r2", "Worker")],
@@ -49,9 +55,9 @@ def test_random_strategy():
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,   [], ["r1"]),
-            _event("e2", "A", 10,  [], ["r2"]),
-            _event("e3", "A", 20,  [], ["r3"]),
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
+            _event("e3", "A", 20, [], ["r3"]),
             _event("e4", "A", 100, [], ["r2"]),  # r2 at pos=1 in [r1, r2, r3] → random
         ],
         [obj("r1", "Worker"), obj("r2", "Worker"), obj("r3", "Worker")],
@@ -66,7 +72,7 @@ def test_single_candidate_scores_fifo():
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,  [], ["r1"]),
+            _event("e1", "A", 0, [], ["r1"]),
             _event("e2", "A", 50, [], ["r1"]),  # r1 is the only candidate → n=1 → FIFO
         ],
         [obj("r1", "Worker")],
@@ -96,14 +102,16 @@ def test_cooldown_excludes_resource_from_candidates():
     with the cooldown r2 is the single candidate and scores FIFO.
     """
     cooldowns = {
-        "LongTask":  {"Worker": {"mean_duration_s": 200}},
-        "ShortTask": {"Worker": {"mean_duration_s": 0}},
+        "LongTask": {"Worker": _cd(200)},
+        "ShortTask": {"Worker": _cd(0)},
     }
     ocel = make_ocel(
         [
             _event("e1", "LongTask", 0, [], ["r1"]),  # r1 available again at t=200
             _event("e2", "ShortTask", 10, [], ["r2"]),  # r2 available again at t=10
-            _event("e3", "ShortTask", 50, [], ["r2"]),  # r1 not available (200 > 50) → only r2 → FIFO
+            _event(
+                "e3", "ShortTask", 50, [], ["r2"]
+            ),  # r1 not available (200 > 50) → only r2 → FIFO
         ],
         [obj("r1", "Worker"), obj("r2", "Worker")],
     )
@@ -118,9 +126,11 @@ def test_two_resource_types_scored_independently():
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,   [], ["w1", "c1"]),
-            _event("e2", "A", 10,  [], ["w2", "c2"]),
-            _event("e3", "A", 100, [], ["w1", "c2"]),  # w1=pos 0 (FIFO), c2=pos 1/last (LIFO)
+            _event("e1", "A", 0, [], ["w1", "c1"]),
+            _event("e2", "A", 10, [], ["w2", "c2"]),
+            _event(
+                "e3", "A", 100, [], ["w1", "c2"]
+            ),  # w1=pos 0 (FIFO), c2=pos 1/last (LIFO)
         ],
         [
             obj("w1", "Worker"),
@@ -149,8 +159,8 @@ def test_majority_strategy_wins():
     """
     ocel = make_ocel(
         [
-            _event("e1", "A", 0,   [], ["r1"]),
-            _event("e2", "A", 10,  [], ["r2"]),
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
             _event("e3", "A", 100, [], ["r1"]),
             _event("e4", "A", 200, [], ["r2"]),
             _event("e5", "A", 300, [], ["r1"]),
@@ -172,8 +182,8 @@ def test_calendar_discounts_cooldown_to_wallclock():
     event scores FIFO.
     """
     cooldowns = {
-        "LongTask": {"Worker": {"mean_duration_s": 100}},
-        "ShortTask": {"Worker": {"mean_duration_s": 0}},
+        "LongTask": {"Worker": _cd(100)},
+        "ShortTask": {"Worker": _cd(0)},
     }
     ocel = make_ocel(
         [

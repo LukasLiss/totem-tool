@@ -2649,8 +2649,6 @@ def run_simulation(request):
         evaluation = None
         evaluation_error = None
         try:
-            cooldown_dist = getattr(simulation_model, "resource_cooldown_distribution", None)
-
             sim_resource_type_map = {
                 f"{rtype}_{i + 1}": rtype
                 for rtype, count in resource_pool.items()
@@ -2658,7 +2656,6 @@ def run_simulation(request):
             }
             evaluation = build_evaluation_payload(
                 filtered_ocel, sim_log,
-                cooldown_distribution=cooldown_dist,
                 actual_obj_type_map=ocel.obj_type_map,
                 simulated_obj_type_map=sim_resource_type_map,
             )
@@ -3119,8 +3116,8 @@ def get_simulation_details(request):
         for act, type_stats in cooldown_dist.items():
             serialized_cooldowns[act] = {
                 res_type: {
-                    "mean_duration_s": round(stats["mean_duration_s"], 2),
-                    "std_duration_s": round(stats["std_duration_s"], 2),
+                    "bin_edges": [round(e, 2) for e in stats["bin_edges"]],
+                    "bin_counts": stats["bin_counts"],
                     "min_duration_s": round(stats["min_duration_s"], 2),
                     "max_duration_s": round(stats["max_duration_s"], 2),
                     "sample_count": stats["sample_count"],

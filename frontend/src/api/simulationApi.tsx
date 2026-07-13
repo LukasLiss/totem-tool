@@ -157,8 +157,10 @@ export type ResourceDistEntry = {
 export type VariantConstraints = Record<string, Record<string, string>>;
 
 export type CooldownEntry = {
-  mean_duration_s: number;
-  std_duration_s: number;
+  bin_edges: number[];
+  bin_counts: number[];
+  select_min_s?: number;
+  select_max_s?: number;
   min_duration_s: number;
   max_duration_s: number;
   sample_count: number;
