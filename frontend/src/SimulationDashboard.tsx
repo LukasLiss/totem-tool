@@ -773,11 +773,6 @@ export const SimulationDashboard: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Simulation Dashboard</h1>
-        {(phase === "details" || phase === "results") && (
-          <Button variant="outline" onClick={() => { setPhase("configure"); setDetails(null); }}>
-            Back to Configuration
-          </Button>
-        )}
       </div>
 
       {/* Wizard step indicator */}
@@ -1388,9 +1383,6 @@ export const SimulationDashboard: React.FC = () => {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Simulation Results</h2>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setPhase("details")}>
-                Back to Details
-              </Button>
               <Button onClick={handleRunSimulation}>
                 Re-run Simulation
               </Button>
