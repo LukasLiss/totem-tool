@@ -268,7 +268,12 @@ const elk = new ELK();
 export async function elkLayeredPositions(
   items: Array<{ id: string; kind: OccnNodeKind }>,
   links: Array<{ source: string; target: string }>,
-  opts?: { direction?: 'RIGHT' | 'DOWN'; layerGap?: number; nodeGap?: number },
+  opts?: {
+    direction?: 'RIGHT' | 'DOWN';
+    layerGap?: number;
+    nodeGap?: number;
+    edgeNodeGap?: number;
+  },
 ): Promise<Record<string, XY>> {
   const graph = {
     id: 'root',
@@ -277,7 +282,7 @@ export async function elkLayeredPositions(
       'elk.direction': opts?.direction ?? 'RIGHT',
       'elk.layered.spacing.nodeNodeBetweenLayers': String(opts?.layerGap ?? 110),
       'elk.spacing.nodeNode': String(opts?.nodeGap ?? 55),
-      'elk.spacing.edgeNode': '30',
+      'elk.spacing.edgeNode': String(opts?.edgeNodeGap ?? 30),
       'elk.layered.mergeEdges': 'false',
     },
     children: items.map((item) => ({

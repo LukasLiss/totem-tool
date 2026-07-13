@@ -176,8 +176,9 @@ function OCCNVisualizer({
       nextGraph.edges,
       {
         direction: layoutDirection === 'TB' ? 'DOWN' : 'RIGHT',
-        layerGap: 150,
-        nodeGap: 70,
+        layerGap: 220,
+        nodeGap: 100,
+        edgeNodeGap: 60,
       },
     )
       .catch((err) => {
