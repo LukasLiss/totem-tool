@@ -66,6 +66,11 @@ const MarkerOverlay = memo(function MarkerOverlay({
     [nodes, edges, bindings, typeColors, parallelOffset],
   );
 
+  // Markers in crowded stacks never render labels/badges: the markers sit
+  // 12–20 flow-px apart, so their labels overlap into mush at every reachable
+  // zoom. The tooltips (and the visualizer's "+N" chips) carry the details.
+  const labelVisible = (vis: MarkerVis) => !vis.crowded;
+
   const { screenToFlowPosition } = useReactFlow();
   const [drag, setDrag] = useState<MarkerDrag | null>(null);
   const dragRef = useRef<MarkerDrag | null>(null);
@@ -285,7 +290,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   <title>{titleFor(vis)}</title>
                 </rect>
               )}
-              {vis.cardinality && (
+              {vis.cardinality && labelVisible(vis) && (
                 <text
                   x={vis.pos.x + perpX * 15}
                   y={vis.pos.y + perpY * 15}
@@ -304,7 +309,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   {vis.cardinality}
                 </text>
               )}
-              {vis.keyBadge !== null && (
+              {vis.keyBadge !== null && labelVisible(vis) && (
                 <g
                   transform={`translate(${vis.pos.x - perpX * 14}, ${vis.pos.y - perpY * 14})`}
                   style={{ pointerEvents: 'none' }}
