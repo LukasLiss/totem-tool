@@ -3045,6 +3045,7 @@ def get_simulation_details(request):
         per_variant_constraints, fallback_constraints = generate_resource_constraints(
             filtered_ocel,
             variants,
+            ocel.obj_type_map,
             support_threshold,
             min_variant_frequency=min_variant_frequency,
             min_variant_executions=min_variant_executions,

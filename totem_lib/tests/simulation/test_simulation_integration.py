@@ -239,7 +239,7 @@ def test_disjoint_constraint_blocks_second_activity_when_strict():
     model = _build_model(
         variant,
         needed=_needs({"A": {"Worker": 1}, "B": {"Worker": 1}}),
-        constraints={variant: {"B": {"A": "disjoint"}}},
+        constraints={variant: {"B": {"A": {"Worker": "disjoint"}}}},
     )
     ocel, finished, spawned = _run(model, pool={"Worker": 1})
     assert spawned > 0
@@ -254,7 +254,7 @@ def test_violation_degree_one_ignores_constraint():
     model = _build_model(
         variant,
         needed=_needs({"A": {"Worker": 1}, "B": {"Worker": 1}}),
-        constraints={variant: {"B": {"A": "disjoint"}}},
+        constraints={variant: {"B": {"A": {"Worker": "disjoint"}}}},
         config=OCProcessAreaSimulationConfiguration(
             resource_constraint_violation_degree=1.0
         ),
@@ -271,7 +271,7 @@ def test_disjoint_constraint_uses_distinct_resources_when_feasible():
     model = _build_model(
         variant,
         needed=_needs({"A": {"Worker": 1}, "B": {"Worker": 1}}),
-        constraints={variant: {"B": {"A": "disjoint"}}},
+        constraints={variant: {"B": {"A": {"Worker": "disjoint"}}}},
     )
     ocel, finished, _ = _run(model, pool={"Worker": 2})
     assert finished > 0
@@ -296,7 +296,7 @@ def test_cooldown_delays_reuse_of_the_same_resource():
     """
     cooldown_s = 600
     needed = _needs({"A": {"Worker": 1}, "B": {"Worker": 1}})
-    constraints_same = {"B": {"A": "same_resource"}}
+    constraints_same = {"B": {"A": {"Worker": "same_resource"}}}
 
     def run_with(cooldowns):
         variant = _chain("A", "B")
@@ -335,7 +335,7 @@ def test_cooldown_burns_only_during_available_hours():
     """
     cooldown_s = 2 * HOUR
     needed = _needs({"A": {"Worker": 1}, "B": {"Worker": 1}})
-    constraints_same = {"B": {"A": "same_resource"}}
+    constraints_same = {"B": {"A": {"Worker": "same_resource"}}}
     cooldowns = {"A": {"Worker": _cd(cooldown_s)}}
 
     on = [1.0] * 24

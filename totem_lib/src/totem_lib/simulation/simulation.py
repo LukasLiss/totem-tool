@@ -128,7 +128,8 @@ def _estimate_constraint_slots(
     *expected* number of resources it needs of each type present in the pool.
 
     Args:
-        variant_constraints: {activity: {other_activity: constraint_type}} dict for this variant.
+        variant_constraints: {activity: {other_activity: {res_type: constraint_type}}}
+            dict for this variant.
         variant_res_dist: {activity: {res_type: {"count_distribution": {count: float}}}} dict for this variant.
         resource_pool_expanded: Set of resource types actually available in the pool.
 
@@ -555,7 +556,8 @@ def _allocate_resources(
 
     Args:
         activity: The activity to allocate resources for.
-        variant_constraints: Constraints dict for this variant: {activity: {other_activity: constraint_type}}.
+        variant_constraints: Constraints dict for this variant:
+            {activity: {other_activity: {res_type: constraint_type}}}.
         simulated_events: List of already simulated events in this instance,
                           each with '_activity' and 'process_area_resources' keys.
         resource_queues: Currently available resources: {res_type: [res_id, ...]}.
@@ -609,12 +611,17 @@ def _allocate_resources(
     constraints_for_activity = variant_constraints.get(activity, {})
 
     # ── Phase 1: Collect the raw constraints per resource type ──
+    # Constraints are keyed per resource type: {other_activity: {res_type: ctype}}.
+    # Each type's relation is enforced only against that type's prior resources.
     constraints_by_type = defaultdict(list)  # res_type -> [(ctype, frozenset), ...]
-    for other_act, ctype in constraints_for_activity.items():
+    for other_act, type_ctype_map in constraints_for_activity.items():
         if other_act not in prior_assignments:
             continue
         for res_type, res_ids in prior_assignments[other_act].items():
             if res_type not in needed_res_types:
+                continue
+            ctype = type_ctype_map.get(res_type)
+            if ctype is None:
                 continue
             constraints_by_type[res_type].append((ctype, frozenset(res_ids)))
 
@@ -763,7 +770,7 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Constraints
         resource_constraints, fallback_constraints = generate_resource_constraints(
-            filtered_ocel, variants, support_threshold_percentage=0.8
+            filtered_ocel, variants, ocel.obj_type_map, support_threshold_percentage=0.8
         )
 
         # Calculate Resource Allocation Strategy
@@ -824,7 +831,10 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Constraints
         resource_constraints, fallback_constraints = generate_resource_constraints(
-            filtered_ocel, process_area, support_threshold_percentage=0.8
+            filtered_ocel,
+            process_area,
+            ocel.obj_type_map,
+            support_threshold_percentage=0.8,
         )
 
         # Calculate Resource Allocation Strategy

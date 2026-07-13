@@ -11,20 +11,22 @@ type Props = {
   variants: VariantDetail[];
   editedConstraints: Record<number, VariantConstraints>;
   activities: string[];
-  onAdd: (variantId: number, act1: string, act2: string, type: string) => void;
-  onRemove: (variantId: number, act1: string, act2: string) => void;
+  resourceTypes: string[];
+  onAdd: (variantId: number, act1: string, act2: string, resType: string, type: string) => void;
+  onRemove: (variantId: number, act1: string, act2: string, resType: string) => void;
   globalConstraints?: VariantConstraints;
-  onAddGlobal?: (act1: string, act2: string, type: string) => void;
-  onRemoveGlobal?: (act1: string, act2: string) => void;
+  onAddGlobal?: (act1: string, act2: string, resType: string, type: string) => void;
+  onRemoveGlobal?: (act1: string, act2: string, resType: string) => void;
   fallbackConstraints?: VariantConstraints;
-  onAddFallback?: (act1: string, act2: string, type: string) => void;
-  onRemoveFallback?: (act1: string, act2: string) => void;
+  onAddFallback?: (act1: string, act2: string, resType: string, type: string) => void;
+  onRemoveFallback?: (act1: string, act2: string, resType: string) => void;
 };
 
 export const ConstraintsEditorPanel: React.FC<Props> = ({
   variants,
   editedConstraints,
   activities,
+  resourceTypes,
   onAdd,
   onRemove,
   globalConstraints,
@@ -41,9 +43,10 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Constraints define relationships between resource usage across activity pairs.
-          Global constraints apply to all variants that contain both activities. The
-          fallback pool applies to variants too infrequent to be mined on their own.
+          Constraints define relationships between resource usage across activity pairs,
+          separately per resource type. Global constraints apply to all variants that
+          contain both activities. The fallback pool applies to variants too infrequent
+          to be mined on their own.
         </p>
 
         {/* Global Constraints */}
@@ -56,6 +59,7 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
               emptyText="No global constraints set"
               constraints={globalConstraints || {}}
               activities={activities}
+              resourceTypes={resourceTypes}
               onAdd={onAddGlobal}
               onRemove={onRemoveGlobal}
             />
@@ -73,6 +77,7 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
               emptyText="No fallback constraints discovered"
               constraints={fallbackConstraints || {}}
               activities={activities}
+              resourceTypes={resourceTypes}
               onAdd={onAddFallback}
               onRemove={onRemoveFallback}
             />
@@ -88,8 +93,9 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
             constraints={editedConstraints[variant.id] || {}}
             customized={editedConstraints[variant.id] !== undefined}
             fallbackConstraints={fallbackConstraints || {}}
-            onAdd={(act1, act2, type) => onAdd(variant.id, act1, act2, type)}
-            onRemove={(act1, act2) => onRemove(variant.id, act1, act2)}
+            resourceTypes={resourceTypes}
+            onAdd={(act1, act2, resType, type) => onAdd(variant.id, act1, act2, resType, type)}
+            onRemove={(act1, act2, resType) => onRemove(variant.id, act1, act2, resType)}
           />
         ))}
       </CardContent>
@@ -107,11 +113,15 @@ const constraintColor = (type: string) => {
   }
 };
 
-function flattenConstraints(constraints: VariantConstraints) {
-  const flat: { act1: string; act2: string; type: string }[] = [];
+type FlatConstraint = { act1: string; act2: string; resType: string; type: string };
+
+function flattenConstraints(constraints: VariantConstraints): FlatConstraint[] {
+  const flat: FlatConstraint[] = [];
   for (const [act1, targets] of Object.entries(constraints)) {
-    for (const [act2, type] of Object.entries(targets)) {
-      flat.push({ act1, act2, type });
+    for (const [act2, byType] of Object.entries(targets)) {
+      for (const [resType, type] of Object.entries(byType)) {
+        flat.push({ act1, act2, resType, type });
+      }
     }
   }
   return flat;
@@ -126,13 +136,11 @@ const EditableConstraintsSection: React.FC<{
   emptyText: string;
   constraints: VariantConstraints;
   activities: string[];
-  onAdd: (act1: string, act2: string, type: string) => void;
-  onRemove: (act1: string, act2: string) => void;
-}> = ({ label, hint, badgeVariant, emptyText, constraints, activities, onAdd, onRemove }) => {
+  resourceTypes: string[];
+  onAdd: (act1: string, act2: string, resType: string, type: string) => void;
+  onRemove: (act1: string, act2: string, resType: string) => void;
+}> = ({ label, hint, badgeVariant, emptyText, constraints, activities, resourceTypes, onAdd, onRemove }) => {
   const [showAdd, setShowAdd] = useState(false);
-  const [newAct1, setNewAct1] = useState("");
-  const [newAct2, setNewAct2] = useState("");
-  const [newType, setNewType] = useState("same_resource");
 
   const flat = flattenConstraints(constraints);
 
@@ -159,12 +167,10 @@ const EditableConstraintsSection: React.FC<{
       {showAdd && (
         <AddConstraintForm
           activities={activities}
-          newAct1={newAct1} setNewAct1={setNewAct1}
-          newAct2={newAct2} setNewAct2={setNewAct2}
-          newType={newType} setNewType={setNewType}
-          onAdd={() => {
-            onAdd(newAct1, newAct2, newType);
-            setNewAct1(""); setNewAct2(""); setShowAdd(false);
+          resourceTypes={resourceTypes}
+          onAdd={(act1, act2, resType, type) => {
+            onAdd(act1, act2, resType, type);
+            setShowAdd(false);
           }}
         />
       )}
@@ -179,13 +185,11 @@ const SingleVariantConstraints: React.FC<{
   constraints: VariantConstraints;
   customized: boolean;
   fallbackConstraints: VariantConstraints;
-  onAdd: (act1: string, act2: string, type: string) => void;
-  onRemove: (act1: string, act2: string) => void;
-}> = ({ variant, constraints, customized, fallbackConstraints, onAdd, onRemove }) => {
+  resourceTypes: string[];
+  onAdd: (act1: string, act2: string, resType: string, type: string) => void;
+  onRemove: (act1: string, act2: string, resType: string) => void;
+}> = ({ variant, constraints, customized, fallbackConstraints, resourceTypes, onAdd, onRemove }) => {
   const [showAdd, setShowAdd] = useState(false);
-  const [newAct1, setNewAct1] = useState("");
-  const [newAct2, setNewAct2] = useState("");
-  const [newType, setNewType] = useState("same_resource");
 
   // An infrequent variant inherits the fallback pool (read-only) until the user
   // edits it, which promotes it to its own editable, pool-seeded set.
@@ -230,12 +234,10 @@ const SingleVariantConstraints: React.FC<{
       {showAdd && (
         <AddConstraintForm
           activities={variantActivities}
-          newAct1={newAct1} setNewAct1={setNewAct1}
-          newAct2={newAct2} setNewAct2={setNewAct2}
-          newType={newType} setNewType={setNewType}
-          onAdd={() => {
-            onAdd(newAct1, newAct2, newType);
-            setNewAct1(""); setNewAct2(""); setShowAdd(false);
+          resourceTypes={resourceTypes}
+          onAdd={(act1, act2, resType, type) => {
+            onAdd(act1, act2, resType, type);
+            setShowAdd(false);
           }}
         />
       )}
@@ -246,23 +248,26 @@ const SingleVariantConstraints: React.FC<{
 // --- Shared sub-components ---
 
 const ConstraintList: React.FC<{
-  constraints: { act1: string; act2: string; type: string }[];
-  onRemove?: (act1: string, act2: string) => void;
+  constraints: FlatConstraint[];
+  onRemove?: (act1: string, act2: string, resType: string) => void;
 }> = ({ constraints, onRemove }) => (
   <div className="space-y-1 max-h-48 overflow-y-auto">
-    {constraints.map(({ act1, act2, type }, idx) => (
+    {constraints.map(({ act1, act2, resType, type }, idx) => (
       <div key={idx} className="flex items-center gap-2 text-xs bg-muted/30 rounded px-2 py-1.5">
-        <span className="font-medium truncate max-w-[160px]" title={act1}>{act1}</span>
+        <Badge variant="outline" className="text-[10px] shrink-0" title={`Resource type: ${resType}`}>
+          {resType}
+        </Badge>
+        <span className="font-medium truncate max-w-[140px]" title={act1}>{act1}</span>
         <span className={`px-1.5 py-0.5 rounded text-[10px] border ${constraintColor(type)}`}>
           {type.replace("_", " ")}
         </span>
-        <span className="font-medium truncate max-w-[160px]" title={act2}>{act2}</span>
+        <span className="font-medium truncate max-w-[140px]" title={act2}>{act2}</span>
         {onRemove && (
           <Button
             variant="ghost"
             size="sm"
             className="ml-auto h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
-            onClick={() => onRemove(act1, act2)}
+            onClick={() => onRemove(act1, act2, resType)}
           >
             x
           </Button>
@@ -274,47 +279,63 @@ const ConstraintList: React.FC<{
 
 const AddConstraintForm: React.FC<{
   activities: string[];
-  newAct1: string; setNewAct1: (v: string) => void;
-  newAct2: string; setNewAct2: (v: string) => void;
-  newType: string; setNewType: (v: string) => void;
-  onAdd: () => void;
-}> = ({ activities, newAct1, setNewAct1, newAct2, setNewAct2, newType, setNewType, onAdd }) => (
-  <div className="mt-3 p-2 border rounded bg-muted/20 space-y-2">
-    <div className="grid grid-cols-3 gap-2">
-      <select
-        className="text-xs border rounded px-2 py-1.5 bg-background"
-        value={newAct1}
-        onChange={(e) => setNewAct1(e.target.value)}
+  resourceTypes: string[];
+  onAdd: (act1: string, act2: string, resType: string, type: string) => void;
+}> = ({ activities, resourceTypes, onAdd }) => {
+  const [newAct1, setNewAct1] = useState("");
+  const [newAct2, setNewAct2] = useState("");
+  const [newResType, setNewResType] = useState(resourceTypes[0] || "");
+  const [newType, setNewType] = useState("same_resource");
+
+  return (
+    <div className="mt-3 p-2 border rounded bg-muted/20 space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <select
+          className="text-xs border rounded px-2 py-1.5 bg-background"
+          value={newAct1}
+          onChange={(e) => setNewAct1(e.target.value)}
+        >
+          <option value="">Activity 1...</option>
+          {activities.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select
+          className="text-xs border rounded px-2 py-1.5 bg-background"
+          value={newAct2}
+          onChange={(e) => setNewAct2(e.target.value)}
+        >
+          <option value="">Activity 2...</option>
+          {activities.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select
+          className="text-xs border rounded px-2 py-1.5 bg-background"
+          value={newResType}
+          onChange={(e) => setNewResType(e.target.value)}
+        >
+          <option value="">Resource type...</option>
+          {resourceTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select
+          className="text-xs border rounded px-2 py-1.5 bg-background"
+          value={newType}
+          onChange={(e) => setNewType(e.target.value)}
+        >
+          {CONSTRAINT_TYPES.map((t) => (
+            <option key={t} value={t}>{t.replace("_", " ")}</option>
+          ))}
+        </select>
+      </div>
+      <Button
+        size="sm"
+        disabled={!newAct1 || !newAct2 || !newResType}
+        onClick={() => {
+          onAdd(newAct1, newAct2, newResType, newType);
+          setNewAct1(""); setNewAct2("");
+        }}
       >
-        <option value="">Activity 1...</option>
-        {activities.map((a) => <option key={a} value={a}>{a}</option>)}
-      </select>
-      <select
-        className="text-xs border rounded px-2 py-1.5 bg-background"
-        value={newType}
-        onChange={(e) => setNewType(e.target.value)}
-      >
-        {CONSTRAINT_TYPES.map((t) => (
-          <option key={t} value={t}>{t.replace("_", " ")}</option>
-        ))}
-      </select>
-      <select
-        className="text-xs border rounded px-2 py-1.5 bg-background"
-        value={newAct2}
-        onChange={(e) => setNewAct2(e.target.value)}
-      >
-        <option value="">Activity 2...</option>
-        {activities.map((a) => <option key={a} value={a}>{a}</option>)}
-      </select>
+        Add Constraint
+      </Button>
     </div>
-    <Button
-      size="sm"
-      disabled={!newAct1 || !newAct2}
-      onClick={onAdd}
-    >
-      Add Constraint
-    </Button>
-  </div>
-);
+  );
+};
 
 export default ConstraintsEditorPanel;

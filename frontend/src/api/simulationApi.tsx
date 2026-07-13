@@ -154,7 +154,7 @@ export type ResourceDistEntry = {
   count_distribution: Record<string, number>;
 };
 
-export type VariantConstraints = Record<string, Record<string, string>>;
+export type VariantConstraints = Record<string, Record<string, Record<string, string>>>;
 
 export type CooldownEntry = {
   bin_edges: number[];

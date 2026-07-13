@@ -1,3 +1,5 @@
+import json
+
 import networkx as nx
 import pytest
 
@@ -19,22 +21,39 @@ def _variants(*variant_list):
     return Variants(list(variant_list))
 
 
-def _mine_variant(ocel, variant, **kwargs):
+def _uniform_type_map(ocel, res_type="R"):
+    """Map every resource id appearing in the log to a single resource type.
+
+    Most tests use one resource type, so per-type mining collapses to the flat
+    behaviour and the single type is addressed as ``["R"]``.
+    """
+    ids = set()
+    for (attrs,) in ocel.events.select("_attributes").iter_rows():
+        if attrs:
+            for rid in json.loads(attrs).get("process_area_resources") or []:
+                ids.add(rid)
+    return {rid: res_type for rid in ids}
+
+
+def _mine_variant(ocel, variant, resource_type_map=None, **kwargs):
     """Mine a single-variant log and return that variant's own constraints.
 
     The frequency guard is relaxed by default so single-execution test variants
-    are mined on their own (rather than being pushed to the fallback pool).
+    are mined on their own (rather than being pushed to the fallback pool). When
+    no ``resource_type_map`` is given, every resource is treated as one type "R".
     """
     kwargs.setdefault("support_threshold_percentage", 0.8)
     kwargs.setdefault("min_variant_frequency", 0.0)
     kwargs.setdefault("min_variant_executions", 1)
+    if resource_type_map is None:
+        resource_type_map = _uniform_type_map(ocel)
     per_variant, _fallback = generate_resource_constraints(
-        ocel, _variants(variant), **kwargs
+        ocel, _variants(variant), resource_type_map, **kwargs
     )
     return per_variant.get(variant, {})
 
 
-# --- relation detection ---
+# --- relation detection (single resource type "R") ---
 
 
 def test_same_resource_detected_and_symmetric():
@@ -52,8 +71,8 @@ def test_same_resource_detected_and_symmetric():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["Load"]["Unload"] == "same_resource"
-    assert constraints["Unload"]["Load"] == "same_resource"
+    assert constraints["Load"]["Unload"] == {"R": "same_resource"}
+    assert constraints["Unload"]["Load"] == {"R": "same_resource"}
 
 
 def test_disjoint_detected_and_symmetric():
@@ -71,8 +90,8 @@ def test_disjoint_detected_and_symmetric():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["Scan"]["Check"] == "disjoint"
-    assert constraints["Check"]["Scan"] == "disjoint"
+    assert constraints["Scan"]["Check"] == {"R": "disjoint"}
+    assert constraints["Check"]["Scan"] == {"R": "disjoint"}
 
 
 def test_no_constraint_below_support_threshold():
@@ -119,7 +138,7 @@ def test_aggregation_across_executions():
     variant = _variant([["e1", "e2"], ["e3", "e4"], ["e5", "e6"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["Load"]["Unload"] == "same_resource"
+    assert constraints["Load"]["Unload"] == {"R": "same_resource"}
 
 
 def test_subset_detected():
@@ -137,7 +156,7 @@ def test_subset_detected():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["A"]["B"] == "subset"
+    assert constraints["A"]["B"] == {"R": "subset"}
 
 
 def test_subset_emits_inverse_superset():
@@ -156,13 +175,14 @@ def test_subset_emits_inverse_superset():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["A"]["B"] == "subset"
-    assert constraints["B"]["A"] == "superset"
+    assert constraints["A"]["B"] == {"R": "subset"}
+    assert constraints["B"]["A"] == {"R": "superset"}
 
 
-def test_empty_resources_treated_as_empty_set():
+def test_empty_resources_yield_no_constraint():
     """
-    Events with no resources: both activities have empty resource sets → same_resource.
+    Events with no resources have no resource type in common, so per-type mining
+    emits nothing (there is no resource relationship to constrain).
     """
     ocel = _make_ocel(
         [
@@ -174,7 +194,7 @@ def test_empty_resources_treated_as_empty_set():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["A"]["B"] == "same_resource"
+    assert len(constraints) == 0
 
 
 def test_same_activity_same_resource_within_execution():
@@ -192,7 +212,7 @@ def test_same_activity_same_resource_within_execution():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["Load"]["Load"] == "same_resource"
+    assert constraints["Load"]["Load"] == {"R": "same_resource"}
 
 
 def test_same_activity_different_resource_within_execution():
@@ -210,7 +230,58 @@ def test_same_activity_different_resource_within_execution():
     variant = _variant([["e1", "e2"]])
 
     constraints = _mine_variant(ocel, variant)
-    assert constraints["Load"]["Load"] == "disjoint"
+    assert constraints["Load"]["Load"] == {"R": "disjoint"}
+
+
+# --- per-type separation ---
+
+
+def test_relations_mined_independently_per_type():
+    """
+    Load and Unload share the same Forklift but use different Workers.
+    Expected: same_resource on the Forklift type, disjoint on the Worker type —
+    a mixed relation the type-agnostic (flat) mining would have discarded.
+    """
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", 1, [], ["F1", "WA"]),
+            _event("e2", "Unload", 2, [], ["F1", "WB"]),
+        ],
+        [],
+    )
+    type_map = {"F1": "Forklift", "WA": "Worker", "WB": "Worker"}
+    variant = _variant([["e1", "e2"]])
+
+    constraints = _mine_variant(ocel, variant, resource_type_map=type_map)
+    assert constraints["Load"]["Unload"] == {
+        "Forklift": "same_resource",
+        "Worker": "disjoint",
+    }
+    assert constraints["Unload"]["Load"] == {
+        "Forklift": "same_resource",
+        "Worker": "disjoint",
+    }
+
+
+def test_type_used_by_only_one_activity_carries_no_constraint():
+    """
+    Forklift is used by both activities; Worker only by Load. Only the shared
+    Forklift type yields a relation — a type present at a single activity of the
+    pair has nothing to compare against.
+    """
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", 1, [], ["F1", "WA"]),
+            _event("e2", "Unload", 2, [], ["F1"]),
+        ],
+        [],
+    )
+    type_map = {"F1": "Forklift", "WA": "Worker"}
+    variant = _variant([["e1", "e2"]])
+
+    constraints = _mine_variant(ocel, variant, resource_type_map=type_map)
+    assert constraints["Load"]["Unload"] == {"Forklift": "same_resource"}
+    assert "Worker" not in constraints["Load"]["Unload"]
 
 
 # --- support-threshold boundary ---
@@ -256,8 +327,8 @@ def test_constraint_kept_at_support_threshold(
 ):
     # 4 of 5 pairs satisfy the relation -> support exactly 0.8 -> kept.
     constraints = _boundary_constraints(a_sat, a_neither, b_set, n_sat=4, n_neither=1)
-    assert constraints["A"]["B"] == expected_fwd
-    assert constraints["B"]["A"] == expected_inv
+    assert constraints["A"]["B"] == {"R": expected_fwd}
+    assert constraints["B"]["A"] == {"R": expected_inv}
 
 
 @pytest.mark.parametrize(
@@ -295,17 +366,19 @@ def test_frequent_variant_mined_specifically():
     """A variant meeting the guard is mined on its own executions."""
     events, executions, _ = _load_unload_executions("f", 5, ["r1"], 0)
     variant = _variant(executions)
+    ocel = _make_ocel(events, [])
 
     per_variant, _fallback = generate_resource_constraints(
-        _make_ocel(events, []),
+        ocel,
         _variants(variant),
+        _uniform_type_map(ocel),
         support_threshold_percentage=0.8,
         min_variant_frequency=0.0,
         min_variant_executions=5,
     )
 
     assert variant in per_variant
-    assert per_variant[variant]["Load"]["Unload"] == "same_resource"
+    assert per_variant[variant]["Load"]["Unload"] == {"R": "same_resource"}
 
 
 def test_infrequent_variant_absent_from_per_variant_uses_fallback():
@@ -317,10 +390,12 @@ def test_infrequent_variant_absent_from_per_variant_uses_fallback():
     rare_events, rare_execs, _ = _load_unload_executions("rare", 1, ["r1"], ts)
     frequent = _variant(freq_execs)
     rare = _variant(rare_execs)
+    ocel = _make_ocel(freq_events + rare_events, [])
 
     per_variant, fallback = generate_resource_constraints(
-        _make_ocel(freq_events + rare_events, []),
+        ocel,
         _variants(frequent, rare),
+        _uniform_type_map(ocel),
         support_threshold_percentage=0.8,
         min_variant_frequency=0.0,
         min_variant_executions=5,
@@ -328,7 +403,7 @@ def test_infrequent_variant_absent_from_per_variant_uses_fallback():
 
     assert frequent in per_variant
     assert rare not in per_variant
-    assert fallback["Load"]["Unload"] == "same_resource"
+    assert fallback["Load"]["Unload"] == {"R": "same_resource"}
 
 
 def test_fallback_evidence_floor_drops_globally_rare_pair():
@@ -353,10 +428,12 @@ def test_fallback_evidence_floor_drops_globally_rare_pair():
         events.append(_event(z, "Z", ts, [], ["r1"]))
         executions.append([z])
     variant = _variant(executions)
+    ocel = _make_ocel(events, [])
 
     _per_variant, fallback = generate_resource_constraints(
-        _make_ocel(events, []),
+        ocel,
         _variants(variant),
+        _uniform_type_map(ocel),
         support_threshold_percentage=0.8,
         min_variant_frequency=0.0,
         min_variant_executions=5,
@@ -373,10 +450,12 @@ def test_combined_guard_excludes_low_frequency_variant():
     rare_events, rare_execs, _ = _load_unload_executions("rare", 1, ["r1"], ts)
     frequent = _variant(freq_execs)
     rare = _variant(rare_execs)
+    ocel = _make_ocel(freq_events + rare_events, [])
 
     per_variant, _fallback = generate_resource_constraints(
-        _make_ocel(freq_events + rare_events, []),
+        ocel,
         _variants(frequent, rare),
+        _uniform_type_map(ocel),
         support_threshold_percentage=0.8,
         min_variant_frequency=0.2,  # rare covers 1/10 = 10% < 20%
         min_variant_executions=1,
@@ -390,10 +469,12 @@ def test_combined_guard_excludes_low_count_variant():
     """A variant covering 100% of cases but with too few executions is excluded."""
     events, executions, _ = _load_unload_executions("v", 3, ["r1"], 0)
     variant = _variant(executions)
+    ocel = _make_ocel(events, [])
 
     per_variant, _fallback = generate_resource_constraints(
-        _make_ocel(events, []),
+        ocel,
         _variants(variant),
+        _uniform_type_map(ocel),
         support_threshold_percentage=0.8,
         min_variant_frequency=0.0,
         min_variant_executions=5,  # only 3 executions

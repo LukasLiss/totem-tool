@@ -582,13 +582,45 @@ export const SimulationDashboard: React.FC = () => {
     }
   };
 
-  // Constraint editing
+  // Constraint editing. Constraints are keyed act -> other_act -> res_type -> type,
+  // so edits address a single (activity pair, resource type) cell.
+  const addToConstraints = (
+    c: VariantConstraints,
+    act1: string,
+    act2: string,
+    resType: string,
+    type: string
+  ): VariantConstraints => {
+    const updated = { ...c };
+    const byOther = { ...(updated[act1] || {}) };
+    byOther[act2] = { ...(byOther[act2] || {}), [resType]: type };
+    updated[act1] = byOther;
+    return updated;
+  };
+
+  const removeFromConstraints = (
+    c: VariantConstraints,
+    act1: string,
+    act2: string,
+    resType: string
+  ): VariantConstraints => {
+    const updated = { ...c };
+    if (updated[act1]?.[act2]) {
+      const byOther = { ...updated[act1] };
+      const byType = { ...byOther[act2] };
+      delete byType[resType];
+      if (Object.keys(byType).length === 0) delete byOther[act2];
+      else byOther[act2] = byType;
+      if (Object.keys(byOther).length === 0) delete updated[act1];
+      else updated[act1] = byOther;
+    }
+    return updated;
+  };
+
   // A deep copy of the current fallback pool, used to seed a fallback variant the
   // first time it is edited (it then detaches from the pool).
-  const clonePool = () =>
-    Object.fromEntries(
-      Object.entries(fallbackConstraints).map(([act, inner]) => [act, { ...inner }])
-    );
+  const clonePool = (): VariantConstraints =>
+    JSON.parse(JSON.stringify(fallbackConstraints));
 
   // A fallback variant has no own entry until edited; editing it here promotes it
   // to a variant-specific set (seeded from the pool) that no longer follows it.
@@ -598,26 +630,22 @@ export const SimulationDashboard: React.FC = () => {
   ): VariantConstraints =>
     prev[variantId] !== undefined ? { ...prev[variantId] } : clonePool();
 
-  const addConstraint = (variantId: number, act1: string, act2: string, type: string) => {
-    setEditedConstraints((prev) => {
-      const varConstraints = seedVariant(prev, variantId);
-      if (!varConstraints[act1]) varConstraints[act1] = {};
-      varConstraints[act1] = { ...varConstraints[act1], [act2]: type };
-      return { ...prev, [variantId]: varConstraints };
-    });
+  const addConstraint = (
+    variantId: number, act1: string, act2: string, resType: string, type: string
+  ) => {
+    setEditedConstraints((prev) => ({
+      ...prev,
+      [variantId]: addToConstraints(seedVariant(prev, variantId), act1, act2, resType, type),
+    }));
   };
 
-  const removeConstraint = (variantId: number, act1: string, act2: string) => {
-    setEditedConstraints((prev) => {
-      const varConstraints = seedVariant(prev, variantId);
-      if (varConstraints[act1]) {
-        const acts = { ...varConstraints[act1] };
-        delete acts[act2];
-        if (Object.keys(acts).length === 0) delete varConstraints[act1];
-        else varConstraints[act1] = acts;
-      }
-      return { ...prev, [variantId]: varConstraints };
-    });
+  const removeConstraint = (
+    variantId: number, act1: string, act2: string, resType: string
+  ) => {
+    setEditedConstraints((prev) => ({
+      ...prev,
+      [variantId]: removeFromConstraints(seedVariant(prev, variantId), act1, act2, resType),
+    }));
   };
 
   // Run simulation
@@ -1251,50 +1279,23 @@ export const SimulationDashboard: React.FC = () => {
               variants={details.variants}
               editedConstraints={editedConstraints}
               activities={selectedActivities}
+              resourceTypes={Object.keys(resourcePool).filter((t) => resourcePool[t] > 0)}
               onAdd={addConstraint}
               onRemove={removeConstraint}
               globalConstraints={globalConstraints}
-              onAddGlobal={(act1, act2, type) => {
-                setGlobalConstraints((prev) => {
-                  const updated = { ...prev };
-                  if (!updated[act1]) updated[act1] = {};
-                  updated[act1] = { ...updated[act1], [act2]: type };
-                  return updated;
-                });
-              }}
-              onRemoveGlobal={(act1, act2) => {
-                setGlobalConstraints((prev) => {
-                  const updated = { ...prev };
-                  if (updated[act1]) {
-                    const acts = { ...updated[act1] };
-                    delete acts[act2];
-                    if (Object.keys(acts).length === 0) delete updated[act1];
-                    else updated[act1] = acts;
-                  }
-                  return updated;
-                });
-              }}
+              onAddGlobal={(act1, act2, resType, type) =>
+                setGlobalConstraints((prev) => addToConstraints(prev, act1, act2, resType, type))
+              }
+              onRemoveGlobal={(act1, act2, resType) =>
+                setGlobalConstraints((prev) => removeFromConstraints(prev, act1, act2, resType))
+              }
               fallbackConstraints={fallbackConstraints}
-              onAddFallback={(act1, act2, type) => {
-                setFallbackConstraints((prev) => {
-                  const updated = { ...prev };
-                  if (!updated[act1]) updated[act1] = {};
-                  updated[act1] = { ...updated[act1], [act2]: type };
-                  return updated;
-                });
-              }}
-              onRemoveFallback={(act1, act2) => {
-                setFallbackConstraints((prev) => {
-                  const updated = { ...prev };
-                  if (updated[act1]) {
-                    const acts = { ...updated[act1] };
-                    delete acts[act2];
-                    if (Object.keys(acts).length === 0) delete updated[act1];
-                    else updated[act1] = acts;
-                  }
-                  return updated;
-                });
-              }}
+              onAddFallback={(act1, act2, resType, type) =>
+                setFallbackConstraints((prev) => addToConstraints(prev, act1, act2, resType, type))
+              }
+              onRemoveFallback={(act1, act2, resType) =>
+                setFallbackConstraints((prev) => removeFromConstraints(prev, act1, act2, resType))
+              }
             />
           </CollapsibleSection>
 
