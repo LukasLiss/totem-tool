@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Play } from "lucide-react"
+import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -22,7 +22,6 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'ocdfg', label: 'OC-DFG', icon: Network },
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
-  { id: 'simulation', label: 'Simulation', icon: Play },
 ];
 
 export function NavAnalysis() {

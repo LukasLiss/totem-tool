@@ -13,7 +13,6 @@ import {
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
-import SimulationDashboard from "@/SimulationDashboard";
 import DottedChart from "@/react_component/DottedChart";
 
 export function AnalysisView() {
@@ -89,13 +88,6 @@ export function AnalysisView() {
                 />
               </CardContent>
             </Card>
-          </div>
-        );
-
-      case 'simulation':
-        return (
-          <div className="w-full max-w-7xl">
-            <SimulationDashboard />
           </div>
         );
 

@@ -7,6 +7,7 @@ import {
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
+import { SimulationView } from "./components/SimulationView";
 import Grid from './components/grid';
 
 export function ProcessOverview() {
@@ -18,6 +19,8 @@ export function ProcessOverview() {
         return <DevDashboard />;
       case 'analysis':
         return <AnalysisView />;
+      case 'simulation':
+        return <SimulationView />;
       case 'dashboard':
         return <Grid />;
       default:

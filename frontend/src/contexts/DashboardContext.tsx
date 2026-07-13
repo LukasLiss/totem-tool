@@ -1,10 +1,11 @@
 import React, { createContext, useState } from "react";
 
-export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart' | 'simulation';
+export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
 
 export type ViewMode =
   | { type: 'overview' }
   | { type: 'analysis'; component: AnalysisComponent }
+  | { type: 'simulation' }
   | { type: 'dashboard'; id: number };
 
 type DashboardContextType = {
