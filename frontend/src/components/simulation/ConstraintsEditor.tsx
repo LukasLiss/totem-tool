@@ -16,6 +16,9 @@ type Props = {
   globalConstraints?: VariantConstraints;
   onAddGlobal?: (act1: string, act2: string, type: string) => void;
   onRemoveGlobal?: (act1: string, act2: string) => void;
+  fallbackConstraints?: VariantConstraints;
+  onAddFallback?: (act1: string, act2: string, type: string) => void;
+  onRemoveFallback?: (act1: string, act2: string) => void;
 };
 
 export const ConstraintsEditorPanel: React.FC<Props> = ({
@@ -27,6 +30,9 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
   globalConstraints,
   onAddGlobal,
   onRemoveGlobal,
+  fallbackConstraints,
+  onAddFallback,
+  onRemoveFallback,
 }) => {
   return (
     <Card>
@@ -36,17 +42,39 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
           Constraints define relationships between resource usage across activity pairs.
-          Global constraints apply to all variants that contain both activities.
+          Global constraints apply to all variants that contain both activities. The
+          fallback pool applies to variants too infrequent to be mined on their own.
         </p>
 
         {/* Global Constraints */}
         {onAddGlobal && onRemoveGlobal && (
           <>
-            <GlobalConstraintsSection
+            <EditableConstraintsSection
+              label="Global"
+              hint="apply to all variants"
+              badgeVariant="secondary"
+              emptyText="No global constraints set"
               constraints={globalConstraints || {}}
               activities={activities}
               onAdd={onAddGlobal}
               onRemove={onRemoveGlobal}
+            />
+            <Separator />
+          </>
+        )}
+
+        {/* Fallback Pool */}
+        {onAddFallback && onRemoveFallback && (
+          <>
+            <EditableConstraintsSection
+              label="Fallback pool"
+              hint="used for infrequent variants"
+              badgeVariant="outline"
+              emptyText="No fallback constraints discovered"
+              constraints={fallbackConstraints || {}}
+              activities={activities}
+              onAdd={onAddFallback}
+              onRemove={onRemoveFallback}
             />
             <Separator />
           </>
@@ -58,6 +86,8 @@ export const ConstraintsEditorPanel: React.FC<Props> = ({
             key={variant.id}
             variant={variant}
             constraints={editedConstraints[variant.id] || {}}
+            customized={editedConstraints[variant.id] !== undefined}
+            fallbackConstraints={fallbackConstraints || {}}
             onAdd={(act1, act2, type) => onAdd(variant.id, act1, act2, type)}
             onRemove={(act1, act2) => onRemove(variant.id, act1, act2)}
           />
@@ -87,14 +117,18 @@ function flattenConstraints(constraints: VariantConstraints) {
   return flat;
 }
 
-// --- Global Constraints ---
+// --- Editable (non-variant) constraint sections: Global + Fallback pool ---
 
-const GlobalConstraintsSection: React.FC<{
+const EditableConstraintsSection: React.FC<{
+  label: string;
+  hint: string;
+  badgeVariant: "secondary" | "outline";
+  emptyText: string;
   constraints: VariantConstraints;
   activities: string[];
   onAdd: (act1: string, act2: string, type: string) => void;
   onRemove: (act1: string, act2: string) => void;
-}> = ({ constraints, activities, onAdd, onRemove }) => {
+}> = ({ label, hint, badgeVariant, emptyText, constraints, activities, onAdd, onRemove }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [newAct1, setNewAct1] = useState("");
   const [newAct2, setNewAct2] = useState("");
@@ -106,9 +140,9 @@ const GlobalConstraintsSection: React.FC<{
     <div className="border rounded p-3 border-dashed">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Badge variant="secondary">Global</Badge>
+          <Badge variant={badgeVariant}>{label}</Badge>
           <span className="text-xs text-muted-foreground">
-            {flat.length} constraint{flat.length !== 1 ? "s" : ""} — apply to all variants
+            {flat.length} constraint{flat.length !== 1 ? "s" : ""} — {hint}
           </span>
         </div>
         <Button variant="ghost" size="sm" onClick={() => setShowAdd(!showAdd)}>
@@ -119,7 +153,7 @@ const GlobalConstraintsSection: React.FC<{
       {flat.length > 0 ? (
         <ConstraintList constraints={flat} onRemove={onRemove} />
       ) : (
-        <p className="text-xs text-muted-foreground italic">No global constraints set</p>
+        <p className="text-xs text-muted-foreground italic">{emptyText}</p>
       )}
 
       {showAdd && (
@@ -143,15 +177,20 @@ const GlobalConstraintsSection: React.FC<{
 const SingleVariantConstraints: React.FC<{
   variant: VariantDetail;
   constraints: VariantConstraints;
+  customized: boolean;
+  fallbackConstraints: VariantConstraints;
   onAdd: (act1: string, act2: string, type: string) => void;
   onRemove: (act1: string, act2: string) => void;
-}> = ({ variant, constraints, onAdd, onRemove }) => {
+}> = ({ variant, constraints, customized, fallbackConstraints, onAdd, onRemove }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [newAct1, setNewAct1] = useState("");
   const [newAct2, setNewAct2] = useState("");
   const [newType, setNewType] = useState("same_resource");
 
-  const flat = flattenConstraints(constraints);
+  // An infrequent variant inherits the fallback pool (read-only) until the user
+  // edits it, which promotes it to its own editable, pool-seeded set.
+  const inheritingPool = variant.uses_fallback && !customized;
+  const flat = flattenConstraints(inheritingPool ? fallbackConstraints : constraints);
   // Use only activities from this variant's sequence
   const variantActivities = [...new Set(variant.activity_sequence)].sort();
 
@@ -160,6 +199,12 @@ const SingleVariantConstraints: React.FC<{
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <Badge variant="outline">Variant {variant.id + 1}</Badge>
+          {inheritingPool && (
+            <Badge variant="secondary" className="text-[10px]">uses fallback pool</Badge>
+          )}
+          {variant.uses_fallback && customized && (
+            <Badge variant="secondary" className="text-[10px]">customized</Badge>
+          )}
           <span className="text-xs text-muted-foreground">
             {flat.length} constraint{flat.length !== 1 ? "s" : ""}
           </span>
@@ -173,9 +218,13 @@ const SingleVariantConstraints: React.FC<{
       </div>
 
       {flat.length > 0 ? (
+        // While inheriting, the rows are the pool's; adding or removing any of them
+        // promotes this variant to its own pool-seeded set (then diverges from it).
         <ConstraintList constraints={flat} onRemove={onRemove} />
       ) : (
-        <p className="text-xs text-muted-foreground italic">No constraints discovered for this variant</p>
+        <p className="text-xs text-muted-foreground italic">
+          {inheritingPool ? "No fallback constraints apply to this variant" : "No constraints discovered for this variant"}
+        </p>
       )}
 
       {showAdd && (
@@ -198,7 +247,7 @@ const SingleVariantConstraints: React.FC<{
 
 const ConstraintList: React.FC<{
   constraints: { act1: string; act2: string; type: string }[];
-  onRemove: (act1: string, act2: string) => void;
+  onRemove?: (act1: string, act2: string) => void;
 }> = ({ constraints, onRemove }) => (
   <div className="space-y-1 max-h-48 overflow-y-auto">
     {constraints.map(({ act1, act2, type }, idx) => (
@@ -208,14 +257,16 @@ const ConstraintList: React.FC<{
           {type.replace("_", " ")}
         </span>
         <span className="font-medium truncate max-w-[160px]" title={act2}>{act2}</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
-          onClick={() => onRemove(act1, act2)}
-        >
-          x
-        </Button>
+        {onRemove && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+            onClick={() => onRemove(act1, act2)}
+          >
+            x
+          </Button>
+        )}
       </div>
     ))}
   </div>

@@ -19,6 +19,24 @@ def _variants(*variant_list):
     return Variants(list(variant_list))
 
 
+def _mine_variant(ocel, variant, **kwargs):
+    """Mine a single-variant log and return that variant's own constraints.
+
+    The frequency guard is relaxed by default so single-execution test variants
+    are mined on their own (rather than being pushed to the fallback pool).
+    """
+    kwargs.setdefault("support_threshold_percentage", 0.8)
+    kwargs.setdefault("min_variant_frequency", 0.0)
+    kwargs.setdefault("min_variant_executions", 1)
+    per_variant, _fallback = generate_resource_constraints(
+        ocel, _variants(variant), **kwargs
+    )
+    return per_variant.get(variant, {})
+
+
+# --- relation detection ---
+
+
 def test_same_resource_detected_and_symmetric():
     """
     Load and Unload always share the exact same resource set {r1, r2}.
@@ -33,15 +51,7 @@ def test_same_resource_detected_and_symmetric():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["Load"]["Unload"] == "same_resource"
     assert constraints["Unload"]["Load"] == "same_resource"
 
@@ -60,15 +70,7 @@ def test_disjoint_detected_and_symmetric():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["Scan"]["Check"] == "disjoint"
     assert constraints["Check"]["Scan"] == "disjoint"
 
@@ -94,41 +96,7 @@ def test_no_constraint_below_support_threshold():
     )
     variant = _variant([["e1", "e2"], ["e3", "e4"], ["e5", "e6"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
-    assert len(constraints) == 0
-
-
-def test_filtered_by_min_occurrences_within_execution():
-    """
-    The pair (A, B) only has 1 pair per execution, but min_occurrences_within_execution=5.
-    The execution should be filtered out entirely → no constraint.
-    """
-    ocel = _make_ocel(
-        [
-            _event("e1", "A", 1, [], ["r1"]),
-            _event("e2", "B", 2, [], ["r1"]),
-        ],
-        [],
-    )
-    variant = _variant([["e1", "e2"]])
-
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=5,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert len(constraints) == 0
 
 
@@ -150,15 +118,7 @@ def test_aggregation_across_executions():
     )
     variant = _variant([["e1", "e2"], ["e3", "e4"], ["e5", "e6"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["Load"]["Unload"] == "same_resource"
 
 
@@ -176,15 +136,7 @@ def test_subset_detected():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["A"]["B"] == "subset"
 
 
@@ -203,15 +155,7 @@ def test_subset_emits_inverse_superset():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["A"]["B"] == "subset"
     assert constraints["B"]["A"] == "superset"
 
@@ -229,15 +173,7 @@ def test_empty_resources_treated_as_empty_set():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["A"]["B"] == "same_resource"
 
 
@@ -255,15 +191,7 @@ def test_same_activity_same_resource_within_execution():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["Load"]["Load"] == "same_resource"
 
 
@@ -281,17 +209,11 @@ def test_same_activity_different_resource_within_execution():
     )
     variant = _variant([["e1", "e2"]])
 
-    result = generate_resource_constraints(
-        ocel,
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-
-    constraints = result[variant]
+    constraints = _mine_variant(ocel, variant)
     assert constraints["Load"]["Load"] == "disjoint"
 
+
+# --- support-threshold boundary ---
 
 _BOUNDARY_CASES = [
     pytest.param(
@@ -323,14 +245,7 @@ def _boundary_constraints(a_sat, a_neither, b_set, n_sat, n_neither):
     ids.append("b")
 
     variant = _variant([ids])
-    result = generate_resource_constraints(
-        _make_ocel(events, []),
-        _variants(variant),
-        support_threshold_percentage=0.8,
-        min_occurrences_within_execution=1,
-        min_occurrences_across_executions=1,
-    )
-    return result[variant]
+    return _mine_variant(_make_ocel(events, []), variant)
 
 
 @pytest.mark.parametrize(
@@ -357,3 +272,131 @@ def test_constraint_dropped_below_support_threshold(
     constraints = _boundary_constraints(a_sat, a_neither, b_set, n_sat=3, n_neither=1)
     assert "B" not in constraints.get("A", {})
     assert "A" not in constraints.get("B", {})
+
+
+# --- frequency guard & fallback ---
+
+
+def _load_unload_executions(prefix, count, res, start_ts):
+    """Build `count` Load→Unload executions each using resource list `res`."""
+    events, executions = [], []
+    ts = start_ts
+    for i in range(count):
+        load, unload = f"{prefix}_l{i}", f"{prefix}_u{i}"
+        ts += 1
+        events.append(_event(load, "Load", ts, [], list(res)))
+        ts += 1
+        events.append(_event(unload, "Unload", ts, [], list(res)))
+        executions.append([load, unload])
+    return events, executions, ts
+
+
+def test_frequent_variant_mined_specifically():
+    """A variant meeting the guard is mined on its own executions."""
+    events, executions, _ = _load_unload_executions("f", 5, ["r1"], 0)
+    variant = _variant(executions)
+
+    per_variant, _fallback = generate_resource_constraints(
+        _make_ocel(events, []),
+        _variants(variant),
+        support_threshold_percentage=0.8,
+        min_variant_frequency=0.0,
+        min_variant_executions=5,
+    )
+
+    assert variant in per_variant
+    assert per_variant[variant]["Load"]["Unload"] == "same_resource"
+
+
+def test_infrequent_variant_absent_from_per_variant_uses_fallback():
+    """
+    A once-occurring variant fails the guard: it is absent from per_variant and the
+    pooled fallback (mined over all executions) carries the same_resource relation.
+    """
+    freq_events, freq_execs, ts = _load_unload_executions("freq", 5, ["r1"], 0)
+    rare_events, rare_execs, _ = _load_unload_executions("rare", 1, ["r1"], ts)
+    frequent = _variant(freq_execs)
+    rare = _variant(rare_execs)
+
+    per_variant, fallback = generate_resource_constraints(
+        _make_ocel(freq_events + rare_events, []),
+        _variants(frequent, rare),
+        support_threshold_percentage=0.8,
+        min_variant_frequency=0.0,
+        min_variant_executions=5,
+    )
+
+    assert frequent in per_variant
+    assert rare not in per_variant
+    assert fallback["Load"]["Unload"] == "same_resource"
+
+
+def test_fallback_evidence_floor_drops_globally_rare_pair():
+    """
+    A pair present in fewer executions than min_variant_executions across the whole
+    log is dropped from the fallback pool, even if consistent where it appears.
+    """
+    events, executions = [], []
+    ts = 0
+    # X and Y share {r1} in only 2 executions ...
+    for i in range(2):
+        x, y = f"x{i}", f"y{i}"
+        ts += 1
+        events.append(_event(x, "X", ts, [], ["r1"]))
+        ts += 1
+        events.append(_event(y, "Y", ts, [], ["r1"]))
+        executions.append([x, y])
+    # ... while 4 further executions contain an unrelated activity.
+    for i in range(4):
+        z = f"z{i}"
+        ts += 1
+        events.append(_event(z, "Z", ts, [], ["r1"]))
+        executions.append([z])
+    variant = _variant(executions)
+
+    _per_variant, fallback = generate_resource_constraints(
+        _make_ocel(events, []),
+        _variants(variant),
+        support_threshold_percentage=0.8,
+        min_variant_frequency=0.0,
+        min_variant_executions=5,
+    )
+
+    # (X, Y) appears in 2 of 6 executions -> below the evidence floor of 5.
+    assert "Y" not in fallback.get("X", {})
+    assert "X" not in fallback.get("Y", {})
+
+
+def test_combined_guard_excludes_low_frequency_variant():
+    """A variant with enough executions but too small a case share is excluded."""
+    freq_events, freq_execs, ts = _load_unload_executions("freq", 9, ["r1"], 0)
+    rare_events, rare_execs, _ = _load_unload_executions("rare", 1, ["r1"], ts)
+    frequent = _variant(freq_execs)
+    rare = _variant(rare_execs)
+
+    per_variant, _fallback = generate_resource_constraints(
+        _make_ocel(freq_events + rare_events, []),
+        _variants(frequent, rare),
+        support_threshold_percentage=0.8,
+        min_variant_frequency=0.2,  # rare covers 1/10 = 10% < 20%
+        min_variant_executions=1,
+    )
+
+    assert frequent in per_variant
+    assert rare not in per_variant
+
+
+def test_combined_guard_excludes_low_count_variant():
+    """A variant covering 100% of cases but with too few executions is excluded."""
+    events, executions, _ = _load_unload_executions("v", 3, ["r1"], 0)
+    variant = _variant(executions)
+
+    per_variant, _fallback = generate_resource_constraints(
+        _make_ocel(events, []),
+        _variants(variant),
+        support_threshold_percentage=0.8,
+        min_variant_frequency=0.0,
+        min_variant_executions=5,  # only 3 executions
+    )
+
+    assert variant not in per_variant

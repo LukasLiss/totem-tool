@@ -249,8 +249,8 @@ export const SimulationDashboard: React.FC = () => {
 
   // Constraint mining config
   const [supportThreshold, setSupportThreshold] = useState(0.8);
-  const [minOccurrencesWithin, setMinOccurrencesWithin] = useState(5);
-  const [minOccurrencesAcross, setMinOccurrencesAcross] = useState(10);
+  const [minVariantFrequency, setMinVariantFrequency] = useState(0.05);
+  const [minVariantExecutions, setMinVariantExecutions] = useState(5);
 
   // Simulation details (variants, arrivals, constraints)
   const [details, setDetails] = useState<SimulationDetailsResponse | null>(null);
@@ -284,9 +284,10 @@ export const SimulationDashboard: React.FC = () => {
     };
   };
 
-  // Editable constraints (per-variant + global)
+  // Editable constraints (per-variant + user global + mined fallback pool)
   const [editedConstraints, setEditedConstraints] = useState<Record<number, VariantConstraints>>({});
   const [globalConstraints, setGlobalConstraints] = useState<VariantConstraints>({});
+  const [fallbackConstraints, setFallbackConstraints] = useState<VariantConstraints>({});
 
   // Resource calendars: one editable calendar per resource type (the default for
   // every resource of that type), plus optional custom calendars for explicitly
@@ -350,6 +351,7 @@ export const SimulationDashboard: React.FC = () => {
     setDetails(null);
     setEditedConstraints({});
     setGlobalConstraints({});
+    setFallbackConstraints({});
     setTypeCalendars({});
     setDiscoveredTypeCalendars({});
     setCalendarOverrides([]);
@@ -494,7 +496,7 @@ export const SimulationDashboard: React.FC = () => {
     if (!fileId) return;
 
     const resourceTypes = Object.keys(resourcePool).filter((k) => resourcePool[k] > 0);
-    const cacheKey = `${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${supportThreshold}_${minOccurrencesWithin}_${minOccurrencesAcross}`;
+    const cacheKey = `${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${supportThreshold}_${minVariantFrequency}_${minVariantExecutions}`;
 
     setDetailsLoading(true);
     setDetailsError("");
@@ -513,8 +515,8 @@ export const SimulationDashboard: React.FC = () => {
             activities: selectedActivities,
             resource_types: resourceTypes.length > 0 ? resourceTypes : undefined,
             support_threshold: supportThreshold,
-            min_occurrences_within: minOccurrencesWithin,
-            min_occurrences_across: minOccurrencesAcross,
+            min_variant_frequency: minVariantFrequency,
+            min_variant_executions: minVariantExecutions,
             progress_id: progressId,
           });
         } finally {
@@ -526,12 +528,15 @@ export const SimulationDashboard: React.FC = () => {
 
       setDetails(data);
 
-      // Initialize editable constraints from variants
+      // Initialize editable constraints from the variants that were mined on
+      // their own. Fallback variants are left absent (undefined) so they inherit
+      // the pool until the user edits one, which promotes it to its own set.
       const initialConstraints: Record<number, VariantConstraints> = {};
       data.variants.forEach((v) => {
-        initialConstraints[v.id] = { ...v.constraints };
+        if (!v.uses_fallback) initialConstraints[v.id] = { ...v.constraints };
       });
       setEditedConstraints(initialConstraints);
+      setFallbackConstraints(data.fallback_constraints || {});
 
       // Store raw discovered type calendars for reference display (heatmap background)
       setDiscoveredTypeCalendars(data.type_calendars || {});
@@ -578,9 +583,24 @@ export const SimulationDashboard: React.FC = () => {
   };
 
   // Constraint editing
+  // A deep copy of the current fallback pool, used to seed a fallback variant the
+  // first time it is edited (it then detaches from the pool).
+  const clonePool = () =>
+    Object.fromEntries(
+      Object.entries(fallbackConstraints).map(([act, inner]) => [act, { ...inner }])
+    );
+
+  // A fallback variant has no own entry until edited; editing it here promotes it
+  // to a variant-specific set (seeded from the pool) that no longer follows it.
+  const seedVariant = (
+    prev: Record<number, VariantConstraints>,
+    variantId: number
+  ): VariantConstraints =>
+    prev[variantId] !== undefined ? { ...prev[variantId] } : clonePool();
+
   const addConstraint = (variantId: number, act1: string, act2: string, type: string) => {
     setEditedConstraints((prev) => {
-      const varConstraints = { ...prev[variantId] };
+      const varConstraints = seedVariant(prev, variantId);
       if (!varConstraints[act1]) varConstraints[act1] = {};
       varConstraints[act1] = { ...varConstraints[act1], [act2]: type };
       return { ...prev, [variantId]: varConstraints };
@@ -589,7 +609,7 @@ export const SimulationDashboard: React.FC = () => {
 
   const removeConstraint = (variantId: number, act1: string, act2: string) => {
     setEditedConstraints((prev) => {
-      const varConstraints = { ...prev[variantId] };
+      const varConstraints = seedVariant(prev, variantId);
       if (varConstraints[act1]) {
         const acts = { ...varConstraints[act1] };
         delete acts[act2];
@@ -622,8 +642,20 @@ export const SimulationDashboard: React.FC = () => {
           resourceCalendars[rid] = group.calendar;
         });
       });
+      // Build the per-variant payload: a customized variant (own entry) sends it;
+      // an untouched fallback variant sends the shared pool. The backend merge then
+      // covers every variant.
+      const constraintsPayload: Record<number, VariantConstraints> = {};
+      details.variants.forEach((v) => {
+        constraintsPayload[v.id] =
+          editedConstraints[v.id] !== undefined
+            ? editedConstraints[v.id]
+            : v.uses_fallback
+              ? fallbackConstraints
+              : {};
+      });
       overrides = {
-        constraints: editedConstraints,
+        constraints: constraintsPayload,
         global_constraints: globalConstraints,
         arrival_distributions: arrivalDistributions,
         cooldowns,
@@ -977,6 +1009,7 @@ export const SimulationDashboard: React.FC = () => {
                   <Label className="text-sm font-medium">Constraint Mining</Label>
                   <p className="text-xs text-muted-foreground mt-1 mb-3">
                     Parameters for discovering resource constraints from the event log.
+                    Variants below either frequency threshold use the pooled fallback pool.
                   </p>
                   <div className="grid grid-cols-3 gap-3">
                     <div>
@@ -985,23 +1018,21 @@ export const SimulationDashboard: React.FC = () => {
                         value={supportThreshold}
                         onChange={(e) => setSupportThreshold(parseFloat(e.target.value) || 0.8)}
                         className="mt-1" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Min fraction of cases</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Min relation consistency</p>
                     </div>
                     <div>
-                      <Label htmlFor="min-occ-within" className="text-xs">Min occ. within</Label>
-                      <Input id="min-occ-within" type="number" min={1} step={1}
-                        value={minOccurrencesWithin}
-                        onChange={(e) => setMinOccurrencesWithin(parseInt(e.target.value) || 5)}
-                        className="mt-1" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Within a single case</p>
+                      <Label className="text-xs">Variant frequency: {(minVariantFrequency * 100).toFixed(0)}%</Label>
+                      <Slider value={[minVariantFrequency]} onValueChange={([v]) => setMinVariantFrequency(v)}
+                        min={0} max={1} step={0.01} className="mt-3" />
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Min share of all cases</p>
                     </div>
                     <div>
-                      <Label htmlFor="min-occ-across" className="text-xs">Min occ. across</Label>
-                      <Input id="min-occ-across" type="number" min={1} step={1}
-                        value={minOccurrencesAcross}
-                        onChange={(e) => setMinOccurrencesAcross(parseInt(e.target.value) || 10)}
+                      <Label htmlFor="min-variant-exec" className="text-xs">Min executions</Label>
+                      <Input id="min-variant-exec" type="number" min={1} step={1}
+                        value={minVariantExecutions}
+                        onChange={(e) => setMinVariantExecutions(parseInt(e.target.value) || 1)}
                         className="mt-1" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Across all cases</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Min cases per variant</p>
                     </div>
                   </div>
                 </div>
@@ -1233,6 +1264,27 @@ export const SimulationDashboard: React.FC = () => {
               }}
               onRemoveGlobal={(act1, act2) => {
                 setGlobalConstraints((prev) => {
+                  const updated = { ...prev };
+                  if (updated[act1]) {
+                    const acts = { ...updated[act1] };
+                    delete acts[act2];
+                    if (Object.keys(acts).length === 0) delete updated[act1];
+                    else updated[act1] = acts;
+                  }
+                  return updated;
+                });
+              }}
+              fallbackConstraints={fallbackConstraints}
+              onAddFallback={(act1, act2, type) => {
+                setFallbackConstraints((prev) => {
+                  const updated = { ...prev };
+                  if (!updated[act1]) updated[act1] = {};
+                  updated[act1] = { ...updated[act1], [act2]: type };
+                  return updated;
+                });
+              }}
+              onRemoveFallback={(act1, act2) => {
+                setFallbackConstraints((prev) => {
                   const updated = { ...prev };
                   if (updated[act1]) {
                     const acts = { ...updated[act1] };

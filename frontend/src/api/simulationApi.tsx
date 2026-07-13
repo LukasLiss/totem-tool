@@ -177,6 +177,7 @@ export type VariantDetail = {
   arrival_distribution: VariantArrivalDistribution;
   resource_distribution: Record<string, Record<string, ResourceDistEntry>>;
   constraints: VariantConstraints;
+  uses_fallback: boolean;
 };
 
 // Resource Calendar: weekday -> hour[] (24 floats)
@@ -185,6 +186,7 @@ export type CalendarProbability = Record<string, number[]>;
 export type SimulationDetailsResponse = {
   variants: VariantDetail[];
   num_variants: number;
+  fallback_constraints: VariantConstraints;
   cooldown_distribution: CooldownDistribution;
   allocation_strategy: AllocationStrategy;
   type_calendars: Record<string, CalendarProbability>;
@@ -199,8 +201,8 @@ export type SimulationDetailsRequest = {
   activities: string[];
   resource_types?: string[];
   support_threshold?: number;
-  min_occurrences_within?: number;
-  min_occurrences_across?: number;
+  min_variant_frequency?: number;
+  min_variant_executions?: number;
   // Client-generated id under which the backend publishes step progress
   progress_id?: string;
 };

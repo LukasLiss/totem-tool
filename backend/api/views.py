@@ -2988,8 +2988,8 @@ def get_simulation_details(request):
         "activities": ["Act1", "Act2"],
         "resource_types": ["ResourceType1", "ResourceType2"],
         "support_threshold": 0.8,
-        "min_occurrences_within": 5,
-        "min_occurrences_across": 10
+        "min_variant_frequency": 0.05,
+        "min_variant_executions": 5
     }
     """
     file_id = request.data.get("file_id")
@@ -2997,8 +2997,8 @@ def get_simulation_details(request):
     activities = request.data.get("activities", [])
     resource_types = request.data.get("resource_types", [])
     support_threshold = request.data.get("support_threshold", 0.8)
-    min_occurrences_within = request.data.get("min_occurrences_within", 5)
-    min_occurrences_across = request.data.get("min_occurrences_across", 10)
+    min_variant_frequency = request.data.get("min_variant_frequency", 0.05)
+    min_variant_executions = request.data.get("min_variant_executions", 5)
     progress_id = request.data.get("progress_id")
 
     if not file_id:
@@ -3042,8 +3042,12 @@ def get_simulation_details(request):
 
         # Compute constraints
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 3)
-        constraints = generate_resource_constraints(
-            filtered_ocel, variants, support_threshold, min_occurrences_within, min_occurrences_across
+        per_variant_constraints, fallback_constraints = generate_resource_constraints(
+            filtered_ocel,
+            variants,
+            support_threshold,
+            min_variant_frequency=min_variant_frequency,
+            min_variant_executions=min_variant_executions,
         )
 
         # Serialize variants
@@ -3072,8 +3076,11 @@ def get_simulation_details(request):
                     for res_type, stats in type_stats.items()
                 }
 
-            # Serialize constraints for this variant
-            var_constraints = constraints.get(variant, {})
+            # Serialize constraints for this variant. Variants too infrequent to
+            # mine on their own are absent from per_variant_constraints and fall
+            # back to the pooled global set at simulation time.
+            var_constraints = per_variant_constraints.get(variant, {})
+            uses_fallback = variant not in per_variant_constraints
 
             # Get activity sequence from variant graph
             activity_sequence = []
@@ -3088,6 +3095,7 @@ def get_simulation_details(request):
                 "arrival_distribution": serialized_arrival,
                 "resource_distribution": serialized_res_dist,
                 "constraints": var_constraints,
+                "uses_fallback": uses_fallback,
             })
 
         # Compute resource calendars first — the cooldown discovery below uses
@@ -3143,6 +3151,7 @@ def get_simulation_details(request):
         return Response({
             "variants": serialized_variants,
             "num_variants": len(variants),
+            "fallback_constraints": fallback_constraints,
             "cooldown_distribution": serialized_cooldowns,
             "allocation_strategy": allocation_strategy,
             "type_calendars": serialized_type_calendars,

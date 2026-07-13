@@ -694,9 +694,11 @@ class OCProcessAreaSimulationModel:
         activity_delays=None,
         type_calendars=None,
         resource_calendars=None,
+        fallback_constraints=None,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
+        self.fallback_constraints = fallback_constraints or {}
         self.resource_allocation_strategy = resource_allocation_strategy
         self.resource_cooldown_distribution = resource_cooldown_distribution
         self.totem_model = totem_model
@@ -760,8 +762,8 @@ class OCProcessAreaSimulationModel:
         playout_strategy = VariantPlayoutStrategy(variants, var_arrival_dist)
 
         # Calculate Resource Constraints
-        resource_constraints = generate_resource_constraints(
-            filtered_ocel, variants, 0.8, 2, 5
+        resource_constraints, fallback_constraints = generate_resource_constraints(
+            filtered_ocel, variants, support_threshold_percentage=0.8
         )
 
         # Calculate Resource Allocation Strategy
@@ -793,6 +795,7 @@ class OCProcessAreaSimulationModel:
             source_log_start_unix,
             activity_delays=activity_delays,
             type_calendars=type_calendars,
+            fallback_constraints=fallback_constraints,
         )
 
     @classmethod
@@ -820,8 +823,8 @@ class OCProcessAreaSimulationModel:
         playout_strategy = StateSpacePlayoutStrategy()
 
         # Calculate Resource Constraints
-        resource_constraints = generate_resource_constraints(
-            filtered_ocel, process_area, 0.8, 2, 5
+        resource_constraints, fallback_constraints = generate_resource_constraints(
+            filtered_ocel, process_area, support_threshold_percentage=0.8
         )
 
         # Calculate Resource Allocation Strategy
@@ -837,6 +840,7 @@ class OCProcessAreaSimulationModel:
             None,
             None,
             OCProcessAreaSimulationConfiguration(),
+            fallback_constraints=fallback_constraints,
         )
 
 
@@ -944,6 +948,8 @@ class VariantPlayoutStrategy:
         allocation_strategy = simulation_model.resource_allocation_strategy
         cooldown_dist = simulation_model.resource_cooldown_distribution
         resource_constraints = simulation_model.resource_constraints or {}
+        # Variants without their own mined constraints fall back to the pooled set.
+        fallback_constraints = simulation_model.fallback_constraints or {}
         resource_distribution_of_variants = (
             simulation_model.needed_resources_per_activity or {}
         )
@@ -1021,7 +1027,7 @@ class VariantPlayoutStrategy:
 
                 # Calculate Violation Budget for this instance
                 total_slots = _estimate_constraint_slots(
-                    resource_constraints.get(variant, {}),
+                    resource_constraints.get(variant, fallback_constraints),
                     resource_distribution_of_variants.get(variant, {}),
                     resource_pool_expanded,
                 )
@@ -1106,7 +1112,9 @@ class VariantPlayoutStrategy:
                 variant_res_dist = resource_distribution_of_variants.get(
                     inst["variant"], {}
                 )
-                variant_constraints = resource_constraints.get(inst["variant"], {})
+                variant_constraints = resource_constraints.get(
+                    inst["variant"], fallback_constraints
+                )
 
                 for node in enabled:
                     activity = node_labels[node]
