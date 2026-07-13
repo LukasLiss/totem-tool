@@ -75,32 +75,46 @@ def test_resource_distribution_distance_per_type():
     assert d["Worker"]["events_per_resource_1wd"] == 1.0  # participations 2 vs 1
 
 
-def test_resource_utilization_uses_cooldown_for_busy_time():
-    cooldown = {"Load": {"Worker": {"mean_duration_s": 50.0}}}
-    util = resource_utilization_rate(_worker_log(), cooldown_distribution=cooldown)
-    assert util["observation_window_s"] == 100
-    assert (
-        util["per_resource"]["r1"]["busy_s"] == 50.0
-    )  # only Load has a cooldown entry
-    assert util["per_resource"]["r1"]["utilization"] == 0.5
-    assert util["per_type"]["Worker"]["mean_utilization"] == 0.5
-
-
-def test_resource_utilization_without_cooldown_is_zero_busy():
+def test_resource_utilization_busy_time_measured_from_log():
+    # r1 participates at t=0 and t=100, so it is occupied for the whole 100s
+    # window: busy_s = last - first = 100, utilization = 1.0.
     util = resource_utilization_rate(_worker_log())
+    assert util["observation_window_s"] == 100
+    assert util["per_resource"]["r1"]["busy_s"] == 100.0
+    assert util["per_resource"]["r1"]["n_events"] == 2
+    assert util["per_resource"]["r1"]["utilization"] == 1.0
+    assert util["per_type"]["Worker"]["mean_utilization"] == 1.0
+
+
+def test_resource_single_participation_is_zero_busy():
+    # A resource seen in only one event has no measurable occupation span.
+    log = make_ocel(
+        [
+            event("e1", "Load", 0, ["o1"], resources=["r1"]),
+            event("e2", "Unload", 100, ["o1"], resources=["r2"]),
+        ],
+        [obj("o1", "Order"), obj("r1", "Worker"), obj("r2", "Worker")],
+    )
+    util = resource_utilization_rate(log)
     assert util["per_resource"]["r1"]["busy_s"] == 0.0
     assert util["per_resource"]["r1"]["utilization"] == 0.0
-    assert util["per_resource"]["r1"]["n_events"] == 2
+    assert util["per_resource"]["r1"]["n_events"] == 1
 
 
-def test_resource_utilization_can_exceed_one():
-    cooldown = {
-        "Load": {"Worker": {"mean_duration_s": 200.0}},
-        "Unload": {"Worker": {"mean_duration_s": 200.0}},
-    }
-
-    util = resource_utilization_rate(_worker_log(), cooldown_distribution=cooldown)
-
+def test_resource_partial_utilization():
+    # Window is 100s. r1 spans t=0..50 (busy 50 → util 0.5); r2 spans the whole
+    # window t=0..100 (busy 100 → util 1.0).
+    log = make_ocel(
+        [
+            event("e1", "A", 0, ["o1"], resources=["r1"]),
+            event("e2", "A", 50, ["o1"], resources=["r1"]),
+            event("e3", "A", 0, ["o1"], resources=["r2"]),
+            event("e4", "A", 100, ["o1"], resources=["r2"]),
+        ],
+        [obj("o1", "Order"), obj("r1", "Worker"), obj("r2", "Worker")],
+    )
+    util = resource_utilization_rate(log)
     assert util["observation_window_s"] == 100
-    assert util["per_resource"]["r1"]["busy_s"] == 400.0
-    assert util["per_resource"]["r1"]["utilization"] == 4.0
+    assert util["per_resource"]["r1"]["utilization"] == 0.5
+    assert util["per_resource"]["r2"]["utilization"] == 1.0
+    assert util["per_type"]["Worker"]["mean_utilization"] == 0.75

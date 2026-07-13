@@ -78,7 +78,6 @@ def build_evaluation_payload(
     actual_ocel,
     simulated_ocel,
     *,
-    cooldown_distribution: dict | None = None,
     actual_obj_type_map: dict | None = None,
     simulated_obj_type_map: dict | None = None,
     include_graph_edit_distance: bool = False,
@@ -166,12 +165,10 @@ def build_evaluation_payload(
     )
     util_actual = resource_utilization_rate(
         actual_ocel,
-        cooldown_distribution=cooldown_distribution,
         obj_type_map=actual_obj_type_map,
     )
     util_sim = resource_utilization_rate(
         simulated_ocel,
-        cooldown_distribution=cooldown_distribution,
         obj_type_map=simulated_obj_type_map,
     )
 

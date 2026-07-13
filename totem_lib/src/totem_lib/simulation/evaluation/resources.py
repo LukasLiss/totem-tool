@@ -154,17 +154,15 @@ def resource_distribution_distance(
 
 def resource_utilization_rate(
     ocel,
-    cooldown_distribution: dict | None = None,
     observation_window_s: int | None = None,
     obj_type_map: dict | None = None,
 ) -> dict:
     """
     Resource utilization = (busy time) / (observation window).
-    Busy time is taken from the cooldown distribution when available, otherwise only counts event participations
     Args:
         ocel:                  log to evaluate.
-        cooldown_distribution: optional, dict of dicts of dicts with mean cooldown durations
-        observation_window_s:  optional window length in seconds
+        observation_window_s:  optional window length in seconds (defaults to
+                               the span of all events in the log).
         obj_type_map:          optional resource-id -> type map (see
                                ``_events_with_resources``); defaults to
                                ``ocel.obj_type_map``.
@@ -187,34 +185,25 @@ def resource_utilization_rate(
         ts_max = max(ev["timestamp"] for ev in events)
         observation_window_s = max(1, ts_max - ts_min)
 
-    busy_per_resource: dict[str, float] = defaultdict(float)
-    events_per_resource: dict[str, int] = defaultdict(int)
+    timestamps_per_resource: dict[str, list[int]] = defaultdict(list)
     type_of_resource: dict[str, str] = {}
 
     for ev in events:
-        activity = ev["activity"]
         for rid, rtype in ev["resources"]:
             if rtype is None:
                 continue
             type_of_resource[rid] = rtype
-            events_per_resource[rid] += 1
-            if cooldown_distribution:
-                mean_cd = (
-                    cooldown_distribution.get(activity, {})
-                    .get(rtype, {})
-                    .get("mean_duration_s", 0.0)
-                )
-                busy_per_resource[rid] += float(mean_cd)
+            timestamps_per_resource[rid].append(ev["timestamp"])
 
-    per_resource = {
-        rid: {
+    per_resource = {}
+    for rid, timestamps in timestamps_per_resource.items():
+        busy_s = float(max(timestamps) - min(timestamps))
+        per_resource[rid] = {
             "type": type_of_resource[rid],
-            "n_events": events_per_resource[rid],
-            "busy_s": busy_per_resource[rid],
-            "utilization": busy_per_resource[rid] / observation_window_s,
+            "n_events": len(timestamps),
+            "busy_s": busy_s,
+            "utilization": busy_s / observation_window_s,
         }
-        for rid in events_per_resource
-    }
 
     per_type_util: dict[str, list[float]] = defaultdict(list)
     for info in per_resource.values():
