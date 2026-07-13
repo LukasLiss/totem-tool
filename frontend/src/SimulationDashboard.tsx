@@ -726,10 +726,7 @@ export const SimulationDashboard: React.FC = () => {
   };
 
   const canLoadDetails = selectedObjectTypes.length > 0 && selectedActivities.length > 0;
-  const canRun =
-    canLoadDetails &&
-    Object.keys(resourcePool).length > 0 &&
-    Object.values(resourcePool).some((v) => v > 0);
+  const canRun = canLoadDetails;
 
   // --- Render ---
 

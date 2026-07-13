@@ -2560,8 +2560,8 @@ def run_simulation(request):
         return Response({"error": "Missing object_types"}, status=status.HTTP_400_BAD_REQUEST)
     if not activities:
         return Response({"error": "Missing activities"}, status=status.HTTP_400_BAD_REQUEST)
-    if not resource_pool:
-        return Response({"error": "Missing resource_pool"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    resource_pool = resource_pool or {}
 
     # Verify user access
     try:
