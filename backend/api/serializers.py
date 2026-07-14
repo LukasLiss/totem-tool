@@ -2,6 +2,7 @@ import json
 
 from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
+from totem_lib import validate_occn_dict, validate_totem_dict
 from .models import EventLog, Project, ProjectAsset
 from .models import Dashboard
 from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
@@ -127,20 +128,19 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
                 {"content_json": "Model asset JSON must be an object."}
             )
 
-        schema = content.get("schema")
-        expected_schemas = {
-            ProjectAsset.AssetType.TOTEM: "totem",
-            ProjectAsset.AssetType.OCCN: "occn",
+        schema_validators = {
+            ProjectAsset.AssetType.TOTEM: validate_totem_dict,
+            ProjectAsset.AssetType.OCCN: validate_occn_dict,
         }
-        expected_schema = expected_schemas.get(asset_type)
-        if schema is not None and expected_schema and schema != expected_schema:
+        validator = schema_validators.get(asset_type)
+        if validator is None:
+            return content
+
+        try:
+            validator(content)
+        except ValueError as exc:
             raise serializers.ValidationError(
-                {
-                    "content_json": (
-                        f"JSON schema '{schema}' does not match asset type "
-                        f"'{asset_type}'."
-                    )
-                }
+                {"content_json": str(exc)}
             )
         return content
 
