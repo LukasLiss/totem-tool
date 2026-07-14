@@ -4,6 +4,7 @@ export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedCh
 
 export type ViewMode =
   | { type: 'overview' }
+  | { type: 'modelAssets' }
   | { type: 'analysis'; component: AnalysisComponent }
   | { type: 'dashboard'; id: number };
 

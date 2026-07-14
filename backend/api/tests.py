@@ -1,3 +1,5 @@
+import copy
+import json
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -12,6 +14,84 @@ from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+
+
+def valid_totem_content_json():
+    return totem_to_dict(
+        Totem(
+            tempgraph={
+                "nodes": {"Order", "Item"},
+                "D": {("Order", "Item")},
+                "Di": set(),
+                "I": set(),
+                "Ii": set(),
+                "P": set(),
+            },
+            cardinalities={
+                ("Order", "Item"): {"LC": "1..*", "EC": "0...*"},
+            },
+            type_relations={frozenset(("Order", "Item"))},
+            all_event_types={"Create Order", "Pick Item"},
+            object_type_to_event_types={
+                "Order": {"Create Order"},
+                "Item": {"Pick Item"},
+            },
+        )
+    )
+
+
+def valid_occn_content_json():
+    return {
+        "schema": "occn",
+        "version": 1,
+        "activities": ["START_Order", "END_Order"],
+        "object_types": ["Order"],
+        "dependency_graph": {
+            "edges": [
+                {
+                    "source": "START_Order",
+                    "target": "END_Order",
+                    "object_type": "Order",
+                }
+            ]
+        },
+        "input_marker_groups": {
+            "START_Order": [],
+            "END_Order": [
+                {
+                    "support_count": 1,
+                    "markers": [
+                        {
+                            "related_activity": "START_Order",
+                            "object_type": "Order",
+                            "min_count": 1,
+                            "max_count": 1,
+                            "marker_key": 1,
+                        }
+                    ],
+                }
+            ],
+        },
+        "output_marker_groups": {
+            "START_Order": [
+                {
+                    "support_count": 1,
+                    "markers": [
+                        {
+                            "related_activity": "END_Order",
+                            "object_type": "Order",
+                            "min_count": 1,
+                            "max_count": 1,
+                            "marker_key": 1,
+                        }
+                    ],
+                }
+            ],
+            "END_Order": [],
+        },
+        "activity_count": {"START_Order": 1, "END_Order": 1},
+        "relative_occurrence_threshold": 0.0,
+    }
 
 
 class ProjectAssetModelTests(TestCase):
@@ -103,12 +183,13 @@ class ProjectAssetSerializerTests(TestCase):
         )
 
     def test_serializer_creates_asset_from_direct_content_json(self):
+        content_json = valid_totem_content_json()
         serializer = self._serializer(
             {
                 "project": self.project.pk,
                 "name": "  Baseline TOTeM  ",
                 "asset_type": ProjectAsset.AssetType.TOTEM,
-                "content_json": {"schema": "totem", "version": 1},
+                "content_json": content_json,
                 "metadata": {"source_log_id": 12},
             }
         )
@@ -117,15 +198,16 @@ class ProjectAssetSerializerTests(TestCase):
         asset = serializer.save()
 
         self.assertEqual(asset.name, "Baseline TOTeM")
-        self.assertEqual(asset.content_json["schema"], "totem")
+        self.assertEqual(asset.content_json, content_json)
         self.assertEqual(asset.metadata["source_log_id"], 12)
         self.assertEqual(asset.created_by, self.user)
 
     def test_serializer_creates_asset_from_json_file(self):
+        content_json = valid_occn_content_json()
         upload = SimpleUploadedFile(
-            "model.json",
-            b'{"schema": "occn", "version": 1}',
-            content_type="application/json",
+            "model.asset",
+            json.dumps(content_json).encode("utf-8"),
+            content_type="application/octet-stream",
         )
         serializer = self._serializer(
             {
@@ -139,7 +221,7 @@ class ProjectAssetSerializerTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         asset = serializer.save()
 
-        self.assertEqual(asset.content_json, {"schema": "occn", "version": 1})
+        self.assertEqual(asset.content_json, content_json)
 
     def test_serializer_rejects_invalid_json_file(self):
         upload = SimpleUploadedFile(
@@ -275,6 +357,19 @@ class ProjectAssetSerializerTests(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("content_json", serializer.errors)
 
+    def test_serializer_rejects_non_canonical_model_json(self):
+        serializer = self._serializer(
+            {
+                "project": self.project.pk,
+                "name": "Incomplete model",
+                "asset_type": ProjectAsset.AssetType.TOTEM,
+                "content_json": {"schema": "totem", "version": 1},
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("content_json", serializer.errors)
+
     def test_serializer_response_does_not_include_file_fields(self):
         asset = ProjectAsset.objects.create(
             project=self.project,
@@ -356,12 +451,38 @@ class ProjectAssetApiTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def _create_asset(self, project, name, asset_type):
-        schema = "totem" if asset_type == ProjectAsset.AssetType.TOTEM else "occn"
+        content_json = (
+            valid_totem_content_json()
+            if asset_type == ProjectAsset.AssetType.TOTEM
+            else valid_occn_content_json()
+        )
         return ProjectAsset.objects.create(
             project=project,
             name=name,
             asset_type=asset_type,
-            content_json={"schema": schema, "version": 1},
+            content_json=content_json,
+        )
+
+    def _upload_asset_file(
+        self,
+        content_json,
+        asset_type,
+        name="Uploaded model",
+        filename="mock.model",
+    ):
+        upload = SimpleUploadedFile(
+            filename,
+            json.dumps(content_json).encode("utf-8"),
+            content_type="application/octet-stream",
+        )
+        return self.client.post(
+            "/api/assets/",
+            {
+                "project": self.project.pk,
+                "name": name,
+                "asset_type": asset_type,
+                "file": upload,
+            },
         )
 
     def test_list_assets_only_returns_accessible_project_assets(self):
@@ -431,27 +552,29 @@ class ProjectAssetApiTests(TestCase):
         self.assertIn("asset_type", response.data)
 
     def test_create_asset_from_direct_content_json(self):
+        content_json = valid_totem_content_json()
         response = self.client.post(
             "/api/assets/",
             {
                 "project": self.project.pk,
                 "name": "API TOTeM",
                 "asset_type": ProjectAsset.AssetType.TOTEM,
-                "content_json": {"schema": "totem", "version": 1},
+                "content_json": content_json,
             },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         asset = ProjectAsset.objects.get(pk=response.data["id"])
-        self.assertEqual(asset.content_json, {"schema": "totem", "version": 1})
+        self.assertEqual(asset.content_json, content_json)
         self.assertEqual(asset.created_by, self.user)
 
     def test_create_asset_from_uploaded_json_file(self):
+        content_json = valid_occn_content_json()
         upload = SimpleUploadedFile(
-            "model.json",
-            b'{"schema": "occn", "version": 1}',
-            content_type="application/json",
+            "model.asset",
+            json.dumps(content_json).encode("utf-8"),
+            content_type="application/octet-stream",
         )
 
         response = self.client.post(
@@ -465,20 +588,108 @@ class ProjectAssetApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["content_json"], {"schema": "occn", "version": 1})
+        self.assertEqual(response.data["content_json"], content_json)
+
+    def test_upload_accepts_valid_totem_from_arbitrary_file_extension(self):
+        content_json = valid_totem_content_json()
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.TOTEM,
+            name="Verified TOTeM upload",
+            filename="mock.totem-model",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["content_json"], content_json)
+
+    def test_upload_accepts_valid_occn_from_arbitrary_file_extension(self):
+        content_json = valid_occn_content_json()
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.OCCN,
+            name="Verified OCCN upload",
+            filename="mock.occn-model",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["content_json"], content_json)
+
+    def test_upload_rejects_schema_type_mismatch(self):
+        response = self._upload_asset_file(
+            valid_occn_content_json(),
+            ProjectAsset.AssetType.TOTEM,
+            name="Mismatched schema upload",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("content_json", response.data)
+
+    def test_upload_rejects_missing_schema_marker(self):
+        content_json = valid_totem_content_json()
+        del content_json["schema"]
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.TOTEM,
+            name="Missing schema upload",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("content_json", response.data)
+
+    def test_upload_rejects_unsupported_schema_version(self):
+        content_json = valid_totem_content_json()
+        content_json["version"] = 2
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.TOTEM,
+            name="Unsupported version upload",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("content_json", response.data)
+
+    def test_upload_rejects_incomplete_totem_structure(self):
+        content_json = valid_totem_content_json()
+        del content_json["tempgraph"]
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.TOTEM,
+            name="Incomplete TOTeM upload",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("content_json", response.data)
+
+    def test_upload_rejects_occn_marker_without_matching_dependency_edge(self):
+        content_json = copy.deepcopy(valid_occn_content_json())
+        content_json["dependency_graph"]["edges"] = []
+
+        response = self._upload_asset_file(
+            content_json,
+            ProjectAsset.AssetType.OCCN,
+            name="Inconsistent OCCN upload",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("content_json", response.data)
 
     def test_retrieve_asset_scoped_to_user_project(self):
         own_asset = ProjectAsset.objects.create(
             project=self.project,
             name="Own model",
             asset_type=ProjectAsset.AssetType.TOTEM,
-            content_json={"schema": "totem", "version": 1},
+            content_json=valid_totem_content_json(),
         )
         foreign_asset = ProjectAsset.objects.create(
             project=self.other_project,
             name="Foreign model",
             asset_type=ProjectAsset.AssetType.TOTEM,
-            content_json={"schema": "totem", "version": 1},
+            content_json=valid_totem_content_json(),
         )
 
         own_response = self.client.get(f"/api/assets/{own_asset.pk}/")
@@ -507,7 +718,7 @@ class ProjectAssetApiTests(TestCase):
             project=self.project,
             name="Delete me",
             asset_type=ProjectAsset.AssetType.OCCN,
-            content_json={"schema": "occn", "version": 1},
+            content_json=valid_occn_content_json(),
         )
 
         response = self.client.delete(f"/api/assets/{asset.pk}/")
@@ -520,7 +731,7 @@ class ProjectAssetApiTests(TestCase):
             project=self.other_project,
             name="Foreign delete",
             asset_type=ProjectAsset.AssetType.OCCN,
-            content_json={"schema": "occn", "version": 1},
+            content_json=valid_occn_content_json(),
         )
 
         response = self.client.delete(f"/api/assets/{foreign_asset.pk}/")
