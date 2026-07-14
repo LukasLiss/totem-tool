@@ -6,7 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
@@ -19,7 +19,6 @@ export function DevDashboard() {
 
   return (
     <div>
-      <SidebarTrigger/>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <LogStatistics
           fileId={selectedFile?.id}

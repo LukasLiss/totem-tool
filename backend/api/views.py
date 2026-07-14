@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, FilterStackComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -17,7 +17,7 @@ from totem_lib.dfg import OCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
-from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel import OcelDuckDB, import_ocel_db, FilterStack, apply_filter_stack
 from types import SimpleNamespace
 import networkx as nx
 
@@ -254,6 +254,47 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response(types, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def activities(self, request, pk=None):
+        """Returns the sorted list of unique activity names in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                acts = _activities(db)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(acts, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def apply_filters(self, request, pk=None):
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        filters_data = request.data.get("filters", [])
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                filter_stack = FilterStack.from_dict({"filters": filters_data})
+                _, stats = apply_filter_stack(db, filter_stack)
+        except Exception as e:
+            return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "object_percentage":   stats["object_percentage"],
+            "object_count_before": stats["object_count_before"],
+            "object_count_after":  stats["object_count_after"],
+            "event_percentage":    stats["event_percentage"],
+            "event_count_before":  stats["event_count_before"],
+            "event_count_after":   stats["event_count_after"],
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -505,6 +546,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
+            elif component_name == 'FilterStackComponent':
+                FilterStackComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    filter_stack_json=item.get('filter_stack_json', []),
+                )
             # Add more as needed
 
         return Response({"status": "saved"})
@@ -652,6 +703,15 @@ def _object_types(db: OcelDuckDB) -> list[str]:
             "SELECT DISTINCT obj_type FROM objects"
         ).fetchall()
     )
+
+
+def _activities(db: OcelDuckDB) -> list[str]:
+    """Distinct activity names in the log (sorted, frontend-friendly)."""
+    return [
+        r[0] for r in db.conn.execute(
+            "SELECT DISTINCT activity FROM events ORDER BY activity"
+        ).fetchall()
+    ]
 
 
 def _layout_shim(db: OcelDuckDB):
