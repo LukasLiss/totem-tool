@@ -1,5 +1,6 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter } from "lucide-react"
-import { useContext } from 'react'
+import { ChevronRight, Database, FolderKanban, FileText } from "lucide-react"
+import { useContext } from "react"
+
 import {
   Collapsible,
   CollapsibleContent,
@@ -14,20 +15,17 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
-import { DashboardContext, AnalysisComponent } from "@/contexts/DashboardContext"
+import { DashboardContext } from "@/contexts/DashboardContext"
 
-const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarChart3 }[] = [
-  { id: 'processArea', label: 'Process Area', icon: BarChart3 },
-  { id: 'ocdfg', label: 'OC-DFG', icon: Network },
-  { id: 'variants', label: 'Variants', icon: GitBranch },
-  { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
-];
+const projectItems = [
+  { id: "overview", label: "Event Logs", icon: FileText },
+  { id: "modelAssets", label: "Model Assets", icon: Database },
+] as const;
 
-export function NavAnalysis() {
+export function NavProject() {
   const { viewMode, setViewMode } = useContext(DashboardContext);
-
-  const isAnalysisActive = viewMode.type === 'analysis';
-  const activeComponent = viewMode.type === 'analysis' ? viewMode.component : null;
+  const isProjectActive =
+    viewMode.type === "overview" || viewMode.type === "modelAssets";
 
   return (
     <SidebarGroup>
@@ -35,20 +33,19 @@ export function NavAnalysis() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Analysis Tools" data-active={isAnalysisActive}>
-                <BarChart3 />
-                <span>Analysis</span>
+              <SidebarMenuButton tooltip="Project" data-active={isProjectActive}>
+                <FolderKanban />
+                <span>Project</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
               </SidebarMenuButton>
             </CollapsibleTrigger>
-
             <CollapsibleContent>
               <SidebarMenuSub>
-                {analysisItems.map((item) => (
+                {projectItems.map((item) => (
                   <SidebarMenuSubItem key={item.id}>
                     <SidebarMenuSubButton
-                      onClick={() => setViewMode({ type: 'analysis', component: item.id })}
-                      data-active={activeComponent === item.id}
+                      onClick={() => setViewMode({ type: item.id })}
+                      data-active={viewMode.type === item.id}
                     >
                       <item.icon className="w-4 h-4" />
                       <span>{item.label}</span>
