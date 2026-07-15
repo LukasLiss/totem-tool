@@ -1,8 +1,8 @@
 import React, { useContext } from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
-import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
+import { useWorkspace } from "@/contexts/useWorkspace";
 import {
   Card,
   CardContent,
@@ -17,7 +17,7 @@ import DottedChart from "@/react_component/DottedChart";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
-  const { selectedFile } = useContext(SelectedFileContext);
+  const { selectedEventLog } = useWorkspace();
 
   if (viewMode.type !== 'analysis') return null;
 
@@ -26,7 +26,7 @@ export function AnalysisView() {
       case 'processArea':
         return (
           <div className="w-full max-w-7xl">
-            <ProcessArea fileId={selectedFile?.id} height={700} />
+            <ProcessArea fileId={selectedEventLog?.id} height={700} />
           </div>
         );
 
@@ -40,7 +40,7 @@ export function AnalysisView() {
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
-                  <NewOCDFGVariantsVisualizer height="100%" fileId={selectedFile?.id} />
+                  <NewOCDFGVariantsVisualizer height="100%" fileId={selectedEventLog?.id} />
                 </ReactFlowProvider>
               </CardContent>
             </Card>
@@ -57,7 +57,7 @@ export function AnalysisView() {
               </CardHeader>
               <CardContent className="p-0 pb-0">
                 <VariantsExplorer
-                  fileId={selectedFile?.id}
+                  fileId={selectedEventLog?.id}
                   colWidth={120}
                   embedded={true}
                 />
@@ -76,7 +76,7 @@ export function AnalysisView() {
               </CardHeader>
               <CardContent>
                 <DottedChart
-                  fileId={selectedFile?.id}
+                  fileId={selectedEventLog?.id}
                   xAxis={{ type: "time" }}
                   yAxis={{ type: "activity" }}
                   colorBy={{ type: "activity" }}

@@ -8,12 +8,50 @@ from .models import Dashboard
 from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
 from django.db.models import Max
 
+
+class ProjectSerializer(serializers.ModelSerializer):
+    display_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Project
+        fields = ["id", "name", "display_name", "created_at"]
+        read_only_fields = ["id", "display_name", "created_at"]
+        extra_kwargs = {
+            "name": {
+                "required": False,
+                "allow_blank": True,
+            },
+        }
+
+    def validate_name(self, value):
+        return value.strip()
+
+
 class EventLogSerializer(serializers.ModelSerializer):
-     class Meta:
-        #not including user to ensure security
+    project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
+
+    class Meta:
+        # Do not expose project membership through the event-log serializer.
         model = EventLog
-        fields = ["id", "project", "file", "uploaded_at"]
-        read_only_fields = ["project", "uploaded_at"]
+        fields = ["id", "project", "file", "uploaded_at", "updated_at"]
+        read_only_fields = ["uploaded_at", "updated_at"]
+
+    def validate_project(self, value):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError(
+                "Authenticated request context is required."
+            )
+        if not value.users.filter(pk=user.pk).exists():
+            raise serializers.ValidationError(
+                "You do not have access to this project."
+            )
+        if self.instance is not None and value.pk != self.instance.project_id:
+            raise serializers.ValidationError(
+                "An event log cannot be moved to another project."
+            )
+        return value
 
 
 class ProjectAssetSerializer(serializers.ModelSerializer):
@@ -145,11 +183,37 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         return content
 
 
+class ProjectAssetUploadValidationSerializer(serializers.Serializer):
+    asset_type = serializers.ChoiceField(choices=ProjectAsset.AssetType.choices)
+    file = serializers.FileField()
+
+    def validate(self, attrs):
+        content_json = ProjectAssetSerializer._parse_json_file(attrs["file"])
+        ProjectAssetSerializer._validate_content_json(
+            content_json,
+            attrs["asset_type"],
+        )
+        return attrs
+
+
 class DashboardSerializer(serializers.ModelSerializer):
     order_in_project = serializers.IntegerField(required=False)  
     class Meta:
         model = Dashboard
         fields = ['id', 'project', 'name', 'order_in_project', 'created_at']
+
+    def validate_project(self, value):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError(
+                "Authenticated request context is required."
+            )
+        if not value.users.filter(pk=user.pk).exists():
+            raise serializers.ValidationError(
+                "You do not have access to this project."
+            )
+        return value
 
     def create(self, validated_data):
         project = validated_data['project']

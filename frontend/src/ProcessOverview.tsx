@@ -5,7 +5,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "./contexts/DashboardContext"
-import { DevDashboard } from "./components/dev_dashboard";
+import { EventLogsView } from "./components/EventLogsView";
 import { AnalysisView } from "./components/AnalysisView";
 import { ConformancePlaceholderView } from "./components/ConformancePlaceholderView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
@@ -16,8 +16,8 @@ export function ProcessOverview() {
 
   const renderContent = () => {
     switch (viewMode.type) {
-      case 'overview':
-        return <DevDashboard />;
+      case 'eventLogs':
+        return <EventLogsView />;
       case 'analysis':
         return <AnalysisView />;
       case 'modelAssets':
@@ -27,7 +27,7 @@ export function ProcessOverview() {
       case 'dashboard':
         return <Grid />;
       default:
-        return <DevDashboard />;
+        return <EventLogsView />;
     }
   };
 

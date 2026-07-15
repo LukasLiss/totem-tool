@@ -36,8 +36,8 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
-import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
+import { useWorkspace } from "@/contexts/useWorkspace";
 import { useNavigate } from "react-router-dom";
 
 
@@ -65,12 +65,12 @@ export function NavDashboard({
 
 
 
-  const { selectedFile } = useContext(SelectedFileContext);
+  const { selectedProject } = useWorkspace();
   console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
-    if (!selectedFile?.project) return;
+    if (!selectedProject) return;
     try {
-      await addDashboard(dashboardname, selectedFile.project);
+      await addDashboard(dashboardname, selectedProject.id);
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field

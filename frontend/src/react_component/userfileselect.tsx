@@ -1,16 +1,16 @@
-import { useState, useEffect, useContext } from "react";
+import { useEffect, useState } from "react";
+import { CheckIcon, ChevronsUpDownIcon, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { getUserFiles } from "../api/fileApi";
-import { SelectedFileContext } from "../contexts/SelectedFileContext";
+
+import { listEventLogs, type EventLog } from "@/api/fileApi";
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardContent,
   CardFooter,
   CardHeader,
   CardTitle,
-  CardContent,
-} from "@/components/ui/card"
-import { cn } from "@/lib/utils";
+} from "@/components/ui/card";
 import {
   Command,
   CommandEmpty,
@@ -18,91 +18,103 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command"
+} from "@/components/ui/command";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
+import { useWorkspace } from "@/contexts/useWorkspace";
+import { cn } from "@/lib/utils";
 
+function eventLogName(eventLog: EventLog) {
+  return eventLog.file.split("/").pop() || `Event log ${eventLog.id}`;
+}
 
 function UserFileSelect() {
-    const [open, setOpen] = useState(false)
-    const [files, setFiles] = useState([])
-    const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
-    const navigate = useNavigate()
+  const [open, setOpen] = useState(false);
+  const [files, setFiles] = useState<EventLog[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const { selectedProject, selectedEventLog, selectEventLog } = useWorkspace();
+  const navigate = useNavigate();
 
-    useEffect(() => {
-        const fetchFiles = async () => {
-            try {
-                const response = await getUserFiles();
-                console.log("Fetched files:", response);
-                setFiles(response);
-                console.log("files",files)
-            } catch (error: any) {
-                console.error(error);
-            }
-        };
+  useEffect(() => {
+    if (!selectedProject) {
+      setFiles([]);
+      return;
+    }
 
-        fetchFiles();
-        }, [selectedFile]);
+    let cancelled = false;
+    setIsLoading(true);
+    listEventLogs(selectedProject.id)
+      .then((response) => {
+        if (!cancelled) setFiles(response);
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+        if (!cancelled) setFiles([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
-    const handleSubmit = () => {
-        const file = files.find((f) => f.id === Number(selectedFile.id));
-        if (file) {
-        setSelectedFile(file);
-        console.log("Saved to context:", file);
-        navigate("/overview");
-        }
+    return () => {
+      cancelled = true;
     };
+  }, [selectedProject, selectedEventLog?.id]);
 
-    return(
-    <Card className="flex-col w-full max-w-sm m-6">
+  return (
+    <Card className="h-full">
       <CardHeader>
-        <CardTitle>
-          Select File to work on
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <FileText className="size-5" />
+          Active event log
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col justify-end">
+      <CardContent className="space-y-3">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button
               variant="outline"
               role="combobox"
               aria-expanded={open}
-              className="w-[300px] justify-between"
+              className="w-full justify-between"
+              disabled={!selectedProject || isLoading}
             >
-              {selectedFile?.file
-                ? selectedFile.file.split("/").pop()
-                : "Select OCEL File"}
-              <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              <span className="truncate">
+                {selectedEventLog
+                  ? eventLogName(selectedEventLog)
+                  : isLoading
+                    ? "Loading event logs..."
+                    : "Select event log"}
+              </span>
+              <ChevronsUpDownIcon className="ml-2 size-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[300px] p-0">
+          <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
             <Command>
-              <CommandInput placeholder="Search files..." />
+              <CommandInput placeholder="Search event logs..." />
               <CommandList>
-                <CommandEmpty>No file found.</CommandEmpty>
+                <CommandEmpty>No event logs found.</CommandEmpty>
                 <CommandGroup>
                   {files.map((file) => (
                     <CommandItem
                       key={file.id}
-                      value={file.file}
+                      value={eventLogName(file)}
                       onSelect={() => {
-                        setSelectedFile(file)
+                        selectEventLog(file);
                         setOpen(false);
                       }}
                     >
                       <CheckIcon
                         className={cn(
-                          "mr-2 h-4 w-4",
-                          selectedFile?.id === file.id
+                          "mr-2 size-4",
+                          selectedEventLog?.id === file.id
                             ? "opacity-100"
-                            : "opacity-0"
+                            : "opacity-0",
                         )}
                       />
-                      {file.file.split("/").pop()}
+                      {eventLogName(file)}
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -111,14 +123,18 @@ function UserFileSelect() {
           </PopoverContent>
         </Popover>
 
-        <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
-          <Button className="w-full flex md:flex-row cursor-pointer transition hover:shadow-lg" onClick={handleSubmit}>
-              Open File
+        <CardFooter className="p-0">
+          <Button
+            className="w-full"
+            onClick={() => navigate("/overview")}
+            disabled={!selectedEventLog}
+          >
+            Open event log
           </Button>
         </CardFooter>
       </CardContent>
     </Card>
-    )
+  );
 }
 
-export default UserFileSelect
+export default UserFileSelect;

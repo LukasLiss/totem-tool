@@ -31,3 +31,4 @@ The Windows executable is built using Electron and includes everything needed to
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) - Development setup
 - [GIT_GUIDE.md](docs/GIT_GUIDE.md) - Git management guidelines
+- [MODEL_ASSETS.md](docs/MODEL_ASSETS.md) - Project model asset formats and upload behavior

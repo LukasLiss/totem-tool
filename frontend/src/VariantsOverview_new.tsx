@@ -1,7 +1,7 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import React, { useState, useContext, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { useWorkspace } from "./contexts/useWorkspace";
 import VariantsExplorer, { type Variant } from "./react_component/VariantsExplorer";
 
 import {
@@ -10,14 +10,14 @@ import {
 } from "@/components/ui/sidebar";
 
 export function VariantsOverview() {
-  const { selectedFile } = useContext(SelectedFileContext);
+  const { selectedEventLog } = useWorkspace();
   const [variants, setVariants] = useState<Variant[]>([]);
   const [status, setStatus] =
     useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    const fileId = (selectedFile as any)?.id as number | undefined;
+    const fileId = selectedEventLog?.id;
 
     // No file selected: reset and bail
     if (!fileId) {
@@ -45,10 +45,10 @@ export function VariantsOverview() {
           setVariants(safe);
           setStatus(safe.length ? "ready" : "empty");
         }
-      } catch (e: any) {
-        if (!cancelled && e?.name !== "AbortError") {
+      } catch (error: unknown) {
+        if (!cancelled && !axios.isCancel(error)) {
           setStatus("error");
-          setErrorMsg(e?.message ? String(e.message) : "Unknown error.");
+          setErrorMsg(error instanceof Error ? error.message : "Unknown error.");
         }
       }
     })();
@@ -57,7 +57,7 @@ export function VariantsOverview() {
       cancelled = true;
       ac.abort();
     };
-  }, [selectedFile?.id]); // only react to the chosen file's id
+  }, [selectedEventLog?.id]); // only react to the chosen event log's id
 
   return (
     <SidebarProvider>

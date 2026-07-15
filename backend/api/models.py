@@ -16,17 +16,26 @@ def project_directory_path(instance, filename):
 
 class Project(models.Model):
     users = models.ManyToManyField(User)
-    name = models.CharField(max_length=30)
+    name = models.CharField(max_length=100, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def display_name(self):
+        return self.name.strip() or f"Project {self.pk}"
+
     def __str__(self):
-        return f"{self.name}"
+        return self.display_name
 
 
 class EventLog(models.Model):
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="event_logs",
+    )
     file = models.FileField()
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"

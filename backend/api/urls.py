@@ -2,9 +2,10 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check
+from .views import ProjectViewSet, EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check
 
 router = DefaultRouter()
+router.register(r'projects', ProjectViewSet, basename="project")
 router.register(r'files', EventLogViewSet, basename="userfile")
 router.register(r'assets', ProjectAssetViewSet, basename="projectasset")
 router.register(r'dashboard', DashboardViewSet, basename="dashboard")

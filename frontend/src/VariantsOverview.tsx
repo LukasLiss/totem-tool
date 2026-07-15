@@ -1,6 +1,5 @@
 import { AppSidebar } from "@/components/app-sidebar"
-import { useContext } from "react";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { useWorkspace } from "./contexts/useWorkspace";
 import { NumberofEvents } from './react_component/numberofevents';
 import VariantsExplorer from './react_component/VariantsExplorer';
 import FileSelect from './react_component/fileselect';
@@ -22,7 +21,7 @@ import {
 
 
 export function VariantsOverview() {
-  const { selectedFile } = useContext(SelectedFileContext);
+  const { selectedEventLog } = useWorkspace();
 
   return (
     <SidebarProvider>
@@ -64,11 +63,11 @@ export function VariantsOverview() {
               <FileSelect />
             </div>
 
-            {selectedFile && (
-              <p className="mb-2 text-sm text-muted-foreground">Currently selected: {String((selectedFile as any).file || (selectedFile as any).name || "").split("/").pop()}</p>
+            {selectedEventLog && (
+              <p className="mb-2 text-sm text-muted-foreground">Currently selected: {selectedEventLog.file.split("/").pop()}</p>
             )}
 
-            <VariantsExplorer fileId={selectedFile?.id} />
+            <VariantsExplorer fileId={selectedEventLog?.id} />
           </div>
         </div>
       </SidebarInset>

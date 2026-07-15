@@ -17,7 +17,7 @@ export interface ProjectAsset {
 }
 
 export interface ListAssetsParams {
-  projectId?: number;
+  projectId: number;
   assetType?: AssetType;
 }
 
@@ -27,6 +27,11 @@ export interface UploadAssetParams {
   assetType: AssetType;
   file: File;
   metadata?: ProjectAssetMetadata;
+}
+
+export interface ValidateAssetUploadParams {
+  assetType: AssetType;
+  file: File;
 }
 
 export interface CreateAssetParams {
@@ -50,11 +55,9 @@ export interface AssetApiError {
 
 const ASSETS_URL = "http://localhost:8000/api/assets/";
 
-export async function listAssets(params: ListAssetsParams = {}) {
+export async function listAssets(params: ListAssetsParams) {
   const queryParams = new URLSearchParams();
-  if (params.projectId !== undefined) {
-    queryParams.set("project", String(params.projectId));
-  }
+  queryParams.set("project", String(params.projectId));
   if (params.assetType) {
     queryParams.set("asset_type", params.assetType);
   }
@@ -83,6 +86,13 @@ export async function uploadAsset(params: UploadAssetParams) {
 
   const { data } = await axios.post<ProjectAsset>(ASSETS_URL, formData);
   return data;
+}
+
+export async function validateAssetUpload(params: ValidateAssetUploadParams) {
+  const formData = new FormData();
+  formData.append("asset_type", params.assetType);
+  formData.append("file", params.file);
+  await axios.post(`${ASSETS_URL}validate/`, formData);
 }
 
 export async function createAsset(params: CreateAssetParams) {

@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
-from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .serializers import ProjectSerializer, EventLogSerializer, ProjectAssetSerializer, ProjectAssetUploadValidationSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -205,24 +205,55 @@ def health_check(request):
     return Response({"status": "ok", "message": "Backend is running."})
 
 
+class ProjectViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_queryset(self):
+        return Project.objects.filter(users=self.request.user).order_by("id")
+
+    def perform_create(self, serializer):
+        project = serializer.save()
+        project.users.add(self.request.user)
+
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return EventLog.objects.filter(project__users=self.request.user)
-    
+        queryset = EventLog.objects.filter(project__users=self.request.user)
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            try:
+                project_id = int(project_id)
+            except (TypeError, ValueError):
+                return queryset.none()
+            queryset = queryset.filter(project_id=project_id)
+        return queryset.order_by("id")
+
+    def list(self, request, *args, **kwargs):
+        project_id = request.query_params.get("project")
+        if project_id:
+            try:
+                int(project_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"project": "Project must be identified by an integer id."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        return super().list(request, *args, **kwargs)
+
     def perform_create(self, serializer):
+        serializer.save()
 
-        user = self.request.user
-
-        file_name = serializer.validated_data['file'].name
-        project_name = f"{slugify(file_name)}_{user.username}"    
-
-        project = Project.objects.create(name=project_name)
-        project.users.add(user)
-        project.save()
-        serializer.save(project=project)
+    def perform_destroy(self, instance):
+        file_name = instance.file.name
+        storage = instance.file.storage
+        super().perform_destroy(instance)
+        if file_name:
+            storage.delete(file_name)
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):
@@ -434,6 +465,12 @@ class ProjectAssetViewSet(viewsets.ModelViewSet):
             )
         return super().list(request, *args, **kwargs)
 
+    @action(detail=False, methods=["post"], url_path="validate")
+    def validate_upload(self, request):
+        serializer = ProjectAssetUploadValidationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response({"valid": True}, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
         asset = self.get_object()
@@ -453,11 +490,6 @@ class DashboardViewSet(viewsets.ModelViewSet):
         if project_id:
             qs = qs.filter(project_id=project_id)
         return qs
-    
-    def perform_create(self, serializer):
-        project_id = self.request.data.get("project")
-        project = Project.objects.get(id=project_id, users=self.request.user)
-        serializer.save(project=project)
     
     @action(detail=True, methods=["PATCH"])
     def rename(self, request, pk=None):

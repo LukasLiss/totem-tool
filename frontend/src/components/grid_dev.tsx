@@ -10,7 +10,6 @@ import GridContainer from "../gridstack/lib/grid_container";
 import { useGrid } from "../gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
-import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
 
 // Type-safe layout items
@@ -19,8 +18,6 @@ import { useGridMode } from '../gridstack/lib/gridstackprovider';
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
   const { viewMode } = useContext(DashboardContext);
-  const { selectedFile } = useContext(SelectedFileContext);
-
   // Extract dashboard ID when in dashboard mode
   const selectedDashboard = viewMode.type === 'dashboard' ? viewMode.id : null;
 

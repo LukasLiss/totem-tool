@@ -4,7 +4,7 @@ export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedCh
 export type ConformanceComponent = 'totem' | 'occn';
 
 export type ViewMode =
-  | { type: 'overview' }
+  | { type: 'eventLogs' }
   | { type: 'modelAssets' }
   | { type: 'analysis'; component: AnalysisComponent }
   | { type: 'conformance'; component: ConformanceComponent }
@@ -16,12 +16,12 @@ type DashboardContextType = {
 };
 
 export const DashboardContext = createContext<DashboardContextType>({
-  viewMode: { type: 'overview' },
+  viewMode: { type: 'eventLogs' },
   setViewMode: () => {},
 });
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [viewMode, setViewMode] = useState<ViewMode>({ type: 'overview' });
+  const [viewMode, setViewMode] = useState<ViewMode>({ type: 'eventLogs' });
 
   return (
     <DashboardContext.Provider value={{ viewMode, setViewMode }}>

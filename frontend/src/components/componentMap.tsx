@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
@@ -12,7 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { GridStackNode } from 'gridstack';
-import { SelectedFileContext } from '@/contexts/SelectedFileContext';
+import type { EventLog } from '@/api/fileApi';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
@@ -90,7 +90,7 @@ interface ComponentProps {
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
   dashboardId: number;  // Added for API calls
-  selectedFile?: { id: number; [key: string]: any }; // Selected event log file
+  selectedFile?: EventLog | null;
 }
 
 
