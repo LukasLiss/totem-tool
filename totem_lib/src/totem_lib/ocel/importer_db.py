@@ -512,20 +512,22 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
     tree = ET.parse(file_path)
     root = tree.getroot()
 
-    events_elem  = root.find("events")  or []
-    objects_elem = root.find("objects") or []
+    events_elem = root.find("events")
+    objects_elem = root.find("objects")
+    events = list(events_elem) if events_elem is not None else []
+    objects = list(objects_elem) if objects_elem is not None else []
 
     event_attr_cols = sorted({
         ae.get("name")
-        for ev in events_elem
-        for ae in ev.findall("attribute")
-        if ae.get("value") is not None and ae.get("name")
+        for ev in events
+        for ae in _xml_attribute_elements(ev)
+        if _xml_attr_value(ae) is not None and ae.get("name")
     })
     obj_attr_cols = sorted({
         ae.get("name")
-        for ob in objects_elem
-        for ae in ob.findall("attribute")
-        if ae.get("value") is not None and ae.get("name")
+        for ob in objects
+        for ae in _xml_attribute_elements(ob)
+        if _xml_attr_value(ae) is not None and ae.get("name")
     })
 
     conn = duckdb.connect(db_path)
@@ -540,15 +542,15 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
     eo_obj_ids: list[str] = []
     eo_quals: list[str | None] = []
 
-    for ev_elem in events_elem:
+    for ev_elem in events:
         ev_id = ev_elem.get("id", "")
         ev_ids.append(ev_id)
         activities.append(ev_elem.get("type", ""))
         timestamps.append(_parse_ts(ev_elem.get("time", "")))
         attr_map = {
-            ae.get("name"): str(ae.get("value"))
-            for ae in ev_elem.findall("attribute")
-            if ae.get("value") is not None and ae.get("name") in event_attr_cols
+            ae.get("name"): str(_xml_attr_value(ae))
+            for ae in _xml_attribute_elements(ev_elem)
+            if _xml_attr_value(ae) is not None and ae.get("name") in event_attr_cols
         }
         for c in event_attr_cols:
             ev_attr[c].append(attr_map.get(c))
@@ -587,20 +589,20 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
     o2o_tgt: list[str] = []
     o2o_qual: list[str | None] = []
 
-    for ob_elem in objects_elem:
+    for ob_elem in objects:
         obj_id = ob_elem.get("id", "")
         obj_ids.append(obj_id)
         obj_types_list.append(ob_elem.get("type", ""))
 
         snapshots = sorted(
-            ob_elem.findall("attribute"),
+            _xml_attribute_elements(ob_elem),
             key=lambda ae: ae.get("time") or ""
         )
         latest: dict[str, str] = {}
         snap_map: dict[int, dict[str, str]] = {}
         for ae in snapshots:
             name = ae.get("name")
-            val  = ae.get("value")
+            val  = _xml_attr_value(ae)
             if name and val is not None and name in obj_attr_cols:
                 latest[name] = str(val)
                 snap_map.setdefault(_parse_ts(ae.get("time") or ""), {})[name] = str(val)
@@ -1129,6 +1131,18 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuc
 # XML (ET.iterparse streaming)
 # ---------------------------------------------------------------------------
 
+def _xml_attribute_elements(elem: ET.Element) -> list[ET.Element]:
+    return [*elem.findall("attribute"), *elem.findall("attributes/attribute")]
+
+
+def _xml_attr_value(elem: ET.Element) -> str | None:
+    value = elem.get("value")
+    if value is not None:
+        return value
+    text = elem.text.strip() if elem.text else ""
+    return text or None
+
+
 def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
     # --- Pass 1: collect attribute column names ---
     # Only collect names from data attributes (those with a "value" attr),
@@ -1159,7 +1173,7 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
                 _in_event = False
             elif elem.tag == "object":
                 _in_object = False
-            elif elem.tag == "attribute" and elem.get("value") is not None:
+            elif elem.tag == "attribute" and _xml_attr_value(elem) is not None:
                 name = elem.get("name")
                 if name:
                     if _in_event:
@@ -1223,9 +1237,9 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
             elif elem.tag == "objects" and not _in_event and not _in_object:
                 _in_top_objects = False
 
-            elif elem.tag == "attribute" and elem.get("value") is not None:
+            elif elem.tag == "attribute" and _xml_attr_value(elem) is not None:
                 name = elem.get("name")
-                val  = elem.get("value")
+                val  = _xml_attr_value(elem)
                 ts   = elem.get("time")
                 if _in_event and name and name in event_attr_cols_sorted:
                     cur_event["attrs"][name] = str(val) if val is not None else None

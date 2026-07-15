@@ -6,7 +6,16 @@ from .ocel import (
 )
 from .totem import totemDiscovery, Totem, mlpaDiscovery
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
-from .occn import OCCausalNet, OCCausalNetState, OCCausalNetSemantics, discover_occn, occn_playout
+from .occn import (
+    OCCausalNet,
+    OCCausalNetState,
+    OCCausalNetSemantics,
+    OCCNContextDetail,
+    OCCNPrecisionResult,
+    discover_occn,
+    occn_playout,
+    occn_precision,
+)
 from .dfg import OCDFG, CCDFG
 from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_distance
 
@@ -28,7 +37,10 @@ __all__ = [
     "OCCausalNet",
     "OCCausalNetSemantics",
     "OCCausalNetState",
+    "OCCNContextDetail",
+    "OCCNPrecisionResult",
     "occn_playout",
+    "occn_precision",
     "OCDFG",
     "ocpns_are_similar",
     "mlpaDiscovery",
