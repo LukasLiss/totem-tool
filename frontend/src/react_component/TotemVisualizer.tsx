@@ -5284,7 +5284,7 @@ function TotemVisualizer({
 
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
-        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
           `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`
         );
         if (payload?.filter_error || payload?.error) {

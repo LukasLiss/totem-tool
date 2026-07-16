@@ -2,6 +2,7 @@ from .totem import (
     Totem,
     get_most_precise_lc,
     get_most_precise_ec,
+    has_valid_event_cardinality_pair,
     get_most_precise_tr,
     TR_TOTAL,
     TR_DEPENDENT,
@@ -279,6 +280,8 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         lc_i = get_most_precise_lc((t2, t1), tau, h_log_cardinalities)
         ec   = get_most_precise_ec((t1, t2), tau, h_event_cardinalities)
         ec_i = get_most_precise_ec((t2, t1), tau, h_event_cardinalities)
+        if not has_valid_event_cardinality_pair(ec, ec_i, tau):
+            continue
         tr   = get_most_precise_tr((t1, t2), tau, h_temporal_relations)
         tr_i = get_most_precise_tr((t2, t1), tau, h_temporal_relations)
 

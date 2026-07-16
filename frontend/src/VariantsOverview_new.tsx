@@ -72,7 +72,7 @@ export function VariantsOverview() {
             </div>
           )}
           {status === "empty" && <div>No variants for this file.</div>}
-          {status === "ready" && <VariantsExplorer variants={variants} />}
+          {status === "ready" && <VariantsExplorer fileId={selectedFile?.id} automaticLoading />}
         </div>
       </SidebarInset>
     </SidebarProvider>
