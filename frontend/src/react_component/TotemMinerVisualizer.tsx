@@ -40,6 +40,17 @@ type TotemCardinality = {
   event_cardinality: string | null;
 };
 
+type TotemRelationStat = {
+  from: string;
+  to: string;
+  lc_total: number;
+  ec_total: number;
+  tr_total: number;
+  lc_percentages: Record<string, number>;
+  ec_percentages: Record<string, number>;
+  tr_percentages: Record<string, number>;
+};
+
 type TotemApiResponse = {
   tempgraph: {
     nodes?: string[];
@@ -49,6 +60,7 @@ type TotemApiResponse = {
   type_relations?: Array<string[]>;
   all_event_types?: string[];
   object_type_to_event_types?: Record<string, string[]>;
+  relations_stats?: TotemRelationStat[];
 };
 
 type RelationType = 'D' | 'P' | 'I' | 'A' | 'Di' | string;
@@ -91,6 +103,7 @@ type TotemMinerVisualizerProps = {
   height?: string | number;
   backendBaseUrl?: string;
   reloadSignal?: number;
+  relayoutSignal?: number;
   title?: string;
   topInset?: number;
   embedded?: boolean;
@@ -152,6 +165,59 @@ function makeBubbleLabel(ec: string | null | undefined, lc: string | null | unde
   };
   return `${side(ec)}|${side(lc)}`;
 }
+
+// Helper functions for frontend relation discovery based on tau
+function getMostPreciseLc(
+  lcPercentages: Record<string, number> | undefined,
+  tau: number
+): string {
+  if (!lcPercentages) return 'None';
+  if (lcPercentages['0'] >= tau) return '0';
+  if (lcPercentages['1'] >= tau) return '1';
+  if (lcPercentages['0...1'] >= tau) return '0...1';
+  if (lcPercentages['1..*'] >= tau) return '1..*';
+  if (lcPercentages['0...*'] >= tau) return '0...*';
+  return 'None';
+}
+
+function getMostPreciseEc(
+  ecPercentages: Record<string, number> | undefined,
+  tau: number
+): string {
+  if (!ecPercentages) return 'None';
+  if (ecPercentages['0'] >= tau) return '0';
+  if (ecPercentages['1'] >= tau) return '1';
+  if (ecPercentages['0...1'] >= tau) return '0...1';
+  if (ecPercentages['1..*'] >= tau) return '1..*';
+  if (ecPercentages['0...*'] >= tau) return '0...*';
+  return 'None';
+}
+
+function hasValidEventCardinalityPair(
+  ec: string,
+  inverseEc: string,
+  tau: number
+): boolean {
+  if (tau < 1) return true;
+  return !(
+    (ec === '1' && inverseEc === '0') ||
+    (ec === '0' && inverseEc === '1')
+  );
+}
+
+function getMostPreciseTr(
+  trPercentages: Record<string, number> | undefined,
+  tau: number
+): string {
+  if (!trPercentages) return 'None';
+  if (trPercentages['D'] >= tau) return 'D';
+  if (trPercentages['Di'] >= tau) return 'Di';
+  if (trPercentages['I'] >= tau) return 'I';
+  if (trPercentages['Ii'] >= tau) return 'Ii';
+  if (trPercentages['P'] >= tau) return 'P';
+  return 'None';
+}
+
 
 // ─── Extract edges from tempgraph ────────────────────────────────────────────
 
@@ -458,6 +524,7 @@ function TotemMinerVisualizer({
   height = '100%',
   backendBaseUrl = DEFAULT_BACKEND,
   reloadSignal,
+  relayoutSignal,
   embedded = false,
   onControlsReady,
   tau = 0.5,
@@ -485,6 +552,10 @@ function TotemMinerVisualizer({
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   manualPositionsRef.current = manualNodePositions;
 
+  const [layoutPositions, setLayoutPositions] = useState<Map<string, { x: number; y: number }>>(
+    () => new Map(),
+  );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
 
@@ -496,9 +567,8 @@ function TotemMinerVisualizer({
     setLoading(true);
     setError(null);
     try {
-      const tauParam = Math.max(0, Math.min(1, tau)).toFixed(3);
       const { data } = await axios.get<TotemApiResponse>(
-        `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/?tau=${tauParam}`,
+        `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
       );
       setRawData(data);
     } catch (err) {
@@ -507,7 +577,7 @@ function TotemMinerVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, tau]);
+  }, [backendBaseUrl, eventLogId]);
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
 
@@ -524,10 +594,79 @@ function TotemMinerVisualizer({
   }, []);
 
   // ── Build graph data ─────────────────────────────────────────────────────────
-  const { nodeIds, edges, colorMap } = useMemo(() => {
-    if (!rawData?.tempgraph) return { nodeIds: [], edges: [], colorMap: {} };
-    const nodeIds = (rawData.tempgraph.nodes as string[]) ?? [];
-    const edges = extractEdges(rawData.tempgraph, rawData.cardinalities ?? []);
+  const { nodeIds, edges, colorMap, rawCardinalities } = useMemo(() => {
+    if (!rawData) return { nodeIds: [], edges: [], colorMap: {}, rawCardinalities: [] };
+
+    const nodes = new Set<string>();
+    const tempgraph: Record<string, string[][]> = {
+      P: [],
+      I: [],
+      D: []
+    };
+    const cardinalities: TotemCardinality[] = [];
+
+    const typeRelations = rawData.type_relations || [];
+    const relationsData = rawData.relations_stats || [];
+
+    const relMap = new Map<string, any>();
+    relationsData.forEach((rel) => {
+      relMap.set(`${rel.from}→${rel.to}`, rel);
+    });
+
+    typeRelations.forEach((pair) => {
+      if (pair.length < 2) return;
+      const [t1, t2] = pair;
+      nodes.add(t1);
+      nodes.add(t2);
+
+      const rel12 = relMap.get(`${t1}→${t2}`);
+      const rel21 = relMap.get(`${t2}→${t1}`);
+
+      const lc = getMostPreciseLc(rel12?.lc_percentages, tau);
+      const lc_i = getMostPreciseLc(rel21?.lc_percentages, tau);
+      const ec = getMostPreciseEc(rel12?.ec_percentages, tau);
+      const ec_i = getMostPreciseEc(rel21?.ec_percentages, tau);
+
+      if (!hasValidEventCardinalityPair(ec, ec_i, tau)) {
+        return;
+      }
+
+      const tr = getMostPreciseTr(rel12?.tr_percentages, tau);
+      const tr_i = getMostPreciseTr(rel21?.tr_percentages, tau);
+
+      if (tr === 'Di' || tr === 'Ii') {
+        const inverseTr = tr === 'Di' ? 'D' : 'I';
+        if (tr_i && (tr_i === 'D' || tr_i === 'I' || tr_i === 'P')) {
+          tempgraph[tr_i] = tempgraph[tr_i] || [];
+          tempgraph[tr_i].push([t2, t1]);
+        } else {
+          tempgraph[inverseTr] = tempgraph[inverseTr] || [];
+          tempgraph[inverseTr].push([t2, t1]);
+        }
+      } else {
+        if (tr && (tr === 'D' || tr === 'I' || tr === 'P')) {
+          tempgraph[tr] = tempgraph[tr] || [];
+          tempgraph[tr].push([t1, t2]);
+        }
+      }
+
+      cardinalities.push({
+        from: t1,
+        to: t2,
+        log_cardinality: lc === 'None' ? null : lc,
+        event_cardinality: ec === 'None' ? null : ec
+      });
+      cardinalities.push({
+        from: t2,
+        to: t1,
+        log_cardinality: lc_i === 'None' ? null : lc_i,
+        event_cardinality: ec_i === 'None' ? null : ec_i
+      });
+    });
+
+    const nodeIds = Array.from(nodes).sort();
+    const edges = extractEdges(tempgraph, cardinalities);
+
     const colorMap = mapTypesToColors(nodeIds, {
       'Forklift': '#f59e0b',
       'Vehicle': '#22c55e',
@@ -537,8 +676,9 @@ function TotemMinerVisualizer({
       'Handling Unit': '#7c3aed',
       'Truck': '#06b6d4',
     });
-    return { nodeIds, edges, colorMap };
-  }, [rawData]);
+
+    return { nodeIds, edges, colorMap, rawCardinalities: cardinalities };
+  }, [rawData, tau]);
 
   // Node widths (auto-sized to label)
   const widthMap = useMemo(
@@ -546,22 +686,43 @@ function TotemMinerVisualizer({
     [nodeIds],
   );
 
-  // ── Hierarchical layout ──────────────────────────────────────────────────────
-  const layoutMap = useMemo(
-    () => computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap),
-    [nodeIds, edges, svgSize.width, svgSize.height, widthMap],
-  );
+  // ── Hierarchical layout & Relayout controls ──────────────────────────────────
+  const handleRelayout = useCallback(() => {
+    if (nodeIds.length === 0) return;
+    const newLayout = computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap);
+    setLayoutPositions(newLayout);
+    setManualNodePositions(new Map());
+  }, [nodeIds, edges, svgSize, widthMap]);
+
+  useEffect(() => {
+    if (relayoutSignal && relayoutSignal > 0) {
+      handleRelayout();
+    }
+  }, [relayoutSignal, handleRelayout]);
+
+  // Run layout on initial load or if layoutPositions is empty
+  useEffect(() => {
+    if (nodeIds.length > 0 && layoutPositions.size === 0) {
+      const initialLayout = computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap);
+      setLayoutPositions(initialLayout);
+    }
+  }, [nodeIds, edges, svgSize, widthMap, layoutPositions.size]);
+
+  useEffect(() => {
+    setLayoutPositions(new Map());
+    setManualNodePositions(new Map());
+  }, [eventLogId]);
 
   const layoutNodes: LayoutNode[] = useMemo(
     () =>
       nodeIds.map((id) => {
-        // Manual positions override the automatic layout until the model changes.
-        const pos = manualNodePositions.get(id) ?? layoutMap.get(id) ?? { x: 100, y: 100 };
+        // Manual positions override the layout positions.
+        const pos = manualNodePositions.get(id) ?? layoutPositions.get(id) ?? { x: 100, y: 100 };
         const color = colorMap[id] ?? '#2563eb';
         const textColor = textColorForBackground(color, { minContrast: 3.8, gradientSamples: [] });
         return { id, x: pos.x, y: pos.y, width: widthMap.get(id) ?? 80, height: NODE_H, color, textColor };
       }),
-    [nodeIds, layoutMap, colorMap, widthMap, manualNodePositions],
+    [nodeIds, layoutPositions, colorMap, widthMap, manualNodePositions],
   );
 
   const nodePos = useMemo(
@@ -599,7 +760,7 @@ function TotemMinerVisualizer({
       x: (svgSize.width - gW * newZoom) / 2 - minX * newZoom,
       y: (svgSize.height - gH * newZoom) / 2 - minY * newZoom,
     });
-  }, [layoutMap, layoutNodes, svgSize]);
+  }, [layoutPositions, layoutNodes, svgSize]);
 
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -762,6 +923,9 @@ function TotemMinerVisualizer({
 
   // ── Render edges ─────────────────────────────────────────────────────────────
   const renderedEdges = useMemo(() => {
+    const cardMap = new Map<string, TotemCardinality>();
+    rawCardinalities.forEach((c) => cardMap.set(`${c.from}→${c.to}`, c));
+
     // Keep track of occupied space to avoid overlaps
     const occupiedRects: { x1: number; y1: number; x2: number; y2: number }[] = [];
     
@@ -811,7 +975,20 @@ function TotemMinerVisualizer({
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
       let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
       let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
-      const bubbleW = edge.bubbleLabel ? Math.max(40, estimateTextWidth(edge.bubbleLabel, FONT_SIZE_BUBBLE) + 16) : 0;
+
+      const formatShortEc = (v: string | null | undefined) => {
+        if (!v) return '0';
+        const s = v.trim();
+        return s.startsWith('0') ? '0' : '1';
+      };
+
+      const ecFromTo = cardMap.get(`${edge.from}→${edge.to}`)?.event_cardinality;
+      const ecToFrom = cardMap.get(`${edge.to}→${edge.from}`)?.event_cardinality;
+      const isSrcLeft = src.x <= tgt.x;
+      const leftVal = isSrcLeft ? ecFromTo : ecToFrom;
+      const rightVal = isSrcLeft ? ecToFrom : ecFromTo;
+      const bubbleLabel = `${formatShortEc(leftVal)}|${formatShortEc(rightVal)}`;
+      const bubbleW = Math.max(40, estimateTextWidth(bubbleLabel, FONT_SIZE_BUBBLE) + 16);
       
       if (bubbleW > 0) {
         const shifts = [0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
@@ -888,7 +1065,7 @@ function TotemMinerVisualizer({
          occupiedRects.push({ x1: tgtLText.x - tgtW/2, y1: tgtLText.y - 8, x2: tgtLText.x + tgtW/2, y2: tgtLText.y + 8 });
       }
 
-      return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW };
+      return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW, bubbleLabel };
     }).filter(Boolean) as any[];
 
     return (
@@ -962,7 +1139,7 @@ function TotemMinerVisualizer({
             )}
 
             {/* Midpoint oval bubble (EC|LC) */}
-            {d.edge.bubbleLabel && (
+            {d.bubbleLabel && (
               <g>
                 <ellipse
                   cx={d.midPt.x}
@@ -983,7 +1160,7 @@ function TotemMinerVisualizer({
                   fontWeight="600"
                   fill={d.color}
                 >
-                  {d.edge.bubbleLabel}
+                  {d.bubbleLabel}
                 </text>
               </g>
             )}
@@ -991,7 +1168,7 @@ function TotemMinerVisualizer({
         ))}
       </>
     );
-  }, [edges, nodePos, edgeCurvatures]);
+  }, [edges, nodePos, edgeCurvatures, rawCardinalities]);
 
   // ── Render nodes ─────────────────────────────────────────────────────────────
   const renderedNodes = useMemo(() =>
@@ -1123,9 +1300,9 @@ function TotemMinerVisualizer({
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
         <CardTitle>TOTeM Model</CardTitle>
         <CardAction className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={fetchData} disabled={!eventLogId} className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleRelayout} disabled={!eventLogId} className="flex items-center gap-2">
             <RefreshCcw className="h-4 w-4" />
-            Reload
+            Relayout
           </Button>
         </CardAction>
       </CardHeader>

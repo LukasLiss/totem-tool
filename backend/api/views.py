@@ -264,21 +264,14 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            # Read optional tau threshold (default 0.5, clamped to [0, 1])
-            try:
-                tau = float(request.query_params.get("tau", 0.5))
-                tau = max(0.0, min(1.0, tau))
-            except (TypeError, ValueError):
-                tau = 0.5
-
-            # Cache key includes tau so different thresholds cache separately
-            cache_key = f"totem_discovery_{user_file.pk}_tau_{tau:.3f}"
+            cache_key = f"totem_discovery_full_{user_file.pk}"
             cached_result = cache.get(cache_key)
             if cached_result:
                 return Response(cached_result, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                totem = totemDiscovery_db(db, tau=tau)
+                # Always run with tau=0.0 to get full relations for frontend filtering
+                totem = totemDiscovery_db(db, tau=0.0)
             serialized = _serialize_totem(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
@@ -851,12 +844,59 @@ def _serialize_totem(totem: Totem) -> dict:
         else:
             object_type_to_event_types[obj_type] = []
 
+    h_log = getattr(totem, "h_log_cardinalities", {})
+    h_event = getattr(totem, "h_event_cardinalities", {})
+    h_tr = getattr(totem, "h_temporal_relations", {})
+
+    relations_stats = []
+    # Find all pairs (from, to) from these dicts
+    all_pairs = set(h_log.keys()) | set(h_event.keys()) | set(h_tr.keys())
+
+    for t1, t2 in all_pairs:
+        log_card = h_log.get((t1, t2), {})
+        event_card = h_event.get((t1, t2), {})
+        tr_rel = h_tr.get((t1, t2), {})
+
+        lc_total = log_card.get("total", 0)
+        ec_total = event_card.get("total", 0)
+        tr_total = tr_rel.get("total", 0)
+
+        lc_pct = {}
+        if lc_total > 0:
+            for k in ["0", "1", "0...1", "1..*", "0...*"]:
+                if k in log_card:
+                    lc_pct[k] = log_card[k] / lc_total
+
+        ec_pct = {}
+        if ec_total > 0:
+            for k in ["0", "1", "0...1", "1..*", "0...*"]:
+                if k in event_card:
+                    ec_pct[k] = event_card[k] / ec_total
+
+        tr_pct = {}
+        if tr_total > 0:
+            for k in ["D", "Di", "I", "Ii", "P"]:
+                if k in tr_rel:
+                    tr_pct[k] = tr_rel[k] / tr_total
+
+        relations_stats.append({
+            "from": t1,
+            "to": t2,
+            "lc_total": lc_total,
+            "ec_total": ec_total,
+            "tr_total": tr_total,
+            "lc_percentages": lc_pct,
+            "ec_percentages": ec_pct,
+            "tr_percentages": tr_pct
+        })
+
     return {
         "tempgraph": tempgraph,
         "cardinalities": cardinalities,
         "type_relations": type_relations,
         "all_event_types": all_event_types,
         "object_type_to_event_types": object_type_to_event_types,
+        "relations_stats": relations_stats,
     }
 
 
