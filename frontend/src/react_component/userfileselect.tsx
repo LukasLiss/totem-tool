@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
 import { CheckIcon, ChevronsUpDownIcon, FileText } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 
 import { listEventLogs, type EventLog } from "@/api/fileApi";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -36,7 +34,6 @@ function UserFileSelect() {
   const [files, setFiles] = useState<EventLog[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const { selectedProject, selectedEventLog, selectEventLog } = useWorkspace();
-  const navigate = useNavigate();
 
   useEffect(() => {
     if (!selectedProject) {
@@ -122,16 +119,6 @@ function UserFileSelect() {
             </Command>
           </PopoverContent>
         </Popover>
-
-        <CardFooter className="p-0">
-          <Button
-            className="w-full"
-            onClick={() => navigate("/overview")}
-            disabled={!selectedEventLog}
-          >
-            Open event log
-          </Button>
-        </CardFooter>
       </CardContent>
     </Card>
   );

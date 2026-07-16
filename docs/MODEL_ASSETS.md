@@ -44,6 +44,11 @@ The initial Project Workspace screen exposes four operations:
 - Upload a TOTeM or OCCN model into the selected project.
 - Select the active event log used by analysis and conformance views.
 
+One project-level `Launch project` action sits below these operations. It only
+requires a selected project; an event log is not required. Launching opens the
+Project area at Event Logs management, including for empty or model-only
+projects.
+
 When a selected project contains exactly one event log, that log becomes active
 automatically. Projects with no logs or multiple logs require no selection or an
 explicit selection, respectively. Event logs can be deleted from the Event Logs
