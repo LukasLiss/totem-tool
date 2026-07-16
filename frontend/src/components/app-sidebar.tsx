@@ -24,6 +24,7 @@ import { getUserFiles } from "../api/fileApi"
 import { NavAnalysis } from "./nav-analysis";
 import { NavProject } from "./nav-project";
 import { NavConformance } from "./nav-conformance";
+import { NavEditor } from "./nav-editor";
 import { getDashboards } from "@/api/dashboardApi";
 import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -97,6 +98,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             }
           }}
         />
+        <NavEditor />
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>

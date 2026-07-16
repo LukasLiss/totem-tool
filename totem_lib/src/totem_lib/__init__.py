@@ -14,12 +14,15 @@ from .totem import (
 )
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import (
-    discover_occn,
     OCCausalNet,
     OCCausalNetSemantics,
     OCCausalNetState,
+    OCCNContextDetail,
+    OCCNPrecisionResult,
+    discover_occn,
     occn_from_dict,
     occn_playout,
+    occn_precision,
     occn_to_dict,
     validate_occn_dict,
 )
@@ -44,8 +47,11 @@ __all__ = [
     "OCCausalNet",
     "OCCausalNetSemantics",
     "OCCausalNetState",
+    "OCCNContextDetail",
+    "OCCNPrecisionResult",
     "occn_from_dict",
     "occn_playout",
+    "occn_precision",
     "occn_to_dict",
     "OCDFG",
     "ocpns_are_similar",
