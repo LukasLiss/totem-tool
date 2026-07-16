@@ -25,8 +25,8 @@ export default function TotemMiner({
   height = 600,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
-  const [tau, setTau] = useState(0.5);
-  const [sliderTau, setSliderTau] = useState(0.5);
+  const [tau, setTau] = useState(0.8);
+  const [sliderTau, setSliderTau] = useState(0.8);
 
   const handleRelayout = useCallback(() => {
     setRelayoutSignal((prev) => prev + 1);

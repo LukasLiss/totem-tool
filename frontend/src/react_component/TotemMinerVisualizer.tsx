@@ -158,12 +158,9 @@ function formatCardinality(raw: string | null | undefined): string {
 
 /** Build compact "EC|LC" label from raw cardinality strings */
 function makeBubbleLabel(ec: string | null | undefined, lc: string | null | undefined): string {
-  const side = (v: string | null | undefined) => {
-    if (!v) return '0';
-    const s = v.trim();
-    return s.startsWith('0') ? '0' : '1';
-  };
-  return `${side(ec)}|${side(lc)}`;
+  const ecFormatted = formatCardinality(ec) || '0';
+  const lcFormatted = formatCardinality(lc) || '0';
+  return `${ecFormatted}|${lcFormatted}`;
 }
 
 // Helper functions for frontend relation discovery based on tau
@@ -277,155 +274,87 @@ function computeHierarchicalLayout(
   nodeWidths: Map<string, number>,
 ): Map<string, { x: number; y: number }> {
   if (nodeIds.length === 0) return new Map();
-
-  // Use D edges for hierarchy; fall back to all edges if none exist
-  const dirEdges = edges.filter((e) => e.relation === 'D' || e.relation === 'Di');
-  const hierarchyEdges = dirEdges.length > 0 ? dirEdges : edges;
-
-  // Build adjacency + in-degree
-  const adj = new Map<string, string[]>(nodeIds.map((id) => [id, []]));
-  const inDegree = new Map<string, number>(nodeIds.map((id) => [id, 0]));
-
-  for (const e of hierarchyEdges) {
-    if (!adj.has(e.from) || !adj.has(e.to)) continue;
-    adj.get(e.from)!.push(e.to);
-    inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1);
+  if (nodeIds.length === 1) {
+    return new Map([[nodeIds[0], { x: width / 2, y: height / 2 }]]);
   }
 
-  // BFS: longest-path layer assignment
-  const layer = new Map<string, number>(nodeIds.map((id) => [id, 0]));
-  const queue = nodeIds.filter((id) => (inDegree.get(id) ?? 0) === 0);
-  const rem = new Map(inDegree);
-  const enqueued = new Set(queue);
-
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    const cur = layer.get(node) ?? 0;
-    for (const nb of adj.get(node) ?? []) {
-      const proposed = cur + 1;
-      if (proposed > (layer.get(nb) ?? 0)) layer.set(nb, proposed);
-      const r = (rem.get(nb) ?? 1) - 1;
-      rem.set(nb, r);
-      if (r <= 0 && !enqueued.has(nb)) {
-        enqueued.add(nb);
-        queue.push(nb);
-      }
-    }
-  }
-  for (const id of nodeIds) if (!enqueued.has(id)) layer.set(id, 0);
-
-  // Adjust layers for same-layer connected nodes to make their connections diagonal
+  // Count degree (incoming + outgoing) of each node
+  const degree = new Map<string, number>(nodeIds.map((id) => [id, 0]));
   for (const e of edges) {
-    const lFrom = layer.get(e.from) ?? 0;
-    const lTo = layer.get(e.to) ?? 0;
-    if (lFrom === lTo) {
-      const hasIncomingD = edges.some(edge => (edge.relation === 'D' || edge.relation === 'Di') && edge.to === e.from);
-      if (!hasIncomingD) {
-        layer.set(e.from, lTo + 1);
+    if (degree.has(e.from)) degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    if (degree.has(e.to)) degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+
+  // Find hub node (node with maximum degree)
+  let hubNode = nodeIds[0];
+  let maxDeg = -1;
+  for (const [id, deg] of degree.entries()) {
+    if (deg > maxDeg) {
+      maxDeg = deg;
+      hubNode = id;
+    }
+  }
+
+  const nonHubNodes = nodeIds.filter((id) => id !== hubNode);
+
+  // Build adjacency list for non-hub nodes (subgraph)
+  const nonHubAdj = new Map<string, string[]>(nonHubNodes.map((id) => [id, []]));
+  for (const e of edges) {
+    if (e.from === hubNode || e.to === hubNode) continue;
+    if (nonHubAdj.has(e.from) && nonHubAdj.has(e.to)) {
+      nonHubAdj.get(e.from)!.push(e.to);
+      nonHubAdj.get(e.to)!.push(e.from);
+    }
+  }
+
+  // Sort non-hub nodes alphabetically to ensure stable DFS traversal starting node order
+  const sortedNonHubNodes = [...nonHubNodes].sort();
+
+  // Traverse the non-hub subgraph using DFS to order the nodes circularly to minimize crossings
+  const visited = new Set<string>();
+  const sortedNonHub: string[] = [];
+
+  function dfs(node: string) {
+    visited.add(node);
+    sortedNonHub.push(node);
+    for (const nb of nonHubAdj.get(node) ?? []) {
+      if (!visited.has(nb)) {
+        dfs(nb);
       }
     }
   }
 
-  // Group nodes by layer
-  const byLayer = new Map<number, string[]>();
-  for (const id of nodeIds) {
-    const l = layer.get(id) ?? 0;
-    if (!byLayer.has(l)) byLayer.set(l, []);
-    byLayer.get(l)!.push(id);
-  }
-  // Sort each layer initially for stable ordering
-  for (const nodes of byLayer.values()) nodes.sort();
-
-  const LAYER_GAP = 180;
-  const numLayers = Math.max(...Array.from(layer.values())) + 1;
-
-  // Run barycenter heuristic to minimize edge crossings
-  // Since l=0 is the top (root nodes) and l increases downwards,
-  // we traverse from l=1 to numLayers-1 and sort based on l-1
-  for (let l = 1; l < numLayers; l++) {
-    const parentLayer = byLayer.get(l - 1) || [];
-    const currentLayer = byLayer.get(l) || [];
-    
-    const parentIndex = new Map<string, number>();
-    parentLayer.forEach((id, idx) => parentIndex.set(id, idx));
-
-    const barycenter = new Map<string, number>();
-    for (const node of currentLayer) {
-      let sum = 0, count = 0;
-      for (const e of hierarchyEdges) {
-        if (e.to === node && parentIndex.has(e.from)) {
-          sum += parentIndex.get(e.from)!; count++;
-        } else if (e.from === node && parentIndex.has(e.to)) {
-          sum += parentIndex.get(e.to)!; count++;
-        }
-      }
-      barycenter.set(node, count > 0 ? sum / count : 0);
+  // Start DFS with endpoints of paths (nodes of degree <= 1 in the non-hub subgraph)
+  for (const node of sortedNonHubNodes) {
+    if (!visited.has(node) && (nonHubAdj.get(node) ?? []).length <= 1) {
+      dfs(node);
     }
-
-    currentLayer.sort((a, b) => (barycenter.get(a) ?? 0) - (barycenter.get(b) ?? 0) || a.localeCompare(b));
+  }
+  // Fallback for remaining nodes (e.g. cycle components)
+  for (const node of sortedNonHubNodes) {
+    if (!visited.has(node)) {
+      dfs(node);
+    }
   }
 
-  const PADDING_Y = 50;
-  const layerY = (l: number) => PADDING_Y + (numLayers - 1 - l) * LAYER_GAP;
+  const cx = width / 2;
+  const cy = height / 2;
+  const rx = Math.max(180, width * 0.32);
+  const ry = Math.max(130, height * 0.3);
 
   const positions = new Map<string, { x: number; y: number }>();
-  const NODE_GAP = 120;
+  positions.set(hubNode, { x: cx, y: cy });
 
-  for (const [l, nodes] of byLayer) {
-    const y = layerY(l);
-    // Total width needed for this layer
-    const totalNodeW = nodes.reduce((s, id) => s + (nodeWidths.get(id) ?? 80), 0);
-    const layerW = totalNodeW + (nodes.length - 1) * NODE_GAP;
-    
-    // Center the layer horizontally around width / 2
-    let curX = (width / 2) - (layerW / 2);
-    
-    for (const id of nodes) {
-      const w = nodeWidths.get(id) ?? 80;
-      positions.set(id, { x: curX + w / 2, y });
-      curX += w + NODE_GAP;
-    }
-  }
-  // ─── Post-process: avoid long edges perfectly overlapping intermediate nodes ───
-  let overlapFound = true;
-  let iterations = 0;
-  while (overlapFound && iterations < 10) {
-    overlapFound = false;
-    iterations++;
-    for (const e of hierarchyEdges) {
-      const srcPos = positions.get(e.from);
-      const tgtPos = positions.get(e.to);
-      if (!srcPos || !tgtPos) continue;
-      
-      const minY = Math.min(srcPos.y, tgtPos.y);
-      const maxY = Math.max(srcPos.y, tgtPos.y);
-      if (maxY - minY < LAYER_GAP * 1.5) continue; // Only long edges spanning > 1 layer
-      
-      const dx = tgtPos.x - srcPos.x;
-      const dy = tgtPos.y - srcPos.y;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      if (length === 0) continue;
-      
-      for (const [id, pos] of positions.entries()) {
-        if (id === e.from || id === e.to) continue;
-        // If node is between the source and target vertically
-        if (pos.y > minY + 10 && pos.y < maxY - 10) {
-          // Distance from node center to the line
-          const dist = Math.abs(dx * (srcPos.y - pos.y) - (srcPos.x - pos.x) * dy) / length;
-          const w = nodeWidths.get(id) ?? 80;
-          if (dist < w / 2 + 16) { // 16px buffer
-            overlapFound = true;
-            const l = layer.get(id);
-            if (l !== undefined) {
-               for (const nid of byLayer.get(l) || []) {
-                  positions.get(nid)!.x += 90;
-               }
-            }
-          }
-        }
-      }
-    }
-  }
+  // Map sorted non-hub nodes around a circle starting from bottom-left (1.92 rad ~ 110 degrees)
+  const startAngle = 1.92;
+  const angleStep = (2 * Math.PI) / sortedNonHub.length;
+
+  sortedNonHub.forEach((id, idx) => {
+    const angle = startAngle + idx * angleStep;
+    const x = cx + rx * Math.cos(angle);
+    const y = cy + ry * Math.sin(angle);
+    positions.set(id, { x, y });
+  });
 
   return positions;
 }
@@ -527,7 +456,7 @@ function TotemMinerVisualizer({
   relayoutSignal,
   embedded = false,
   onControlsReady,
-  tau = 0.5,
+  tau = 0.8,
 }: TotemMinerVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -976,18 +905,7 @@ function TotemMinerVisualizer({
       let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
       let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
-      const formatShortEc = (v: string | null | undefined) => {
-        if (!v) return '0';
-        const s = v.trim();
-        return s.startsWith('0') ? '0' : '1';
-      };
-
-      const ecFromTo = cardMap.get(`${edge.from}→${edge.to}`)?.event_cardinality;
-      const ecToFrom = cardMap.get(`${edge.to}→${edge.from}`)?.event_cardinality;
-      const isSrcLeft = src.x <= tgt.x;
-      const leftVal = isSrcLeft ? ecFromTo : ecToFrom;
-      const rightVal = isSrcLeft ? ecToFrom : ecFromTo;
-      const bubbleLabel = `${formatShortEc(leftVal)}|${formatShortEc(rightVal)}`;
+      const bubbleLabel = edge.bubbleLabel || '0|0';
       const bubbleW = Math.max(40, estimateTextWidth(bubbleLabel, FONT_SIZE_BUBBLE) + 16);
       
       if (bubbleW > 0) {
