@@ -487,6 +487,14 @@ function TotemMinerVisualizer({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
+  const [stableSvgSize, setStableSvgSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setStableSvgSize(svgSize);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [svgSize]);
 
   const effectiveReloadSignal = reloadSignal ?? 0;
 
@@ -617,11 +625,11 @@ function TotemMinerVisualizer({
 
   // ── Hierarchical layout & Relayout controls ──────────────────────────────────
   const handleRelayout = useCallback(() => {
-    if (nodeIds.length === 0) return;
-    const newLayout = computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap);
+    if (nodeIds.length === 0 || !stableSvgSize) return;
+    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
     setLayoutPositions(newLayout);
     setManualNodePositions(new Map());
-  }, [nodeIds, edges, svgSize, widthMap]);
+  }, [nodeIds, edges, stableSvgSize, widthMap]);
 
   useEffect(() => {
     if (relayoutSignal && relayoutSignal > 0) {
@@ -631,11 +639,11 @@ function TotemMinerVisualizer({
 
   // Run layout on initial load or if layoutPositions is empty
   useEffect(() => {
-    if (nodeIds.length > 0 && layoutPositions.size === 0) {
-      const initialLayout = computeHierarchicalLayout(nodeIds, edges, svgSize.width, svgSize.height, widthMap);
+    if (nodeIds.length > 0 && layoutPositions.size === 0 && stableSvgSize) {
+      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
       setLayoutPositions(initialLayout);
     }
-  }, [nodeIds, edges, svgSize, widthMap, layoutPositions.size]);
+  }, [nodeIds, edges, stableSvgSize, widthMap, layoutPositions.size]);
 
   useEffect(() => {
     setLayoutPositions(new Map());
@@ -673,7 +681,7 @@ function TotemMinerVisualizer({
 
   // ── Auto-fit on layout change ────────────────────────────────────────────────
   useEffect(() => {
-    if (layoutNodes.length === 0) return;
+    if (layoutNodes.length === 0 || !stableSvgSize) return;
     if (manualPositionsRef.current.size > 0) return;
     const xs = layoutNodes.map((n) => n.x);
     const ys = layoutNodes.map((n) => n.y);
@@ -683,13 +691,13 @@ function TotemMinerVisualizer({
     const maxY = Math.max(...ys) + 60;
     const gW = maxX - minX;
     const gH = maxY - minY;
-    const newZoom = Math.min(svgSize.width / gW, svgSize.height / gH, 1.6);
+    const newZoom = Math.min(stableSvgSize.width / gW, stableSvgSize.height / gH, 1.6);
     setZoom(newZoom);
     setPan({
-      x: (svgSize.width - gW * newZoom) / 2 - minX * newZoom,
-      y: (svgSize.height - gH * newZoom) / 2 - minY * newZoom,
+      x: (stableSvgSize.width - gW * newZoom) / 2 - minX * newZoom,
+      y: (stableSvgSize.height - gH * newZoom) / 2 - minY * newZoom,
     });
-  }, [layoutPositions, layoutNodes, svgSize]);
+  }, [layoutPositions, layoutNodes, stableSvgSize]);
 
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -739,17 +747,17 @@ function TotemMinerVisualizer({
   const handleZoomIn = () => zoomToCenter(1.2);
   const handleZoomOut = () => zoomToCenter(1 / 1.2);
   const handleFit = () => {
-    if (layoutNodes.length === 0) return;
+    if (layoutNodes.length === 0 || !stableSvgSize) return;
     const xs = layoutNodes.map((n) => n.x);
     const ys = layoutNodes.map((n) => n.y);
     const minX = Math.min(...xs) - 80, maxX = Math.max(...xs) + 80;
     const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
     const gW = maxX - minX, gH = maxY - minY;
-    const nz = Math.min(svgSize.width / gW, svgSize.height / gH, 1.6);
+    const nz = Math.min(stableSvgSize.width / gW, stableSvgSize.height / gH, 1.6);
     setZoom(nz);
     setPan({
-      x: (svgSize.width - gW * nz) / 2 - minX * nz,
-      y: (svgSize.height - gH * nz) / 2 - minY * nz,
+      x: (stableSvgSize.width - gW * nz) / 2 - minX * nz,
+      y: (stableSvgSize.height - gH * nz) / 2 - minY * nz,
     });
   };
 
@@ -1158,7 +1166,7 @@ function TotemMinerVisualizer({
       )}
 
       {/* Loading */}
-      {loading && (
+      {(loading || !stableSvgSize) && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(4px)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
             <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
