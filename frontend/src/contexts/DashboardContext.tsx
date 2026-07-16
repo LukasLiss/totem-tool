@@ -1,6 +1,6 @@
 import React, { createContext, useState } from "react";
 
-export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
+export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart' | 'totemMiner';
 
 export type EditorComponent = 'totem' | 'occn' | 'ocpn';
 
