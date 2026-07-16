@@ -1486,10 +1486,29 @@ function buildCurvedPathFromWaypoints(
     // Calculate corner radius based on segment lengths
     const lenBefore = Math.hypot(curr.x - prev.x, curr.y - prev.y);
     const lenAfter = Math.hypot(next.x - curr.x, next.y - curr.y);
-    const cornerRadius = Math.max(
-      dynamicMinRadius,
-      Math.min(lenBefore * dynamicCornerScale, lenAfter * dynamicCornerScale, dynamicMaxRadius),
+
+    if (lenBefore < 1e-6 || lenAfter < 1e-6) {
+      parts.push(`L ${curr.x} ${curr.y}`);
+      continue;
+    }
+
+    const limitBefore = i - 1 === 0 ? lenBefore : lenBefore * 0.5;
+    const limitAfter = i + 1 === waypoints.length - 1 ? lenAfter : lenAfter * 0.5;
+    const maxAllowedRadius = Math.min(limitBefore, limitAfter);
+
+    let cornerRadius = Math.min(
+      lenBefore * dynamicCornerScale,
+      lenAfter * dynamicCornerScale,
+      dynamicMaxRadius
     );
+    // Apply dynamicMinRadius but make sure it never exceeds the geometric limit
+    if (cornerRadius < dynamicMinRadius) {
+      cornerRadius = Math.min(dynamicMinRadius, maxAllowedRadius);
+    }
+    // Cap to ensure it fits the segment geometries and prevents overshooting/overlaps
+    if (cornerRadius > maxAllowedRadius) {
+      cornerRadius = maxAllowedRadius;
+    }
 
     // Calculate points along segments where curve should start/end
     const beforeDir = {
