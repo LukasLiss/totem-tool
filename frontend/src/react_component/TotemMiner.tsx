@@ -24,12 +24,12 @@ export default function TotemMiner({
   backendBaseUrl = 'http://localhost:8000',
   height = 600,
 }: TotemMinerProps) {
-  const [reloadSignal, setReloadSignal] = useState(0);
+  const [relayoutSignal, setRelayoutSignal] = useState(0);
   const [tau, setTau] = useState(0.5);
   const [sliderTau, setSliderTau] = useState(0.5);
 
-  const handleReload = useCallback(() => {
-    setReloadSignal((prev) => prev + 1);
+  const handleRelayout = useCallback(() => {
+    setRelayoutSignal((prev) => prev + 1);
   }, []);
 
   const heightStyle = typeof height === 'number' ? `${height}px` : height;
@@ -40,7 +40,7 @@ export default function TotemMiner({
       eventLogId={fileId}
       height="100%"
       backendBaseUrl={backendBaseUrl}
-      reloadSignal={reloadSignal}
+      relayoutSignal={relayoutSignal}
       embedded={true}
       tau={tau}
     />
@@ -85,12 +85,12 @@ export default function TotemMiner({
           <Button
             variant="outline"
             size="sm"
-            onClick={handleReload}
+            onClick={handleRelayout}
             disabled={!fileId}
             className="flex items-center gap-2"
           >
             <RefreshCcw className="h-4 w-4" />
-            Reload
+            Relayout
           </Button>
         </div>
       </div>

@@ -293,4 +293,9 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         cardinalities[(t1, t2)] = {"LC": lc,   "EC": ec}
         cardinalities[(t2, t1)] = {"LC": lc_i, "EC": ec_i}
 
-    return Totem(tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type)
+    totem = Totem(tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type)
+    totem.h_event_cardinalities = h_event_cardinalities
+    totem.h_log_cardinalities = h_log_cardinalities
+    totem.h_temporal_relations = h_temporal_relations
+    return totem
+
