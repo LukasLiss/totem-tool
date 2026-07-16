@@ -89,8 +89,8 @@ export function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
   ranks: Map<string, number>,
-  layoutDirection: 'TB' | 'LR' = 'TB'
-) {
+  layoutDirection: 'TB' | 'LR' = 'TB',
+): Promise<{ nodes: Node[]; edges: Edge[] }> {
   // Configure ELK for a layered layout
   const elkOptions = {
     'elk.algorithm': 'layered',
@@ -103,19 +103,39 @@ export function getLayoutedElements(
     id: 'root',
     layoutOptions: elkOptions,
     children: nodes.map(node => ({
-      ...node,
+      id: node.id,
       width: node.width ?? 150,
       height: node.height ?? 50,
     })),
-    edges,
+    edges: edges.map(edge => ({
+      id: edge.id,
+      sources: [edge.source],
+      targets: [edge.target],
+    })),
   };
 
   return elk
     .layout(graph)
-    .then(g => ({
-      nodes: g.children!.map(n => ({ ...n, position: { x: n.x, y: n.y } })),
-      edges: g.edges || [],
-    }))
+    .then(g => {
+      const sectionsByEdgeId = new Map((g.edges ?? []).map(edge => [
+        edge.id,
+        (edge as { sections?: unknown }).sections,
+      ]));
+      return {
+      nodes: (g.children ?? []).flatMap((layoutedNode) => {
+        const originalNode = nodes.find(node => node.id === layoutedNode.id);
+        if (!originalNode) return [];
+        return [{
+          ...originalNode,
+          position: { x: layoutedNode.x ?? 0, y: layoutedNode.y ?? 0 },
+        }];
+      }),
+      // ELK only supplies routing information. Keep React Flow edge data intact.
+      edges: edges.map(edge => Object.assign({}, edge, {
+        sections: sectionsByEdgeId.get(edge.id),
+      })),
+    };
+    })
     .catch(error => {
       console.error(error);
       throw error;

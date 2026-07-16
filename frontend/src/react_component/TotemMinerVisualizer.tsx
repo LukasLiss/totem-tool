@@ -35,6 +35,7 @@ import { mapTypesToColors, textColorForBackground } from '../utils/objectColors'
 type TotemCardinality = {
   from: string;
   to: string;
+  model_cardinality?: string | null;
   log_cardinality: string | null;
   event_cardinality: string | null;
 };
@@ -95,8 +96,6 @@ type TotemMinerVisualizerProps = {
   embedded?: boolean;
   onControlsReady?: (controls: TotemMinerVisualizerControls) => void;
   tau?: number;
-  fitness?: number | null;
-  precision?: number | null;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -106,8 +105,8 @@ const DEFAULT_BACKEND = 'http://localhost:8000';
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',
   Di: '#0f172a',
-  P: '#dc2626',
-  I: '#2563eb',
+  P: '#0f172a',
+  I: '#0f172a',
   A: '#64748b',
 };
 
@@ -164,20 +163,30 @@ function extractEdges(
   cardinalities.forEach((c) => cardMap.set(`${c.from}→${c.to}`, c));
 
   const edges: GraphEdge[] = [];
-  const RELATION_KEYS = ['D', 'Di', 'P', 'I', 'A'];
+  const RELATION_KEYS = ['D', 'Di', 'P', 'I', 'Ii', 'A'];
 
   for (const key of RELATION_KEYS) {
     const list = tempgraph[key];
     if (!Array.isArray(list)) continue;
     (list as string[][]).forEach((pair) => {
       if (!Array.isArray(pair) || pair.length < 2) return;
-      const [from, to] = pair;
+      let [from, to] = pair;
+      let relation = key;
+      // Inverse relations are rendered by reversing the arc direction so each
+      // marker keeps the same meaning as in the paper.
+      if (key === 'Di') {
+        [from, to] = [to, from];
+        relation = 'D';
+      } else if (key === 'Ii') {
+        [from, to] = [to, from];
+        relation = 'I';
+      }
       const card = cardMap.get(`${from}→${to}`);
       edges.push({
         id: `${key}::${from}→${to}`,
         from,
         to,
-        relation: key,
+        relation,
         sourceLabel: formatCardinality(card?.model_cardinality) || '1',
         targetLabel: formatCardinality(card?.log_cardinality),
         bubbleLabel: makeBubbleLabel(card?.event_cardinality, card?.log_cardinality),
@@ -452,8 +461,6 @@ function TotemMinerVisualizer({
   embedded = false,
   onControlsReady,
   tau = 0.5,
-  fitness = null,
-  precision = null,
 }: TotemMinerVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -466,6 +473,17 @@ function TotemMinerVisualizer({
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0 });
+  const [manualNodePositions, setManualNodePositions] = useState<Map<string, { x: number; y: number }>>(
+    () => new Map(),
+  );
+  const manualPositionsRef = useRef(manualNodePositions);
+  const draggedNode = useRef<{
+    id: string;
+    origin: { x: number; y: number };
+    pointer: { x: number; y: number };
+  } | null>(null);
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  manualPositionsRef.current = manualNodePositions;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
@@ -537,12 +555,13 @@ function TotemMinerVisualizer({
   const layoutNodes: LayoutNode[] = useMemo(
     () =>
       nodeIds.map((id) => {
-        const pos = layoutMap.get(id) ?? { x: 100, y: 100 };
+        // Manual positions override the automatic layout until the model changes.
+        const pos = manualNodePositions.get(id) ?? layoutMap.get(id) ?? { x: 100, y: 100 };
         const color = colorMap[id] ?? '#2563eb';
         const textColor = textColorForBackground(color, { minContrast: 3.8, gradientSamples: [] });
         return { id, x: pos.x, y: pos.y, width: widthMap.get(id) ?? 80, height: NODE_H, color, textColor };
       }),
-    [nodeIds, layoutMap, colorMap, widthMap],
+    [nodeIds, layoutMap, colorMap, widthMap, manualNodePositions],
   );
 
   const nodePos = useMemo(
@@ -550,9 +569,22 @@ function TotemMinerVisualizer({
     [layoutNodes],
   );
 
+  useEffect(() => {
+    const knownNodeIds = new Set(nodeIds);
+    setManualNodePositions((positions) => {
+      const next = new Map([...positions].filter(([id]) => knownNodeIds.has(id)));
+      return next.size === positions.size ? positions : next;
+    });
+  }, [nodeIds]);
+
+  useEffect(() => {
+    setManualNodePositions(new Map());
+  }, [eventLogId]);
+
   // ── Auto-fit on layout change ────────────────────────────────────────────────
   useEffect(() => {
     if (layoutNodes.length === 0) return;
+    if (manualPositionsRef.current.size > 0) return;
     const xs = layoutNodes.map((n) => n.x);
     const ys = layoutNodes.map((n) => n.y);
     const minX = Math.min(...xs) - 80;
@@ -567,7 +599,7 @@ function TotemMinerVisualizer({
       x: (svgSize.width - gW * newZoom) / 2 - minX * newZoom,
       y: (svgSize.height - gH * newZoom) / 2 - minY * newZoom,
     });
-  }, [layoutNodes, svgSize]);
+  }, [layoutMap, layoutNodes, svgSize]);
 
   // ── Zoom / pan handlers ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -644,6 +676,48 @@ function TotemMinerVisualizer({
   }, []);
   const handleMouseUp = useCallback(() => { isPanning.current = false; }, []);
 
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent<SVGGElement>, nodeId: string) => {
+    if (e.button !== 0) return;
+    const node = nodePos.get(nodeId);
+    if (!node) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    draggedNode.current = {
+      id: nodeId,
+      origin: { x: node.x, y: node.y },
+      pointer: { x: e.clientX, y: e.clientY },
+    };
+    setDraggingNodeId(nodeId);
+  }, [nodePos]);
+
+  useEffect(() => {
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      const drag = draggedNode.current;
+      if (!drag) return;
+
+      setManualNodePositions((positions) => {
+        const next = new Map(positions);
+        next.set(drag.id, {
+          x: drag.origin.x + (e.clientX - drag.pointer.x) / zoom,
+          y: drag.origin.y + (e.clientY - drag.pointer.y) / zoom,
+        });
+        return next;
+      });
+    };
+    const handleWindowMouseUp = () => {
+      draggedNode.current = null;
+      setDraggingNodeId(null);
+    };
+
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+    };
+  }, [zoom]);
+
   // Expose controls
   useEffect(() => {
     onControlsReady?.({
@@ -678,7 +752,7 @@ function TotemMinerVisualizer({
       pairIndex.set(key, idx + 1);
       const count = pairCount.get(key) ?? 1;
       const sameLayer = layerOf.get(e.from) === layerOf.get(e.to);
-      // Curve same-layer edges or multi-edges, but never independent (I) edges
+      // Curve same-layer edges or multi-edges, but keep precedes (I) edges direct.
       const baseCurve = e.relation === 'I' ? 0 : sameLayer ? 60 : count > 1 ? 40 : 0;
       const sign = idx % 2 === 0 ? 1 : -1;
       pairIndex.set(e.id, baseCurve * sign);
@@ -716,9 +790,8 @@ function TotemMinerVisualizer({
 
       const curvature = edgeCurvatures.get(edge.id) ?? 0;
       const color = RELATION_COLOR[edge.relation] ?? '#64748b';
-      const isConcurrent = edge.relation === 'P';
-      const isIndependent = edge.relation === 'I';
-      const isDashed = isIndependent;
+      const isParallel = edge.relation === 'P';
+      const isInitiating = edge.relation === 'I';
 
       // Clip endpoints to node borders
       const srcPt = clipToBorder(src.x, src.y, tgt.x, tgt.y, src.width / 2 + 1, NODE_H / 2 + 1);
@@ -732,6 +805,8 @@ function TotemMinerVisualizer({
       const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
       const perpX = -edgeDy / edgeLen;
       const perpY = edgeDx / edgeLen;
+      const parallelSource = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, 0.08);
+      const parallelTarget = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, 0.92);
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
       let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
@@ -813,9 +888,7 @@ function TotemMinerVisualizer({
          occupiedRects.push({ x1: tgtLText.x - tgtW/2, y1: tgtLText.y - 8, x2: tgtLText.x + tgtW/2, y2: tgtLText.y + 8 });
       }
 
-      const squareAngle = Math.atan2(edgeDy, edgeDx) * 180 / Math.PI;
-
-      return { edge, path, color, isConcurrent, isIndependent, isDashed, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, edgeDx, edgeDy, squareAngle, bubbleWidth: bubbleW };
+      return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW };
     }).filter(Boolean) as any[];
 
     return (
@@ -826,8 +899,7 @@ function TotemMinerVisualizer({
             key={`path-${d.edge.id}`}
             d={d.path}
             stroke={d.color}
-            strokeWidth={d.isConcurrent ? 2 : 1.5}
-            strokeDasharray={d.isDashed ? '6 3' : undefined}
+            strokeWidth={d.isParallel ? 2 : 1.5}
             fill="none"
           />
         ))}
@@ -835,25 +907,25 @@ function TotemMinerVisualizer({
         {/* Pass 2: Render all terminators, text, and bubbles on top */}
         {edgeData.map((d) => (
           <g key={`dec-${d.edge.id}`}>
-            {/* Arrowhead (Only for Independent relations) */}
-            {d.isIndependent && <path d={d.arrow} fill={d.color} />}
-
-            {/* Source square terminator (For all other relations) */}
-            {!d.isIndependent && (
+            {/* During (D): the box sits next to the containing target type. */}
+            {d.edge.relation === 'D' && (
               <rect
-                x={d.srcPt.x - SQUARE_SIZE / 2}
-                y={d.srcPt.y - SQUARE_SIZE / 2}
+                x={d.tgtPt.x - SQUARE_SIZE / 2}
+                y={d.tgtPt.y - SQUARE_SIZE / 2}
                 width={SQUARE_SIZE}
                 height={SQUARE_SIZE}
                 fill={d.color}
               />
             )}
 
-            {/* Parallel (P) double tick marks crossing the line near source */}
-            {d.isConcurrent && (
+            {/* Precedes (I): a triangle points toward the later target type. */}
+            {d.isInitiating && <path d={d.arrow} fill={d.color} />}
+
+            {/* Parallel (P): tee markers at both ends form the paper's || relation. */}
+            {d.isParallel && (
               <>
-                <line x1={d.srcPt.x + d.edgeDx * Math.min(20, d.edgeLen * 0.08) + d.perpX * 6} y1={d.srcPt.y + d.edgeDy * Math.min(20, d.edgeLen * 0.08) + d.perpY * 6} x2={d.srcPt.x + d.edgeDx * Math.min(20, d.edgeLen * 0.08) - d.perpX * 6} y2={d.srcPt.y + d.edgeDy * Math.min(20, d.edgeLen * 0.08) - d.perpY * 6} stroke={d.color} strokeWidth={1.8} />
-                <line x1={d.srcPt.x + d.edgeDx * Math.min(28, d.edgeLen * 0.12) + d.perpX * 6} y1={d.srcPt.y + d.edgeDy * Math.min(28, d.edgeLen * 0.12) + d.perpY * 6} x2={d.srcPt.x + d.edgeDx * Math.min(28, d.edgeLen * 0.12) - d.perpX * 6} y2={d.srcPt.y + d.edgeDy * Math.min(28, d.edgeLen * 0.12) - d.perpY * 6} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.parallelSource.x + d.perpX * 7} y1={d.parallelSource.y + d.perpY * 7} x2={d.parallelSource.x - d.perpX * 7} y2={d.parallelSource.y - d.perpY * 7} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.parallelTarget.x + d.perpX * 7} y1={d.parallelTarget.y + d.perpY * 7} x2={d.parallelTarget.x - d.perpX * 7} y2={d.parallelTarget.y - d.perpY * 7} stroke={d.color} strokeWidth={1.8} />
               </>
             )}
 
@@ -924,7 +996,12 @@ function TotemMinerVisualizer({
   // ── Render nodes ─────────────────────────────────────────────────────────────
   const renderedNodes = useMemo(() =>
     layoutNodes.map((n) => (
-      <g key={n.id} transform={`translate(${n.x - n.width / 2}, ${n.y - NODE_H / 2})`}>
+      <g
+        key={n.id}
+        transform={`translate(${n.x - n.width / 2}, ${n.y - NODE_H / 2})`}
+        onMouseDown={(e) => handleNodeMouseDown(e, n.id)}
+        style={{ cursor: draggingNodeId === n.id ? 'grabbing' : 'grab' }}
+      >
         <rect
           width={n.width}
           height={NODE_H}
@@ -948,15 +1025,10 @@ function TotemMinerVisualizer({
         </text>
       </g>
     )),
-    [layoutNodes],
+    [layoutNodes, handleNodeMouseDown, draggingNodeId],
   );
 
   // ── Legend ───────────────────────────────────────────────────────────────────
-  const relationTypes = useMemo(() => [...new Set(edges.map((e) => e.relation))], [edges]);
-  const RELATION_LABEL: Record<string, string> = {
-    D: 'Dependent', Di: 'Dependent (inv.)', P: 'Parallel', I: 'Independent', A: 'Abstract',
-  };
-
   // ── Core visualizer ──────────────────────────────────────────────────────────
   const core = (
     <div
@@ -1041,18 +1113,6 @@ function TotemMinerVisualizer({
       </div>
 
       {/* Legend — bottom right */}
-      {relationTypes.length > 0 && (
-        <div style={{ position: 'absolute', bottom: 14, right: 14, zIndex: 20, background: 'rgba(255,255,255,0.92)', border: '1px solid #e2e8f0', borderRadius: 8, padding: '7px 12px', fontSize: 11, boxShadow: '0 1px 6px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', gap: 5, pointerEvents: 'none' }}>
-          {relationTypes.map((rel) => (
-            <div key={rel} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <svg width={24} height={10}>
-                <line x1={0} y1={5} x2={24} y2={5} stroke={RELATION_COLOR[rel] ?? '#64748b'} strokeWidth={rel === 'P' ? 2 : 1.5} strokeDasharray={rel === 'I' ? '4 2' : undefined} />
-              </svg>
-              <span style={{ color: '#475569', fontWeight: 500 }}>{RELATION_LABEL[rel] ?? rel}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 

@@ -487,7 +487,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         padding: { top: 50, right: 50, bottom: 50, left: 50 },
         offset: { x: LEGEND_TOTAL, y: 0 },
         duration: 200
-      }));
+      } as any));
     }).catch(console.error);
   }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey, showDebugOverlays, shiftForLegend]);
 

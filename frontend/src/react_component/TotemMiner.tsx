@@ -64,17 +64,6 @@ export default function TotemMiner({
           TOTeM Model
         </h3>
         <div className="flex items-center gap-5">
-          {/* HUD Metrics */}
-          <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
-            <span>
-              Fitness: <span className="font-bold text-orange-500">0.84</span>
-            </span>
-            <span>
-              Precision: <span className="font-bold text-slate-700">1.00</span>
-            </span>
-            <div className="w-px h-4 bg-slate-200" />
-          </div>
-
           {/* τ slider */}
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[50px] text-right">
