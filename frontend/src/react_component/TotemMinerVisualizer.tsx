@@ -27,7 +27,7 @@ import {
   CardTitle,
   CardAction,
 } from '@/components/ui/card';
-import { RefreshCcw, ZoomIn, ZoomOut, Maximize2, Lock, Unlock } from 'lucide-react';
+import { RefreshCcw, Plus, Minus, Scan, Lock, Unlock } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -721,7 +721,6 @@ function TotemMinerVisualizer({
   }, [panLocked]);
 
   const zoomToCenter = (factor: number) => {
-    if (panLocked) return;
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const centerX = rect.width / 2;
@@ -1184,27 +1183,47 @@ function TotemMinerVisualizer({
       </svg>
 
       {/* Zoom controls — bottom left */}
-      <div style={{ position: 'absolute', bottom: 14, left: 14, zIndex: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {([
-          { icon: <ZoomIn size={14} />, action: handleZoomIn, title: 'Zoom in' },
-          { icon: <ZoomOut size={14} />, action: handleZoomOut, title: 'Zoom out' },
-          { icon: <Maximize2 size={14} />, action: handleFit, title: 'Fit' },
-          { icon: panLocked ? <Lock size={14} /> : <Unlock size={14} />, action: () => setPanLocked((v) => !v), title: panLocked ? 'Unlock pan' : 'Lock pan' },
-        ] as const).map((btn, i) => (
-          <button
-            key={i}
-            onClick={btn.action as () => void}
-            title={btn.title}
-            style={{
-              width: 28, height: 28, borderRadius: 6, border: '1px solid #e2e8f0',
-              background: 'rgba(255,255,255,0.9)', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#475569', boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-            }}
-          >
-            {btn.icon}
-          </button>
-        ))}
+      <div style={{ position: 'absolute', bottom: 14, left: 14, zIndex: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleZoomIn}
+          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
+          title="Zoom in"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleZoomOut}
+          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
+          title="Zoom out"
+        >
+          <Minus className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleFit}
+          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
+          title="Fit"
+        >
+          <Scan className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant={panLocked ? 'secondary' : 'outline'}
+          size="icon"
+          onClick={() => setPanLocked((v) => !v)}
+          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
+          title={panLocked ? 'Unlock pan' : 'Lock pan'}
+        >
+          {panLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+        </Button>
       </div>
 
       {/* Legend — bottom right */}
