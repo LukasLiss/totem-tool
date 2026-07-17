@@ -210,6 +210,17 @@ class OCHANDOVER(nx.MultiDiGraph):
 
         eog_arc_count = eog_arcs_unique.height
 
+        # Per-type arc counts for normalisation — fixed to the original EOG so
+        # that repair arcs added by the parallel filter do not inflate the denominator.
+        eog_arc_count_by_type = (
+            eog_arcs
+            .select(["source_event", "target_event", "businessobject_type"])
+            .unique()
+            .group_by("businessobject_type")
+            .len()
+            .rename({"len": "_arc_count"})
+        )
+
         if parallel_threshold is not None:
             footprint = cls.compute_footprint(ocel, businessobject_types)
 
@@ -297,29 +308,29 @@ class OCHANDOVER(nx.MultiDiGraph):
                                 })
                                 break
 
-            # Remove dominated orphan arcs (Definition 4.6 refinement):
-            # an orphan repair arc (src, tgt) is dominated if every resource at tgt
-            # is already covered by a non-orphan arc from the same src event.
-            _event_res: dict[str, frozenset] = {
-                r["_eventId"]: frozenset(r["resources"])
-                for r in event_resources.to_dicts()
-            }
-            _src_covered: dict[str, set] = {}
-            _non_orphan_pairs: set[tuple[str, str]] = set()
-            for _arc in _new_arcs:
-                if not _arc["_orphan"]:
-                    _s, _t = _arc["source_event"], _arc["target_event"]
-                    _non_orphan_pairs.add((_s, _t))
-                    _src_covered.setdefault(_s, set()).update(_event_res.get(_t, frozenset()))
-
-            _new_arcs = [
-                _arc for _arc in _new_arcs
-                if not _arc["_orphan"]
-                or (_arc["source_event"], _arc["target_event"]) in _non_orphan_pairs
-                or not _event_res.get(_arc["target_event"], frozenset()).issubset(
-                    _src_covered.get(_arc["source_event"], set())
-                )
-            ]
+            # # Remove dominated orphan arcs (Definition 4.6 refinement):
+            # # an orphan repair arc (src, tgt) is dominated if every resource at tgt
+            # # is already covered by a non-orphan arc from the same src event.
+            # _event_res: dict[str, frozenset] = {
+            #     r["_eventId"]: frozenset(r["resources"])
+            #     for r in event_resources.to_dicts()
+            # }
+            # _src_covered: dict[str, set] = {}
+            # _non_orphan_pairs: set[tuple[str, str]] = set()
+            # for _arc in _new_arcs:
+            #     if not _arc["_orphan"]:
+            #         _s, _t = _arc["source_event"], _arc["target_event"]
+            #         _non_orphan_pairs.add((_s, _t))
+            #         _src_covered.setdefault(_s, set()).update(_event_res.get(_t, frozenset()))
+            #
+            # _new_arcs = [
+            #     _arc for _arc in _new_arcs
+            #     if not _arc["_orphan"]
+            #     or (_arc["source_event"], _arc["target_event"]) in _non_orphan_pairs
+            #     or not _event_res.get(_arc["target_event"], frozenset()).issubset(
+            #         _src_covered.get(_arc["source_event"], set())
+            #     )
+            # ]
 
             if _new_arcs:
                 modified_eog_arcs = (
@@ -338,7 +349,8 @@ class OCHANDOVER(nx.MultiDiGraph):
             print("Modified EOG arcs")
             print(modified_eog_arcs)
 
-            # Update eog_arcs and derived counts for downstream normalisation.
+            # Update eog_arcs for handover computation; eog_arc_count and
+            # eog_arc_count_by_type are kept from the original EOG for normalisation.
             eog_arcs = modified_eog_arcs
             eog_arcs_unique = (
                 modified_eog_arcs
@@ -348,7 +360,6 @@ class OCHANDOVER(nx.MultiDiGraph):
                     pl.col("businessobject_type").unique().alias("businessobject_types"),
                 ])
             )
-            eog_arc_count = eog_arcs_unique.height
 
         # Per-event timestamps shared by both branches.
         _event_ts = (
@@ -430,19 +441,10 @@ class OCHANDOVER(nx.MultiDiGraph):
 
         elif normalization == "by_arcs_in_eog":
             if normalization_scope == "per_bo_type":
-                # Count unique EOG arcs per business object type
-                bo_arc_counts = (
-                    eog_arcs
-                    .select(["source_event", "target_event", "businessobject_type"])
-                    .unique()
-                    .group_by("businessobject_type")
-                    .len()
-                    .rename({"len": "_arc_count"})
-                )
-                print("bo arc counts", bo_arc_counts)
+                print("bo arc counts", eog_arc_count_by_type)
                 handover_edges = (
                     handover_edges
-                    .join(bo_arc_counts, on="businessobject_type", how="left")
+                    .join(eog_arc_count_by_type, on="businessobject_type", how="left")
                     .with_columns((pl.col("weight") / pl.col("_arc_count")).alias("norm_weight"))
                     .drop("_arc_count")
                 )
