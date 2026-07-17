@@ -1321,4 +1321,14 @@ class OCHANDOVER(nx.MultiDiGraph):
                         "dependency": round(dependency, 4),
                     })
 
+        if not all_rows:
+            return pl.DataFrame(schema={
+                "businessobject_type": pl.Utf8,
+                "activity_a":          pl.Utf8,
+                "activity_b":          pl.Utf8,
+                "relation":            pl.Utf8,
+                "count_ab":            pl.Int64,
+                "count_ba":            pl.Int64,
+                "dependency":          pl.Float64,
+            })
         return pl.DataFrame(all_rows)
