@@ -2429,9 +2429,9 @@ function HandoverGraph({
     await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = svgUrl; });
     URL.revokeObjectURL(svgUrl);
 
-    // ── Graph-only canvas (graph + compact color legend, two columns) ──
+    // ── Graph-only canvas (graph + compact color legend, three columns) ──
     const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
-    const COLOR_ROWS = 1 + Math.max(nodeTypes.length, boTypes.length);
+    const COLOR_ROWS = 1 + Math.max(nodeTypes.length, boTypes.length, scaleRows);
     const COLOR_PANEL_H = PAD + Math.ceil(COLOR_ROWS) * ROW_H + PAD;
     const GRAPH_ONLY_H = GRAPH_H + COLOR_PANEL_H;
     const graphCanvas = document.createElement("canvas");
@@ -2447,7 +2447,7 @@ function HandoverGraph({
     gCtx.strokeStyle = "#E2E8F0"; gCtx.lineWidth = 1;
     gCtx.beginPath(); gCtx.moveTo(0, GRAPH_H); gCtx.lineTo(EXPORT_W, GRAPH_H); gCtx.stroke();
 
-    const colW = EXPORT_W / 2;
+    const colW = EXPORT_W / 3;
     const gTop = GRAPH_H + PAD;
 
     // Left column: Resources
@@ -2463,7 +2463,7 @@ function HandoverGraph({
       gly += ROW_H;
     });
 
-    // Right column: Handover Object Types
+    // Middle column: Handover Object Types
     const RX = colW + PAD;
     let bly = gTop;
     gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
@@ -2476,6 +2476,32 @@ function HandoverGraph({
       gCtx.fillText(bt, RX + 22, cy + 4);
       bly += ROW_H;
     });
+
+    // Right column: Scale
+    const SX = colW * 2 + PAD;
+    let sly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("SCALE (WEIGHT OF THICKEST ARC)", SX, sly + 9); sly += ROW_H;
+    if (normalizationScope === "per_bo_type") {
+      boTypes.forEach(bt => {
+        const cy = sly + ROW_H / 2 - 2;
+        gCtx.save();
+        gCtx.strokeStyle = typeColorMap[bt] ?? "#94a3b8"; gCtx.lineWidth = 6; gCtx.lineCap = "round";
+        gCtx.beginPath(); gCtx.moveTo(SX, cy); gCtx.lineTo(SX + 30, cy); gCtx.stroke();
+        gCtx.restore();
+        gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+        gCtx.fillText(`${bt}  = ${(maxWeightPerType[bt] ?? 0).toFixed(4)}`, SX + 38, cy + 4);
+        sly += ROW_H;
+      });
+    } else {
+      const cy = sly + ROW_H / 2 - 2;
+      gCtx.save();
+      gCtx.strokeStyle = "#374151"; gCtx.lineWidth = 6; gCtx.lineCap = "round";
+      gCtx.beginPath(); gCtx.moveTo(SX, cy); gCtx.lineTo(SX + 30, cy); gCtx.stroke();
+      gCtx.restore();
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(`= ${maxWeight.toFixed(4)}`, SX + 38, cy + 4);
+    }
 
     // ── Full canvas (graph + legend panel) ──
     const canvas = document.createElement("canvas");
