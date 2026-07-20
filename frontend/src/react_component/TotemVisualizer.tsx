@@ -1591,8 +1591,8 @@ function buildParallelBars({
 
   const tolerance = 0.15 * edgeScale;
   const barHeight = Math.min(
-    Math.max(10 * edgeScale, effectiveLength * 0.28),
-    20 * edgeScale,
+    Math.max(8 * edgeScale, effectiveLength * 0.35),
+    12 * edgeScale,
   );
   const halfPerp = barHeight;
 
@@ -1610,12 +1610,12 @@ function buildParallelBars({
   const maxOffset = Math.max(0, effectiveLength - 0.75);
   const outerOffset = 0;
   const minGap = Math.max(
-    6 * edgeScale,
-    Math.min(18 * edgeScale, effectiveLength * 0.24),
+    3 * edgeScale,
+    Math.min(5 * edgeScale, effectiveLength * 0.15),
   );
   const preferredGap = Math.max(
     minGap,
-    Math.min(22 * edgeScale, effectiveLength * 0.28),
+    Math.min(6 * edgeScale, effectiveLength * 0.2),
   );
 
   let innerOffset = outerOffset + preferredGap;
@@ -5744,12 +5744,12 @@ function TotemVisualizer({
                     (edge.relation === 'D'
                       ? 3.2
                       : edge.relation === 'P'
-                        ? 3
+                        ? 1.5
                         : edge.relation === 'A'
                           ? 2.2
                           : 2.6) * edgeStrokeScale;
                   const strokeColor = edge.color ?? '#0F172A';
-                  const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
+                  const barStrokeWidth = edge.relation === 'P' ? 4.5 * edgeStrokeScale : strokeWidth;
                   return (
                     <g key={`${edge.id}-${groupIndex}`}>
                       <path

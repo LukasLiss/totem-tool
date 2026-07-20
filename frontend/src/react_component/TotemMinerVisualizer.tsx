@@ -897,22 +897,44 @@ function TotemMinerVisualizer({
       const srcPt = clipToBorder(src.x, src.y, tgt.x, tgt.y, src.width / 2 + 1, NODE_H / 2 + 1);
       const tgtPt = clipToBorder(tgt.x, tgt.y, src.x, src.y, tgt.width / 2 + 6, NODE_H / 2 + 6);
 
-      const path = bezierPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
-      const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
-
       const edgeDx = tgtPt.x - srcPt.x;
       const edgeDy = tgtPt.y - srcPt.y;
       const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
       const perpX = -edgeDy / edgeLen;
       const perpY = edgeDx / edgeLen;
-      const parallelSource = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, 0.08);
-      const parallelTarget = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, 0.92);
+
+      const gapOffset = Math.min(6, edgeLen * 0.25);
+      const tSource = gapOffset / edgeLen;
+      const tTarget = 1 - tSource;
+      const parallelSource = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tSource);
+      const parallelTarget = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, tTarget);
+
+      const path = isParallel
+        ? bezierPath(parallelSource.x, parallelSource.y, parallelTarget.x, parallelTarget.y, curvature * 0.8)
+        : bezierPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature);
+      const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
       let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
       let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
-      const bubbleLabel = edge.bubbleLabel || '0|0';
+      // Angle parallel to the edge vector (same logic as TotemRelationEdge)
+      const rawAngle = Math.atan2(edgeDy, edgeDx) * (180 / Math.PI);
+      const flipped = rawAngle > 90 || rawAngle < -90;
+      const bubbleAngle = flipped ? rawAngle + (rawAngle > 0 ? -180 : 180) : rawAngle;
+
+      // Keep pill text placement matching the physical node placement when flipped
+      let rawBubbleLabel = edge.bubbleLabel || '0|0';
+      let bubbleLabel = rawBubbleLabel;
+      if (rawBubbleLabel.includes('|')) {
+        const parts = rawBubbleLabel.split('|');
+        if (parts.length === 2) {
+          const pillLeft = flipped ? parts[1] : parts[0];
+          const pillRight = flipped ? parts[0] : parts[1];
+          bubbleLabel = `${pillLeft}|${pillRight}`;
+        }
+      }
+
       const bubbleW = Math.max(40, estimateTextWidth(bubbleLabel, FONT_SIZE_BUBBLE) + 16);
       
       if (bubbleW > 0) {
@@ -990,7 +1012,7 @@ function TotemMinerVisualizer({
          occupiedRects.push({ x1: tgtLText.x - tgtW/2, y1: tgtLText.y - 8, x2: tgtLText.x + tgtW/2, y2: tgtLText.y + 8 });
       }
 
-      return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW, bubbleLabel };
+      return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW, bubbleLabel, bubbleAngle };
     }).filter(Boolean) as any[];
 
     return (
@@ -1001,7 +1023,7 @@ function TotemMinerVisualizer({
             key={`path-${d.edge.id}`}
             d={d.path}
             stroke={d.color}
-            strokeWidth={d.isParallel ? 2 : 1.5}
+            strokeWidth={d.isParallel ? 1.2 : 1.5}
             fill="none"
           />
         ))}
@@ -1023,11 +1045,13 @@ function TotemMinerVisualizer({
             {/* Precedes (I): a triangle points toward the later target type. */}
             {d.isInitiating && <path d={d.arrow} fill={d.color} />}
 
-            {/* Parallel (P): tee markers at both ends form the paper's || relation. */}
+            {/* Parallel (P): double tee markers at both ends form the paper's || relation. */}
             {d.isParallel && (
               <>
-                <line x1={d.parallelSource.x + d.perpX * 7} y1={d.parallelSource.y + d.perpY * 7} x2={d.parallelSource.x - d.perpX * 7} y2={d.parallelSource.y - d.perpY * 7} stroke={d.color} strokeWidth={1.8} />
-                <line x1={d.parallelTarget.x + d.perpX * 7} y1={d.parallelTarget.y + d.perpY * 7} x2={d.parallelTarget.x - d.perpX * 7} y2={d.parallelTarget.y - d.perpY * 7} stroke={d.color} strokeWidth={1.8} />
+                <line x1={d.srcPt.x + d.perpX * 7} y1={d.srcPt.y + d.perpY * 7} x2={d.srcPt.x - d.perpX * 7} y2={d.srcPt.y - d.perpY * 7} stroke={d.color} strokeWidth={4.5} strokeLinecap="butt" />
+                <line x1={d.parallelSource.x + d.perpX * 7} y1={d.parallelSource.y + d.perpY * 7} x2={d.parallelSource.x - d.perpX * 7} y2={d.parallelSource.y - d.perpY * 7} stroke={d.color} strokeWidth={4.5} strokeLinecap="butt" />
+                <line x1={d.parallelTarget.x + d.perpX * 7} y1={d.parallelTarget.y + d.perpY * 7} x2={d.parallelTarget.x - d.perpX * 7} y2={d.parallelTarget.y - d.perpY * 7} stroke={d.color} strokeWidth={4.5} strokeLinecap="butt" />
+                <line x1={d.tgtPt.x + d.perpX * 7} y1={d.tgtPt.y + d.perpY * 7} x2={d.tgtPt.x - d.perpX * 7} y2={d.tgtPt.y - d.perpY * 7} stroke={d.color} strokeWidth={4.5} strokeLinecap="butt" />
               </>
             )}
 
@@ -1063,9 +1087,9 @@ function TotemMinerVisualizer({
               </text>
             )}
 
-            {/* Midpoint oval bubble (EC|LC) */}
+            {/* Midpoint oval bubble (EC|LC) aligned with line direction */}
             {d.bubbleLabel && (
-              <g>
+              <g transform={`rotate(${d.bubbleAngle}, ${d.midPt.x}, ${d.midPt.y})`}>
                 <ellipse
                   cx={d.midPt.x}
                   cy={d.midPt.y}
