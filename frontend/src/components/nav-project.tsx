@@ -1,4 +1,4 @@
-import { ChevronRight, Database, FolderKanban, FileText } from "lucide-react"
+import { ChevronRight, Database, FolderKanban } from "lucide-react"
 import { useContext } from "react"
 
 import {
@@ -18,14 +18,12 @@ import {
 import { DashboardContext } from "@/contexts/DashboardContext"
 
 const projectItems = [
-  { id: "overview", label: "Event Logs", icon: FileText },
   { id: "modelAssets", label: "Model Assets", icon: Database },
 ] as const;
 
 export function NavProject() {
   const { viewMode, setViewMode } = useContext(DashboardContext);
-  const isProjectActive =
-    viewMode.type === "overview" || viewMode.type === "modelAssets";
+  const isProjectActive = viewMode.type === "modelAssets";
 
   return (
     <SidebarGroup>
@@ -33,9 +31,9 @@ export function NavProject() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Project" data-active={isProjectActive}>
+              <SidebarMenuButton tooltip="Project Assets" data-active={isProjectActive}>
                 <FolderKanban />
-                <span>Project</span>
+                <span>Project Assets</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
               </SidebarMenuButton>
             </CollapsibleTrigger>

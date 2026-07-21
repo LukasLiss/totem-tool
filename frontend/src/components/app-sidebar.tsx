@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
+import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
 import { NavProject } from "./nav-project";
 import { NavConformance } from "./nav-conformance";
@@ -81,6 +82,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <Switcher/>
       </SidebarHeader>
       <SidebarContent>
+        <NavOverview />
         <NavProject />
         <NavAnalysis />
         <NavConformance />
