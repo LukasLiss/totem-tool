@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Literal, Tuple
 
 from ..ocel.ocel_duckdb import OcelDuckDB
 from .conformance import TotemConformanceHistograms
@@ -30,6 +30,7 @@ from .totem import (
 
 Histogram = Dict[Tuple[str, str], Dict[str, int]]
 DetailHistogram = Dict[Tuple[str, str, str], Dict[str, int]]
+ConnectionMode = Literal["discovery", "conformance"]
 
 
 _AGGREGATE_CONNECTIONS_CTE = """
@@ -47,6 +48,33 @@ all_conn AS (
     SELECT DISTINCT src_obj, tgt_obj FROM e2o_conn
     UNION
     SELECT src_obj, tgt_obj FROM o2o_direct
+)
+"""
+
+
+_CONFORMANCE_CONNECTIONS_CTE = """
+e2o_conn AS (
+    SELECT eo1.obj_id AS src_obj, eo2.obj_id AS tgt_obj
+    FROM event_object eo1
+    JOIN event_object eo2 ON eo1.event_id = eo2.event_id
+),
+qualified_o2o_raw AS (
+    SELECT source_obj_id AS src_obj, target_obj_id AS tgt_obj
+    FROM object_relations
+    WHERE qualifier IS NOT NULL
+      AND source_obj_id IN (SELECT obj_id FROM event_object)
+      AND target_obj_id IN (SELECT obj_id FROM event_object)
+    UNION
+    SELECT target_obj_id AS src_obj, source_obj_id AS tgt_obj
+    FROM object_relations
+    WHERE qualifier IS NOT NULL
+      AND source_obj_id IN (SELECT obj_id FROM event_object)
+      AND target_obj_id IN (SELECT obj_id FROM event_object)
+),
+all_conn AS (
+    SELECT DISTINCT src_obj, tgt_obj FROM e2o_conn
+    UNION
+    SELECT src_obj, tgt_obj FROM qualified_o2o_raw
 )
 """
 
@@ -95,21 +123,40 @@ relation_conn AS (
 def compute_totem_histograms_db(
     ocel_db: OcelDuckDB,
     include_details: bool = False,
+    connection_mode: ConnectionMode = "discovery",
 ) -> TotemConformanceHistograms:
     """Compute aggregate and optional detailed TOTeM histograms in DuckDB.
 
-    Aggregate queries preserve the existing ``totemDiscovery_db`` behavior.
-    Detailed queries reproduce the reference conformance branch: event
-    cardinalities are grouped by activity, while temporal and log-cardinality
-    histograms are grouped by ``e2o`` or an o2o qualifier. A qualified o2o
-    relation overrides ``e2o`` for the same object pair and is considered in
-    both directions. If conflicting qualifiers exist for one pair, the
-    lexicographically first qualifier is used to keep output deterministic.
+    ``discovery`` preserves the existing ``totemDiscovery_db`` behavior,
+    including directional and unqualified o2o relations. ``conformance``
+    reproduces the reference branch by considering qualified o2o relations in
+    both directions and omitting zero-count histogram entries. Detailed
+    queries always use the reference conformance semantics: event cardinality
+    is grouped by activity, while temporal and log cardinality are grouped by
+    ``e2o`` or an o2o qualifier. A qualifier overrides ``e2o`` for the same
+    object pair. If conflicting qualifiers exist, the lexicographically first
+    qualifier is used to keep output deterministic.
     """
+    if connection_mode not in ("discovery", "conformance"):
+        raise ValueError(f"Unsupported TOTeM connection mode: {connection_mode}")
+
     conn = ocel_db.conn
-    event_cardinality = _event_cardinality_histogram(conn)
-    log_cardinality = _log_cardinality_histogram(conn)
-    temporal = _temporal_histogram(conn)
+    conformance_mode = connection_mode == "conformance"
+    connections_cte = (
+        _CONFORMANCE_CONNECTIONS_CTE
+        if conformance_mode
+        else _AGGREGATE_CONNECTIONS_CTE
+    )
+    event_cardinality = _event_cardinality_histogram(
+        conn,
+        include_zero_counts=not conformance_mode,
+    )
+    log_cardinality = _log_cardinality_histogram(
+        conn,
+        connections_cte,
+        include_zero_counts=not conformance_mode,
+    )
+    temporal = _temporal_histogram(conn, connections_cte)
 
     if include_details:
         event_by_activity = _event_cardinality_by_activity(conn)
@@ -130,7 +177,10 @@ def compute_totem_histograms_db(
     )
 
 
-def _event_cardinality_histogram(conn) -> Histogram:
+def _event_cardinality_histogram(
+    conn,
+    include_zero_counts: bool,
+) -> Histogram:
     rows = conn.execute("""
         WITH
         all_types AS (
@@ -166,14 +216,18 @@ def _event_cardinality_histogram(conn) -> Histogram:
         EC_ZERO_ONE,
         EC_MANY,
         EC_ZERO_MANY,
-        include_zero_counts=True,
+        include_zero_counts=include_zero_counts,
     )
 
 
-def _log_cardinality_histogram(conn) -> Histogram:
+def _log_cardinality_histogram(
+    conn,
+    connections_cte: str,
+    include_zero_counts: bool,
+) -> Histogram:
     rows = conn.execute(f"""
         WITH
-        {_AGGREGATE_CONNECTIONS_CTE},
+        {connections_cte},
         active_objs AS (
             SELECT DISTINCT o.obj_id, o.obj_type
             FROM objects o
@@ -214,14 +268,14 @@ def _log_cardinality_histogram(conn) -> Histogram:
         LC_ZERO_ONE,
         LC_MANY,
         LC_ZERO_MANY,
-        include_zero_counts=True,
+        include_zero_counts=include_zero_counts,
     )
 
 
-def _temporal_histogram(conn) -> Histogram:
+def _temporal_histogram(conn, connections_cte: str) -> Histogram:
     rows = conn.execute(f"""
         WITH
-        {_AGGREGATE_CONNECTIONS_CTE},
+        {connections_cte},
         lifetimes AS (
             SELECT o.obj_id, o.obj_type,
                    MIN(e.timestamp_unix) AS min_t,

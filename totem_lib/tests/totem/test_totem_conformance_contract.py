@@ -87,6 +87,184 @@ def make_disconnected_ocel():
     return ObjectCentricEventLog(events=events, objects=objects)
 
 
+def make_o2o_only_ocel():
+    """Two active objects connected only by a qualified o2o relation."""
+    events = pl.DataFrame(
+        {
+            "_eventId": ["e-a", "e-b"],
+            "_activity": ["Use A", "Use B"],
+            "_timestampUnix": [1, 2],
+            "_objects": [["a1"], ["b1"]],
+            "_qualifiers": [["a"], ["b"]],
+            "_attributes": ["{}", "{}"],
+        },
+        schema=EVENTS_SCHEMA,
+    )
+    objects = pl.DataFrame(
+        {
+            "_objId": ["a1", "b1"],
+            "_objType": ["A", "B"],
+            "_targetObjects": [["b1"], []],
+            "_qualifiers": [["links"], []],
+        },
+        schema=OBJECTS_SCHEMA,
+    )
+    return ObjectCentricEventLog(events=events, objects=objects)
+
+
+def reference_connection_histograms(ocel):
+    """Small independent oracle matching the reference branch's o2o logic."""
+    object_types = {
+        row["_objId"]: row["_objType"]
+        for row in ocel.objects.iter_rows(named=True)
+    }
+    active_objects = {
+        object_id
+        for row in ocel.events.iter_rows(named=True)
+        for object_id in row["_objects"]
+    }
+    connections = {object_id: set() for object_id in active_objects}
+    relation_types = {}
+    lifetimes = {}
+
+    for row in ocel.events.iter_rows(named=True):
+        event_objects = row["_objects"]
+        timestamp = row["_timestampUnix"]
+        for source in event_objects:
+            connections[source].update(event_objects)
+            previous = lifetimes.get(source)
+            lifetimes[source] = (
+                min(previous[0], timestamp),
+                max(previous[1], timestamp),
+            ) if previous else (timestamp, timestamp)
+            for target in event_objects:
+                if source != target:
+                    relation_types.setdefault((source, target), "e2o")
+
+    for row in ocel.objects.iter_rows(named=True):
+        source = row["_objId"]
+        for target, qualifier in zip(
+            row["_targetObjects"] or [],
+            row["_qualifiers"] or [],
+        ):
+            if not qualifier or source not in active_objects or target not in active_objects:
+                continue
+            connections[source].add(target)
+            connections[target].add(source)
+            relation_types[(source, target)] = qualifier
+            relation_types[(target, source)] = qualifier
+
+    log_cardinality = {}
+    temporal = {}
+    log_by_relation = {}
+    temporal_by_relation = {}
+    active_types = sorted({object_types[item] for item in active_objects})
+
+    for source_type in active_types:
+        sources = [
+            item for item in active_objects if object_types[item] == source_type
+        ]
+        for target_type in active_types:
+            cardinalities = [
+                len(
+                    {
+                        target
+                        for target in connections[source]
+                        if object_types[target] == target_type
+                    }
+                )
+                for source in sources
+            ]
+            log_cardinality[(source_type, target_type)] = (
+                _reference_cardinality_counts(cardinalities)
+            )
+
+            for source in sources:
+                grouped_targets = {}
+                for target in connections[source]:
+                    if object_types[target] != target_type:
+                        continue
+                    relation_type = relation_types.get(
+                        (source, target),
+                        "e2o",
+                    )
+                    grouped_targets.setdefault(relation_type, set()).add(target)
+
+                for relation_type, targets in grouped_targets.items():
+                    log_key = (source_type, target_type, relation_type)
+                    counts = log_by_relation.setdefault(log_key, [])
+                    counts.append(len(targets))
+
+                    for target in targets:
+                        temporal_key = (source_type, target_type)
+                        detail_key = (
+                            source_type,
+                            target_type,
+                            relation_type,
+                        )
+                        relation = _reference_temporal_relations(
+                            lifetimes[source],
+                            lifetimes[target],
+                        )
+                        for target_histogram, key in (
+                            (temporal, temporal_key),
+                            (temporal_by_relation, detail_key),
+                        ):
+                            histogram = target_histogram.setdefault(
+                                key,
+                                {"total": 0},
+                            )
+                            histogram["total"] += 1
+                            for value in relation:
+                                histogram[value] = histogram.get(value, 0) + 1
+
+    return {
+        "log_cardinality": log_cardinality,
+        "temporal": temporal,
+        "log_cardinality_by_relation_type": {
+            key: _reference_cardinality_counts(values)
+            for key, values in log_by_relation.items()
+        },
+        "temporal_by_relation_type": temporal_by_relation,
+    }
+
+
+def _reference_cardinality_counts(values):
+    zero = sum(value == 0 for value in values)
+    one = sum(value == 1 for value in values)
+    many = sum(value > 1 for value in values)
+    counts = {
+        "total": len(values),
+        "0": zero,
+        "1": one,
+        "0...1": zero + one,
+        "1..*": one + many,
+        "0...*": len(values),
+    }
+    return {key: value for key, value in counts.items() if value > 0}
+
+
+def _reference_temporal_relations(source_lifetime, target_lifetime):
+    source_min, source_max = source_lifetime
+    target_min, target_max = target_lifetime
+    relations = ["P"]
+    if target_min <= source_min and source_max <= target_max:
+        relations.append("D")
+    if source_min <= target_min and target_max <= source_max:
+        relations.append("Di")
+    if (
+        source_min <= source_max <= target_min <= target_max
+        or source_min < target_min <= source_max < target_max
+    ):
+        relations.append("I")
+    if (
+        target_min <= target_max <= source_min <= source_max
+        or target_min < source_min <= target_max < source_max
+    ):
+        relations.append("Ii")
+    return relations
+
+
 def fitting_totem_data():
     """Canonical model matching the relation and cardinalities in the log."""
     return {
@@ -298,13 +476,72 @@ def test_disconnected_types_have_cardinality_but_no_temporal_histogram():
     assert ("A", "B", "e2o") not in histograms.temporal_by_relation_type
 
 
+def test_conformance_histograms_match_reference_for_o2o_only_connections():
+    ocel = make_o2o_only_ocel()
+    expected = reference_connection_histograms(ocel)
+    database = OcelDuckDB(ocel)
+    try:
+        histograms = compute_totem_histograms_db(
+            database,
+            include_details=True,
+            connection_mode="conformance",
+        )
+    finally:
+        database.close()
+
+    assert histograms.log_cardinality == expected["log_cardinality"]
+    assert histograms.temporal == expected["temporal"]
+    assert (
+        histograms.log_cardinality_by_relation_type
+        == expected["log_cardinality_by_relation_type"]
+    )
+    assert (
+        histograms.temporal_by_relation_type
+        == expected["temporal_by_relation_type"]
+    )
+    assert histograms.temporal[("A", "B")] == {
+        "total": 1,
+        "I": 1,
+        "P": 1,
+    }
+    assert histograms.temporal[("B", "A")] == {
+        "total": 1,
+        "Ii": 1,
+        "P": 1,
+    }
+
+
+def test_discovery_histograms_keep_directional_o2o_behavior():
+    database = OcelDuckDB(make_o2o_only_ocel())
+    try:
+        histograms = compute_totem_histograms_db(database)
+    finally:
+        database.close()
+
+    assert ("A", "B") in histograms.temporal
+    assert ("B", "A") not in histograms.temporal
+
+
+def test_histogram_connection_mode_is_validated():
+    database = OcelDuckDB(make_o2o_only_ocel())
+    try:
+        try:
+            compute_totem_histograms_db(database, connection_mode="unknown")
+        except ValueError as error:
+            assert "unknown" in str(error)
+        else:
+            raise AssertionError("Expected an invalid connection mode to fail")
+    finally:
+        database.close()
+
+
 def test_conformance_result_contract_is_deterministic_and_json_compatible():
     medium = FitnessPrecision(fitness=0.75, precision=0.5)
     high = FitnessPrecision(fitness=1.0, precision=1.0)
     pair = TypePairConformance(
         source_type="Order",
         target_type="Item",
-        temporal=RelationConformance("D", 0.75, 0.5),
+        temporal=RelationConformance("Di", 0.75, 0.5),
         log_cardinality=RelationConformance("1..*", 1.0, 1.0),
         event_cardinality=RelationConformance("0...1", 1.0, 1.0),
     )
@@ -337,10 +574,11 @@ def test_conformance_result_contract_is_deterministic_and_json_compatible():
 
     payload = result.to_dict()
 
-    assert [item["object_type"] for item in payload["object_type_metrics"]] == [
-        "Item",
-        "Order",
-    ]
+    assert list(payload["object_type_metrics"]) == ["Item", "Order"]
+    assert payload["object_type_metrics"]["Order"]["temporal"] == {
+        "avg_fitness": 0.75,
+        "avg_precision": 0.5,
+    }
     assert payload["type_pair_metrics"][0]["source_type"] == "Order"
     assert payload["histograms"]["temporal"] == [
         {

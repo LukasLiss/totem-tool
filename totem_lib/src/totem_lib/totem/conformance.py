@@ -90,12 +90,13 @@ class ObjectTypeConformance:
     log_cardinality: FitnessPrecision
     event_cardinality: FitnessPrecision
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Dict[str, Optional[float]]]:
         return {
-            "object_type": self.object_type,
-            "temporal": self.temporal.to_dict(),
-            "log_cardinality": self.log_cardinality.to_dict(),
-            "event_cardinality": self.event_cardinality.to_dict(),
+            "temporal": _average_metrics_dict(self.temporal),
+            "log_cardinality": _average_metrics_dict(self.log_cardinality),
+            "event_cardinality": _average_metrics_dict(
+                self.event_cardinality
+            ),
         }
 
 
@@ -164,13 +165,13 @@ class TotemConformanceResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "overall_metrics": self.overall_metrics.to_dict(),
-            "object_type_metrics": [
-                metric.to_dict()
+            "object_type_metrics": {
+                metric.object_type: metric.to_dict()
                 for metric in sorted(
                     self.object_type_metrics,
                     key=lambda item: item.object_type,
                 )
-            ],
+            },
             "type_pair_metrics": [
                 metric.to_dict()
                 for metric in sorted(
@@ -180,6 +181,15 @@ class TotemConformanceResult:
             ],
             "histograms": self.histograms.to_dict(),
         }
+
+
+def _average_metrics_dict(
+    metrics: FitnessPrecision,
+) -> Dict[str, Optional[float]]:
+    return {
+        "avg_fitness": metrics.fitness,
+        "avg_precision": metrics.precision,
+    }
 
 
 def _pair_histogram_records(
