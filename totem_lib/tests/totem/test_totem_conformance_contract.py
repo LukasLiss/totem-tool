@@ -1,6 +1,7 @@
 import json
 
 import polars as pl
+import pytest
 
 from totem_lib.ocel.ocel import (
     EVENTS_SCHEMA,
@@ -16,6 +17,10 @@ from totem_lib.totem.conformance import (
     TotemConformanceHistograms,
     TotemConformanceResult,
     TypePairConformance,
+    conformance_of_totem,
+    get_more_precise_ec,
+    get_more_precise_lc,
+    get_more_precise_tr,
 )
 from totem_lib.totem.histograms_db import compute_totem_histograms_db
 from totem_lib.totem.serialization import totem_from_dict, totem_to_dict
@@ -525,14 +530,77 @@ def test_discovery_histograms_keep_directional_o2o_behavior():
 def test_histogram_connection_mode_is_validated():
     database = OcelDuckDB(make_o2o_only_ocel())
     try:
-        try:
+        with pytest.raises(ValueError, match="unknown"):
             compute_totem_histograms_db(database, connection_mode="unknown")
-        except ValueError as error:
-            assert "unknown" in str(error)
-        else:
-            raise AssertionError("Expected an invalid connection mode to fail")
     finally:
         database.close()
+
+
+def test_precision_hierarchies_match_reference_algorithm():
+    assert get_more_precise_tr("P") == ("D", "Di", "I", "Ii")
+    assert get_more_precise_tr("I") == ("D", "Di")
+    assert get_more_precise_tr("Ii") == ("D", "Di")
+    assert get_more_precise_tr("D") == ()
+    assert get_more_precise_lc("0...*") == ("0", "1", "0...1", "1..*")
+    assert get_more_precise_lc("0...1") == ("0", "1")
+    assert get_more_precise_ec("1..*") == ("1",)
+
+
+def test_conformance_algorithm_returns_stable_fitting_result():
+    model = totem_from_dict(fitting_totem_data())
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        result = conformance_of_totem(model, database)
+    finally:
+        database.close()
+
+    assert result.overall_metrics.temporal == FitnessPrecision(1.0, 1.0)
+    assert result.overall_metrics.log_cardinality == FitnessPrecision(1.0, 1.0)
+    assert result.overall_metrics.event_cardinality == FitnessPrecision(
+        1.0,
+        pytest.approx(2 / 3),
+    )
+    assert result.object_type_metrics == (
+        ObjectTypeConformance(
+            "Item",
+            FitnessPrecision(1.0, 1.0),
+            FitnessPrecision(1.0, 1.0),
+            FitnessPrecision(1.0, 0.75),
+        ),
+        ObjectTypeConformance(
+            "Order",
+            FitnessPrecision(1.0, 1.0),
+            FitnessPrecision(1.0, 1.0),
+            FitnessPrecision(1.0, 0.75),
+        ),
+    )
+    payload = result.to_dict()
+    assert json.loads(json.dumps(payload, allow_nan=False)) == payload
+    assert [
+        (metric["source_type"], metric["target_type"])
+        for metric in payload["type_pair_metrics"]
+    ] == [("Item", "Order"), ("Order", "Item")]
+
+
+def test_explicit_inverse_temporal_relation_is_used_directly():
+    model_data = fitting_totem_data()
+    model_data["tempgraph"]["D"] = []
+    model_data["tempgraph"]["Di"] = [["Order", "Item"]]
+    model = totem_from_dict(model_data)
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        result = conformance_of_totem(model, database)
+    finally:
+        database.close()
+
+    pair_metrics = {
+        (metric.source_type, metric.target_type): metric
+        for metric in result.type_pair_metrics
+    }
+    assert pair_metrics[("Order", "Item")].temporal.model_relation == "Di"
+    assert pair_metrics[("Order", "Item")].temporal.fitness == 1.0
+    assert pair_metrics[("Item", "Order")].temporal.model_relation == "D"
+    assert pair_metrics[("Item", "Order")].temporal.fitness == 1.0
 
 
 def test_conformance_result_contract_is_deterministic_and_json_compatible():
