@@ -165,8 +165,8 @@ const SidePanel: React.FC = () => {
         appendTo: "body",
       },
       [{
-        h: 4,
-        w: 6,
+        h: 6,
+        w: 4,
         content: "Pie Chart",
         component_name: "PieChartComponent",
         query: '',

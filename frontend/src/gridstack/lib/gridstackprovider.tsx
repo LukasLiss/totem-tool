@@ -10,6 +10,28 @@ import ReactDOM from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
 import { componentMap } from "../../components/componentMap";
 
+// Minimum grid cell size (w, h) per component type. Falls back to DEFAULT_MIN_SIZE
+// for any component_name not listed here. Enforced by GridStack itself, so users
+// cannot drag/resize a widget smaller than this.
+const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
+  TextBoxComponent: { minW: 2, minH: 2 },
+  NumberOfEventsComponent: { minW: 2, minH: 2 },
+  ImageComponent: { minW: 2, minH: 2 },
+  VariantsComponent: { minW: 4, minH: 4 },
+  ProcessAreaComponent: { minW: 4, minH: 4 },
+  LogStatisticsComponent: { minW: 3, minH: 2 },
+  OCDFGComponent: { minW: 4, minH: 4 },
+  OCDottedChartComponent: { minW: 4, minH: 3 },
+  NewOCDFGComponent: { minW: 4, minH: 4 },
+  NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
+  SQLQueryComponent: { minW: 3, minH: 3 },
+  PieChartComponent: { minW: 2, minH: 6 },
+};
+const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
+
+const getMinSize = (componentName?: string) =>
+  (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
+
 interface GridContextValue {
   grid: GridStack | null;
   gridRef: React.RefObject<HTMLDivElement>;
@@ -123,6 +145,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const node = (contentEl as any).gridstackNode;
         const component_name = (node as any)?.component_name || (contentEl as HTMLElement).dataset.componentName || item.dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
+        // Self-heal widgets whose node predates the min-size feature (e.g. loaded
+        // from an older saved layout) — grows them up to the minimum if needed.
+        if (node) {
+          const { minW, minH } = getMinSize(component_name);
+          gridRef.current?.update(item as HTMLElement, { minW, minH });
+        }
         const Component = componentMap[component_name];
         if (root && Component && node) {
           console.log(`Re-rendering component for item ${index}`);
@@ -151,11 +179,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
     if (!grid) return;
     const newId = generateComponentId();
+    const { minW, minH } = getMinSize(componentName);
     const widgetEl = grid.addWidget({
       x: 0,
       y: 0,
-      w: 2,
-      h: 2,
+      w: Math.max(2, minW),
+      h: Math.max(2, minH),
+      minW,
+      minH,
       content,
       component_name: componentName,
       component_id: newId,
@@ -367,13 +398,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         
         // Ensure component_id is set (generate if missing from layout)
         const component_id = item.id || item.component_id || generateComponentId();
-        
+        const { minW, minH } = getMinSize(item.component_name);
+
         try {
           const widgetEl = gridRef.current?.addWidget({
             x: item.x,
             y: item.y,
-            w: item.w,
-            h: item.h,
+            w: Math.max(item.w, minW),
+            h: Math.max(item.h, minH),
+            minW,
+            minH,
             content,  // Keep for GridStack compatibility
             text: item.text,
             component_name: item.component_name,

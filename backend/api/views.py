@@ -17,7 +17,7 @@ from totem_lib.dfg import OCDFGDb, NewOCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
-from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel import OcelDuckDB, import_ocel_db, import_ocel
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 import networkx as nx
@@ -428,7 +428,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         if not ocel:
             try:
-                ocel = _build_ocel_from_path(user_file.file.path)
+                ocel = import_ocel(user_file.file.path)
                 cache.set(cache_key, ocel, timeout=3600)
             except Exception as e:
                 return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
