@@ -9,11 +9,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+from .views import EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -437,6 +438,138 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data, totem_to_dict(totem))
         self.assertEqual(response.data["schema"], "totem")
         self.assertEqual(response.data["version"], 1)
+
+
+class TotemConformanceApiValidationTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="conformance-api-user")
+        self.other_user = User.objects.create_user(username="conformance-other-user")
+
+        self.project = Project.objects.create(name="Project A")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.totem_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Selected TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        self.url = f"/api/files/{self.event_log.pk}/totem_conformance/"
+        self.client.force_authenticate(user=self.user)
+
+    def test_request_requires_asset_id(self):
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", response.data)
+
+    def test_request_requires_positive_integer_asset_id(self):
+        zero_response = self.client.post(
+            self.url,
+            {"asset_id": 0},
+            format="json",
+        )
+        string_response = self.client.post(
+            self.url,
+            {"asset_id": "not-an-id"},
+            format="json",
+        )
+
+        self.assertEqual(zero_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(string_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", zero_response.data)
+        self.assertIn("asset_id", string_response.data)
+
+    def test_event_log_is_scoped_to_authenticated_user(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_log = EventLog.objects.create(
+            project=foreign_project,
+            file="foreign-log.json",
+        )
+
+        response = self.client.post(
+            f"/api/files/{foreign_log.pk}/totem_conformance/",
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_inaccessible_asset_returns_not_found(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_asset = ProjectAsset.objects.create(
+            project=foreign_project,
+            name="Foreign TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": foreign_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("asset_id", response.data)
+
+    def test_asset_from_another_accessible_project_is_rejected(self):
+        other_project = Project.objects.create(name="Other Accessible Project")
+        other_project.users.add(self.user)
+        other_asset = ProjectAsset.objects.create(
+            project=other_project,
+            name="Other TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": other_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("event log project", response.data["asset_id"])
+
+    def test_wrong_asset_type_is_rejected(self):
+        occn_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Wrong model type",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": occn_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("TOTEM", response.data["asset_id"])
+
+    def test_valid_request_reaches_execution_boundary(self):
+        request = APIRequestFactory().post(
+            self.url,
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        response = EventLogViewSet.as_view({"post": "totem_conformance"})(
+            request,
+            pk=self.event_log.pk,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_501_NOT_IMPLEMENTED)
+        self.assertEqual(response.data["file_id"], self.event_log.pk)
+        self.assertEqual(response.data["asset_id"], self.totem_asset.pk)
 
 
 class ProjectAssetApiTests(TestCase):

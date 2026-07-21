@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
-from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .serializers import EventLogSerializer, ProjectAssetSerializer, TotemConformanceRequestSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -277,6 +277,55 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["post"])
+    def totem_conformance(self, request, pk=None):
+        request_serializer = TotemConformanceRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.TOTEM:
+            return Response(
+                {"asset_id": "Model asset must have type TOTEM."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "detail": "TOTeM conformance execution is added in Pass 2.",
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+            },
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
 
     @action(detail=True, methods=["get"])
     def discover_mlpa(self, request, pk=None):
