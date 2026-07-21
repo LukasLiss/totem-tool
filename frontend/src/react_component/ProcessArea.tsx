@@ -16,6 +16,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
+import { API_BASE_URL } from '@/config/apiBaseUrl';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
 
@@ -29,7 +30,7 @@ export type ProcessAreaProps = {
 export default function ProcessArea({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);

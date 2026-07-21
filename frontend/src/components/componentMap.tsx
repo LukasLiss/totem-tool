@@ -16,6 +16,7 @@ import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { uploadImageToComponent } from "@/api/componentsApi";
+import { API_BASE_URL } from "@/config/apiBaseUrl";
 import VariantsExplorer, {
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
@@ -251,7 +252,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
           <CardContent>
           
           <img
-            src={`http://localhost:8000${node.image}`}
+            src={`${API_BASE_URL}${node.image}`}
             alt="Uploaded"
             className="w-full h-full object-cover"
           />

@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useLocation, useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "@/config/apiBaseUrl";
 
 type LocationState = {
   from?: string;
@@ -38,7 +39,7 @@ export const Login = () => {
     };
 
     try {
-    const response = await fetch('http://localhost:8000/token/', {
+    const response = await fetch(`${API_BASE_URL}/token/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

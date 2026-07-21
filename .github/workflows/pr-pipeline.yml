@@ -1,0 +1,120 @@
+name: PR Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # NOTE: lint-frontend and typecheck-frontend are `continue-on-error: true`.
+  # `eslint .` / `tsc -b` run on the whole repo (not just the PR diff), and
+  # as of this pipeline's introduction there are ~276 pre-existing ESLint
+  # errors and ~60 pre-existing type errors unrelated to any given PR. Until
+  # a cleanup pass fixes those, these jobs report status (visible on every
+  # PR) without blocking merges. Flip continue-on-error to false once the
+  # codebase is clean, so new violations start blocking merges for real.
+  lint-frontend:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: ./frontend
+        run: npm install
+      - working-directory: ./frontend
+        run: npm run lint
+
+  typecheck-frontend:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: ./frontend
+        run: npm install
+      - working-directory: ./frontend
+        run: npm run typecheck
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: ./frontend
+        run: npm install
+      - working-directory: ./frontend
+        run: npm run build
+
+  test-totem-lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e totem_lib[test]
+      - name: Test with coverage (line + branch)
+        working-directory: ./totem_lib
+        run: pytest --cov=totem_lib --cov-branch --cov-report=xml:../coverage-totem-lib.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-totem-lib
+          path: coverage-totem-lib.xml
+
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e totem_lib
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+      - name: Run Django tests with coverage (line + branch)
+        run: |
+          coverage run --branch --source=backend/api,backend/authentification backend/manage.py test
+          coverage xml -o coverage-backend.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-backend
+          path: coverage-backend.xml
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: ./frontend
+        run: npm install
+      - name: Test with coverage (line + branch)
+        working-directory: ./frontend
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend
+          path: frontend/coverage/lcov.info
