@@ -17,6 +17,7 @@ from totem_lib.totem.conformance import (
     TotemConformanceResult,
     TypePairConformance,
 )
+from totem_lib.totem.histograms_db import compute_totem_histograms_db
 from totem_lib.totem.serialization import totem_from_dict, totem_to_dict
 from totem_lib.totem.totem_db import totemDiscovery_db
 
@@ -55,6 +56,31 @@ def make_conformance_ocel():
             "_objType": ["Order", "Item", "Item"],
             "_targetObjects": [["i1", "i2"], [], []],
             "_qualifiers": [["contains", "contains"], [], []],
+        },
+        schema=OBJECTS_SCHEMA,
+    )
+    return ObjectCentricEventLog(events=events, objects=objects)
+
+
+def make_disconnected_ocel():
+    """Two active object types that never participate in the same event."""
+    events = pl.DataFrame(
+        {
+            "_eventId": ["e-a", "e-b"],
+            "_activity": ["Use A", "Use B"],
+            "_timestampUnix": [1, 2],
+            "_objects": [["a1"], ["b1"]],
+            "_qualifiers": [["a"], ["b"]],
+            "_attributes": ["{}", "{}"],
+        },
+        schema=EVENTS_SCHEMA,
+    )
+    objects = pl.DataFrame(
+        {
+            "_objId": ["a1", "b1"],
+            "_objType": ["A", "B"],
+            "_targetObjects": [[], []],
+            "_qualifiers": [[], []],
         },
         schema=OBJECTS_SCHEMA,
     )
@@ -146,6 +172,130 @@ def test_fitting_scenario_matches_current_duckdb_discovery():
         assert totem_to_dict(totemDiscovery_db(database)) == fitting_totem_data()
     finally:
         database.close()
+
+
+def test_shared_histograms_preserve_discovery_aggregate_semantics():
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        histograms = compute_totem_histograms_db(database)
+    finally:
+        database.close()
+
+    assert histograms.event_cardinality[("Order", "Item")] == {
+        "total": 4,
+        "0": 2,
+        "1": 2,
+        "0...1": 4,
+        "1..*": 2,
+        "0...*": 4,
+    }
+    assert histograms.log_cardinality[("Order", "Item")] == {
+        "total": 1,
+        "0": 0,
+        "1": 0,
+        "0...1": 0,
+        "1..*": 1,
+        "0...*": 1,
+    }
+    assert histograms.temporal[("Item", "Order")] == {
+        "total": 2,
+        "D": 2,
+        "P": 2,
+    }
+    assert histograms.temporal[("Order", "Item")] == {
+        "total": 2,
+        "Di": 2,
+        "P": 2,
+    }
+    assert histograms.event_cardinality_by_activity == {}
+    assert histograms.temporal_by_relation_type == {}
+    assert histograms.log_cardinality_by_relation_type == {}
+
+
+def test_detailed_histograms_preserve_activity_and_qualifier_dimensions():
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        histograms = compute_totem_histograms_db(
+            database,
+            include_details=True,
+        )
+    finally:
+        database.close()
+
+    assert histograms.event_cardinality_by_activity[
+        ("Order", "Item", "Add Item")
+    ] == {
+        "total": 2,
+        "1": 2,
+        "0...1": 2,
+        "1..*": 2,
+        "0...*": 2,
+    }
+    assert histograms.event_cardinality_by_activity[
+        ("Order", "Item", "Create Order")
+    ] == {
+        "total": 1,
+        "0": 1,
+        "0...1": 1,
+        "0...*": 1,
+    }
+    assert histograms.temporal_by_relation_type[
+        ("Item", "Order", "contains")
+    ] == {
+        "total": 2,
+        "D": 2,
+        "P": 2,
+    }
+    assert histograms.temporal_by_relation_type[
+        ("Order", "Item", "contains")
+    ] == {
+        "total": 2,
+        "Di": 2,
+        "P": 2,
+    }
+    assert histograms.log_cardinality_by_relation_type[
+        ("Order", "Item", "contains")
+    ] == {
+        "total": 1,
+        "1..*": 1,
+        "0...*": 1,
+    }
+    assert ("Order", "Item", "e2o") not in (
+        histograms.temporal_by_relation_type
+    )
+    assert ("Item", "Order", "e2o") not in (
+        histograms.temporal_by_relation_type
+    )
+
+
+def test_disconnected_types_have_cardinality_but_no_temporal_histogram():
+    database = OcelDuckDB(make_disconnected_ocel())
+    try:
+        histograms = compute_totem_histograms_db(
+            database,
+            include_details=True,
+        )
+    finally:
+        database.close()
+
+    assert histograms.event_cardinality[("A", "B")] == {
+        "total": 1,
+        "0": 1,
+        "1": 0,
+        "0...1": 1,
+        "1..*": 0,
+        "0...*": 1,
+    }
+    assert histograms.log_cardinality[("A", "B")] == {
+        "total": 1,
+        "0": 1,
+        "1": 0,
+        "0...1": 1,
+        "1..*": 0,
+        "0...*": 1,
+    }
+    assert ("A", "B") not in histograms.temporal
+    assert ("A", "B", "e2o") not in histograms.temporal_by_relation_type
 
 
 def test_conformance_result_contract_is_deterministic_and_json_compatible():
