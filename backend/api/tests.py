@@ -765,3 +765,91 @@ class ProjectAssetApiTests(TestCase):
         response = self.client.get(f"/api/assets/{foreign_asset.pk}/download/")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_patch_rename_asset_keeps_content(self):
+        asset = self._create_asset(
+            self.project,
+            "Old name",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        original_content = asset.content_json
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"name": "New name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        asset.refresh_from_db()
+        self.assertEqual(asset.name, "New name")
+        self.assertEqual(asset.content_json, original_content)
+
+    def test_patch_updates_content_json(self):
+        asset = self._create_asset(
+            self.project,
+            "Updatable",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        updated = valid_totem_content_json()
+        updated["all_event_types"] = ["Create Order", "Pick Item", "Ship Order"]
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"content_json": updated},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        asset.refresh_from_db()
+        self.assertIn("Ship Order", asset.content_json["all_event_types"])
+
+    def test_patch_rejects_invalid_content_json(self):
+        asset = self._create_asset(
+            self.project,
+            "Guarded",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        invalid = valid_totem_content_json()
+        invalid["schema"] = "occn"
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"content_json": invalid},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        asset.refresh_from_db()
+        self.assertEqual(asset.content_json["schema"], "totem")
+
+    def test_patch_rejects_duplicate_name_in_project(self):
+        self._create_asset(self.project, "Existing", ProjectAsset.AssetType.TOTEM)
+        asset = self._create_asset(
+            self.project,
+            "To rename",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"name": "Existing"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_patch_scoped_to_user_project(self):
+        foreign_asset = self._create_asset(
+            self.other_project,
+            "Foreign update",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.patch(
+            f"/api/assets/{foreign_asset.pk}/",
+            {"name": "Hacked"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

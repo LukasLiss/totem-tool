@@ -1,15 +1,27 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Box, Filter, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Box,
+  Download,
+  Filter,
+  Pencil,
+  Plus,
+  SquarePen,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
   AssetType,
   ProjectAsset,
   deleteAsset,
+  downloadAsset,
   extractAssetApiError,
   listAssets,
+  updateAsset,
   uploadAsset,
 } from "@/api/assetsApi";
+import { DashboardContext, EditorComponent } from "@/contexts/DashboardContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +65,11 @@ const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, string> = {
   OCCN: "occn",
 };
 
+const EDITOR_COMPONENT_BY_TYPE: Record<AssetType, EditorComponent> = {
+  TOTEM: "totem",
+  OCCN: "occn",
+};
+
 interface AssetTableFilters {
   type: AssetFilter;
   changedFrom: string;
@@ -67,6 +84,7 @@ const DEFAULT_TABLE_FILTERS: AssetTableFilters = {
 
 export function ModelAssetsView() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
   const projectId = selectedFile?.project;
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [filters, setFilters] = useState<AssetTableFilters>(DEFAULT_TABLE_FILTERS);
@@ -74,6 +92,28 @@ export function ModelAssetsView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [assetToDelete, setAssetToDelete] = useState<ProjectAsset | null>(null);
+  const [assetToRename, setAssetToRename] = useState<ProjectAsset | null>(null);
+
+  const handleDownload = useCallback(async (asset: ProjectAsset) => {
+    try {
+      const { blob, filename } = await downloadAsset(asset.id);
+      triggerBlobDownload(blob, filename);
+    } catch (error) {
+      toast.error(extractAssetApiError(error).message);
+    }
+  }, []);
+
+  const handleOpenInEditor = useCallback(
+    (asset: ProjectAsset) => {
+      const component = EDITOR_COMPONENT_BY_TYPE[asset.asset_type];
+      if (!component) {
+        toast.error("This asset type cannot be opened in an editor.");
+        return;
+      }
+      setViewMode({ type: "editor", component, openAssetId: asset.id });
+    },
+    [setViewMode]
+  );
 
   const loadAssets = useCallback(async () => {
     if (!projectId) {
@@ -150,8 +190,24 @@ export function ModelAssetsView() {
               description="No stored model assets match the current filters."
             />
           ) : (
-            <AssetList assets={filteredAssets} onDeleteClick={setAssetToDelete} />
+            <AssetList
+              assets={filteredAssets}
+              onDownloadClick={handleDownload}
+              onRenameClick={setAssetToRename}
+              onOpenInEditorClick={handleOpenInEditor}
+              onDeleteClick={setAssetToDelete}
+            />
           )}
+          <RenameAssetDialog
+            asset={assetToRename}
+            onOpenChange={(open) => {
+              if (!open) setAssetToRename(null);
+            }}
+            onRenamed={async () => {
+              setAssetToRename(null);
+              await loadAssets();
+            }}
+          />
           <DeleteAssetDialog
             asset={assetToDelete}
             onOpenChange={(open) => {
@@ -444,36 +500,77 @@ function UploadAssetDialog({
 
 function AssetList({
   assets,
+  onDownloadClick,
+  onRenameClick,
+  onOpenInEditorClick,
   onDeleteClick,
 }: {
   assets: ProjectAsset[];
+  onDownloadClick: (asset: ProjectAsset) => void;
+  onRenameClick: (asset: ProjectAsset) => void;
+  onOpenInEditorClick: (asset: ProjectAsset) => void;
   onDeleteClick: (asset: ProjectAsset) => void;
 }) {
+  const columns = "grid-cols-[minmax(200px,1.7fr)_100px_160px_160px]";
   return (
     <div className="overflow-x-auto rounded-md border bg-background">
-      <div className="min-w-[650px]">
-        <div className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+      <div className="min-w-[720px]">
+        <div
+          className={`grid ${columns} border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground`}
+        >
           <span>Name</span>
           <span>Type</span>
           <span>Last changed</span>
-          <span>Actions</span>
+          <span className="text-right">Actions</span>
         </div>
         <div className="divide-y">
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] items-center px-4 py-3 text-sm"
+              className={`grid ${columns} items-center px-4 py-3 text-sm`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium" title={asset.name}>
                   {asset.name}
                 </div>
               </div>
-              <Badge variant="secondary">{formatAssetType(asset.asset_type)}</Badge>
+              <Badge variant="secondary" className="w-fit">
+                {formatAssetType(asset.asset_type)}
+              </Badge>
               <span className="text-muted-foreground">
                 {formatDate(asset.updated_at)}
               </span>
-              <div>
+              <div className="flex justify-end gap-0.5">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Open ${asset.name} in editor`}
+                  onClick={() => onOpenInEditorClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <SquarePen />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Rename ${asset.name}`}
+                  onClick={() => onRenameClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Download ${asset.name}`}
+                  onClick={() => onDownloadClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Download />
+                </Button>
                 <Button
                   type="button"
                   size="icon"
@@ -546,6 +643,106 @@ function EmptyState({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
     </Card>
+  );
+}
+
+function RenameAssetDialog({
+  asset,
+  onOpenChange,
+  onRenamed,
+}: {
+  asset: ProjectAsset | null;
+  onOpenChange: (open: boolean) => void;
+  onRenamed: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Seed the input each time a different asset opens the dialog.
+  useEffect(() => {
+    if (asset) {
+      setName(asset.name);
+      setError(null);
+    }
+  }, [asset]);
+
+  const handleSave = async () => {
+    if (!asset) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Enter a name.");
+      return;
+    }
+    if (trimmed === asset.name) {
+      onOpenChange(false);
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      await updateAsset({ assetId: asset.id, name: trimmed });
+      toast.success("Model asset renamed");
+      await onRenamed();
+    } catch (requestError) {
+      setError(extractAssetApiError(requestError).message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={Boolean(asset)}
+      onOpenChange={(open) => {
+        if (!open) setError(null);
+        onOpenChange(open);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename Model Asset</DialogTitle>
+          <DialogDescription>
+            Give {asset ? `"${asset.name}"` : "this model asset"} a new name. The
+            name must be unique within the project.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-2 py-2">
+          <Label htmlFor="rename-model-asset">Name</Label>
+          <Input
+            id="rename-model-asset"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={isSaving}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void handleSave();
+            }}
+          />
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <AlertCircle className="size-4" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isSaving}
+          >
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => void handleSave()} disabled={isSaving}>
+            {isSaving ? "Saving" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -689,6 +886,17 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 }
 
 export default ModelAssetsView;
