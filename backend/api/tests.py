@@ -556,14 +556,110 @@ class TotemConformanceApiValidationTests(TestCase):
 
     def test_valid_request_executes_conformance_and_returns_result(self):
         expected_result = {
-            "overall_metrics": {"temporal": {"fitness": 1.0, "precision": 0.5}},
-            "object_type_metrics": {},
-            "type_pair_metrics": [],
-            "histograms": {},
+            "overall_metrics": {
+                "temporal": {"fitness": 1.0, "precision": 0.75},
+                "log_cardinality": {"fitness": 0.8, "precision": 0.6},
+                "event_cardinality": {"fitness": 0.9, "precision": 0.7},
+            },
+            "object_type_metrics": {
+                "Item": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+                "Order": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+            },
+            "type_pair_metrics": [
+                {
+                    "source_type": "Order",
+                    "target_type": "Item",
+                    "temporal": {
+                        "model_relation": "D",
+                        "fitness": 1.0,
+                        "precision": 0.75,
+                    },
+                    "log_cardinality": {
+                        "model_relation": "1..*",
+                        "fitness": 0.8,
+                        "precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "model_relation": "0...*",
+                        "fitness": 0.9,
+                        "precision": 0.7,
+                    },
+                }
+            ],
+            "histograms": {
+                "temporal": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+                "event_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "event_cardinality_by_activity": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "activity": "Pick Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "temporal_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+            },
         }
         db = object()
         with (
-            patch("api.views._with_ocel_db", return_value=nullcontext(db)),
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ) as load_ocel,
             patch("api.views.conformance_of_totem") as conformance,
         ):
             conformance.return_value.to_dict.return_value = expected_result
@@ -574,15 +670,16 @@ class TotemConformanceApiValidationTests(TestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["file_id"], self.event_log.pk)
-        self.assertEqual(response.data["asset_id"], self.totem_asset.pk)
         self.assertEqual(
-            response.data["overall_metrics"],
-            expected_result["overall_metrics"],
+            response.data,
+            {
+                "file_id": self.event_log.pk,
+                "asset_id": self.totem_asset.pk,
+                **expected_result,
+            },
         )
-        self.assertEqual(response.data["object_type_metrics"], {})
-        self.assertEqual(response.data["type_pair_metrics"], [])
-        self.assertEqual(response.data["histograms"], {})
+        load_ocel.assert_called_once()
+        self.assertEqual(load_ocel.call_args.args[0].pk, self.event_log.pk)
         conformance.assert_called_once()
         deserialized_totem, called_db = conformance.call_args.args
         self.assertIsInstance(deserialized_totem, Totem)
@@ -591,6 +688,53 @@ class TotemConformanceApiValidationTests(TestCase):
             {("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
         )
         self.assertIs(called_db, db)
+
+    def test_invalid_stored_totem_models_return_validation_error(self):
+        wrong_schema = valid_totem_content_json()
+        wrong_schema["schema"] = "occn"
+
+        unsupported_version = valid_totem_content_json()
+        unsupported_version["version"] = 2
+
+        unknown_relation_node = valid_totem_content_json()
+        unknown_relation_node["tempgraph"]["D"] = [["Order", "Unknown"]]
+
+        invalid_cardinality = valid_totem_content_json()
+        invalid_cardinality["cardinalities"][0]["log_cardinality"] = "sometimes"
+
+        invalid_models = (
+            ("non-object payload", []),
+            ("wrong schema", wrong_schema),
+            ("unsupported schema version", unsupported_version),
+            ("relation references unknown node", unknown_relation_node),
+            ("unsupported cardinality", invalid_cardinality),
+        )
+
+        for label, content_json in invalid_models:
+            with self.subTest(label=label):
+                ProjectAsset.objects.filter(pk=self.totem_asset.pk).update(
+                    content_json=content_json
+                )
+                with (
+                    patch("api.views._with_ocel_db") as load_ocel,
+                    patch("api.views.conformance_of_totem") as conformance,
+                ):
+                    response = self.client.post(
+                        self.url,
+                        {"asset_id": self.totem_asset.pk},
+                        format="json",
+                    )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn(
+                    "Stored TOTeM model is invalid",
+                    response.data["asset_id"],
+                )
+                load_ocel.assert_not_called()
+                conformance.assert_not_called()
 
 
 class ProjectAssetApiTests(TestCase):
