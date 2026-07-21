@@ -7,12 +7,11 @@
  * a direct python invocation.
  *
  * Usage (from package.json scripts):
- *   node scripts/run-python.js [--cwd path] <args...>
+ *   node scripts/run-python.js <args...>
  *
  * Examples:
  *   node scripts/run-python.js backend/manage.py runserver 8000
  *   node scripts/run-python.js -m pytest totem_lib/tests
- *   node scripts/run-python.js --cwd totem_lib -m pytest tests
  */
 
 const fs = require('fs');
@@ -34,19 +33,7 @@ if (!fs.existsSync(venvPython)) {
 }
 
 const args = process.argv.slice(2);
-let cwd = ROOT_DIR;
-const cwdIndex = args.indexOf('--cwd');
-if (cwdIndex !== -1) {
-    const requestedCwd = args[cwdIndex + 1];
-    if (!requestedCwd) {
-        console.error('Missing path after --cwd.');
-        process.exit(1);
-    }
-    cwd = path.resolve(ROOT_DIR, requestedCwd);
-    args.splice(cwdIndex, 2);
-}
-
-const result = spawnSync(venvPython, args, { stdio: 'inherit', cwd });
+const result = spawnSync(venvPython, args, { stdio: 'inherit', cwd: ROOT_DIR });
 
 if (result.error) {
     console.error(`❌ Failed to launch python: ${result.error.message}`);

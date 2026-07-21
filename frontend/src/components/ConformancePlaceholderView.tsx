@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/card";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { DashboardContext } from "@/contexts/DashboardContext";
-import { useWorkspace } from "@/contexts/useWorkspace";
+import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 const CONFORMANCE_LABELS = {
   totem: "TOTeM Conformance",
@@ -17,7 +17,7 @@ const CONFORMANCE_LABELS = {
 
 export function ConformancePlaceholderView() {
   const { viewMode } = useContext(DashboardContext);
-  const { selectedProject, selectedEventLog } = useWorkspace();
+  const { selectedFile } = useContext(SelectedFileContext);
 
   if (viewMode.type !== "conformance") return null;
 
@@ -30,11 +30,9 @@ export function ConformancePlaceholderView() {
             <CardHeader>
               <CardTitle>{CONFORMANCE_LABELS[viewMode.component]}</CardTitle>
               <CardDescription>
-                {!selectedProject
-                  ? "Select a project before running conformance checking."
-                  : !selectedEventLog
-                    ? "Select an event log before running conformance checking."
-                    : "This workflow will use the selected project and event log."}
+                {selectedFile?.project
+                  ? "This conformance workflow will use the selected project context."
+                  : "Select an event log before running conformance checking."}
               </CardDescription>
             </CardHeader>
           </Card>

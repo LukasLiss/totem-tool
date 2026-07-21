@@ -1,123 +1,137 @@
-import { useState, type FormEvent } from "react";
-import { Upload } from "lucide-react";
-import { useDropzone } from "react-dropzone";
-import { toast } from "sonner";
-
-import { uploadEventLog } from "@/api/fileApi";
-import { createProject } from "@/api/projectApi";
+import { useState, useRef, useContext } from "react";
+import { fileTypeFromBlob } from "file-type";
+import { uploadFile } from "../api/fileApi";
+import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import {
   Card,
-  CardContent,
+  CardAction,
+  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { useWorkspace } from "@/contexts/useWorkspace";
-import {
-  projectNameFromEventLogFilename,
-  validateEventLogFile,
-} from "@/lib/eventLogFiles";
+  CardContent,
+} from "@/components/ui/card"
+import { toast } from "sonner"
+
 
 export function FileUploadValidator() {
-  const { selectedProject, selectProject, selectEventLog } = useWorkspace();
-  const [file, setFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+    const { setSelectedFile } = useContext(SelectedFileContext);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: (incomingFiles) => setFile(incomingFiles[0] ?? null),
-    multiple: false,
-    disabled: isUploading,
-  });
+    const [file, setFile] = useState<File | null>(null);
+    const hiddenInputRef = useRef<HTMLInputElement | null>(null);
 
-  const validateFile = async () => {
+
+    const {getRootProps, getInputProps} = useDropzone({
+      onDrop: (incomingFiles) => {
+        if (hiddenInputRef.current) {
+          const dataTransfer = new DataTransfer();
+          incomingFiles.forEach((v) => {
+            dataTransfer.items.add(v);
+          });
+          hiddenInputRef.current.files = dataTransfer.files;
+        }
+        setFile(incomingFiles[0]);
+      },
+      multiple: false,
+    });
+
+    const validateFile = async () => {
     if (!file) {
       toast.error("Please select a file first");
       return false;
     }
 
-    try {
-      await validateEventLogFile(file);
-    } catch (error) {
-      toast.error("Invalid file type", {
-        description: error instanceof Error ? error.message : undefined,
-      });
-      return false;
+    const type = await fileTypeFromBlob(file);
+    console.log("Detected type:", type);
+
+    const isJson =
+      type?.ext === "json" || file.name.toLowerCase().endsWith(".json");
+    const isXml =
+      type?.ext === "xml" && file.name.toLowerCase().endsWith(".xml");
+    const isSqlite =
+      (type?.ext === "sqlite" || type?.ext === "db") &&
+      (file.name.toLowerCase().endsWith(".sqlite") ||
+        file.name.toLowerCase().endsWith(".db"));
+    const isCsv =
+      type?.ext === "csv" || file.name.toLowerCase().endsWith(".csv");
+    // The `file-type` library has no DuckDB signature, so `type?.ext` is
+    // undefined for valid DuckDB files. Fall back to filename matching, in
+    // line with how isJson / isCsv are handled.
+    const isDuckDB =
+      file.name.toLowerCase().endsWith(".duckdb");
+
+    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
+        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
+        return false;
     }
 
     return true;
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!(await validateFile()) || !file) return;
-
-    setIsUploading(true);
+  const handleFileUpload = async () => {
     try {
-      let targetProject = selectedProject;
-      if (!targetProject) {
-        targetProject = await createProject(
-          projectNameFromEventLogFilename(file.name),
-        );
-        selectProject(targetProject);
+      if (!file) {
+        toast.warning("No file selected!");
+        return;
       }
-      const eventLog = await uploadEventLog({
-        projectId: targetProject.id,
-        file,
+      const response = await uploadFile(file);
+      setSelectedFile(response);
+      toast.success("Upload successful", {
+        description: file.name,
       });
-      selectEventLog(eventLog);
-      toast.success("Event log uploaded", { description: file.name });
       setFile(null);
-    } catch (error) {
-      console.error("Upload failed:", error);
-      toast.error("Event log could not be uploaded");
-    } finally {
-      setIsUploading(false);
+    } catch (err) {
+      console.error("Upload failed:", err);
+      toast.error("Upload failed");
     }
   };
 
+
+ const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const isValid = await validateFile();
+    if (isValid) {
+      await handleFileUpload();
+    }
+ };
+
+
   return (
-    <Card className="h-full">
+  <div>
+    <Card className="w-full max-w-sm m-6">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-lg">
-          <Upload className="size-5" />
-          Upload event log
+        <CardTitle>
+          Upload new file
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <form className="space-y-3" onSubmit={handleSubmit}>
-          <div
-            {...getRootProps({
-              className:
-                "flex min-h-36 cursor-pointer items-center justify-center rounded-md border border-dashed p-5 text-center text-sm transition-colors hover:bg-muted/50 data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-50",
-              "data-disabled": isUploading,
-            })}
-          >
-            <input {...getInputProps()} />
-            <span>
-              {isDragActive
-                  ? "Drop the event log here"
-                  : selectedProject
-                    ? "Choose or drop an OCEL file"
-                    : "Choose or drop an OCEL file to create a project"}
-            </span>
+        <CardContent>
+          <form className="flex flex-col" onSubmit={handleSubmit}>
+            <div {...getRootProps({ className:
+              "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })}>
+              <input
+                type="file"
+                name="my-file"
+                ref={hiddenInputRef}
+                style={{ opacity: 0 }}
+              />
+              <input  {...getInputProps()} />
+              <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
+            </div>
+
+        <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
+          <div className="flex flex-col justify-center w-full">
+            <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
+                <span>{file?.name ?? "No file chosen"}</span>
+            </div>
+              <Button className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
           </div>
-          <div className="min-h-9 rounded-md border px-3 py-2 text-sm text-muted-foreground">
-            {file?.name ?? "No file selected"}
-          </div>
-          <CardFooter className="p-0">
-            <Button
-              className="w-full"
-              type="submit"
-              disabled={!file || isUploading}
-            >
-              <Upload />
-              {isUploading ? "Uploading..." : "Upload"}
-            </Button>
-          </CardFooter>
-        </form>
-      </CardContent>
-    </Card>
+        </CardFooter>
+      </form>
+    </CardContent>
+  </Card>
+  </div>
   );
 }
 

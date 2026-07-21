@@ -1,23 +1,23 @@
-import { useEffect, useState } from "react";
+import { useState, useContext, useEffect } from "react";
 import { processFile } from "../api/fileApi";
-import { useWorkspace } from "../contexts/useWorkspace";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
 
 export function NumberofEvents() {
-    const [processedResult, setProcessedResult] = useState<number | null>(null);
+    const [processedResult, setProcessedResult] = useState(null);
 
-    const { selectedEventLog } = useWorkspace();
+    const { selectedFile } = useContext(SelectedFileContext);
 
     useEffect(() => {
         const handleProcessFile = async () => {
             console.log("handleProcessFile");
 
-            if (!selectedEventLog?.id) {
-                setProcessedResult(null);
+            if (!selectedFile?.id) {
+                alert("Please select a file first");
                 return;
             }
 
             try {
-                const result = await processFile(selectedEventLog.id);
+                const result = await processFile(selectedFile.id);
                 setProcessedResult(result);
                 console.log(result);
             } catch (err) {
@@ -26,7 +26,7 @@ export function NumberofEvents() {
         };
 
         handleProcessFile();
-    }, [selectedEventLog?.id]);
+    }, [selectedFile]);
 
         return (
             <p>Number of Events: {processedResult} </p>

@@ -24,40 +24,17 @@ The currently supported asset types are:
 - `TOTEM`
 - `OCCN`
 
-## Project Workspace Behavior
+## Project Scoping
 
-A project is an independent workspace rather than an alias for one event log.
-It can exist without an event log and can contain multiple event logs and model
-assets. A project may have a user-defined name. An unnamed explicitly created
-project uses the stable display fallback `Project <id>`. Uploading an event log
-without first selecting a project creates one named
-`<event-log-filename-stem>_project`.
+This ticket does not change the existing event-log-centered project lifecycle.
+Uploading an event log creates its project, and the selected event log determines
+the active project throughout the frontend. The Model Assets view therefore
+loads and manages assets for the project associated with the currently selected
+event log.
 
 Event logs remain stored files because analysis algorithms read their OCEL
 content. Model assets differ deliberately: their upload file is parsed and
 discarded, and only validated canonical JSON is stored.
-
-The initial Project Workspace screen exposes four operations:
-
-- Select or create a project.
-- Upload an event log, creating a project from its filename when necessary.
-- Upload a TOTeM or OCCN model into the selected project.
-- Select the active event log used by analysis and conformance views.
-
-One project-level `Launch project` action sits below these operations. It only
-requires a selected project; an event log is not required. Launching opens the
-Project area at Event Logs management, including for empty or model-only
-projects.
-
-When a selected project contains exactly one event log, that log becomes active
-automatically. Projects with no logs or multiple logs require no selection or an
-explicit selection, respectively. Event logs can be deleted from the Event Logs
-view. Deleting the active log clears the workspace selection, removes the
-database row and stored file, and leaves the project itself intact.
-
-The Event Logs view reports the file type derived from the filename and a `Last
-changed` timestamp. Existing logs initialize that timestamp from their original
-upload time.
 
 ## Asset Concept
 
@@ -102,9 +79,6 @@ Supported operations:
   project and type.
 - `POST /api/assets/`: create an asset from either multipart file upload or
   direct JSON content.
-- `POST /api/assets/validate/`: validate a multipart model file without storing
-  an asset. The initial project-creation flow uses this before creating the
-  project, avoiding partial projects for invalid models.
 - `GET /api/assets/<asset_id>/`: retrieve one asset.
 - `DELETE /api/assets/<asset_id>/`: delete one asset.
 - `GET /api/assets/<asset_id>/download/`: return the stored JSON content as a
@@ -118,11 +92,8 @@ Multipart upload accepts:
 - `file`: UTF-8 JSON file.
 - `metadata`: optional JSON string.
 
-The HTTP API keeps `asset_type` explicit as a storage and query contract. The
-frontend does not ask the user to select it: it infers `TOTEM` from
-`schema: "totem"` and `OCCN` from `schema: "occn"`, then sends the inferred type
-to the API. Backend validation verifies that the supplied type and canonical
-model structure agree.
+The HTTP API and current upload form require `asset_type` explicitly. Backend
+validation verifies that the selected type and canonical model structure agree.
 
 Direct JSON creation accepts:
 
@@ -359,9 +330,9 @@ The repository contains complete canonical examples:
 - [OCCN v1 example](examples/model-assets/occn-v1.json)
 
 These files contain the model payload itself, not the surrounding asset API
-request. They can be uploaded directly in the initial Project Workspace or
-Model Assets view; the model type is inferred from `schema`. They can also be
-used as `content_json` for direct JSON creation.
+request. They can be uploaded directly in the Model Assets view by selecting
+the matching model type. They can also be used as `content_json` for direct JSON
+creation.
 
 ## Adding a New Asset Type
 
@@ -378,7 +349,8 @@ across the library, backend, frontend, tests, and this documentation.
 4. Register the model validator in `ProjectAssetSerializer._validate_content_json`
    in `backend/api/serializers.py`.
 5. Extend the frontend `AssetType` union in `frontend/src/api/assetsApi.tsx`,
-   register its schema-to-type inference, and add it to Model Assets filters.
+   register its expected schema, and add it to the upload form and Model Assets
+   filters.
 6. Add library roundtrip and malformed-input tests, backend upload/API tests,
    and a canonical example JSON file.
 7. Document the new schema, version, validation behavior, and example here.

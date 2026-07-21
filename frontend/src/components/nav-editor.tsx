@@ -33,7 +33,7 @@ export function NavEditor() {
     <SidebarGroup>
       <SidebarGroupLabel>Editor</SidebarGroupLabel>
       <SidebarMenu>
-        <Collapsible asChild className="group/collapsible">
+        <Collapsible asChild defaultOpen className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
               <SidebarMenuButton tooltip="Model Editors" data-active={isEditorActive}>

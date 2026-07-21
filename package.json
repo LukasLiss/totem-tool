@@ -7,7 +7,7 @@
     "start-backend": "node scripts/run-python.js backend/manage.py runserver 8000",
     "start-frontend": "cd frontend && npm start",
     "start-electron": "cd electron && cross-env NODE_ENV=development npm start",
-    "test-backend": "node scripts/run-python.js --cwd totem_lib -m pytest tests",
+    "test-backend": "node scripts/run-python.js -m pytest totem_lib/tests",
     "build-frontend": "cd frontend && cross-env VITE_LOCAL_MODE=1 npm run build-no-typecheck",
     "build-frontend-server": "cd frontend && npm run build-no-typecheck",
     "build-electron": "cd electron && npm run build",

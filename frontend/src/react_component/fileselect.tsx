@@ -1,61 +1,59 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect, useContext } from "react";
+import { useNavigate } from "react-router-dom";
+import { getUserFiles } from "../api/fileApi";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
+import './component_styles/fileselect.css';
 
-import { listEventLogs, type EventLog } from "@/api/fileApi";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { useWorkspace } from "@/contexts/useWorkspace";
+type FileItem = {
+  id: number;
+  project: number;
+  file: string;
+  uploaded_at: string;
+};
 
 function FileSelect() {
-  const [files, setFiles] = useState<EventLog[]>([]);
-  const { selectedProject, selectedEventLog, selectEventLog } = useWorkspace();
+    const [files, setFiles] = useState<FileItem[]>([]);
+    const [selectedFileId, setSelectedFileId] = useState<number | "">("");
+    const { setSelectedFile } = useContext(SelectedFileContext);
+    const navigate = useNavigate()
 
-  useEffect(() => {
-    if (!selectedProject) {
-      setFiles([]);
-      return;
-    }
+    useEffect(() => {
+        const fetchFiles = async () => {
+            try {
+                const response = await getUserFiles();
+                setFiles(response);
+            } catch (err) {
+                console.error(err);
+            }
+        };
 
-    let cancelled = false;
-    listEventLogs(selectedProject.id)
-      .then((response) => {
-        if (!cancelled) setFiles(response);
-      })
-      .catch((error: unknown) => {
-        console.error(error);
-        if (!cancelled) setFiles([]);
-      });
+        fetchFiles();
+        }, []);
 
-    return () => {
-      cancelled = true;
+    const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const fileId = Number(e.target.value);
+        setSelectedFileId(fileId);
+
+        const file = files.find((f) => f.id === fileId);
+        if (file) {
+            setSelectedFile(file);
+            console.log("Saved to context:", file);
+            navigate("/variantsview");
+        }
     };
-  }, [selectedProject]);
 
-  return (
-    <Select
-      value={selectedEventLog ? String(selectedEventLog.id) : ""}
-      onValueChange={(value) => {
-        const eventLog = files.find((file) => file.id === Number(value));
-        if (eventLog) selectEventLog(eventLog);
-      }}
-      disabled={!selectedProject || files.length === 0}
-    >
-      <SelectTrigger className="w-72">
-        <SelectValue placeholder="Select event log" />
-      </SelectTrigger>
-      <SelectContent>
-        {files.map((file) => (
-          <SelectItem key={file.id} value={String(file.id)}>
-            {file.file.split("/").pop() || `Event log ${file.id}`}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
+    return(
+        <div className="flex flex-row justify-between">
+            <select className="rounded-md border bg-background px-2 py-2" onChange={handleSelectChange} value={selectedFileId}>
+                <option value="">Select OCEL File</option>
+                {files.map((file) => (
+                    <option key={file.id} value={file.id} >
+                        {file.file ? file.file.split("/").pop() : "Unknown file"}
+                    </option>
+                ))}
+            </select>
+        </div>
+    )
 }
 
-export default FileSelect;
+export default FileSelect

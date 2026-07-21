@@ -16,8 +16,10 @@ export async function renameDashboard(dashboardId: number, newName: string) {
   return data;
 }
 
-export async function getDashboards(projectId: number) {
-  const url = `http://localhost:8000/api/dashboard/?project=${projectId}`;
+export async function getDashboards(projectId?: number) {
+  const url = projectId
+    ? `http://localhost:8000/api/dashboard/?project=${projectId}`
+    : "http://localhost:8000/api/dashboard/";
   const { data } = await axios.get(url);
   return data;
 }

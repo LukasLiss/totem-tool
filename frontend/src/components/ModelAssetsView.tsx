@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Filter, Plus, Trash2, Workflow } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { AlertCircle, Box, Filter, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -44,13 +44,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { useWorkspace } from "@/contexts/useWorkspace";
-import {
-  formatAssetType,
-  inferModelAssetType,
-} from "@/lib/modelAssetFiles";
+import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 type AssetFilter = "ALL" | AssetType;
+
+const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, string> = {
+  TOTEM: "totem",
+  OCCN: "occn",
+};
 
 interface AssetTableFilters {
   type: AssetFilter;
@@ -65,8 +66,8 @@ const DEFAULT_TABLE_FILTERS: AssetTableFilters = {
 };
 
 export function ModelAssetsView() {
-  const { selectedProject } = useWorkspace();
-  const projectId = selectedProject?.id;
+  const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project;
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [filters, setFilters] = useState<AssetTableFilters>(DEFAULT_TABLE_FILTERS);
   const [isLoading, setIsLoading] = useState(false);
@@ -132,7 +133,7 @@ export function ModelAssetsView() {
           {!projectId ? (
             <EmptyState
               title="No project selected"
-              description="Select or create a project to manage model assets."
+              description="Upload or select an event log to manage model assets."
             />
           ) : isLoading ? (
             <AssetsLoadingState />
@@ -300,6 +301,7 @@ function UploadAssetDialog({
   onUploaded: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
+  const [assetType, setAssetType] = useState<AssetType>("TOTEM");
   const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -307,6 +309,7 @@ function UploadAssetDialog({
 
   const resetForm = () => {
     setName("");
+    setAssetType("TOTEM");
     setFile(null);
     setFormError(null);
     setIsSubmitting(false);
@@ -331,7 +334,7 @@ function UploadAssetDialog({
     setIsSubmitting(true);
     setFormError(null);
     try {
-      const assetType = await inferModelAssetType(file);
+      await validateModelAssetFile(file, assetType);
       await uploadAsset({
         projectId,
         name: name.trim(),
@@ -385,12 +388,28 @@ function UploadAssetDialog({
             </div>
 
             <div className="grid gap-2">
+              <Label htmlFor="model-asset-type">Type</Label>
+              <Select
+                value={assetType}
+                onValueChange={(value) => setAssetType(value as AssetType)}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger id="model-asset-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="TOTEM">TOTeM</SelectItem>
+                  <SelectItem value="OCCN">OCCN</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
               <Label htmlFor="model-asset-file">Model file</Label>
               <Input
                 key={fileInputKey}
                 id="model-asset-file"
                 type="file"
-                accept=".json,application/json"
                 disabled={isSubmitting}
                 onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               />
@@ -521,7 +540,7 @@ function EmptyState({
     <Card>
       <CardHeader className="items-center text-center">
         <div className="mb-2 rounded-md border bg-muted p-2">
-          <Workflow className="size-5 text-muted-foreground" />
+          <Box className="size-5 text-muted-foreground" />
         </div>
         <CardTitle className="text-base">{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
@@ -623,6 +642,35 @@ function ErrorState({
       </CardContent>
     </Card>
   );
+}
+
+function formatAssetType(assetType: AssetType) {
+  return assetType === "TOTEM" ? "TOTeM" : "OCCN";
+}
+
+async function validateModelAssetFile(file: File, assetType: AssetType) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    throw new Error("Model file content must be valid JSON.");
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Model asset JSON must be an object.");
+  }
+
+  const schema = (parsed as Record<string, unknown>).schema;
+  if (typeof schema !== "string") {
+    throw new Error("Model asset JSON must declare a schema.");
+  }
+
+  const expectedSchema = EXPECTED_SCHEMA_BY_TYPE[assetType];
+  if (schema !== expectedSchema) {
+    throw new Error(
+      `Expected schema "${expectedSchema}" for ${formatAssetType(assetType)} assets.`
+    );
+  }
 }
 
 function getDateOnly(value: string) {

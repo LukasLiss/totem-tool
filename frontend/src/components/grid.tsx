@@ -12,7 +12,7 @@ import GridContainer from "../gridstack/lib/grid_container";
 import { useGrid } from "../gridstack/lib/gridstackprovider";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
-import { useWorkspace } from "@/contexts/useWorkspace";
+import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
 import {
   Settings, Save, Minus, Plus
@@ -145,13 +145,13 @@ const GridContent: React.FC = () => {
 };
 
 const Grid: React.FC = () => {
-  const { selectedEventLog } = useWorkspace();
+  const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
   const { viewMode } = useContext(DashboardContext);
   const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
-  console.log("selectedEventLog passed to GridProvider:", selectedEventLog);
+  console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
-    <GridProvider selectedFile={selectedEventLog} dashboardId={dashboardId}>
+    <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
       <GridContent />
     </GridProvider>
   </SidebarInset>
