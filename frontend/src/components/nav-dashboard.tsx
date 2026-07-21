@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/collapsible"
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -42,6 +41,10 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { useNavigate } from "react-router-dom";
 
 
+function isUnauthorizedError(error: unknown) {
+  return error instanceof Error && error.message === "UNAUTHORIZED";
+}
+
 
 
 export function NavDashboard({
@@ -51,7 +54,7 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
-  const { setViewMode } = useContext(DashboardContext);
+  const { viewMode, setViewMode } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
@@ -71,8 +74,8 @@ export function NavDashboard({
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
+    } catch (error: unknown) {
+              if (isUnauthorizedError(error)) {
                 navigate("/login", {
                   replace: true,
                   state: { from: location.pathname },
@@ -93,8 +96,8 @@ export function NavDashboard({
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
+  } catch (error: unknown) {
+              if (isUnauthorizedError(error)) {
                 navigate("/login", {
                   replace: true,
                   state: { from: location.pathname },
@@ -113,8 +116,8 @@ export function NavDashboard({
     await refreshDashboards();
     setOpenDelete(false);
     setDashboardToDelete(null); // reset
-  } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
+  } catch (error: unknown) {
+              if (isUnauthorizedError(error)) {
                 navigate("/login", {
                   replace: true,
                   state: { from: location.pathname },
@@ -131,13 +134,15 @@ export function NavDashboard({
   return (
     <div>
       <SidebarGroup>
-        <SidebarGroupLabel>Dashboards</SidebarGroupLabel>
         <SidebarMenu>
           <Collapsible asChild className="group/collapsible">
             <SidebarMenuItem>
               {/* Main permanent button */}
               <CollapsibleTrigger asChild>
-                <SidebarMenuButton tooltip="Dashboards">
+                <SidebarMenuButton
+                  tooltip="Dashboards"
+                  data-active={viewMode.type === 'dashboard'}
+                >
                   <FileStack />
                   <span>Dashboards</span>
                   <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />

@@ -1,12 +1,15 @@
 import React, { createContext, useState } from "react";
 
 export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
+export type ConformanceComponent = 'totem' | 'occn';
 
 export type EditorComponent = 'totem' | 'occn' | 'ocpn';
 
 export type ViewMode =
   | { type: 'overview' }
+  | { type: 'modelAssets' }
   | { type: 'analysis'; component: AnalysisComponent }
+  | { type: 'conformance'; component: ConformanceComponent }
   | { type: 'editor'; component: EditorComponent }
   | { type: 'dashboard'; id: number };
 
