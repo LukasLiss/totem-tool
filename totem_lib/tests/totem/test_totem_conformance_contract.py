@@ -2,6 +2,10 @@ import json
 
 import polars as pl
 import pytest
+from totem_lib import (
+    TotemConformanceResult as PublicTotemConformanceResult,
+)
+from totem_lib import conformance_of_totem as public_conformance_of_totem
 
 from totem_lib.ocel.ocel import (
     EVENTS_SCHEMA,
@@ -601,6 +605,141 @@ def test_explicit_inverse_temporal_relation_is_used_directly():
     assert pair_metrics[("Order", "Item")].temporal.fitness == 1.0
     assert pair_metrics[("Item", "Order")].temporal.model_relation == "D"
     assert pair_metrics[("Item", "Order")].temporal.fitness == 1.0
+
+
+def test_conformance_algorithm_returns_expected_non_fitting_result():
+    model = totem_from_dict(non_fitting_totem_data())
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        result = conformance_of_totem(model, database)
+    finally:
+        database.close()
+
+    assert result.overall_metrics == OverallConformance(
+        temporal=FitnessPrecision(0.0, 1.0),
+        log_cardinality=FitnessPrecision(0.0, 1.0),
+        event_cardinality=FitnessPrecision(
+            pytest.approx(1 / 3),
+            pytest.approx(2 / 3),
+        ),
+    )
+    assert result.object_type_metrics == (
+        ObjectTypeConformance(
+            "Item",
+            FitnessPrecision(0.0, 1.0),
+            FitnessPrecision(0.0, 1.0),
+            FitnessPrecision(0.25, 0.75),
+        ),
+        ObjectTypeConformance(
+            "Order",
+            FitnessPrecision(0.0, 1.0),
+            FitnessPrecision(0.0, 1.0),
+            FitnessPrecision(0.25, 0.75),
+        ),
+    )
+
+    pair_metrics = {
+        (metric.source_type, metric.target_type): metric
+        for metric in result.type_pair_metrics
+    }
+    assert pair_metrics[("Item", "Order")].temporal.fitness == 0.0
+    assert pair_metrics[("Item", "Order")].log_cardinality.fitness == 0.0
+    assert pair_metrics[("Order", "Item")].event_cardinality == (
+        RelationConformance("1..*", 0.5, 0.5)
+    )
+
+
+def test_model_types_missing_from_log_produce_unavailable_metrics():
+    model_data = fitting_totem_data()
+    model_data["tempgraph"] = {
+        "nodes": ["Ghost", "Order"],
+        "D": [["Ghost", "Order"]],
+        "Di": [],
+        "I": [],
+        "Ii": [],
+        "P": [],
+    }
+    model_data["cardinalities"] = [
+        {
+            "from": "Ghost",
+            "to": "Order",
+            "log_cardinality": "1",
+            "event_cardinality": "1",
+        }
+    ]
+    model_data["type_relations"] = [["Ghost", "Order"]]
+    model_data["object_type_to_event_types"] = {
+        "Ghost": [],
+        "Order": ["Add Item", "Close Order", "Create Order"],
+    }
+    model = totem_from_dict(model_data)
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        result = conformance_of_totem(model, database)
+    finally:
+        database.close()
+
+    unavailable = FitnessPrecision(None, None)
+    assert result.overall_metrics == OverallConformance(
+        temporal=unavailable,
+        log_cardinality=unavailable,
+        event_cardinality=unavailable,
+    )
+    assert all(
+        metric.temporal == RelationConformance("D", None, None)
+        and metric.log_cardinality == RelationConformance("1", None, None)
+        and metric.event_cardinality == RelationConformance("1", None, None)
+        for metric in result.type_pair_metrics
+    )
+    assert all(
+        metric.temporal == unavailable
+        and metric.log_cardinality == unavailable
+        and metric.event_cardinality == unavailable
+        for metric in result.object_type_metrics
+    )
+
+
+def test_empty_model_returns_stable_empty_metrics():
+    model = totem_from_dict(
+        {
+            "schema": "totem",
+            "version": 1,
+            "tempgraph": {
+                "nodes": [],
+                "D": [],
+                "Di": [],
+                "I": [],
+                "Ii": [],
+                "P": [],
+            },
+            "cardinalities": [],
+            "type_relations": [],
+            "all_event_types": [],
+            "object_type_to_event_types": {},
+        }
+    )
+    database = OcelDuckDB(make_conformance_ocel())
+    try:
+        result = conformance_of_totem(model, database)
+    finally:
+        database.close()
+
+    unavailable = FitnessPrecision(None, None)
+    assert result.overall_metrics == OverallConformance(
+        temporal=unavailable,
+        log_cardinality=unavailable,
+        event_cardinality=unavailable,
+    )
+    assert result.object_type_metrics == ()
+    assert result.type_pair_metrics == ()
+    assert json.loads(json.dumps(result.to_dict(), allow_nan=False)) == (
+        result.to_dict()
+    )
+
+
+def test_conformance_api_is_exposed_from_package_root():
+    assert public_conformance_of_totem is conformance_of_totem
+    assert PublicTotemConformanceResult is TotemConformanceResult
 
 
 def test_conformance_result_contract_is_deterministic_and_json_compatible():

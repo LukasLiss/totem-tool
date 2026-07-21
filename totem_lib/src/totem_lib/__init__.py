@@ -5,8 +5,10 @@ from .ocel import (
     filter_dead_objects
 )
 from .totem import (
+    conformance_of_totem,
     mlpaDiscovery,
     Totem,
+    TotemConformanceResult,
     totemDiscovery,
     totem_from_dict,
     totem_to_dict,
@@ -35,6 +37,7 @@ from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_
 __all__ = [
     "calculate_layout",
     "CCDFG",
+    "conformance_of_totem",
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
     "discover_oc_petri_net_polars",
@@ -58,6 +61,7 @@ __all__ = [
     "mlpaDiscovery",
     "process_execution_edit_distance",
     "Totem",
+    "TotemConformanceResult",
     "totemDiscovery",
     "totem_from_dict",
     "totem_to_dict",

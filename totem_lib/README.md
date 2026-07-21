@@ -16,6 +16,35 @@ totem = totemDiscovery(ocel, tau=0.9)
 process_view = mlpaDiscovery(totem)
 ```
 
+## TOTeM conformance checking
+
+TOTeM conformance compares an independently loaded model with a current event
+log. It does not discover or modify the model during the check.
+
+```python
+from totem_lib import conformance_of_totem, totem_from_dict
+from totem_lib.ocel import import_ocel_db
+
+model = totem_from_dict(model_json)
+event_log = import_ocel_db("example_data/ContainerLogistics.sqlite")
+try:
+    result = conformance_of_totem(model, event_log)
+    response_data = result.to_dict()
+finally:
+    event_log.close()
+```
+
+The implementation runs directly on `OcelDuckDB`. Discovery and conformance
+share their aggregate histogram queries, while conformance uses the symmetric,
+qualified object-to-object relation behavior of the original paper branch. No
+Polars conversion or temporary model discovery is required.
+
+`TotemConformanceResult` contains overall metrics, averages per object type,
+metrics per directed type pair, and aggregate and detailed histograms. Its
+`to_dict()` output is deterministic and JSON-compatible. Compound keys such as
+type pairs are represented as records with named fields so object-type names do
+not need delimiter escaping.
+
 ## Installation
 
 To set up a development environment for totem-lib, follow these steps. This is required for development only.
