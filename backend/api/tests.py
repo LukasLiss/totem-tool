@@ -9,12 +9,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
+from rest_framework.test import APIClient, APIRequestFactory
 from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
-from .views import EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -555,21 +554,43 @@ class TotemConformanceApiValidationTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("TOTEM", response.data["asset_id"])
 
-    def test_valid_request_reaches_execution_boundary(self):
-        request = APIRequestFactory().post(
-            self.url,
-            {"asset_id": self.totem_asset.pk},
-            format="json",
-        )
-        force_authenticate(request, user=self.user)
-        response = EventLogViewSet.as_view({"post": "totem_conformance"})(
-            request,
-            pk=self.event_log.pk,
-        )
+    def test_valid_request_executes_conformance_and_returns_result(self):
+        expected_result = {
+            "overall_metrics": {"temporal": {"fitness": 1.0, "precision": 0.5}},
+            "object_type_metrics": {},
+            "type_pair_metrics": [],
+            "histograms": {},
+        }
+        db = object()
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(db)),
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            conformance.return_value.to_dict.return_value = expected_result
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
 
-        self.assertEqual(response.status_code, status.HTTP_501_NOT_IMPLEMENTED)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["file_id"], self.event_log.pk)
         self.assertEqual(response.data["asset_id"], self.totem_asset.pk)
+        self.assertEqual(
+            response.data["overall_metrics"],
+            expected_result["overall_metrics"],
+        )
+        self.assertEqual(response.data["object_type_metrics"], {})
+        self.assertEqual(response.data["type_pair_metrics"], [])
+        self.assertEqual(response.data["histograms"], {})
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertEqual(
+            deserialized_totem.cardinalities,
+            {("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
+        )
+        self.assertIs(called_db, db)
 
 
 class ProjectAssetApiTests(TestCase):

@@ -16,7 +16,14 @@ from django.db.models import Max
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
-from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
+from totem_lib.totem import (
+    Totem,
+    conformance_of_totem,
+    mlpaDiscovery,
+    totemDiscovery_db,
+    totem_from_dict,
+    totem_to_dict,
+)
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
@@ -318,13 +325,30 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            totem = totem_from_dict(asset.content_json)
+        except (TypeError, ValueError) as exc:
+            return Response(
+                {"asset_id": f"Stored TOTeM model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = conformance_of_totem(totem, db)
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate TOTeM conformance: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         return Response(
             {
-                "detail": "TOTeM conformance execution is added in Pass 2.",
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
+                **result.to_dict(),
             },
-            status=status.HTTP_501_NOT_IMPLEMENTED,
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=["get"])
