@@ -9,11 +9,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+from .views import EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -460,6 +461,18 @@ class TotemConformanceApiValidationTests(TestCase):
         self.url = f"/api/files/{self.event_log.pk}/totem_conformance/"
         self.client.force_authenticate(user=self.user)
 
+    def _post_directly_to_view(self):
+        request = APIRequestFactory().post(
+            self.url,
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        return EventLogViewSet.as_view({"post": "totem_conformance"})(
+            request,
+            pk=self.event_log.pk,
+        )
+
     def test_request_requires_asset_id(self):
         response = self.client.post(self.url, {}, format="json")
 
@@ -735,6 +748,81 @@ class TotemConformanceApiValidationTests(TestCase):
                 )
                 load_ocel.assert_not_called()
                 conformance.assert_not_called()
+
+    def test_ocel_load_failure_returns_server_error(self):
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                side_effect=RuntimeError("OCEL unavailable"),
+            ) as load_ocel,
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: OCEL unavailable"},
+        )
+        load_ocel.assert_called_once()
+        conformance.assert_not_called()
+
+    def test_conformance_failure_returns_server_error(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch(
+                "api.views.conformance_of_totem",
+                side_effect=RuntimeError("Conformance failed"),
+            ) as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: Conformance failed"},
+        )
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertIs(called_db, db)
+
+    def test_conformance_uses_stored_model_without_discovery(self):
+        result_json = {
+            "overall_metrics": {},
+            "object_type_metrics": {},
+            "type_pair_metrics": [],
+            "histograms": {},
+        }
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch("api.views.conformance_of_totem") as conformance,
+            patch("api.views.totemDiscovery_db") as discovery,
+        ):
+            conformance.return_value.to_dict.return_value = result_json
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        discovery.assert_not_called()
+        conformance.assert_called_once()
+        self.assertIsInstance(conformance.call_args.args[0], Totem)
 
 
 class ProjectAssetApiTests(TestCase):

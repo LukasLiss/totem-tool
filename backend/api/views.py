@@ -287,6 +287,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def totem_conformance(self, request, pk=None):
+        """Check one stored TOTeM asset against this event log."""
         request_serializer = TotemConformanceRequestSerializer(data=request.data)
         if not request_serializer.is_valid():
             return Response(
