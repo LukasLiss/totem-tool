@@ -25,13 +25,21 @@ type SelectedEventLog = {
   file?: string;
 };
 
-export function TotemConformanceView() {
+export function TotemConformanceView({
+  initialAssetId,
+}: {
+  initialAssetId?: number;
+}) {
   const { selectedFile } = useContext(SelectedFileContext);
   const { setViewMode } = useContext(DashboardContext);
   const eventLog = (selectedFile ?? null) as SelectedEventLog | null;
   const eventLogId = positiveId(eventLog?.id);
   const projectId = positiveId(eventLog?.project);
-  const workflow = useTotemConformanceWorkflow(eventLogId, projectId);
+  const workflow = useTotemConformanceWorkflow(
+    eventLogId,
+    projectId,
+    positiveId(initialAssetId)
+  );
   const { assetSelection } = workflow;
   const visualization = useMemo(
     () =>

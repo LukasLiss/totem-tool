@@ -80,6 +80,33 @@ describe("useTotemAssetSelection", () => {
     expect(result.current.selectedAsset?.id).toBe(2);
   });
 
+  it("preselects a requested current-project TOTEM asset", async () => {
+    listAssetsMock.mockResolvedValue([
+      asset(1, 7, "2026-07-20T10:00:00Z"),
+      asset(2, 7, "2026-07-22T10:00:00Z"),
+    ]);
+
+    const { result } = renderHook(() => useTotemAssetSelection(7, 1));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.selectedAssetId).toBe(1);
+    expect(result.current.selectedAsset?.id).toBe(1);
+  });
+
+  it("does not preselect an asset outside the selectable project models", async () => {
+    listAssetsMock.mockResolvedValue([
+      asset(1, 7, "2026-07-20T10:00:00Z"),
+    ]);
+
+    const { result } = renderHook(() => useTotemAssetSelection(7, 99));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.selectedAssetId).toBeNull();
+    expect(result.current.selectedAsset).toBeNull();
+  });
+
   it("exposes a load error and retries the project query", async () => {
     listAssetsMock
       .mockRejectedValueOnce(new Error("Model store unavailable"))

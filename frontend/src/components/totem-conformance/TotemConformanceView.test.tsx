@@ -48,7 +48,7 @@ function workflowState(overrides: Record<string, unknown> = {}) {
   } as ReturnType<typeof useTotemConformanceWorkflow>;
 }
 
-function renderView() {
+function renderView(initialAssetId?: number) {
   return render(
     <SelectedFileContext.Provider
       value={{
@@ -56,7 +56,7 @@ function renderView() {
         setSelectedFile: vi.fn(),
       }}
     >
-      <TotemConformanceView />
+      <TotemConformanceView initialAssetId={initialAssetId} />
     </SelectedFileContext.Provider>
   );
 }
@@ -76,6 +76,12 @@ describe("TotemConformanceView result states", () => {
 
     expect(screen.getByText("Ready to calculate")).toBeTruthy();
     expect(screen.queryByTestId("totem-visualization")).toBeNull();
+  });
+
+  it("passes an asset requested by the Model Assets action into the workflow", () => {
+    renderView(42);
+
+    expect(useWorkflowMock).toHaveBeenCalledWith(12, 7, 42);
   });
 
   it("renders the visualization after a successful calculation", () => {

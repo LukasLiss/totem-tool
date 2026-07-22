@@ -22,7 +22,8 @@ export interface TotemAssetSelectionState {
 }
 
 export function useTotemAssetSelection(
-  projectId: number | null | undefined
+  projectId: number | null | undefined,
+  initialAssetId?: number | null
 ): TotemAssetSelectionState {
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
@@ -65,9 +66,9 @@ export function useTotemAssetSelection(
 
   useEffect(() => {
     setSelectedAssetId((current) =>
-      resolveTotemAssetSelection(current, assets)
+      resolveTotemAssetSelection(current ?? initialAssetId, assets)
     );
-  }, [assets]);
+  }, [assets, initialAssetId]);
 
   const selectAsset = useCallback(
     (assetId: number | null) => {

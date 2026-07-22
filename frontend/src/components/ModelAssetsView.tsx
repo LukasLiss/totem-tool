@@ -1,5 +1,12 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Box, Filter, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Box,
+  Filter,
+  GitCompareArrows,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -44,6 +51,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 type AssetFilter = "ALL" | AssetType;
@@ -67,6 +75,7 @@ const DEFAULT_TABLE_FILTERS: AssetTableFilters = {
 
 export function ModelAssetsView() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
   const projectId = selectedFile?.project;
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [filters, setFilters] = useState<AssetTableFilters>(DEFAULT_TABLE_FILTERS);
@@ -150,7 +159,17 @@ export function ModelAssetsView() {
               description="No stored model assets match the current filters."
             />
           ) : (
-            <AssetList assets={filteredAssets} onDeleteClick={setAssetToDelete} />
+            <AssetList
+              assets={filteredAssets}
+              onConformanceClick={(asset) =>
+                setViewMode({
+                  type: "conformance",
+                  component: "totem",
+                  assetId: asset.id,
+                })
+              }
+              onDeleteClick={setAssetToDelete}
+            />
           )}
           <DeleteAssetDialog
             asset={assetToDelete}
@@ -444,15 +463,17 @@ function UploadAssetDialog({
 
 function AssetList({
   assets,
+  onConformanceClick,
   onDeleteClick,
 }: {
   assets: ProjectAsset[];
+  onConformanceClick: (asset: ProjectAsset) => void;
   onDeleteClick: (asset: ProjectAsset) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-md border bg-background">
       <div className="min-w-[650px]">
-        <div className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+        <div className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_120px] border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
           <span>Name</span>
           <span>Type</span>
           <span>Last changed</span>
@@ -462,7 +483,7 @@ function AssetList({
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] items-center px-4 py-3 text-sm"
+              className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_120px] items-center px-4 py-3 text-sm"
             >
               <div className="min-w-0">
                 <div className="truncate font-medium" title={asset.name}>
@@ -473,7 +494,20 @@ function AssetList({
               <span className="text-muted-foreground">
                 {formatDate(asset.updated_at)}
               </span>
-              <div>
+              <div className="flex items-center gap-1">
+                {asset.asset_type === "TOTEM" && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    title={`Use ${asset.name} for conformance`}
+                    aria-label={`Use ${asset.name} for conformance`}
+                    onClick={() => onConformanceClick(asset)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <GitCompareArrows />
+                  </Button>
+                )}
                 <Button
                   type="button"
                   size="icon"

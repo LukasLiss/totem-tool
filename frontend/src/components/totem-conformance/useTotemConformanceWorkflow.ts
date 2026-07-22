@@ -23,9 +23,10 @@ export interface TotemConformanceWorkflowState {
 
 export function useTotemConformanceWorkflow(
   eventLogId: number | null | undefined,
-  projectId: number | null | undefined
+  projectId: number | null | undefined,
+  initialAssetId?: number | null
 ): TotemConformanceWorkflowState {
-  const assetSelection = useTotemAssetSelection(projectId);
+  const assetSelection = useTotemAssetSelection(projectId, initialAssetId);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<TotemConformanceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
