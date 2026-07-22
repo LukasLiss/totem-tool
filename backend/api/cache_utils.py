@@ -61,6 +61,7 @@ def make_cache_key(
         },
         sort_keys=True,
         separators=(",", ":"),
+        default=str,
     )
     digest = hashlib.sha256(canonical.encode()).hexdigest()[:16]
     return f"{_PREFIX}:{digest}"
