@@ -8,6 +8,11 @@ from .models import Dashboard
 from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
 from django.db.models import Max
 
+
+class TotemConformanceRequestSerializer(serializers.Serializer):
+    asset_id = serializers.IntegerField(min_value=1)
+
+
 class EventLogSerializer(serializers.ModelSerializer):
      class Meta:
         #not including user to ensure security

@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent
-from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .serializers import EventLogSerializer, ProjectAssetSerializer, TotemConformanceRequestSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -16,7 +16,14 @@ from django.db.models import Max
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
-from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
+from totem_lib.totem import (
+    Totem,
+    conformance_of_totem,
+    mlpaDiscovery,
+    totemDiscovery_db,
+    totem_from_dict,
+    totem_to_dict,
+)
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
@@ -277,6 +284,73 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["post"])
+    def totem_conformance(self, request, pk=None):
+        """Check one stored TOTeM asset against this event log."""
+        request_serializer = TotemConformanceRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.TOTEM:
+            return Response(
+                {"asset_id": "Model asset must have type TOTEM."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            totem = totem_from_dict(asset.content_json)
+        except (TypeError, ValueError) as exc:
+            return Response(
+                {"asset_id": f"Stored TOTeM model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = conformance_of_totem(totem, db)
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate TOTeM conformance: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["get"])
     def discover_mlpa(self, request, pk=None):

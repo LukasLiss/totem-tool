@@ -9,11 +9,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+from .views import EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -437,6 +438,391 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data, totem_to_dict(totem))
         self.assertEqual(response.data["schema"], "totem")
         self.assertEqual(response.data["version"], 1)
+
+
+class TotemConformanceApiValidationTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="conformance-api-user")
+        self.other_user = User.objects.create_user(username="conformance-other-user")
+
+        self.project = Project.objects.create(name="Project A")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.totem_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Selected TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        self.url = f"/api/files/{self.event_log.pk}/totem_conformance/"
+        self.client.force_authenticate(user=self.user)
+
+    def _post_directly_to_view(self):
+        request = APIRequestFactory().post(
+            self.url,
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        return EventLogViewSet.as_view({"post": "totem_conformance"})(
+            request,
+            pk=self.event_log.pk,
+        )
+
+    def test_request_requires_asset_id(self):
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", response.data)
+
+    def test_request_requires_positive_integer_asset_id(self):
+        zero_response = self.client.post(
+            self.url,
+            {"asset_id": 0},
+            format="json",
+        )
+        string_response = self.client.post(
+            self.url,
+            {"asset_id": "not-an-id"},
+            format="json",
+        )
+
+        self.assertEqual(zero_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(string_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", zero_response.data)
+        self.assertIn("asset_id", string_response.data)
+
+    def test_event_log_is_scoped_to_authenticated_user(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_log = EventLog.objects.create(
+            project=foreign_project,
+            file="foreign-log.json",
+        )
+
+        response = self.client.post(
+            f"/api/files/{foreign_log.pk}/totem_conformance/",
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_inaccessible_asset_returns_not_found(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_asset = ProjectAsset.objects.create(
+            project=foreign_project,
+            name="Foreign TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": foreign_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("asset_id", response.data)
+
+    def test_asset_from_another_accessible_project_is_rejected(self):
+        other_project = Project.objects.create(name="Other Accessible Project")
+        other_project.users.add(self.user)
+        other_asset = ProjectAsset.objects.create(
+            project=other_project,
+            name="Other TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": other_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("event log project", response.data["asset_id"])
+
+    def test_wrong_asset_type_is_rejected(self):
+        occn_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Wrong model type",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": occn_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("TOTEM", response.data["asset_id"])
+
+    def test_valid_request_executes_conformance_and_returns_result(self):
+        expected_result = {
+            "overall_metrics": {
+                "temporal": {"fitness": 1.0, "precision": 0.75},
+                "log_cardinality": {"fitness": 0.8, "precision": 0.6},
+                "event_cardinality": {"fitness": 0.9, "precision": 0.7},
+            },
+            "object_type_metrics": {
+                "Item": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+                "Order": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+            },
+            "type_pair_metrics": [
+                {
+                    "source_type": "Order",
+                    "target_type": "Item",
+                    "temporal": {
+                        "model_relation": "D",
+                        "fitness": 1.0,
+                        "precision": 0.75,
+                    },
+                    "log_cardinality": {
+                        "model_relation": "1..*",
+                        "fitness": 0.8,
+                        "precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "model_relation": "0...*",
+                        "fitness": 0.9,
+                        "precision": 0.7,
+                    },
+                }
+            ],
+            "histograms": {
+                "temporal": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+                "event_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "event_cardinality_by_activity": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "activity": "Pick Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "temporal_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+            },
+        }
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ) as load_ocel,
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            conformance.return_value.to_dict.return_value = expected_result
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                "file_id": self.event_log.pk,
+                "asset_id": self.totem_asset.pk,
+                **expected_result,
+            },
+        )
+        load_ocel.assert_called_once()
+        self.assertEqual(load_ocel.call_args.args[0].pk, self.event_log.pk)
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertEqual(
+            deserialized_totem.cardinalities,
+            {("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
+        )
+        self.assertIs(called_db, db)
+
+    def test_invalid_stored_totem_models_return_validation_error(self):
+        wrong_schema = valid_totem_content_json()
+        wrong_schema["schema"] = "occn"
+
+        unsupported_version = valid_totem_content_json()
+        unsupported_version["version"] = 2
+
+        unknown_relation_node = valid_totem_content_json()
+        unknown_relation_node["tempgraph"]["D"] = [["Order", "Unknown"]]
+
+        invalid_cardinality = valid_totem_content_json()
+        invalid_cardinality["cardinalities"][0]["log_cardinality"] = "sometimes"
+
+        invalid_models = (
+            ("non-object payload", []),
+            ("wrong schema", wrong_schema),
+            ("unsupported schema version", unsupported_version),
+            ("relation references unknown node", unknown_relation_node),
+            ("unsupported cardinality", invalid_cardinality),
+        )
+
+        for label, content_json in invalid_models:
+            with self.subTest(label=label):
+                ProjectAsset.objects.filter(pk=self.totem_asset.pk).update(
+                    content_json=content_json
+                )
+                with (
+                    patch("api.views._with_ocel_db") as load_ocel,
+                    patch("api.views.conformance_of_totem") as conformance,
+                ):
+                    response = self.client.post(
+                        self.url,
+                        {"asset_id": self.totem_asset.pk},
+                        format="json",
+                    )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn(
+                    "Stored TOTeM model is invalid",
+                    response.data["asset_id"],
+                )
+                load_ocel.assert_not_called()
+                conformance.assert_not_called()
+
+    def test_ocel_load_failure_returns_server_error(self):
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                side_effect=RuntimeError("OCEL unavailable"),
+            ) as load_ocel,
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: OCEL unavailable"},
+        )
+        load_ocel.assert_called_once()
+        conformance.assert_not_called()
+
+    def test_conformance_failure_returns_server_error(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch(
+                "api.views.conformance_of_totem",
+                side_effect=RuntimeError("Conformance failed"),
+            ) as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: Conformance failed"},
+        )
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertIs(called_db, db)
+
+    def test_conformance_uses_stored_model_without_discovery(self):
+        result_json = {
+            "overall_metrics": {},
+            "object_type_metrics": {},
+            "type_pair_metrics": [],
+            "histograms": {},
+        }
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch("api.views.conformance_of_totem") as conformance,
+            patch("api.views.totemDiscovery_db") as discovery,
+        ):
+            conformance.return_value.to_dict.return_value = result_json
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        discovery.assert_not_called()
+        conformance.assert_called_once()
+        self.assertIsInstance(conformance.call_args.args[0], Totem)
 
 
 class ProjectAssetApiTests(TestCase):

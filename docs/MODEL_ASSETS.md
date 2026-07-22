@@ -130,6 +130,42 @@ rejected, and sending neither is rejected.
 The download endpoint returns the stored `content_json`. The download filename
 is derived from the asset name and always uses a `.json` extension.
 
+### TOTeM conformance endpoint
+
+TOTeM conformance checking combines one event log with an existing TOTeM asset:
+
+```text
+POST /api/files/<file_id>/totem_conformance/
+```
+
+The request body selects the model asset:
+
+```json
+{
+  "asset_id": 42
+}
+```
+
+The event log and asset must both be accessible to the authenticated user and
+must belong to the same project. The selected asset must have type `TOTEM` and
+contain valid canonical TOTeM JSON. The endpoint reconstructs that stored model
+and checks it against the event log; it does not discover a new model from the
+checked log.
+
+A successful response contains:
+
+- `file_id` and `asset_id`: the inputs used for the calculation.
+- `overall_metrics`: fitness and precision for temporal, log-cardinality, and
+  event-cardinality conformance.
+- `object_type_metrics`: averaged metrics for each object type.
+- `type_pair_metrics`: model relations and metrics for each directed type pair.
+- `histograms`: aggregate and detailed counts used by the visualization.
+
+Invalid request data, wrong asset types, cross-project assets, and invalid
+stored TOTeM JSON are rejected before computation. Inaccessible resources
+return `404`; invalid accessible inputs return `400`; failures while loading the
+event log or calculating conformance return `500`.
+
 ## Validation Behavior
 
 General asset validation:
