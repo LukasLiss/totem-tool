@@ -1,0 +1,128 @@
+// @vitest-environment happy-dom
+
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { listAssets, type ProjectAsset } from "@/api/assetsApi";
+
+import { useTotemAssetSelection } from "./useTotemAssetSelection";
+
+vi.mock("@/api/assetsApi", async () => {
+  const actual = await vi.importActual<typeof import("@/api/assetsApi")>(
+    "@/api/assetsApi"
+  );
+  return {
+    ...actual,
+    listAssets: vi.fn(),
+  };
+});
+
+const listAssetsMock = vi.mocked(listAssets);
+
+function asset(
+  id: number,
+  project: number,
+  updatedAt: string,
+  assetType: ProjectAsset["asset_type"] = "TOTEM"
+): ProjectAsset {
+  return {
+    id,
+    project,
+    name: `Model ${id}`,
+    asset_type: assetType,
+    content_json: {},
+    metadata: {},
+    created_by: 1,
+    created_at: updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+describe("useTotemAssetSelection", () => {
+  beforeEach(() => {
+    listAssetsMock.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("loads only current-project TOTEM assets and keeps an explicit selection", async () => {
+    listAssetsMock.mockResolvedValue([
+      asset(1, 7, "2026-07-20T10:00:00Z"),
+      asset(2, 7, "2026-07-22T10:00:00Z"),
+      asset(3, 8, "2026-07-23T10:00:00Z"),
+      asset(4, 7, "2026-07-24T10:00:00Z", "OCCN"),
+    ]);
+
+    const { result } = renderHook(() => useTotemAssetSelection(7));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(listAssetsMock).toHaveBeenCalledWith({
+      projectId: 7,
+      assetType: "TOTEM",
+    });
+    expect(result.current.assets.map(({ id }) => id)).toEqual([2, 1]);
+    expect(result.current.selectedAssetId).toBeNull();
+
+    act(() => result.current.selectAsset(2));
+
+    expect(result.current.selectedAssetId).toBe(2);
+    expect(result.current.selectedAsset?.id).toBe(2);
+  });
+
+  it("exposes a load error and retries the project query", async () => {
+    listAssetsMock
+      .mockRejectedValueOnce(new Error("Model store unavailable"))
+      .mockResolvedValueOnce([asset(2, 7, "2026-07-22T10:00:00Z")]);
+
+    const { result } = renderHook(() => useTotemAssetSelection(7));
+
+    await waitFor(() =>
+      expect(result.current.error).toBe("Model store unavailable")
+    );
+
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(result.current.assets).toHaveLength(1));
+    expect(result.current.error).toBeNull();
+    expect(listAssetsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a stale response after the selected project changes", async () => {
+    const oldProject = deferred<ProjectAsset[]>();
+    const newProject = deferred<ProjectAsset[]>();
+    listAssetsMock.mockImplementation(({ projectId }) =>
+      projectId === 7 ? oldProject.promise : newProject.promise
+    );
+
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useTotemAssetSelection(projectId),
+      { initialProps: { projectId: 7 } }
+    );
+
+    rerender({ projectId: 8 });
+    await waitFor(() => expect(listAssetsMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      newProject.resolve([asset(8, 8, "2026-07-22T12:00:00Z")]);
+      await newProject.promise;
+    });
+    expect(result.current.assets.map(({ id }) => id)).toEqual([8]);
+
+    await act(async () => {
+      oldProject.resolve([asset(7, 7, "2026-07-22T11:00:00Z")]);
+      await oldProject.promise;
+    });
+    expect(result.current.assets.map(({ id }) => id)).toEqual([8]);
+  });
+});
