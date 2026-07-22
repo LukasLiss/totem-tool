@@ -101,31 +101,15 @@ def get_cached_result(event_log, endpoint: str, params: dict | None = None):
 
 
 def set_cached_result(event_log, endpoint: str, result, params: dict | None = None):
-    """Store *result* keyed by *event_log*'s current file version and track the key."""
+    """Store *result* keyed by *event_log*'s current file version.
+
+    No per-log key index is kept: correctness comes from the version token in
+    the key (see :func:`_log_version`). A replaced file gets a new key, and a
+    deleted log's PK is never reused, so stale results can't be served. Orphaned
+    entries are reclaimed by the cache's own ``MAX_ENTRIES`` culling.
+    """
     key = make_cache_key(event_log.pk, endpoint, params, _log_version(event_log))
     RESULTS_CACHE.set(key, result)
-    _track_key_for_log(event_log.pk, key)
-
-
-# ---------------------------------------------------------------------------
-# Per-event-log key index  (used by invalidation, #75)
-# ---------------------------------------------------------------------------
-
-def _track_key_for_log(event_log_id: int, key: str):
-    """Maintain a set of cache keys associated with an event_log_id."""
-    index_key = f"{_PREFIX}:index:{int(event_log_id)}"
-    existing: set = RESULTS_CACHE.get(index_key) or set()
-    existing.add(key)
-    RESULTS_CACHE.set(index_key, existing)
-
-
-def invalidate_log_cache(event_log_id: int):
-    """Delete **all** cached results for a given event log."""
-    index_key = f"{_PREFIX}:index:{int(event_log_id)}"
-    keys: set = RESULTS_CACHE.get(index_key) or set()
-    for key in keys:
-        RESULTS_CACHE.delete(key)
-    RESULTS_CACHE.delete(index_key)
 
 
 # ---------------------------------------------------------------------------

@@ -9,9 +9,9 @@ def delete_eventlog_file(sender, instance, **kwargs):
     if instance.file:
         instance.file.delete(save=False)
 
-    # --- Cache invalidation (#75) ---
-    from .cache_utils import invalidate_log_cache
-    invalidate_log_cache(instance.pk)
+    # Cache invalidation is handled by versioned keys (see cache_utils.make_cache_key):
+    # a deleted log's PK is never reused, so its cached entries can never be served
+    # again and are reclaimed by MAX_ENTRIES culling. No explicit purge needed.
 
     # Evict the DuckDB connection from the process-local registry so stale
     # handles don't linger after the underlying file is gone.
