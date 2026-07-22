@@ -1,10 +1,11 @@
-import { useContext, type ReactNode } from "react";
+import { useContext, useMemo, type ReactNode } from "react";
 import {
   AlertCircle,
-  CircleCheck,
   FileText,
+  Info,
   LoaderCircle,
   Play,
+  TriangleAlert,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,9 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { TotemAssetSelector } from "./TotemAssetSelector";
+import { TotemConformanceVisualization } from "./TotemConformanceVisualization";
 import { useTotemConformanceWorkflow } from "./useTotemConformanceWorkflow";
+import { prepareTotemVisualization } from "./visualizationPreparation";
 
 type SelectedEventLog = {
   id?: number;
@@ -30,12 +33,23 @@ export function TotemConformanceView() {
   const projectId = positiveId(eventLog?.project);
   const workflow = useTotemConformanceWorkflow(eventLogId, projectId);
   const { assetSelection } = workflow;
+  const visualization = useMemo(
+    () =>
+      workflow.result && eventLogId
+        ? prepareTotemVisualization(
+            assetSelection.selectedAsset,
+            workflow.result,
+            eventLogId
+          )
+        : null,
+    [assetSelection.selectedAsset, eventLogId, workflow.result]
+  );
 
   return (
     <div className="flex min-h-screen flex-col">
       <SidebarTrigger className="m-2" />
       <main className="flex-1 p-4 pt-0">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
           <header className="border-b pb-4">
             <h1 className="text-2xl font-semibold tracking-normal">
               TOTeM Conformance
@@ -99,12 +113,63 @@ export function TotemConformanceView() {
               title="Conformance calculation failed"
               description={workflow.error}
             />
-          ) : workflow.result ? (
+          ) : workflow.running ? (
             <StatusMessage
-              tone="success"
-              icon={<CircleCheck />}
-              title="Conformance result ready"
-              description={`Calculated with ${assetSelection.selectedAsset?.name ?? "the selected TOTeM model"}.`}
+              tone="neutral"
+              icon={<LoaderCircle className="animate-spin" />}
+              title="Calculating conformance"
+              description="The result will appear here when the calculation finishes."
+            />
+          ) : visualization?.status === "ready" ? (
+            <section className="grid gap-4" aria-labelledby="totem-result-heading">
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2 border-b pb-3">
+                <h2 id="totem-result-heading" className="text-lg font-semibold">
+                  Conformance result
+                </h2>
+                <p
+                  className="max-w-full truncate text-sm text-muted-foreground"
+                  title={assetSelection.selectedAsset?.name}
+                >
+                  {assetSelection.selectedAsset?.name}
+                </p>
+              </div>
+              {visualization.model.warnings.length > 0 && (
+                <StatusMessage
+                  tone="warning"
+                  icon={<TriangleAlert />}
+                  title="Some model details were adjusted"
+                  description={visualization.model.warnings.join(" ")}
+                />
+              )}
+              <TotemConformanceVisualization
+                model={visualization.model}
+                result={workflow.result}
+              />
+            </section>
+          ) : visualization ? (
+            <StatusMessage
+              tone={visualization.status === "invalid" ? "error" : "neutral"}
+              icon={
+                visualization.status === "invalid" ? <AlertCircle /> : <Info />
+              }
+              title={visualization.title}
+              description={visualization.description}
+            />
+          ) : assetSelection.selectedAsset ? (
+            <StatusMessage
+              tone="neutral"
+              icon={<Info />}
+              title="Ready to calculate"
+              description="Run conformance to compare the selected event log and TOTeM model."
+            />
+          ) : !assetSelection.loading &&
+            !assetSelection.error &&
+            assetSelection.assets.length > 0 ? (
+            <StatusMessage
+              tone="neutral"
+              icon={<Info />}
+              title="Select a TOTeM model"
+              description="Choose a stored model before running conformance."
             />
           ) : null}
         </div>
@@ -119,7 +184,7 @@ function StatusMessage({
   title,
   description,
 }: {
-  tone: "neutral" | "error" | "success";
+  tone: "neutral" | "error" | "warning";
   icon: ReactNode;
   title: string;
   description: string;
@@ -127,7 +192,7 @@ function StatusMessage({
   const toneClasses = {
     neutral: "border-border bg-muted/30 text-foreground",
     error: "border-destructive/30 bg-destructive/5 text-destructive",
-    success: "border-emerald-600/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300",
+    warning: "border-amber-600/30 bg-amber-500/5 text-amber-800 dark:text-amber-300",
   }[tone];
 
   return (
