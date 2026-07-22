@@ -1028,7 +1028,7 @@ def variants(request):
     }, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def OCDFGViewSet(request):
     """
 
@@ -2130,10 +2130,13 @@ def OCDFGViewSet(request):
     if raw_object_types:
         object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         with _with_ocel_db(user_file) as db:
@@ -2202,7 +2205,7 @@ def OCDFGViewSet(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def NewOCDFGViewSet(request):
     """
     Thin routing layer for the New OC-DFG endpoint.
@@ -2230,10 +2233,13 @@ def NewOCDFGViewSet(request):
             t.strip() for t in raw_object_types.split(",") if t.strip()
         ) or None
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         with _with_ocel_db(user_file) as db:
@@ -2282,13 +2288,17 @@ def NewOCDFGViewSet(request):
 # the pattern discover_occn's own docstring recommends. In-process cache: it
 # is cleared on backend restart/reload and sized small because nets can be
 # large in memory.
+#
+# The key has no user component on purpose: the cache is only ever reached
+# after the ownership check on the event log below, so a hit already implies
+# the caller may read that log. Keep the lookup above the cache read.
 _OCCN_CACHE_MAX_ENTRIES = 4
 _occn_base_cache = OrderedDict()
 _occn_cache_lock = threading.Lock()
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def OCCNViewSet(request):
     """
     Discover and return a serialized OCCN for the given event log file.
@@ -2323,14 +2333,17 @@ def OCCNViewSet(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         parameters = {"object_types": object_type_filter} if object_type_filter else None
-        cache_key = (int(file_id), tuple(object_type_filter) if object_type_filter else None)
+        cache_key = (user_file.id, tuple(object_type_filter) if object_type_filter else None)
 
         with _occn_cache_lock:
             base_occn = _occn_base_cache.get(cache_key)
