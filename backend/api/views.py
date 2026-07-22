@@ -2,7 +2,7 @@ from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
 from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, UserSettings
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
@@ -2396,7 +2396,12 @@ def user_settings(request):
 
     if request.method == "PATCH":
         if "bypass_cache" in request.data:
-            settings_obj.bypass_cache = bool(request.data["bypass_cache"])
+            # Coerce via DRF's BooleanField so string payloads like "false"/"0"
+            # are parsed correctly (bool("false") would wrongly be True). Invalid
+            # values raise ValidationError -> 400.
+            settings_obj.bypass_cache = serializers.BooleanField().to_internal_value(
+                request.data["bypass_cache"]
+            )
             settings_obj.save(update_fields=["bypass_cache"])
 
     return Response({"bypass_cache": settings_obj.bypass_cache})
