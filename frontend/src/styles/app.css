@@ -22,3 +22,12 @@
 .gridstack-sidebar .sidebar {
   border-left: 1px solid var(--border-color); /* use your theme variable */
 }
+
+.filter-date-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  position: absolute;
+  right: 0;
+  width: 36px;
+  height: 100%;
+  cursor: pointer;
+}

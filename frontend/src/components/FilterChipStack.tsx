@@ -574,6 +574,7 @@ export default function FilterChipStack() {
         icon={TYPE_CONFIG[activeType].icon}
         titleLabel={TYPE_CONFIG[activeType].label}
         hasFile={!!fileId}
+        fileId={fileId}
       />
     </div>
   );

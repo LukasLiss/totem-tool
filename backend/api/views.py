@@ -271,6 +271,31 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         return Response(acts, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["get"])
+    def event_distribution(self, request, pk=None):
+        """Returns monthly event counts for the time range histogram."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                rows = db.conn.execute("""
+                    SELECT
+                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
+                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
+                        COUNT(*) AS count
+                    FROM events
+                    GROUP BY yr, mo
+                    ORDER BY yr, mo
+                """).fetchall()
+            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(distribution, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["post"])
     def apply_filters(self, request, pk=None):
         try:
