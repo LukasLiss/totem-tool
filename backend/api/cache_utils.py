@@ -29,7 +29,10 @@ _PREFIX = "totem_result"
 # ---------------------------------------------------------------------------
 
 def make_cache_key(
-    event_log_id: int, endpoint: str, params: dict | None = None
+    event_log_id: int,
+    endpoint: str,
+    params: dict | None = None,
+    version: str | None = None,
 ) -> str:
     """
     Build a deterministic, collision-resistant cache key.
@@ -39,7 +42,12 @@ def make_cache_key(
         totem_result:<sha256_hex[:16]>
 
     Hash input: canonical JSON of
-    ``{"event_log_id": ..., "endpoint": ..., "params": ...}``
+    ``{"event_log_id": ..., "endpoint": ..., "params": ..., "version": ...}``
+
+    ``version`` is a token that changes whenever the underlying file is
+    replaced (see :func:`_log_version`), so a replaced log naturally misses
+    the cache instead of serving stale results — no explicit invalidation
+    needed.
 
     ``sort_keys=True`` and compact separators guarantee that two dicts with
     the same content but different insertion order produce the same key.
@@ -49,6 +57,7 @@ def make_cache_key(
             "event_log_id": int(event_log_id),
             "endpoint": endpoint,
             "params": params or {},
+            "version": version or "",
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -57,25 +66,45 @@ def make_cache_key(
     return f"{_PREFIX}:{digest}"
 
 
+def _log_version(event_log) -> str:
+    """
+    Return a token that changes when the event log's file is replaced.
+
+    Combines the file's storage mtime and size. Replacing the file on an
+    existing ``EventLog`` (same PK) changes at least one of these, yielding a
+    new cache key and therefore a natural miss. Falls back to ``"0"`` if the
+    file is missing or the storage backend can't stat it (never blocks a
+    request).
+    """
+    try:
+        storage = event_log.file.storage
+        name = event_log.file.name
+        mtime = storage.get_modified_time(name).timestamp()
+        size = storage.size(name)
+        return f"{mtime}:{size}"
+    except Exception:
+        return "0"
+
+
 # ---------------------------------------------------------------------------
 # Get / Set helpers
 # ---------------------------------------------------------------------------
 
-def get_cached_result(
-    event_log_id: int, endpoint: str, params: dict | None = None
-):
-    """Return the cached result or ``None``."""
-    key = make_cache_key(event_log_id, endpoint, params)
+def get_cached_result(event_log, endpoint: str, params: dict | None = None):
+    """Return the cached result for *event_log*'s current file version, or ``None``.
+
+    *event_log* is an ``EventLog`` instance; the key is scoped to its PK and
+    the current file mtime+size, so a replaced file misses automatically.
+    """
+    key = make_cache_key(event_log.pk, endpoint, params, _log_version(event_log))
     return RESULTS_CACHE.get(key)
 
 
-def set_cached_result(
-    event_log_id: int, endpoint: str, result, params: dict | None = None
-):
-    """Store *result* in the filesystem cache and track the key for invalidation."""
-    key = make_cache_key(event_log_id, endpoint, params)
+def set_cached_result(event_log, endpoint: str, result, params: dict | None = None):
+    """Store *result* keyed by *event_log*'s current file version and track the key."""
+    key = make_cache_key(event_log.pk, endpoint, params, _log_version(event_log))
     RESULTS_CACHE.set(key, result)
-    _track_key_for_log(event_log_id, key)
+    _track_key_for_log(event_log.pk, key)
 
 
 # ---------------------------------------------------------------------------

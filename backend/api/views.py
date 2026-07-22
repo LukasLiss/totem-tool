@@ -244,7 +244,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if _should_use_cache(request):
-            cached = get_cached_result(user_file.pk, "noe")
+            cached = get_cached_result(user_file, "noe")
             if cached is not None:
                 return Response(cached, status=status.HTTP_200_OK)
 
@@ -254,7 +254,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        set_cached_result(user_file.pk, "noe", processed)
+        set_cached_result(user_file, "noe", processed)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -266,7 +266,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if _should_use_cache(request):
-            cached = get_cached_result(user_file.pk, "object_types")
+            cached = get_cached_result(user_file, "object_types")
             if cached is not None:
                 return Response(cached, status=status.HTTP_200_OK)
 
@@ -276,7 +276,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        set_cached_result(user_file.pk, "object_types", types)
+        set_cached_result(user_file, "object_types", types)
         return Response(types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -288,7 +288,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             if _should_use_cache(request):
-                cached = get_cached_result(user_file.pk, "discover_totem")
+                cached = get_cached_result(user_file, "discover_totem")
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
@@ -296,7 +296,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 totem = totemDiscovery_db(db)
             serialized = _serialize_totem(totem)
 
-            set_cached_result(user_file.pk, "discover_totem", serialized)
+            set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -312,7 +312,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             if _should_use_cache(request):
-                cached = get_cached_result(user_file.pk, "discover_mlpa")
+                cached = get_cached_result(user_file, "discover_mlpa")
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
@@ -323,7 +323,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
-            set_cached_result(user_file.pk, "discover_mlpa", serialized)
+            set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -337,7 +337,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if _should_use_cache(request):
-            cached = get_cached_result(user_file.pk, "statistics")
+            cached = get_cached_result(user_file, "statistics")
             if cached is not None:
                 return Response(cached, status=status.HTTP_200_OK)
 
@@ -366,7 +366,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
             }
-            set_cached_result(user_file.pk, "statistics", result)
+            set_cached_result(user_file, "statistics", result)
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -978,7 +978,7 @@ def variants(request):
         "timeout_s": timeout_s,
     }
     if _should_use_cache(request):
-        cached = get_cached_result(user_file.pk, "variants", cache_params)
+        cached = get_cached_result(user_file, "variants", cache_params)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
 
@@ -1075,7 +1075,7 @@ def variants(request):
     }
     # Update cache_params with the resolved leading_type
     cache_params["leading_type"] = leading_object_type or ""
-    set_cached_result(user_file.pk, "variants", result, cache_params)
+    set_cached_result(user_file, "variants", result, cache_params)
     return Response(result, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
@@ -2191,7 +2191,7 @@ def OCDFGViewSet(request):
         "object_types": sorted(object_type_filter) if object_type_filter else [],
     }
     if _should_use_cache(request):
-        cached = get_cached_result(user_file.pk, "ocdfg", ocdfg_cache_params)
+        cached = get_cached_result(user_file, "ocdfg", ocdfg_cache_params)
         if cached is not None:
             return Response(cached, status=status.HTTP_200_OK)
 
@@ -2256,7 +2256,7 @@ def OCDFGViewSet(request):
         if trace_variants:
             response_payload["trace_variants"] = trace_variants
 
-        set_cached_result(user_file.pk, "ocdfg", response_payload, ocdfg_cache_params)
+        set_cached_result(user_file, "ocdfg", response_payload, ocdfg_cache_params)
         return Response(response_payload, status=status.HTTP_200_OK)
 
     except Exception as e:
