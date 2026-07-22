@@ -43,9 +43,9 @@ const arrowBase: React.CSSProperties = {
 const FILTER_TYPE_ORDER: FilterType[] = ["time_range", "object_types", "activity"];
 
 const TYPE_CONFIG: Record<FilterType, { bg: string; fg: string; icon: React.ReactElement; label: string }> = {
-  time_range:   { bg: "var(--chart-2)", fg: "#fff",     icon: <Calendar size={14} />, label: "Time Range"   },
-  object_types: { bg: "#16a34a",        fg: "#fff",     icon: <Layers   size={14} />, label: "Object Types" },
-  activity:     { bg: "var(--chart-1)", fg: "#3b1a00",  icon: <Zap      size={14} />, label: "Activities"   },
+  time_range:   { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Calendar size={14} />, label: "Time Range"   },
+  object_types: { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Layers   size={14} />, label: "Object Types" },
+  activity:     { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Zap      size={14} />, label: "Activities"   },
 };
 
 function fmtDate(unix: number): string {
@@ -113,7 +113,7 @@ function FilterIconWithArcs({
               strokeLinecap="round"
               transform={`rotate(-90 ${ARC_C} ${ARC_C})`}
               style={{
-                stroke: "var(--chart-1)",
+                stroke: "var(--foreground)",
                 strokeDasharray: `${outerCirc * eventPct} ${outerCirc}`,
                 transition: "stroke-dasharray 0.5s ease",
               }}
@@ -125,7 +125,8 @@ function FilterIconWithArcs({
               strokeLinecap="round"
               transform={`rotate(-90 ${ARC_C} ${ARC_C})`}
               style={{
-                stroke: "var(--chart-2)",
+                stroke: "var(--foreground)",
+                opacity: 0.45,
                 strokeDasharray: `${innerCirc * objectPct} ${innerCirc}`,
                 transition: "stroke-dasharray 0.5s ease",
               }}
@@ -397,8 +398,8 @@ export default function FilterChipStack() {
   const [dialogOpen,    setDialogOpen]    = useState(false);
   const [activeType,    setActiveType]    = useState<FilterType>("object_types");
   const [editingRule,   setEditingRule]   = useState<FilterRule | undefined>();
-  const [objectTypes,   setObjectTypes]   = useState<string[]>([]);
-  const [activities,    setActivities]    = useState<string[]>([]);
+  const [objectTypes,   setObjectTypes]   = useState<{ name: string; count: number }[]>([]);
+  const [activities,    setActivities]    = useState<{ name: string; count: number }[]>([]);
   const [stats,         setStats]         = useState<FilterStats>(DEFAULT_STATS);
   const [applying,      setApplying]      = useState(false);
   const [appliedKey,    setAppliedKey]    = useState(JSON.stringify([]));
@@ -414,15 +415,15 @@ export default function FilterChipStack() {
     setStats(DEFAULT_STATS);
     setAppliedKey(JSON.stringify([]));
     if (!fileId) { setObjectTypes([]); setActivities([]); return; }
-    axios.get<string[]>(`/api/files/${fileId}/object_types/`)
+    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`)
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
       .catch((err) => { console.error("FilterChipStack: failed to load object_types", err); setObjectTypes([]); });
-    axios.get<string[]>(`/api/files/${fileId}/activities/`)
+    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/activities/`)
       .then(({ data }) => setActivities(Array.isArray(data) ? data : []))
       .catch((err) => { console.error("FilterChipStack: failed to load activities", err); setActivities([]); });
 
     axios.get<{ num_objects: number; num_events: number }>(
-      `/api/files/${fileId}/stats/`
+      `/api/files/${fileId}/statistics/`
     ).then(({ data }) => {
       setStats({
         objectPct:    1,
@@ -570,8 +571,6 @@ export default function FilterChipStack() {
         availableObjectTypes={objectTypes}
         availableActivities={activities}
         onSubmit={handleSubmit}
-        accentBg={TYPE_CONFIG[activeType].bg}
-        accentFg={TYPE_CONFIG[activeType].fg}
         icon={TYPE_CONFIG[activeType].icon}
         titleLabel={TYPE_CONFIG[activeType].label}
         hasFile={!!fileId}

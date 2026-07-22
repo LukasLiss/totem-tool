@@ -249,7 +249,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                types = _object_types(db)
+                types = _object_types_with_counts(db)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -265,7 +265,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                acts = _activities(db)
+                acts = _activities_with_counts(db)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -705,11 +705,22 @@ def _object_types(db: OcelDuckDB) -> list[str]:
     )
 
 
-def _activities(db: OcelDuckDB) -> list[str]:
-    """Distinct activity names in the log (sorted, frontend-friendly)."""
+def _object_types_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Object types with per-type object counts, sorted by name."""
     return [
-        r[0] for r in db.conn.execute(
-            "SELECT DISTINCT activity FROM events ORDER BY activity"
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT obj_type, COUNT(*) FROM objects GROUP BY obj_type ORDER BY obj_type"
+        ).fetchall()
+    ]
+
+
+def _activities_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Activity names with per-activity event counts, sorted by name."""
+    return [
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT activity, COUNT(*) FROM events GROUP BY activity ORDER BY activity"
         ).fetchall()
     ]
 

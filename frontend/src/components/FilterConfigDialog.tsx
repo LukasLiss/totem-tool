@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,50 +18,99 @@ import {
   type ActivityParams,
 } from "@/contexts/FilterStackContext";
 
-function OptionTagSelector({
+type OptionItem = { name: string; count: number };
+
+function OptionList({
   options,
   selected,
-  color,
-  fgColor,
+  search,
   onToggle,
 }: {
-  options:  string[];
+  options:  OptionItem[];
   selected: Set<string>;
-  color:    string;
-  fgColor:  string;
-  onToggle: (opt: string) => void;
+  search:   string;
+  onToggle: (name: string) => void;
 }) {
   if (options.length === 0) {
     return (
-      <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+      <p style={{ fontSize: 13, color: "var(--muted-foreground)", padding: "8px 0" }}>
         No options available — load an event log file first.
       </p>
     );
   }
 
+  const filtered = search
+    ? options.filter(o => o.name.toLowerCase().includes(search.toLowerCase()))
+    : options;
+
+  if (filtered.length === 0) {
+    return (
+      <p style={{ fontSize: 13, color: "var(--muted-foreground)", padding: "8px 0" }}>
+        No matches for "{search}".
+      </p>
+    );
+  }
+
+  const maxCount = Math.max(...options.map(o => o.count), 1);
+
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-      {options.map(opt => {
-        const active = selected.has(opt);
+    <div>
+      {filtered.map((opt, i) => {
+        const active = selected.has(opt.name);
         return (
-          <button
-            key={opt}
-            type="button"
-            onClick={() => onToggle(opt)}
+          <div
+            key={opt.name}
+            onClick={() => onToggle(opt.name)}
             style={{
-              padding:      "4px 12px",
-              borderRadius: 16,
-              border:       `1px solid ${active ? color : "var(--border)"}`,
-              background:   active ? color : "transparent",
-              color:        active ? fgColor : "var(--foreground)",
-              fontSize:     13,
-              fontWeight:   active ? 600 : 400,
               cursor:       "pointer",
-              transition:   "all 0.12s",
+              padding:      "8px 0 6px",
+              borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none",
             }}
           >
-            {opt}
-          </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{
+                width:          18,
+                height:         18,
+                borderRadius:   4,
+                flexShrink:     0,
+                border:         `1.5px solid ${active ? "var(--primary)" : "var(--border)"}`,
+                background:     active ? "var(--primary)" : "transparent",
+                display:        "flex",
+                alignItems:     "center",
+                justifyContent: "center",
+                transition:     "background 0.1s, border-color 0.1s",
+              }}>
+                {active && (
+                  <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+                    <path
+                      d="M1 4L3.5 6.5L9 1"
+                      stroke="var(--primary-foreground)"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </div>
+
+              <span style={{ fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {opt.name}
+              </span>
+
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                {opt.count.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ marginLeft: 28, marginTop: 5, height: 2, background: "var(--border)", borderRadius: 1 }}>
+              <div style={{
+                height:     "100%",
+                width:      `${(opt.count / maxCount) * 100}%`,
+                background: active ? "var(--primary)" : "var(--muted-foreground)",
+                borderRadius: 1,
+                transition: "background 0.1s",
+              }} />
+            </div>
+          </div>
         );
       })}
     </div>
@@ -75,8 +125,6 @@ export function FilterConfigDialog({
   availableObjectTypes,
   availableActivities,
   onSubmit,
-  accentBg,
-  accentFg,
   icon,
   titleLabel,
   hasFile,
@@ -85,11 +133,9 @@ export function FilterConfigDialog({
   onClose:              () => void;
   filterType:           FilterType;
   existingRule:         FilterRule | undefined;
-  availableObjectTypes: string[];
-  availableActivities:  string[];
+  availableObjectTypes: OptionItem[];
+  availableActivities:  OptionItem[];
   onSubmit:             (params: FilterRule["params"]) => void;
-  accentBg:             string;
-  accentFg:             string;
   icon:                 React.ReactElement;
   titleLabel:           string;
   hasFile:              boolean;
@@ -97,9 +143,12 @@ export function FilterConfigDialog({
   const [afterDate,  setAfterDate]  = useState("");
   const [beforeDate, setBeforeDate] = useState("");
   const [selected,   setSelected]   = useState<Set<string>>(new Set());
+  const [search,     setSearch]     = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    setSearch("");
     if (existingRule) {
       if (existingRule.type === "time_range") {
         const p = existingRule.params as TimeRangeParams;
@@ -118,10 +167,16 @@ export function FilterConfigDialog({
     }
   }, [open, existingRule]);
 
-  function toggleOption(opt: string) {
+  useEffect(() => {
+    if (open && filterType !== "time_range") {
+      setTimeout(() => searchRef.current?.focus(), 50);
+    }
+  }, [open, filterType]);
+
+  function toggleOption(name: string) {
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(opt) ? next.delete(opt) : next.add(opt);
+      next.has(name) ? next.delete(name) : next.add(name);
       return next;
     });
   }
@@ -144,19 +199,42 @@ export function FilterConfigDialog({
     onClose();
   }
 
-  const tagOptions = filterType === "object_types" ? availableObjectTypes : availableActivities;
+  const options     = filterType === "object_types" ? availableObjectTypes : availableActivities;
+  const isList      = filterType !== "time_range";
+  const searchLabel = filterType === "object_types" ? "Search object types…" : "Search activities…";
+  const countLabel  = filterType === "object_types" ? "object types" : "activities";
+
+  const allSelected  = options.length > 0 && options.every(o => selected.has(o.name));
+  const someSelected = !allSelected && options.some(o => selected.has(o.name));
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(options.map(o => o.name)));
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-[440px]">
-        <DialogHeader>
-          <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, color: accentBg }}>
-            {icon}
-            {existingRule ? `Edit ${titleLabel}` : `Add ${titleLabel}`}
+      <DialogContent className="sm:max-w-[440px]" style={{ padding: 0, gap: 0, overflow: "hidden" }}>
+
+        <DialogHeader style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)" }}>
+          <DialogTitle style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 16 }}>
+            <span style={{ display: "flex", alignItems: "center", color: "var(--primary)" }}>
+              {React.cloneElement(icon, { size: 18 } as React.HTMLAttributes<SVGElement>)}
+            </span>
+            {existingRule ? `Edit ${titleLabel}` : titleLabel}
           </DialogTitle>
+          {isList && hasFile && (
+            <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: 0 }}>
+              {options.length} {countLabel} in this log
+              {selected.size > 0 && ` · ${selected.size} selected`}
+            </p>
+          )}
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 pt-1">
+        <div style={{ padding: "16px 24px", display: "flex", flexDirection: "column", gap: 12 }}>
           {filterType === "time_range" && (
             !hasFile ? (
               <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
@@ -178,53 +256,122 @@ export function FilterConfigDialog({
             )
           )}
 
-          {(filterType === "object_types" || filterType === "activity") && (
-            <div className="flex flex-col gap-2">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <Label>
-                  {filterType === "object_types" ? "Object types to keep" : "Activities to keep"}
-                </Label>
-                {selected.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelected(new Set())}
-                    style={{
-                      fontSize: 12, color: "var(--muted-foreground)",
-                      cursor: "pointer", background: "none", border: "none",
-                    }}
-                  >
-                    Clear all
-                  </button>
-                )}
+          {isList && (
+            <>
+              <div style={{ position: "relative" }}>
+                <Search
+                  size={14}
+                  style={{
+                    position: "absolute", left: 10, top: "50%",
+                    transform: "translateY(-50%)", color: "var(--muted-foreground)",
+                    pointerEvents: "none",
+                  }}
+                />
+                <input
+                  ref={searchRef}
+                  type="text"
+                  placeholder={searchLabel}
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  style={{
+                    width:        "100%",
+                    paddingLeft:  32,
+                    paddingRight: 12,
+                    paddingTop:   8,
+                    paddingBottom: 8,
+                    fontSize:     13,
+                    border:       "1px solid var(--border)",
+                    borderRadius: 6,
+                    background:   "transparent",
+                    color:        "var(--foreground)",
+                    outline:      "none",
+                    boxSizing:    "border-box",
+                  }}
+                />
               </div>
-              <div style={{ maxHeight: 220, overflowY: "auto", paddingTop: 4 }}>
-                <OptionTagSelector
-                  options={tagOptions}
+              {options.length > 0 && (
+                <div
+                  onClick={toggleAll}
+                  style={{
+                    display:       "flex",
+                    alignItems:    "center",
+                    gap:           10,
+                    cursor:        "pointer",
+                    paddingBottom: 10,
+                    borderBottom:  "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{
+                    width:          18,
+                    height:         18,
+                    borderRadius:   4,
+                    flexShrink:     0,
+                    border:         `1.5px solid ${(allSelected || someSelected) ? "var(--primary)" : "var(--border)"}`,
+                    background:     (allSelected || someSelected) ? "var(--primary)" : "transparent",
+                    display:        "flex",
+                    alignItems:     "center",
+                    justifyContent: "center",
+                    transition:     "background 0.1s, border-color 0.1s",
+                  }}>
+                    {allSelected && (
+                      <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+                        <path d="M1 4L3.5 6.5L9 1" stroke="var(--primary-foreground)"
+                          strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                    {someSelected && (
+                      <svg width="10" height="2" viewBox="0 0 10 2" fill="none">
+                        <path d="M1 1H9" stroke="var(--primary-foreground)"
+                          strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                    )}
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>Select all</span>
+                </div>
+              )}
+
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                <OptionList
+                  options={options}
                   selected={selected}
-                  color={accentBg}
-                  fgColor={accentFg}
+                  search={search}
                   onToggle={toggleOption}
                 />
               </div>
-              {selected.size > 0 && (
-                <p style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                  {selected.size} of {tagOptions.length} selected
-                </p>
-              )}
-            </div>
+            </>
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={!hasFile}
-            style={{ background: accentBg, borderColor: accentBg, color: accentFg }}
-          >
-            {existingRule ? "Update" : "Add"} Filter
-          </Button>
+        <DialogFooter style={{
+          padding:        "12px 24px",
+          borderTop:      "1px solid var(--border)",
+          display:        "flex",
+          justifyContent: "space-between",
+          alignItems:     "center",
+        }}>
+          {isList ? (
+            <Button
+              variant="ghost"
+              onClick={() => setSelected(new Set())}
+              disabled={selected.size === 0}
+              style={{ padding: "0 4px", fontSize: 13 }}
+            >
+              Reset
+            </Button>
+          ) : <span />}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={!hasFile}
+              style={{ background: "var(--primary)", borderColor: "var(--primary)", color: "var(--primary-foreground)" }}
+            >
+              Apply
+            </Button>
+          </div>
         </DialogFooter>
+
       </DialogContent>
     </Dialog>
   );

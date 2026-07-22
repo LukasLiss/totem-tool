@@ -236,7 +236,7 @@ export default function VariantsExplorer({
           return;  // File changed, abort this stale closure
         }
 
-        const { data: objectTypes }: { data: string[] } = await axios.get(
+        const { data: objectTypesRaw }: { data: { name: string; count: number }[] } = await axios.get(
           `/api/files/${currentFileId}/object_types/`
         );
 
@@ -245,6 +245,7 @@ export default function VariantsExplorer({
           return;  // File changed during fetch, abort
         }
 
+        const objectTypes = objectTypesRaw.map(o => o.name);
         if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
           setAvailableTypes(objectTypes);
 
