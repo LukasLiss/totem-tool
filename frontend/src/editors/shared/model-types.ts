@@ -645,8 +645,10 @@ export function parseOcdfgModelFile(raw: unknown): ParseResult<OcdfgModelFile> {
   };
 
   const nodeIds = new Set<string>();
+  const warnings: string[] = [];
 
   const activities: OcdfgActivity[] = [];
+  const usedLabels = new Set<string>();
   for (const [index, entry] of raw.activities.entries()) {
     if (!isRecord(entry)) {
       return { ok: false, error: `Activity #${index + 1} must be an object.` };
@@ -655,12 +657,26 @@ export function parseOcdfgModelFile(raw: unknown): ParseResult<OcdfgModelFile> {
     if (!id) return { ok: false, error: `Activity #${index + 1} needs an "id".` };
     if (nodeIds.has(id)) return { ok: false, error: `Duplicate node id "${id}".` };
     nodeIds.add(id);
+    // Activity names identify the nodes of an OC-DFG (the canonical model
+    // format uses them as ids), so normalise empty/duplicate names of
+    // legacy or hand-written files instead of keeping them.
+    let label = asName(entry.label) ?? id;
+    if (asName(entry.label) === null && typeof entry.label === 'string') {
+      warnings.push(`Activity "${id}" had an empty name — using its id instead.`);
+    }
+    if (usedLabels.has(label)) {
+      const base = label;
+      let n = 2;
+      while (usedLabels.has(`${base} (${n})`)) n += 1;
+      label = `${base} (${n})`;
+      warnings.push(
+        `Two activities were named "${base}" — renamed one to "${label}" (names must be unique).`,
+      );
+    }
+    usedLabels.add(label);
     activities.push({
       id,
-      // Keep string labels verbatim (even empty ones — drawn as "unnamed")
-      // so the editor's own exports round-trip unchanged; fall back to the
-      // id only when the label is missing entirely.
-      label: typeof entry.label === 'string' ? entry.label : id,
+      label,
       position: isXY(entry.position) ? entry.position : undefined,
     });
   }
@@ -714,7 +730,6 @@ export function parseOcdfgModelFile(raw: unknown): ParseResult<OcdfgModelFile> {
     [...starts, ...ends].map((c) => [c.id, c.objectType] as const),
   );
 
-  const warnings: string[] = [];
   const arcsRaw = raw.arcs ?? [];
   if (!Array.isArray(arcsRaw)) return { ok: false, error: '"arcs" must be an array.' };
   const arcs: OcdfgArc[] = [];

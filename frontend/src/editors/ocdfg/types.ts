@@ -78,7 +78,7 @@ export const isControlNode = (node: OcdfgFlowNode): node is ControlFlowNode =>
   node.type === 'control';
 
 /** Layout sizes (also used as ELK node sizes). */
-export const CONTROL_SIZE = 48;
+export const CONTROL_SIZE = 80;
 export const ACTIVITY_WIDTH = 130;
 export const ACTIVITY_HEIGHT = 48;
 

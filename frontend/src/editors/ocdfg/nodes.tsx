@@ -1,12 +1,11 @@
 import { memo } from 'react';
 import { type NodeProps } from '@xyflow/react';
 
+import { contrastText } from '@/editors/shared/colors';
 import {
   NodeHandles,
-  PlayGlyph,
   SELECTED_SHADOW,
   SOFT_SHADOW,
-  SquareGlyph,
 } from '@/editors/shared/node-chrome';
 
 import {
@@ -76,47 +75,82 @@ export const ActivityNode = memo(function ActivityNode({
   );
 });
 
-/** START (▶) / END (■) marker node of one object type — a filled circle. */
+/**
+ * START (▶) / END (●) marker node of one object type — the same visual
+ * language as the analysis views' OC-DFG terminal nodes
+ * (react_component/OcdfgTerminalNode.tsx): a rounded square filled with the
+ * type color, a triangle (start) or dot (end) in the readable contrast
+ * color, and the object type name inside the tile.
+ */
 export const ControlNode = memo(function ControlNode({
   data,
   selected,
 }: NodeProps<ControlFlowNode>) {
+  const textColor = contrastText(data.color);
   return (
     <div
       className="group"
-      style={{ position: 'relative', width: CONTROL_SIZE, height: CONTROL_SIZE }}
+      style={{
+        position: 'relative',
+        width: CONTROL_SIZE,
+        height: CONTROL_SIZE,
+        borderRadius: 18,
+        background: data.color,
+        border: selected
+          ? '1.5px solid rgba(37, 99, 235, 0.6)'
+          : '1px solid rgba(15, 23, 42, 0.08)',
+        boxShadow: selected ? SELECTED_SHADOW : SOFT_SHADOW,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+        padding: 8,
+      }}
     >
-      <div
+      {data.kind === 'start' ? (
+        <div
+          aria-hidden
+          style={{
+            width: 0,
+            height: 0,
+            borderTop: '12px solid transparent',
+            borderBottom: '12px solid transparent',
+            borderLeft: `18px solid ${textColor}`,
+            filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.18))',
+          }}
+        />
+      ) : (
+        <div
+          aria-hidden
+          style={{
+            width: 24,
+            height: 24,
+            borderRadius: 10,
+            background: textColor,
+            boxShadow: '0 3px 6px rgba(15, 23, 42, 0.18)',
+          }}
+        />
+      )}
+      <span
         style={{
-          position: 'absolute',
-          inset: 0,
-          borderRadius: '50%',
-          border: `2.5px solid ${data.color}`,
-          background: data.color,
-          boxShadow: selected ? SELECTED_SHADOW : SOFT_SHADOW,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          color: textColor,
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '-0.015em',
+          textAlign: 'center',
+          lineHeight: 1.2,
+          maxWidth: '100%',
+          overflow: 'hidden',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
         }}
+        title={`${data.objectType} ${data.kind}`}
       >
-        {data.kind === 'start' ? <PlayGlyph size={16} /> : <SquareGlyph size={15} />}
-      </div>
+        {data.objectType}
+      </span>
       <NodeHandles show={selected === true} />
-      <div
-        style={{
-          position: 'absolute',
-          top: CONTROL_SIZE + 5,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontSize: 10,
-          fontWeight: 500,
-          color: '#64748B',
-          whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-        }}
-      >
-        {data.kind === 'start' ? 'start' : 'end'} · {data.objectType}
-      </div>
     </div>
   );
 });

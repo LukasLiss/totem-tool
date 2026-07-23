@@ -74,7 +74,7 @@ function NotationLegend() {
       <LegendRow
         glyph={
           <svg width={22} height={22} viewBox="0 0 22 22">
-            <circle cx={11} cy={11} r={9} fill={accent} stroke={accent} strokeWidth={2} />
+            <rect x={1} y={1} width={20} height={20} rx={6} fill={accent} />
             <polygon points="8,6.5 16,11 8,15.5" fill="#fff" />
           </svg>
         }
@@ -83,8 +83,8 @@ function NotationLegend() {
       <LegendRow
         glyph={
           <svg width={22} height={22} viewBox="0 0 22 22">
-            <circle cx={11} cy={11} r={9} fill={accent} stroke={accent} strokeWidth={2} />
-            <rect x={7.5} y={7.5} width={7} height={7} fill="#fff" />
+            <rect x={1} y={1} width={20} height={20} rx={6} fill={accent} />
+            <circle cx={11} cy={11} r={4} fill="#fff" />
           </svg>
         }
         text="END node — where objects of a type finish"

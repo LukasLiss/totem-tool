@@ -7,6 +7,8 @@ import {
   type EdgeProps,
 } from '@xyflow/react';
 
+import type { XY } from '@/editors/shared/model-types';
+
 import {
   anchorPoint,
   arcPathPoints,
@@ -14,6 +16,7 @@ import {
   effectiveWaypoints,
   internalNodeBox,
   roundedPolylinePath,
+  selfLoopWaypoints,
 } from './geometry';
 import {
   ActiveTypeColorContext,
@@ -25,9 +28,8 @@ import {
 
 /**
  * OC-DFG arc: a floating edge colored by its object type that attaches to the
- * node border facing the next path point (circle border for START/END nodes,
- * rectangle border for activities), optionally routed through draggable bend
- * points. Self-loops and parallel arcs between the same nodes are routed
+ * node border facing the next path point, optionally routed through draggable
+ * bend points. Self-loops and parallel arcs between the same nodes are routed
  * apart automatically as long as they have no user bend points.
  *
  * Bend points: double-click the arc to add one (handled by the editor),
@@ -67,13 +69,9 @@ export const ArcEdge = memo(function ArcEdge({
     data?.parallelOffset ?? 0,
     data?.loopIndex ?? 0,
   );
-  const points = arcPathPoints(
-    sourceBox,
-    sourceNode.type === 'control',
-    targetBox,
-    targetNode.type === 'control',
-    routed,
-  );
+  // Both node kinds are rounded rectangles (START/END tiles match the
+  // analysis views' terminal nodes), so all anchors use the rectangle border.
+  const points = arcPathPoints(sourceBox, false, targetBox, false, routed);
   const path = roundedPolylinePath(points, source === target ? 22 : 14);
 
   const color = data?.color ?? FALLBACK_TYPE_COLOR;
@@ -177,7 +175,8 @@ export const ArcEdge = memo(function ArcEdge({
 
 /**
  * Preview line while dragging a new arc: same floating border-anchor geometry
- * as the final edge (red when hovering an invalid target).
+ * as the final edge (red when hovering an invalid target). Hovering back over
+ * the source node previews the self-loop exactly as it would be created.
  */
 export function ArcConnectionLine({
   fromNode,
@@ -190,12 +189,6 @@ export function ArcConnectionLine({
   const sourceBox = internalNodeBox(fromNode);
   const cursor = { x: toX, y: toY };
   const targetBox = toNode ? internalNodeBox(toNode) : null;
-  const towards = targetBox ? boxCenter(targetBox) : cursor;
-  const start = anchorPoint(sourceBox, fromNode.type === 'control', towards);
-  const end =
-    targetBox && toNode
-      ? anchorPoint(targetBox, toNode.type === 'control', boxCenter(sourceBox))
-      : cursor;
 
   const controlEndpoint =
     fromNode.type === 'control' ? fromNode : toNode?.type === 'control' ? toNode : null;
@@ -206,17 +199,53 @@ export function ArcConnectionLine({
   const color =
     connectionStatus === 'invalid' ? '#DC2626' : (controlColor ?? activeTypeColor);
 
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len;
-  const uy = dy / len;
   const arrowLength = 11;
   const arrowWidth = 9;
-  const backX = end.x - ux * arrowLength;
-  const backY = end.y - uy * arrowLength;
-  const perpX = -uy * (arrowWidth / 2);
-  const perpY = ux * (arrowWidth / 2);
+  const arrowHead = (tip: XY, prev: XY) => {
+    const dx = tip.x - prev.x;
+    const dy = tip.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const backX = tip.x - ux * arrowLength;
+    const backY = tip.y - uy * arrowLength;
+    const perpX = -uy * (arrowWidth / 2);
+    const perpY = ux * (arrowWidth / 2);
+    return `${tip.x},${tip.y} ${backX + perpX},${backY + perpY} ${backX - perpX},${backY - perpY}`;
+  };
+
+  // Releasing over the source node creates a self-loop — preview that loop
+  // instead of a zero-length line so the user sees what they would get.
+  if (toNode && toNode.id === fromNode.id) {
+    const points = arcPathPoints(
+      sourceBox,
+      false,
+      sourceBox,
+      false,
+      selfLoopWaypoints(sourceBox),
+    );
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        <path
+          d={roundedPolylinePath(points, 22)}
+          fill="none"
+          stroke={color}
+          strokeWidth={2.5}
+          strokeDasharray="7 5"
+          strokeLinecap="round"
+        />
+        <polygon
+          points={arrowHead(points[points.length - 1], points[points.length - 2])}
+          fill={color}
+        />
+      </g>
+    );
+  }
+
+  const towards = targetBox ? boxCenter(targetBox) : cursor;
+  const start = anchorPoint(sourceBox, false, towards);
+  const end =
+    targetBox && toNode ? anchorPoint(targetBox, false, boxCenter(sourceBox)) : cursor;
 
   return (
     <g style={{ pointerEvents: 'none' }}>
@@ -228,10 +257,7 @@ export function ArcConnectionLine({
         strokeDasharray="7 5"
         strokeLinecap="round"
       />
-      <polygon
-        points={`${end.x},${end.y} ${backX + perpX},${backY + perpY} ${backX - perpX},${backY - perpY}`}
-        fill={color}
-      />
+      <polygon points={arrowHead(end, start)} fill={color} />
     </g>
   );
 }

@@ -133,46 +133,56 @@ just the net can ignore:
 }
 ```
 
-## OC-DFG format (`"format": "ocdfg"`)
+## OC-DFG format (`"schema": "ocdfg"`)
 
 An object-centric directly-follows graph: **activity** nodes plus one
-artificial **START** (▶) and **END** (■) node per object type, connected by
-**typed arcs** — every arc belongs to exactly one object type and is drawn in
-that type's color (a multigraph: the same two activities can be connected by
-one arc per type). Self-loops (an activity directly follows itself) are
-allowed and drawn as a loop next to the node. Arcs cannot leave an END node
-or enter a START node, and arcs at a START/END node always belong to that
-node's object type. There are no variable arcs.
+artificial **START** (▶) and **END** (●) node per object type — drawn with
+the same visual language as the OC-DFG analysis views (a rounded tile filled
+with the type color) — connected by **typed arcs**. Every arc belongs to
+exactly one object type and is drawn in that type's color (a multigraph: the
+same two activities can be connected by one arc per type). Self-loops (an
+activity directly follows itself) are allowed; while drawing an arc, hovering
+back over the source node previews the loop that would be created. Arcs
+cannot leave an END node or enter a START node, and arcs at a START/END node
+always belong to that node's object type. There are no variable arcs.
 
 Arcs float and support the same **bend points** as the OCPN editor
 (double-click the arc to add, drag to route, double-click the point to
-remove; saved as the optional layout-only `"waypoints"` array). Parallel
-arcs between the same two nodes and stacked self-loops are routed apart
-automatically until you place your own bend points.
+remove). Parallel arcs between the same two nodes and stacked self-loops are
+routed apart automatically until you place your own bend points.
+
+The saved file is the **canonical OC-DFG model JSON** — the backend's
+spelling of a directly-follows graph (`totem_lib.dfg`): activities are
+identified by their unique name, the START/END node of a type is the pseudo
+node `__start__:<type>` / `__end__:<type>`, and edges are
+`{source, target, object_type}` triples. The editor adds an OPTIONAL
+`layout` block (node positions, type colors, arc bend points, and START/END
+nodes without edges) that model consumers simply ignore — so one validator
+covers both plain model files and editor files, and a file without `layout`
+opens with auto layout. The editor also still reads its earlier
+`"format": "ocdfg"` files.
 
 ```json
 {
-  "format": "ocdfg",
+  "schema": "ocdfg",
   "version": 1,
   "name": "Order fulfilment (OC-DFG)",
-  "objectTypes": [
-    { "name": "Order", "color": "#10B981" },
-    { "name": "Item", "color": "#2563EB" }
+  "object_types": ["Item", "Order"],
+  "activities": ["pick item", "place order"],
+  "edges": [
+    { "source": "__start__:Order", "target": "place order", "object_type": "Order" },
+    { "source": "pick item", "target": "pick item", "object_type": "Item" },
+    { "source": "place order", "target": "pick item", "object_type": "Item" }
   ],
-  "activities": [
-    { "id": "place", "label": "place order", "position": { "x": 300, "y": 170 } },
-    { "id": "pick", "label": "pick item", "position": { "x": 640, "y": 340 } }
-  ],
-  "starts": [
-    { "id": "start_Order", "objectType": "Order", "position": { "x": 40, "y": 70 } }
-  ],
-  "ends": [
-    { "id": "end_Order", "objectType": "Order", "position": { "x": 1620, "y": 70 } }
-  ],
-  "arcs": [
-    { "id": "a1", "source": "start_Order", "target": "place", "objectType": "Order" },
-    { "id": "a2", "source": "place", "target": "pick", "objectType": "Item" },
-    { "id": "a3", "source": "pick", "target": "pick", "objectType": "Item" }
-  ]
+  "layout": {
+    "objectTypes": { "Order": { "color": "#10B981" }, "Item": { "color": "#2563EB" } },
+    "activities": { "place order": { "position": { "x": 300, "y": 170 } } },
+    "starts": { "Order": { "position": { "x": 40, "y": 70 } } },
+    "ends": {},
+    "edges": [
+      { "source": "place order", "target": "pick item", "object_type": "Item",
+        "waypoints": [{ "x": 470, "y": 260 }] }
+    ]
+  }
 }
 ```

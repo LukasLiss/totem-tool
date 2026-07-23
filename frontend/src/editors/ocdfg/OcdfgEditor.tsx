@@ -43,6 +43,7 @@ import { loadEditorSession, saveEditorSession } from '@/editors/shared/sessionCa
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { ArcConnectionLine, edgeTypes } from './ArcEdge';
+import { assetToOcdfgModel, isOcdfgAsset, ocdfgModelToAsset } from './asset-format';
 import {
   arcPathPoints,
   effectiveWaypoints,
@@ -651,11 +652,13 @@ function OcdfgEditorInner() {
         edge.data?.parallelOffset ?? 0,
         edge.data?.loopIndex ?? 0,
       );
+      // Rectangle anchors for both node kinds (START/END tiles are rounded
+      // squares like the analysis views' terminal nodes).
       const points = arcPathPoints(
         flowNodeBox(sourceNode),
-        isControlNode(sourceNode),
+        false,
         flowNodeBox(targetNode),
-        isControlNode(targetNode),
+        false,
         waypoints,
       );
       const insertAt = nearestSegmentIndex(points, position);
@@ -835,7 +838,22 @@ function OcdfgEditorInner() {
   // -------------------------------------------------------------------------
 
   const changeActivityLabel = useCallback(
-    (activityId: string, label: string) => {
+    (activityId: string, rawLabel: string) => {
+      // Activity names identify the nodes of an OC-DFG (the saved model uses
+      // them as ids), so they must be non-empty and unique.
+      const label = rawLabel.trim();
+      if (!label) {
+        toast.error('Activity names cannot be empty.');
+        return;
+      }
+      const taken = nodes.some(
+        (node) =>
+          node.id !== activityId && !isControlNode(node) && node.data.label.trim() === label,
+      );
+      if (taken) {
+        toast.error(`An activity named "${label}" already exists.`);
+        return;
+      }
       record();
       setNodes((current) =>
         current.map((node) =>
@@ -845,7 +863,7 @@ function OcdfgEditorInner() {
         ),
       );
     },
-    [record],
+    [record, nodes],
   );
 
   const changeArcType = useCallback(
@@ -902,7 +920,10 @@ function OcdfgEditorInner() {
     try {
       const raw = await openJsonFile();
       if (raw === null) return;
-      const parsed = parseOcdfgModelFile(raw);
+      // Accept both the canonical model JSON ("schema": "ocdfg") and the
+      // legacy editor file ("format": "ocdfg").
+      const candidate = isOcdfgAsset(raw) ? assetToOcdfgModel(raw, modelName) : raw;
+      const parsed = parseOcdfgModelFile(candidate);
       if (parsed.ok === false) {
         toast.error(parsed.error);
         return;
@@ -914,12 +935,20 @@ function OcdfgEditorInner() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not read the file.');
     }
-  }, [applyModel, record]);
+  }, [applyModel, record, modelName]);
 
   const handleExport = useCallback(() => {
-    const filename = toFilename(modelName, 'ocdfg-model');
-    downloadJson(filename, serializeRef.current());
-    toast.success(`Saved ${filename}.json`);
+    // Save in the canonical OC-DFG model format (the backend's spelling of
+    // activities and typed edges); the editor's positions, colors and bend
+    // points travel in the optional `layout` block.
+    try {
+      const asset = ocdfgModelToAsset(serializeRef.current());
+      const filename = toFilename(modelName, 'ocdfg-model');
+      downloadJson(filename, asset);
+      toast.success(`Saved ${filename}.json`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save the model.');
+    }
   }, [modelName]);
 
   const handleLoadExample = useCallback(() => {
