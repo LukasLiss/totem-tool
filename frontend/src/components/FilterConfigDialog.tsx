@@ -410,10 +410,13 @@ export function FilterConfigDialog({
       : "Search activities…";
   const countLabel =
     filterType === "object_types" ? "object types" : "activities";
+  const filteredOptions = search
+    ? options.filter((o) => o.name.toLowerCase().includes(search.toLowerCase()))
+    : options;
   const allSelected =
-    options.length > 0 && options.every((o) => selected.has(o.name));
+    filteredOptions.length > 0 && filteredOptions.every((o) => selected.has(o.name));
   const someSelected =
-    !allSelected && options.some((o) => selected.has(o.name));
+    !allSelected && filteredOptions.some((o) => selected.has(o.name));
 
   const logMinDate = logMin != null ? unixToDate(logMin) : "";
   const logMaxDate = logMax != null ? unixToDate(logMax) : "";
@@ -450,7 +453,12 @@ export function FilterConfigDialog({
   }
 
   function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(options.map((o) => o.name)));
+    if (allSelected) {
+      const toRemove = new Set(filteredOptions.map((o) => o.name));
+      setSelected((prev) => new Set([...prev].filter((n) => !toRemove.has(n))));
+    } else {
+      setSelected((prev) => new Set([...prev, ...filteredOptions.map((o) => o.name)]));
+    }
   }
 
   function handleSubmit() {
