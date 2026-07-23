@@ -2,7 +2,7 @@ name: PR Pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed] 
   workflow_dispatch:
 
 concurrency:
