@@ -35,10 +35,17 @@ const totemAsset: ProjectAsset = {
   updated_at: "2026-07-22T10:00:00Z",
 };
 
-describe("ModelAssetsView conformance action", () => {
+const occnAsset: ProjectAsset = {
+  ...totemAsset,
+  id: 43,
+  name: "Reference OCCN",
+  asset_type: "OCCN",
+};
+
+describe("ModelAssetsView row actions", () => {
   beforeEach(() => {
     listAssetsMock.mockReset();
-    listAssetsMock.mockResolvedValue([totemAsset]);
+    listAssetsMock.mockResolvedValue([totemAsset, occnAsset]);
   });
 
   afterEach(() => {
@@ -77,4 +84,37 @@ describe("ModelAssetsView conformance action", () => {
       assetId: 42,
     });
   });
+
+  it.each([
+    ["Reference TOTeM", "totem", 42],
+    ["Reference OCCN", "occn", 43],
+  ] as const)(
+    "opens %s in its editor with the row model selected",
+    async (name, component, assetId) => {
+      const setViewMode = vi.fn();
+      render(
+        <SelectedFileContext.Provider
+          value={{
+            selectedFile: { id: 12, project: 7, file: "event-log.xml" },
+            setSelectedFile: vi.fn(),
+          }}
+        >
+          <DashboardContext.Provider
+            value={{ viewMode: { type: "modelAssets" }, setViewMode }}
+          >
+            <ModelAssetsView />
+          </DashboardContext.Provider>
+        </SelectedFileContext.Provider>
+      );
+
+      await waitFor(() => expect(screen.getByText(name)).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: `Edit ${name}` }));
+
+      expect(setViewMode).toHaveBeenCalledWith({
+        type: "editor",
+        component,
+        openAssetId: assetId,
+      });
+    }
+  );
 });
