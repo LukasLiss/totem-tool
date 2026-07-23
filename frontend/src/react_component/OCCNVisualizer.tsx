@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   ReactFlow,
@@ -83,6 +83,11 @@ function OCCNVisualizer({
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
+
+  // Track the container's real size so we can re-fit once the dashboard/gridstack
+  // cell is actually sized (see the reactive re-fit effect below).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const [net, setNet] = useState<OccnNet | null>(data ?? null);
   const [graph, setGraph] = useState<OccnEditorGraph | null>(null);
@@ -202,6 +207,38 @@ function OCCNVisualizer({
     };
   }, [net, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
 
+  // Track the container size via a ResizeObserver. In a dashboard the gridstack
+  // cell is sized asynchronously, so the initial layout's fitView often runs
+  // against a zero-size container and leaves the graph in a corner.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateSize = () => {
+      const width = Math.max(0, container.clientWidth);
+      const height = Math.max(0, container.clientHeight);
+      setContainerSize((prev) =>
+        prev.width === width && prev.height === height ? prev : { width, height },
+      );
+    };
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => updateSize());
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  // Re-fit once the container actually has real dimensions (and whenever it is
+  // resized). Gated on positioned nodes so we never fit against origin {0,0}
+  // placeholders before ELK layout has resolved.
+  useEffect(() => {
+    if (containerSize.width <= 0 || containerSize.height <= 0) return;
+    if (nodes.length === 0) return;
+    const frame = window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+    return () => cancelAnimationFrame(frame);
+  }, [containerSize.width, containerSize.height, nodes.length, fitView]);
+
   const renderContext = useMemo(
     () => ({
       typeColors,
@@ -232,6 +269,7 @@ function OCCNVisualizer({
 
   return (
     <div
+      ref={containerRef}
       data-occn-readonly
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
       className={interactionsDisabled ? 'interactions-disabled' : ''}
