@@ -50,7 +50,7 @@ export const groupRefEquals = (a: GroupRef | null, b: GroupRef | null) =>
   !!a && !!b && a.activity === b.activity && a.side === b.side && a.groupIndex === b.groupIndex;
 
 /** Default node sizes (also used for ELK and as measurement fallbacks). */
-export const ACTIVITY_WIDTH = 140;
+export const ACTIVITY_WIDTH = 180;
 export const ACTIVITY_HEIGHT = 56;
 export const PSEUDO_WIDTH = 56;
 export const PSEUDO_HEIGHT = 74;

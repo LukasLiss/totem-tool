@@ -73,7 +73,7 @@ function OCCNVisualizer({
   fileId,
   data,
   showControls = true,
-  initialInteractionLocked = false,
+  initialInteractionLocked = true,
   typeColorOverrides,
   maxMarkerGroupsPerSide,
   initialLayoutDirection = 'LR',
