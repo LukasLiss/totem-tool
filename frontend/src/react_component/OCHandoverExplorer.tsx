@@ -199,6 +199,15 @@ export default function OCHandoverExplorer({
   const [selectedMlpaLevel, setSelectedMlpaLevel] = useState<number | null>(null);
   const useClustersRef = useRef(useClusters);
   useEffect(() => { useClustersRef.current = useClusters; }, [useClusters]);
+  const clusterInfoRef = useRef(clusterInfo);
+  useEffect(() => { clusterInfoRef.current = clusterInfo; }, [clusterInfo]);
+  // Increments only when clusterInfo changes while useClusters is on, so the
+  // data-fetching effect does not re-run (and reset zoom) on every OrgaMining
+  // recomputation when the handover explorer is not using clusters.
+  // useClusters intentionally NOT in deps: toggling it should not auto-recompute.
+  const [clusterTrigger, setClusterTrigger] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (useClustersRef.current) setClusterTrigger(t => t + 1); }, [clusterInfo]);
 
   const resultsRef = useRef<HTMLDivElement>(null);
   const viewModeRef = useRef(viewMode);
@@ -408,7 +417,7 @@ export default function OCHandoverExplorer({
       if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
 
       try {
-        const activeClusterMap = useClustersRef.current && clusterInfo ? clusterInfo.clusterMap : null;
+        const activeClusterMap = useClustersRef.current && clusterInfoRef.current ? clusterInfoRef.current.clusterMap : null;
         const res = activeClusterMap
           ? await fetch("/api/handover/", {
               method: "POST",
@@ -439,9 +448,10 @@ export default function OCHandoverExplorer({
 
     return () => { cancelled = true; };
   // useClusters intentionally omitted (read via ref): toggling it should not auto-recompute.
-  // clusterInfo is included so OrgaMining recomputes propagate when useClusters is on.
+  // clusterTrigger (not clusterInfo directly) propagates OrgaMining recomputes only when
+  // useClusters is on, preventing spurious zoom resets when working in OrgaMining.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId, hasStartedLoading, onDataLoad, clusterInfo]);
+  }, [fileId, hasStartedLoading, onDataLoad, clusterTrigger]);
 
   const handleCompute = () => {
     hasStartedLoadingRef.current = false;
