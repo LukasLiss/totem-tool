@@ -1,5 +1,4 @@
 import React, { useContext } from "react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -54,7 +53,7 @@ export function AnalysisView() {
                 <CardTitle>Variants Explorer</CardTitle>
                 <CardDescription>Object-centric variant analysis</CardDescription>
               </CardHeader>
-              <CardContent className="p-0 pb-0">
+              <CardContent className="p-0 pb-4">
                 <VariantsExplorer
                   fileId={selectedFile?.id}
                   colWidth={120}
@@ -72,8 +71,7 @@ export function AnalysisView() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <SidebarTrigger className="m-2" />
-      <div className="flex-1 flex justify-center p-4 pt-0">
+      <div className="flex-1 flex justify-center p-4 pt-4">
         {renderComponent()}
       </div>
     </div>

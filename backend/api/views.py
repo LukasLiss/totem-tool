@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent
+from .models import EventLog, Project, Dashboard, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, FilterStackComponent
 from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -17,7 +17,7 @@ from totem_lib.dfg import OCDFGDb
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
-from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel import OcelDuckDB, import_ocel_db, FilterStack, apply_filter_stack
 from types import SimpleNamespace
 import networkx as nx
 
@@ -249,11 +249,77 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                types = _object_types(db)
+                types = _object_types_with_counts(db)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response(types, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def activities(self, request, pk=None):
+        """Returns the sorted list of unique activity names in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                acts = _activities_with_counts(db)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(acts, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def event_distribution(self, request, pk=None):
+        """Returns monthly event counts for the time range histogram."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                rows = db.conn.execute("""
+                    SELECT
+                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
+                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
+                        COUNT(*) AS count
+                    FROM events
+                    GROUP BY yr, mo
+                    ORDER BY yr, mo
+                """).fetchall()
+            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(distribution, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def apply_filters(self, request, pk=None):
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        filters_data = request.data.get("filters", [])
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                filter_stack = FilterStack.from_dict({"filters": filters_data})
+                _, stats = apply_filter_stack(db, filter_stack)
+        except Exception as e:
+            return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "object_percentage":   stats["object_percentage"],
+            "object_count_before": stats["object_count_before"],
+            "object_count_after":  stats["object_count_after"],
+            "event_percentage":    stats["event_percentage"],
+            "event_count_before":  stats["event_count_before"],
+            "event_count_after":   stats["event_count_after"],
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -505,6 +571,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                 )
+            elif component_name == 'FilterStackComponent':
+                FilterStackComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    filter_stack_json=item.get('filter_stack_json', []),
+                )
             # Add more as needed
 
         return Response({"status": "saved"})
@@ -652,6 +728,26 @@ def _object_types(db: OcelDuckDB) -> list[str]:
             "SELECT DISTINCT obj_type FROM objects"
         ).fetchall()
     )
+
+
+def _object_types_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Object types with per-type object counts, sorted by name."""
+    return [
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT obj_type, COUNT(*) FROM objects GROUP BY obj_type ORDER BY obj_type"
+        ).fetchall()
+    ]
+
+
+def _activities_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Activity names with per-activity event counts, sorted by name."""
+    return [
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT activity, COUNT(*) FROM events GROUP BY activity ORDER BY activity"
+        ).fetchall()
+    ]
 
 
 def _layout_shim(db: OcelDuckDB):
