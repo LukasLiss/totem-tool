@@ -358,6 +358,54 @@ The JSON value `null` is the canonical representation for Python infinity in
 - `relative_occurrence_threshold`: number between `0` and `1`, inclusive. It
   controls filtering of infrequent marker groups when constructing the OCCN.
 
+## Optional `layout` block (editor interop)
+
+Both the TOTeM and OCCN formats accept an **optional** top-level `layout`
+object. It carries purely presentational information written by the visual
+model editors (see [MODEL_EDITORS.md](MODEL_EDITORS.md)): node positions,
+colors, and — for OCCN — dependency arcs that carry no marker groups but should
+survive a round trip.
+
+`layout` is validated only when present, and it is ignored when the JSON is
+turned back into a `Totem` / `OCCausalNet` in `totem_lib`. This keeps an
+editor-saved file a strict superset of the miner format: it uploads to the
+asset store with no conversion, and a downloaded asset re-opens in the editor
+with its layout intact. A model without `layout` (e.g. straight from the miner)
+remains valid.
+
+Every entity referenced in `layout` must exist in the model itself, so a layout
+can never introduce phantom object types, activities, or arcs.
+
+TOTeM `layout`:
+
+```json
+{
+  "layout": {
+    "objectTypes": {
+      "Order": { "position": { "x": 40, "y": 300 }, "color": "#8B5CF6" },
+      "Item": { "position": { "x": 640, "y": 470 } }
+    }
+  }
+}
+```
+
+OCCN `layout`:
+
+```json
+{
+  "layout": {
+    "activities": { "send": { "position": { "x": 470, "y": 205 } } },
+    "objectTypes": { "order": { "color": "#2563EB" } },
+    "arcs": [
+      { "source": "START_order", "target": "send", "object_type": "order" }
+    ]
+  }
+}
+```
+
+Both `position` (`{ "x": number, "y": number }`) and `color` are optional inside
+a layout entry.
+
 ## Example Model Files
 
 The repository contains complete canonical examples:

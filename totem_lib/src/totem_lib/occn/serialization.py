@@ -143,6 +143,78 @@ def validate_occn_dict(data: dict[str, Any]) -> None:
     ):
         raise ValueError("relative_occurrence_threshold must be in [0, 1]")
 
+    if "layout" in data:
+        _validate_occn_layout(data["layout"], activity_set, object_type_set)
+
+
+def _validate_occn_layout(
+    layout: Any, activity_set: set[str], object_type_set: set[str]
+) -> None:
+    """Validate the optional editor-supplied ``layout`` block.
+
+    ``layout`` is an optional, purely presentational add-on written by the
+    visual editor. It is validated when present but ignored when rebuilding the
+    in-memory :class:`OCCausalNet`. Every referenced activity/object type must
+    exist in the model, and ``layout.arcs`` may hold extra (e.g. bindingless)
+    arcs that carry no marker-group semantics but should survive a round trip.
+    """
+    if not isinstance(layout, dict):
+        raise ValueError("layout must be an object")
+
+    activities = layout.get("activities", {})
+    if not isinstance(activities, dict):
+        raise ValueError("layout.activities must be an object")
+    for name, entry in activities.items():
+        path = f"layout.activities.{name}"
+        _require_known_value(name, activity_set, path, "activity")
+        _validate_layout_node(entry, path)
+
+    object_types = layout.get("objectTypes", {})
+    if not isinstance(object_types, dict):
+        raise ValueError("layout.objectTypes must be an object")
+    for name, entry in object_types.items():
+        path = f"layout.objectTypes.{name}"
+        _require_known_value(name, object_type_set, path, "object type")
+        _validate_layout_node(entry, path)
+
+    arcs = layout.get("arcs", [])
+    if not isinstance(arcs, list):
+        raise ValueError("layout.arcs must be a list")
+    for index, arc in enumerate(arcs):
+        path = f"layout.arcs[{index}]"
+        if not isinstance(arc, dict):
+            raise ValueError(f"{path} must be an object")
+        source = _require_string(arc, "source", f"{path}.source")
+        target = _require_string(arc, "target", f"{path}.target")
+        object_type = _require_string(arc, "object_type", f"{path}.object_type")
+        _require_known_value(source, activity_set, f"{path}.source", "activity")
+        _require_known_value(target, activity_set, f"{path}.target", "activity")
+        _require_known_value(
+            object_type, object_type_set, f"{path}.object_type", "object type"
+        )
+
+
+def _validate_layout_node(entry: Any, path: str) -> None:
+    """Validate one ``{position?: {x, y}, color?: str}`` layout entry."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"{path} must be an object")
+    position = entry.get("position")
+    if position is not None:
+        _validate_position(position, f"{path}.position")
+    color = entry.get("color")
+    if color is not None and not isinstance(color, str):
+        raise ValueError(f"{path}.color must be a string")
+
+
+def _validate_position(position: Any, path: str) -> None:
+    """Validate a ``{x: number, y: number}`` position."""
+    if not isinstance(position, dict):
+        raise ValueError(f"{path} must be an object")
+    for axis in ("x", "y"):
+        value = position.get(axis)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{path}.{axis} must be a number")
+
 
 def _serialize_dependency_graph(graph: nx.MultiDiGraph) -> list[dict[str, str]]:
     edges = []

@@ -53,6 +53,10 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
     def validate_asset_type(self, value):
         if value not in ProjectAsset.AssetType.values:
             raise serializers.ValidationError("Unsupported asset type.")
+        if self.instance is not None and value != self.instance.asset_type:
+            raise serializers.ValidationError(
+                "Asset type cannot be changed after creation."
+            )
         return value
 
     def validate_project(self, value):
@@ -65,8 +69,15 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        # On update, project/name may be omitted from the payload; fall back to
+        # the stored values so the uniqueness check still runs (and a duplicate
+        # rename is rejected with a clean 400 instead of a DB IntegrityError).
         project = attrs.get("project")
+        if project is None and self.instance is not None:
+            project = self.instance.project
         name = attrs.get("name")
+        if name is None and self.instance is not None:
+            name = self.instance.name
         if project and name:
             existing_assets = ProjectAsset.objects.filter(project=project, name=name)
             if self.instance is not None:
@@ -79,21 +90,33 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         file_obj = attrs.pop("file", None)
         content_json = attrs.get("content_json")
 
-        if file_obj is None and content_json is None:
-            raise serializers.ValidationError(
-                {"file": "Provide either a JSON file or direct content_json."}
-            )
         if file_obj is not None and content_json is not None:
             raise serializers.ValidationError(
                 {"file": "Provide either file or content_json, not both."}
             )
 
+        is_update = self.instance is not None
+        if file_obj is None and content_json is None:
+            # Creating an asset always needs its content; on update the model
+            # content may be left unchanged (e.g. a rename-only PATCH).
+            if not is_update:
+                raise serializers.ValidationError(
+                    {"file": "Provide either a JSON file or direct content_json."}
+                )
+            return attrs
+
         if file_obj is not None:
             content_json = self._parse_json_file(file_obj)
 
+        # On update the asset_type is often not resent; fall back to the stored
+        # value so content validation still runs against the correct schema.
+        asset_type = attrs.get("asset_type")
+        if asset_type is None and is_update:
+            asset_type = self.instance.asset_type
+
         attrs["content_json"] = self._validate_content_json(
             content_json,
-            attrs.get("asset_type"),
+            asset_type,
         )
         return attrs
 

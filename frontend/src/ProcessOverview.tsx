@@ -26,7 +26,7 @@ export function ProcessOverview() {
         return <ModelAssetsView />;
       case 'conformance':
         return viewMode.component === 'totem'
-          ? <TotemConformanceView />
+          ? <TotemConformanceView initialAssetId={viewMode.assetId} />
           : <ConformancePlaceholderView />;
       case 'editor':
         return <EditorView />;

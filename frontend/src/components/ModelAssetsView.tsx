@@ -1,5 +1,13 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Box, Filter, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Box,
+  Filter,
+  GitCompareArrows,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -10,6 +18,7 @@ import {
   listAssets,
   uploadAsset,
 } from "@/api/assetsApi";
+import { DashboardContext, EditorComponent } from "@/contexts/DashboardContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +62,11 @@ const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, string> = {
   OCCN: "occn",
 };
 
+const EDITOR_COMPONENT_BY_TYPE: Record<AssetType, EditorComponent> = {
+  TOTEM: "totem",
+  OCCN: "occn",
+};
+
 interface AssetTableFilters {
   type: AssetFilter;
   changedFrom: string;
@@ -67,6 +81,7 @@ const DEFAULT_TABLE_FILTERS: AssetTableFilters = {
 
 export function ModelAssetsView() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
   const projectId = selectedFile?.project;
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [filters, setFilters] = useState<AssetTableFilters>(DEFAULT_TABLE_FILTERS);
@@ -74,6 +89,18 @@ export function ModelAssetsView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [assetToDelete, setAssetToDelete] = useState<ProjectAsset | null>(null);
+
+  const handleOpenInEditor = useCallback(
+    (asset: ProjectAsset) => {
+      const component = EDITOR_COMPONENT_BY_TYPE[asset.asset_type];
+      if (!component) {
+        toast.error("This asset type cannot be opened in an editor.");
+        return;
+      }
+      setViewMode({ type: "editor", component, openAssetId: asset.id });
+    },
+    [setViewMode]
+  );
 
   const loadAssets = useCallback(async () => {
     if (!projectId) {
@@ -150,7 +177,18 @@ export function ModelAssetsView() {
               description="No stored model assets match the current filters."
             />
           ) : (
-            <AssetList assets={filteredAssets} onDeleteClick={setAssetToDelete} />
+            <AssetList
+              assets={filteredAssets}
+              onConformanceClick={(asset) =>
+                setViewMode({
+                  type: "conformance",
+                  component: "totem",
+                  assetId: asset.id,
+                })
+              }
+              onOpenInEditorClick={handleOpenInEditor}
+              onDeleteClick={setAssetToDelete}
+            />
           )}
           <DeleteAssetDialog
             asset={assetToDelete}
@@ -444,41 +482,75 @@ function UploadAssetDialog({
 
 function AssetList({
   assets,
+  onConformanceClick,
+  onOpenInEditorClick,
   onDeleteClick,
 }: {
   assets: ProjectAsset[];
+  onConformanceClick: (asset: ProjectAsset) => void;
+  onOpenInEditorClick: (asset: ProjectAsset) => void;
   onDeleteClick: (asset: ProjectAsset) => void;
 }) {
+  const columns = "grid-cols-[minmax(200px,1.7fr)_100px_160px_160px]";
   return (
     <div className="overflow-x-auto rounded-md border bg-background">
-      <div className="min-w-[650px]">
-        <div className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+      <div className="min-w-[720px]">
+        <div
+          className={`grid ${columns} border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground`}
+        >
           <span>Name</span>
           <span>Type</span>
           <span>Last changed</span>
-          <span>Actions</span>
+          <span className="text-right">Actions</span>
         </div>
         <div className="divide-y">
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] items-center px-4 py-3 text-sm"
+              className={`grid ${columns} items-center px-4 py-3 text-sm`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium" title={asset.name}>
                   {asset.name}
                 </div>
               </div>
-              <Badge variant="secondary">{formatAssetType(asset.asset_type)}</Badge>
+              <Badge variant="secondary" className="w-fit">
+                {formatAssetType(asset.asset_type)}
+              </Badge>
               <span className="text-muted-foreground">
                 {formatDate(asset.updated_at)}
               </span>
-              <div>
+              <div className="flex justify-end gap-0.5">
+                {asset.asset_type === "TOTEM" && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    title={`Use ${asset.name} for conformance`}
+                    aria-label={`Use ${asset.name} for conformance`}
+                    onClick={() => onConformanceClick(asset)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <GitCompareArrows />
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Edit ${asset.name}`}
+                  aria-label={`Edit ${asset.name}`}
+                  onClick={() => onOpenInEditorClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil />
+                </Button>
                 <Button
                   type="button"
                   size="icon"
                   variant="ghost"
                   title={`Delete ${asset.name}`}
+                  aria-label={`Delete ${asset.name}`}
                   onClick={() => onDeleteClick(asset)}
                   className="text-muted-foreground hover:text-destructive"
                 >

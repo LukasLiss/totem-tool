@@ -28,6 +28,13 @@ import {
 } from '@/components/ui/tooltip';
 import { nextFreeColor } from '@/editors/shared/colors';
 import EditorShell from '@/editors/shared/EditorShell';
+import {
+  TOTEM_SCHEMA,
+  assetToTotemModel,
+  isAssetModel,
+  totemModelToAsset,
+  type CanonicalAssetSource,
+} from '@/editors/shared/asset-format';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
 import {
   TOTEM_FORMAT,
@@ -41,6 +48,7 @@ import {
   loadEditorSession,
   saveEditorSession,
 } from '@/editors/shared/sessionCache';
+import { useProjectAssetBridge } from '@/editors/shared/useProjectAssetBridge';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { EXAMPLE_MODEL } from './example';
@@ -80,6 +88,15 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** Read a non-empty `name` from a parsed asset object, if present. */
+function extractName(raw: unknown): string | null {
+  if (typeof raw === 'object' && raw !== null && 'name' in raw) {
+    const name = (raw as { name?: unknown }).name;
+    if (typeof name === 'string' && name.trim().length > 0) return name.trim();
+  }
+  return null;
+}
+
 function TotemEditorInner() {
   const [modelName, setModelName] = useState('TOTeM model');
   const [nodes, setNodes] = useState<TotemTypeNodeType[]>([]);
@@ -91,6 +108,7 @@ function TotemEditorInner() {
   >();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const dragSnapshotRef = useRef<{ file: TotemModelFile; x: number; y: number } | null>(null);
+  const assetSourceRef = useRef<CanonicalAssetSource | null>(null);
 
   // Latest state for stable callbacks (avoids stale closures in listeners).
   const nodesRef = useRef(nodes);
@@ -417,6 +435,7 @@ function TotemEditorInner() {
   }, [serializeCurrent]);
 
   const handleNew = useCallback(() => {
+    assetSourceRef.current = null;
     setNodes([]);
     setEdges([]);
     history.reset();
@@ -431,12 +450,29 @@ function TotemEditorInner() {
       return;
     }
     if (raw === null) return;
-    const detected = detectModelFormat(raw);
-    if (detected && detected !== TOTEM_FORMAT) {
-      toast.error(wrongFormatMessage(TOTEM_FORMAT, raw));
-      return;
+    // Accept both the canonical asset-store JSON ("schema": "totem") and the
+    // legacy editor file ("format": "totem-model").
+    let candidate = raw;
+    let assetWarnings: string[] = [];
+    let assetSource: CanonicalAssetSource | null = null;
+    if (isAssetModel(raw, TOTEM_SCHEMA)) {
+      try {
+        const converted = assetToTotemModel(raw, extractName(raw) ?? nameRef.current);
+        candidate = converted.model;
+        assetWarnings = converted.warnings;
+        assetSource = converted.source;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Invalid TOTeM asset file.');
+        return;
+      }
+    } else {
+      const detected = detectModelFormat(raw);
+      if (detected && detected !== TOTEM_FORMAT) {
+        toast.error(wrongFormatMessage(TOTEM_FORMAT, raw));
+        return;
+      }
     }
-    const parsed = parseTotemModelFile(raw);
+    const parsed = parseTotemModelFile(candidate);
     if (parsed.ok === false) {
       toast.error(parsed.error);
       return;
@@ -444,14 +480,36 @@ function TotemEditorInner() {
     // Importing replaces the model — make it undoable instead of wiping history.
     recordSnapshot();
     loadModel(parsed.model);
+    assetSourceRef.current = assetSource;
     toast.success(`Loaded "${parsed.model.name}".`);
+    for (const warning of assetWarnings) toast.warning(warning);
   }, [loadModel, recordSnapshot]);
 
   const handleExport = useCallback(() => {
     const filename = toFilename(nameRef.current, 'totem-model');
-    downloadJson(filename, serializeCurrent());
+    // Save in the canonical asset-store format so the file can be uploaded to
+    // the project model asset store directly; the editor's layout travels in
+    // the optional `layout` block.
+    downloadJson(filename, totemModelToAsset(serializeCurrent(), assetSourceRef.current));
     toast.success(`Saved ${filename}.json`);
   }, [serializeCurrent]);
+
+  const bridge = useProjectAssetBridge({
+    assetType: 'TOTEM',
+    modelName,
+    serializeAsset: () => totemModelToAsset(serializeCurrent(), assetSourceRef.current),
+    onOpen: (content, assetName) => {
+      const { model, warnings, source } = assetToTotemModel(content, assetName);
+      const parsed = parseTotemModelFile(model);
+      if (parsed.ok === false) {
+        throw new Error(parsed.error);
+      }
+      recordSnapshot();
+      loadModel(parsed.model);
+      assetSourceRef.current = source;
+      for (const warning of warnings) toast.warning(warning);
+    },
+  });
 
   const handleLoadExample = useCallback(() => {
     // Same validated code path as importing a file.
@@ -462,6 +520,7 @@ function TotemEditorInner() {
     }
     // Loading the example replaces the model — make it undoable.
     recordSnapshot();
+    assetSourceRef.current = null;
     loadModel(parsed.model);
   }, [loadModel, recordSnapshot]);
 
@@ -564,6 +623,8 @@ function TotemEditorInner() {
       onNew={handleNew}
       onImport={handleImport}
       onExport={handleExport}
+      onSaveToProject={bridge.available ? bridge.onSaveToProject : undefined}
+      onOpenFromProject={bridge.available ? bridge.onOpenFromProject : undefined}
       onAutoLayout={handleAutoLayout}
       onLoadExample={handleLoadExample}
       undo={{ onClick: handleUndo, disabled: !history.canUndo }}
@@ -610,6 +671,7 @@ function TotemEditorInner() {
           </div>
         )}
       </div>
+      {bridge.dialogs}
     </EditorShell>
   );
 }
