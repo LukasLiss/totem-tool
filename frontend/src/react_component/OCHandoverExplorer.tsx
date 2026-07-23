@@ -1724,7 +1724,7 @@ function HandoverGraph({
         //   so every dot is exactly on the arc.
         // Self-loops: follow the path at slotOffset from the endpoint — the path curves
         //   back to the same node so there is no meaningful radial direction to project along.
-        const dots: { x: number; y: number; angle: number; color: string; is_gapped: boolean; mark: "dot" | "square" }[] = [];
+        const dots: { x: number; y: number; angle: number; color: string; is_gapped: boolean; mark: "dot" | "square"; isSelfLoop: boolean }[] = [];
         for (let i = 0; i < pathKeys.length; i++) {
           const path = pathMap.get(pathKeys[i]);
           if (!path) continue;
@@ -1745,15 +1745,18 @@ function HandoverGraph({
             px = pt.x; py = pt.y;
             angle = nodePos ? Math.atan2(pt.y - nodePos.y, pt.x - nodePos.x) : 0;
           }
-          dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark });
+          dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark, isSelfLoop });
         }
         if (dots.length === 0) continue;
 
         // Connector: circular arc centred at node at exactly totalR.
+        // Self-loop dots are excluded: their path position can't be projected onto the
+        // totalR circle, so they just show their mark without a connecting arc.
         // Largest-gap sort so we sweep the short arc.
-        if (dots.length >= 2 && nodePos) {
+        const connectorDots = dots.filter(d => !d.isSelfLoop);
+        if (connectorDots.length >= 2 && nodePos) {
           const { x: cx, y: cy } = nodePos;
-          const sorted = [...dots].sort((a, b) => a.angle - b.angle);
+          const sorted = [...connectorDots].sort((a, b) => a.angle - b.angle);
           const n = sorted.length;
           let maxGap = -1, gapIdx = 0;
           for (let i = 0; i < n; i++) {
