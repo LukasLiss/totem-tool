@@ -49,6 +49,45 @@ class EventLog(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"
 
+
+class ProjectAsset(models.Model):
+    class AssetType(models.TextChoices):
+        TOTEM = "TOTEM", "TOTeM"
+        OCCN = "OCCN", "OCCN"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="assets",
+    )
+    name = models.CharField(max_length=100)
+    asset_type = models.CharField(max_length=20, choices=AssetType.choices)
+    content_json = models.JSONField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="unique_project_asset_name",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["project", "asset_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.project.name} - {self.name} ({self.asset_type})"
+
+
 class Dashboard(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     name = models.CharField(max_length=30)
