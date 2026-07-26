@@ -1031,8 +1031,6 @@ function ResourceGraph({
 
     // Column index within this feature block for each resource name
     const listIdx = new Map(resourceList.map((r, i) => [r, i]));
-    const MIN_WEIGHT = 0.02;
-
     const result: { ai: number; bi: number; weight: number; wij: number; wji: number }[] = [];
     const n = data.resources.length;
     for (let i = 0; i < n; i++) {
@@ -1044,7 +1042,7 @@ function ResourceGraph({
         const wij = (data.values[i]?.[offset + cj]) ?? 0; // fraction i→j
         const wji = (data.values[j]?.[offset + ci]) ?? 0; // fraction j→i
         const avg = (wij + wji) / 2;
-        if (avg >= MIN_WEIGHT) result.push({ ai: i, bi: j, weight: avg, wij, wji });
+        if (avg > 0) result.push({ ai: i, bi: j, weight: avg, wij, wji });
       }
     }
 
@@ -1142,8 +1140,9 @@ function ResourceGraph({
             const pb = data.mds_positions[edge.bi];
             if (!pa || !pb) return null;
             const maxSW = 7 / effectiveScale;
-            const sw    = Math.max(0.5 / effectiveScale, edge.weight * maxSW);
-            const opacity = Math.max(0.2, Math.min(0.7, edge.weight * 1.5));
+            const minSW = 0.5 / effectiveScale;
+            const sw    = minSW + Math.sqrt(edge.weight) * (maxSW - minSW);
+            const opacity = 0.5;
             return (
               <line
                 key={ei}
