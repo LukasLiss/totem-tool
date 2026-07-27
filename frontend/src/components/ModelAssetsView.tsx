@@ -54,6 +54,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { ModelAssetDropzone } from "@/components/model-assets/ModelAssetDropzone";
 
 type AssetFilter = "ALL" | AssetType;
 
@@ -341,6 +342,9 @@ function UploadAssetDialog({
   const [name, setName] = useState("");
   const [assetType, setAssetType] = useState<AssetType>("TOTEM");
   const [file, setFile] = useState<File | null>(null);
+  const [fileSelectionError, setFileSelectionError] = useState<string | null>(
+    null
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -349,9 +353,15 @@ function UploadAssetDialog({
     setName("");
     setAssetType("TOTEM");
     setFile(null);
+    setFileSelectionError(null);
     setFormError(null);
     setIsSubmitting(false);
     setFileInputKey((value) => value + 1);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    onOpenChange(nextOpen);
+    if (!nextOpen) resetForm();
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -368,6 +378,10 @@ function UploadAssetDialog({
       setFormError("Choose a model file.");
       return;
     }
+    if (fileSelectionError) {
+      setFormError("Choose a valid JSON model file.");
+      return;
+    }
 
     setIsSubmitting(true);
     setFormError(null);
@@ -380,8 +394,7 @@ function UploadAssetDialog({
         file,
       });
       toast.success("Model asset uploaded");
-      onOpenChange(false);
-      resetForm();
+      handleOpenChange(false);
       await onUploaded();
     } catch (error) {
       setFormError(extractAssetApiError(error).message);
@@ -393,10 +406,7 @@ function UploadAssetDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(nextOpen) => {
-        onOpenChange(nextOpen);
-        if (!nextOpen) resetForm();
-      }}
+      onOpenChange={handleOpenChange}
     >
       <DialogTrigger asChild>
         <Button type="button" disabled={!projectId}>
@@ -443,13 +453,20 @@ function UploadAssetDialog({
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="model-asset-file">Model file</Label>
-              <Input
+              <Label>Model file</Label>
+              <ModelAssetDropzone
                 key={fileInputKey}
-                id="model-asset-file"
-                type="file"
+                file={file}
+                error={fileSelectionError}
                 disabled={isSubmitting}
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                onFileChange={(selectedFile) => {
+                  setFile(selectedFile);
+                  setFormError(null);
+                }}
+                onErrorChange={(nextError) => {
+                  setFileSelectionError(nextError);
+                  if (nextError) setFormError(null);
+                }}
               />
             </div>
 
@@ -465,12 +482,15 @@ function UploadAssetDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={isSubmitting}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting || !projectId}>
+            <Button
+              type="submit"
+              disabled={isSubmitting || !projectId || Boolean(fileSelectionError)}
+            >
               {isSubmitting ? "Uploading" : "Upload"}
             </Button>
           </DialogFooter>

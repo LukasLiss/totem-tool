@@ -95,6 +95,29 @@ Multipart upload accepts:
 The HTTP API and current upload form require `asset_type` explicitly. Backend
 validation verifies that the selected type and canonical model structure agree.
 
+### Frontend model upload
+
+The **Project Assets > Model Assets** upload dialog accepts one `.json` model
+file at a time. The user can either drop the file onto the model-file target or
+click the same target to open the operating-system file picker.
+
+Selecting or dropping a valid replacement changes the pending file. Unsupported
+files and multiple-file drops are rejected with a visible message and do not
+replace an already valid selection. A drop only selects the file; no request is
+sent until the user enters an asset name and explicitly confirms **Upload**.
+
+Dropped and file-picker-selected files use the same validation and upload path:
+
+1. The frontend verifies that the file contains JSON with a schema matching the
+   selected asset type.
+2. The multipart request sends the project, name, asset type, and selected file
+   to `POST /api/assets/`.
+3. The backend performs the authoritative canonical model validation before
+   storing the parsed JSON content.
+
+Closing or cancelling the dialog clears the pending name, type, file, and error
+state. Successful upload does the same before the asset list is refreshed.
+
 Direct JSON creation accepts:
 
 ```json
