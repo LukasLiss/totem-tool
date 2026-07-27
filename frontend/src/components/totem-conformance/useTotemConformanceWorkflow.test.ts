@@ -44,6 +44,12 @@ const model: ProjectAsset = {
   updated_at: "2026-07-22T10:00:00Z",
 };
 
+const alternativeModel: ProjectAsset = {
+  ...model,
+  id: 3,
+  name: "Alternative model",
+};
+
 const response: TotemConformanceResponse = {
   file_id: 12,
   asset_id: 2,
@@ -62,6 +68,11 @@ const response: TotemConformanceResponse = {
     temporal_by_relation_type: [],
     log_cardinality_by_relation_type: [],
   },
+};
+
+const alternativeResponse: TotemConformanceResponse = {
+  ...response,
+  asset_id: alternativeModel.id,
 };
 
 let selection: TotemAssetSelectionState;
@@ -180,6 +191,66 @@ describe("useTotemConformanceWorkflow", () => {
       request.resolve(response);
       expect(await runPromise).toBeNull();
     });
+
+    expect(result.current.result).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("clears a completed result and reruns with a newly selected model", async () => {
+    runTotemConformanceMock
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce(alternativeResponse);
+    const { result, rerender } = renderHook(
+      ({ revision }) => {
+        void revision;
+        return useTotemConformanceWorkflow(12, 7);
+      },
+      { initialProps: { revision: 0 } }
+    );
+
+    await act(async () => {
+      expect(await result.current.run()).toEqual(response);
+    });
+    expect(result.current.result).toEqual(response);
+
+    selection = selectedModelState({
+      assets: [model, alternativeModel],
+      selectedAssetId: alternativeModel.id,
+      selectedAsset: alternativeModel,
+    });
+    rerender({ revision: 1 });
+
+    expect(result.current.result).toBeNull();
+    expect(result.current.error).toBeNull();
+
+    await act(async () => {
+      expect(await result.current.run()).toEqual(alternativeResponse);
+    });
+    expect(runTotemConformanceMock.mock.calls).toEqual([
+      [12, model.id],
+      [12, alternativeModel.id],
+    ]);
+  });
+
+  it("clears a completed result when the event log and project change", async () => {
+    runTotemConformanceMock.mockResolvedValue(response);
+    const { result, rerender } = renderHook(
+      ({ eventLogId, projectId }) =>
+        useTotemConformanceWorkflow(eventLogId, projectId),
+      { initialProps: { eventLogId: 12, projectId: 7 } }
+    );
+
+    await act(async () => {
+      await result.current.run();
+    });
+    expect(result.current.result).toEqual(response);
+
+    selection = selectedModelState({
+      assets: [{ ...alternativeModel, project: 8 }],
+      selectedAssetId: alternativeModel.id,
+      selectedAsset: { ...alternativeModel, project: 8 },
+    });
+    rerender({ eventLogId: 13, projectId: 8 });
 
     expect(result.current.result).toBeNull();
     expect(result.current.error).toBeNull();
