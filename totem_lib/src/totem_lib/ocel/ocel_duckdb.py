@@ -337,6 +337,13 @@ class OcelDuckDB:
             ORDER BY e.timestamp_unix
         """).pl()
 
+    @property
+    def object_types(self) -> list:
+        """Returns a list of all unique object types present in the log."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT obj_type FROM objects ORDER BY obj_type"
+        ).fetchall()]
+
     def query(self, sql: str) -> pl.DataFrame:
         """Execute an arbitrary SQL query and return a Polars DataFrame."""
         return self.conn.execute(sql).pl()

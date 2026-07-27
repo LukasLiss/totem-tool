@@ -1,7 +1,7 @@
-import { memo, useContext } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
+import { Handle, Position, type NodeProps } from "@xyflow/react";
 
-import { lightenHex } from '@/editors/shared/colors';
+import { lightenHex } from "@/editors/shared/colors";
 
 import {
   ACTIVITY_HEIGHT,
@@ -9,19 +9,24 @@ import {
   OccnRenderContext,
   PSEUDO_WIDTH,
   type OccnNode,
-} from './types';
+} from "./types";
 
 const HANDLE_CLASS =
-  '!size-2.5 !rounded-full !border-2 !border-white !bg-slate-400 hover:!bg-blue-600 transition-colors';
+  "!size-2.5 !rounded-full !border-2 !border-white !bg-slate-400 hover:!bg-blue-600 transition-colors";
 
 const selectedShadow =
-  '0 0 0 3px rgba(37, 99, 235, 0.35), 0 12px 28px rgba(15, 23, 42, 0.18)';
-const restShadow = '0 6px 18px rgba(15, 23, 42, 0.12)';
+  "0 0 0 3px rgba(37, 99, 235, 0.35), 0 12px 28px rgba(15, 23, 42, 0.18)";
+const restShadow = "0 6px 18px rgba(15, 23, 42, 0.12)";
 
 /** Horizontal-stripe fill, one stripe per incident object type (paper style). */
-function stripeBackground(types: string[], colors: Record<string, string>): string {
-  if (types.length === 0) return '#FFFFFF';
-  const tones = types.map((type) => lightenHex(colors[type] ?? '#94A3B8', 0.45));
+function stripeBackground(
+  types: string[],
+  colors: Record<string, string>,
+): string {
+  if (types.length === 0) return "#FFFFFF";
+  const tones = types.map((type) =>
+    lightenHex(colors[type] ?? "#94A3B8", 0.45),
+  );
   if (tones.length === 1) return tones[0];
   const stops: string[] = [];
   const step = 100 / tones.length;
@@ -29,7 +34,7 @@ function stripeBackground(types: string[], colors: Record<string, string>): stri
     stops.push(`${tone} ${(index * step).toFixed(2)}%`);
     stops.push(`${tone} ${((index + 1) * step).toFixed(2)}%`);
   });
-  return `linear-gradient(to bottom, ${stops.join(', ')})`;
+  return `linear-gradient(to bottom, ${stops.join(", ")})`;
 }
 
 const OccnNodeComponent = memo(function OccnNodeComponent({
@@ -39,8 +44,19 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
 }: NodeProps<OccnNode>) {
   const { typeColors, incidentTypes } = useContext(OccnRenderContext);
 
-  if (data.kind !== 'activity') {
-    const color = typeColors[data.objectType ?? ''] ?? '#64748B';
+  // Long single-token activity names (e.g. "DelegatePurchaseRequisitionApproval")
+  // can't wrap and would spill past the fixed-width box. Detect the overflow so
+  // we can left-align + fade only the labels that actually need it, keeping short
+  // labels centered and untouched.
+  const labelRef = useRef<HTMLDivElement>(null);
+  const [truncated, setTruncated] = useState(false);
+  useLayoutEffect(() => {
+    const el = labelRef.current;
+    if (el) setTruncated(el.scrollWidth > el.clientWidth + 1);
+  }, [data.label]);
+
+  if (data.kind !== "activity") {
+    const color = typeColors[data.objectType ?? ""] ?? "#64748B";
     const squareSize = 48;
     return (
       <div
@@ -51,8 +67,11 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
           type="target"
           position={Position.Left}
           className={HANDLE_CLASS}
-          style={{ top: squareSize / 2, opacity: data.kind === 'start' ? 0 : 1 }}
-          isConnectable={data.kind === 'end'}
+          style={{
+            top: squareSize / 2,
+            opacity: data.kind === "start" ? 0 : 1,
+          }}
+          isConnectable={data.kind === "end"}
         />
         <div
           style={{
@@ -61,14 +80,14 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
             borderRadius: 12,
             background: color,
             border: selected
-              ? '1.5px solid rgba(37, 99, 235, 0.8)'
-              : '1.5px solid rgba(15, 23, 42, 0.55)',
+              ? "1.5px solid rgba(37, 99, 235, 0.8)"
+              : "1.5px solid rgba(15, 23, 42, 0.55)",
             boxShadow: selected ? selectedShadow : restShadow,
-            display: 'grid',
-            placeItems: 'center',
+            display: "grid",
+            placeItems: "center",
           }}
         >
-          {data.kind === 'start' ? (
+          {data.kind === "start" ? (
             <svg width={16} height={16} viewBox="0 0 16 16">
               <polygon points="3,1.5 14,8 3,14.5" fill="#FFFFFF" />
             </svg>
@@ -80,7 +99,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
         </div>
         <div
           className="max-w-24 truncate text-center font-semibold"
-          style={{ fontSize: 10, color, lineHeight: '12px' }}
+          style={{ fontSize: 10, color, lineHeight: "12px" }}
           title={data.objectType}
         >
           {data.objectType}
@@ -89,8 +108,8 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
           type="source"
           position={Position.Right}
           className={HANDLE_CLASS}
-          style={{ top: squareSize / 2, opacity: data.kind === 'end' ? 0 : 1 }}
-          isConnectable={data.kind === 'start'}
+          style={{ top: squareSize / 2, opacity: data.kind === "end" ? 0 : 1 }}
+          isConnectable={data.kind === "start"}
         />
       </div>
     );
@@ -100,30 +119,61 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
   return (
     <div
       style={{
-        minWidth: ACTIVITY_WIDTH,
+        width: ACTIVITY_WIDTH,
+        maxWidth: ACTIVITY_WIDTH,
         minHeight: ACTIVITY_HEIGHT,
         borderRadius: 12,
         background: stripeBackground(types, typeColors),
         border: selected
-          ? '1.5px solid rgba(37, 99, 235, 0.8)'
+          ? "1.5px solid rgba(37, 99, 235, 0.8)"
           : types.length === 0
-            ? '1.5px solid #94A3B8'
-            : '1.5px solid rgba(15, 23, 42, 0.45)',
+            ? "1.5px solid #94A3B8"
+            : "1.5px solid rgba(15, 23, 42, 0.45)",
         boxShadow: selected ? selectedShadow : restShadow,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '8px 14px',
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "8px 14px",
+        overflow: "hidden",
       }}
     >
       <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
-      <div
-        className="text-center font-semibold"
-        style={{ color: '#0F172A', fontSize: 14, lineHeight: 1.2, maxWidth: 200 }}
-      >
-        {data.label}
+      <div className="text-center" style={{ width: "100%", minWidth: 0 }}>
+        <div
+          ref={labelRef}
+          className="font-semibold"
+          title={data.label}
+          style={{
+            color: "#0F172A",
+            fontSize: 14,
+            lineHeight: 1.2,
+            width: "100%",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textAlign: truncated ? "left" : "center",
+            ...(truncated
+              ? {
+                  maskImage:
+                    "linear-gradient(to right, #000 82%, transparent 100%)",
+                  WebkitMaskImage:
+                    "linear-gradient(to right, #000 82%, transparent 100%)",
+                }
+              : {}),
+          }}
+        >
+          {data.label}
+        </div>
+        {data.count != null && (
+          <div style={{ color: "#0F172A", fontSize: 10, opacity: 0.75 }}>
+            ×{data.count}
+          </div>
+        )}
       </div>
-      <Handle type="source" position={Position.Right} className={HANDLE_CLASS} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className={HANDLE_CLASS}
+      />
     </div>
   );
 });

@@ -31,6 +31,45 @@ class EventLog(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"
 
+
+class ProjectAsset(models.Model):
+    class AssetType(models.TextChoices):
+        TOTEM = "TOTEM", "TOTeM"
+        OCCN = "OCCN", "OCCN"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="assets",
+    )
+    name = models.CharField(max_length=100)
+    asset_type = models.CharField(max_length=20, choices=AssetType.choices)
+    content_json = models.JSONField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="unique_project_asset_name",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["project", "asset_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.project.name} - {self.name} ({self.asset_type})"
+
+
 class Dashboard(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     name = models.CharField(max_length=30)
@@ -122,3 +161,19 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+
+
+class OCCNComponent(DashboardComponent):
+    relative_occurrence_threshold = models.FloatField(
+        default=0.0,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+    )
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)
+    layout_direction = models.CharField(
+        max_length=2,
+        choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
+        default='LR',
+    )
+    # Comma-separated object type filter; empty = discover on all types.
+    object_types = models.TextField(default="", blank=True)
