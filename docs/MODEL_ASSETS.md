@@ -166,6 +166,51 @@ stored TOTeM JSON are rejected before computation. Inaccessible resources
 return `404`; invalid accessible inputs return `400`; failures while loading the
 event log or calculating conformance return `500`.
 
+## TOTeM Conformance Workflow
+
+The desktop workflow is available under **Conformance > TOTeM Conformance**.
+It combines the selected event log with one stored TOTeM asset from that event
+log's project.
+
+The workflow has two entry points:
+
+- Open **TOTeM Conformance** from the sidebar, then select a stored model.
+- Use the conformance action on a TOTeM row in **Project Assets > Model
+  Assets**. This opens the same workflow with that asset preselected.
+
+The selected event log remains the source of the active project context. The
+frontend requests only `TOTEM` assets from that project. Assets belonging to
+other projects and OCCN assets are not selectable.
+
+Execution proceeds as follows:
+
+1. The user selects a stored TOTeM model.
+2. **Run conformance** calls the event-log endpoint with the selected asset id.
+3. The previous result is cleared while the request is running.
+4. A successful response is checked against the current event-log and asset
+   ids before it is displayed.
+5. The stored model is rendered with the returned conformance metrics.
+
+Changing the selected model, event log, or project clears the current result.
+Responses from requests whose inputs changed while they were running are
+ignored. The user can then run conformance again with the new inputs. Execution
+is disabled while required context is missing, assets are loading, or another
+calculation is running.
+
+The result view provides:
+
+- Overall fitness and precision for temporal, log-cardinality, and
+  event-cardinality conformance.
+- A metric selector that controls which fitness dimension colors the model.
+- Object-type details when a model node is selected.
+- Directional relation metrics and available histogram details when a model
+  relation is selected.
+- Explicit states for unavailable, invalid, empty, stale, loading, and failed
+  results.
+
+This workflow always checks an existing stored model. TOTeM discovery is a
+separate workflow and is not performed implicitly before conformance checking.
+
 ## Validation Behavior
 
 General asset validation:
