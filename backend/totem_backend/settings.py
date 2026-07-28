@@ -45,6 +45,11 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    pattern for pattern in os.environ.get('CORS_ALLOWED_ORIGIN_REGEXES', '').split(',')
+    if pattern.strip()
+]
+
 
 # Application definition
 

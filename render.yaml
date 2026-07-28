@@ -1,18 +1,4 @@
-# Render Blueprint — spins up a per-PR "dev-ci" preview (backend + frontend)
-# so a PR's changes can be manually tried out before merging.
-#
-# One-time manual setup (cannot be done from this repo):
-#   1. Render dashboard -> New -> Blueprint -> connect this GitHub repo.
-#   2. Confirm "Preview Environments" is enabled on the Blueprint.
-# Once connected, Render builds a preview for every PR automatically and
-# comments the preview URL(s) on the PR.
-#
-# NOTE: verify this file's syntax against Render's current Blueprint spec
-# (https://render.com/docs/blueprint-spec) before the first deploy — the
-# schema (runtime/env keys, fromService properties) evolves over time.
 
-previews:
-  generation: automatic
 
 services:
   - name: totem-backend
@@ -34,20 +20,5 @@ services:
           name: totem-backend
           type: web
           property: host
-      - key: CORS_ALLOWED_ORIGINS
-        fromService:
-          name: totem-frontend
-          type: web
-          property: host
-
-  - name: totem-frontend
-    type: web
-    runtime: static
-    buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: frontend/dist
-    envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          name: totem-backend
-          type: web
-          property: host
+      - key: CORS_ALLOWED_ORIGIN_REGEXES
+        value: ""
