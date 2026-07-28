@@ -11,11 +11,17 @@ export type OccnNodeData = {
   kind: OccnNodeKind;
   /** Object type of START/END pseudo activities. */
   objectType?: string;
+  /** Occurrence count shown under the label (discovery visualizer only). */
+  count?: number;
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;
 
-export type OccnEdgeData = { objectType: string };
+export type OccnEdgeData = {
+  objectType: string;
+  /** Tooltip value from discovery (visualizer only; editor leaves it unset). */
+  dependenceMeasure?: number | null;
+};
 
 export type OccnEdge = Edge<OccnEdgeData, 'occnArc'>;
 
@@ -44,7 +50,7 @@ export const groupRefEquals = (a: GroupRef | null, b: GroupRef | null) =>
   !!a && !!b && a.activity === b.activity && a.side === b.side && a.groupIndex === b.groupIndex;
 
 /** Default node sizes (also used for ELK and as measurement fallbacks). */
-export const ACTIVITY_WIDTH = 140;
+export const ACTIVITY_WIDTH = 180;
 export const ACTIVITY_HEIGHT = 56;
 export const PSEUDO_WIDTH = 56;
 export const PSEUDO_HEIGHT = 74;

@@ -52,6 +52,7 @@ import {
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 import { cn } from '@/lib/utils';
 
+import { computeIncidentTypes, computeParallelOffsets } from './derive';
 import MarkerOverlay from './MarkerOverlay';
 import OccnConnectionLine from './OccnConnectionLine';
 import OccnEdgeComponent from './OccnEdge';
@@ -235,46 +236,12 @@ function OccnEditorInner() {
     return result;
   }, [types]);
 
-  const incidentTypes = useMemo(() => {
-    const order = new Map(types.map((t, i) => [t.name, i]));
-    // Null prototype: keys are activity names (user data, e.g. "__proto__").
-    const sets: Record<string, Set<string>> = Object.create(null);
-    for (const edge of edges) {
-      const ot = edge.data?.objectType;
-      if (!ot) continue;
-      (sets[edge.source] ??= new Set()).add(ot);
-      (sets[edge.target] ??= new Set()).add(ot);
-    }
-    const result: Record<string, string[]> = Object.create(null);
-    for (const [name, set] of Object.entries(sets)) {
-      result[name] = [...set].sort(
-        (a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99),
-      );
-    }
-    return result;
-  }, [edges, types]);
+  const incidentTypes = useMemo(
+    () => computeIncidentTypes(edges, types.map((t) => t.name)),
+    [edges, types],
+  );
 
-  const parallelOffset = useMemo(() => {
-    const pairs = new Map<string, OccnEdge[]>();
-    for (const edge of edges) {
-      const key = [edge.source, edge.target].sort().join(' ');
-      const list = pairs.get(key);
-      if (list) list.push(edge);
-      else pairs.set(key, [edge]);
-    }
-    const result: Record<string, number> = {};
-    for (const list of pairs.values()) {
-      const sorted = [...list].sort((a, b) => a.id.localeCompare(b.id));
-      sorted.forEach((edge, index) => {
-        let offset = (index - (sorted.length - 1) / 2) * 42;
-        // Canonical perpendicular direction per unordered node pair, so
-        // opposite-direction arcs fan out consistently.
-        if (edge.source > edge.target) offset = -offset;
-        result[edge.id] = offset;
-      });
-    }
-    return result;
-  }, [edges]);
+  const parallelOffset = useMemo(() => computeParallelOffsets(edges), [edges]);
 
   const renderContext = useMemo(
     () => ({ typeColors, incidentTypes, parallelOffset, activeType }),
