@@ -208,51 +208,193 @@ exploration than the external fitness prototype:
 - a configurable state cap;
 - deterministic introduction of objects through start bindings.
 
-These capabilities are relevant to replay fitness. Pass 2 of this analysis
-will decide whether they should be extracted into a shared replay module or
-adapted separately for fitness.
+Some, but not all, of these capabilities can be reused for fitness.
 
-## 5. Behavioral and Technical Risks
+### 4.1 Safe reuse
 
-### Search growth
+The following operations have the same meaning for precision and fitness:
 
-The external depth-first recursion has no memoization, state limit, recursion
-limit handling, or timeout. Runtime can grow exponentially with the number of
-possible input/output bindings. Cycles can also produce many equivalent
-search paths.
+- introducing one object with its artificial start activity;
+- enumerating bindings for a visible event that involve exactly its observed
+  objects;
+- applying an internal binding to an `OCCausalNetState`;
+- deduplicating exactly equal states;
+- caching binding enumeration for equal activity/obligation/object inputs.
 
-### Incomplete-search semantics
+These operations should be implemented as small internal helpers in
+`totem_lib/src/totem_lib/occn/replay.py`. The helpers should yield successor
+states without deciding which states a metric may discard. Precision and
+fitness can then apply their own frontier policy.
 
-A bounded implementation must distinguish "proven non-fitting" from "search
-limit reached." Treating a stopped search as non-fitting would silently
-underestimate fitness.
+### 4.2 Dominance pruning must remain precision-specific
 
-### Replay-unit size
+The `_StateFront` in `precision.py` retains only maximal states under
+multiset inclusion. This is correct for precision because a larger state
+enables every binding available in a smaller state and therefore covers its
+enabled behavior.
+
+It is not correct for replay fitness. Fitness requires an exactly empty final
+state. A larger state may follow the same remaining bindings as a smaller
+state but retain additional obligations at the end. Conversely, a smaller
+state may lack an obligation needed by a later event. Neither state can be
+discarded solely because one contains the other.
+
+Fitness must therefore retain every distinct reachable state. It may
+deduplicate equal states, but it must not use the precision dominance rule.
+
+## 5. Target Architecture
+
+The replay implementation should be an independent implementation based on
+the published behavior and current `totem_lib` APIs. It must not copy the
+AGPL-licensed source of the external prototype.
+
+### 5.1 Shared internal replay helpers
+
+Target module:
+
+`totem_lib/src/totem_lib/occn/replay.py`
+
+This internal module should contain metric-independent successor generation
+for:
+
+- starting one object immediately before its first visible event;
+- applying one visible event with exactly its observed objects;
+- applying one artificial end event for one object;
+- creating a canonical signature for exact state deduplication and caches.
+
+Starting an object immediately before its first visible event is equivalent
+to starting all objects before the execution under the current one-object
+start assumption. It reduces intermediate states and matches the established
+precision implementation.
+
+The helpers must not contain aggregate fitness calculations, replay-unit
+extraction, dominance pruning, or backend concerns.
+
+### 5.2 Public replay-fitness module
+
+Target module:
+
+`totem_lib/src/totem_lib/occn/replay_fitness.py`
+
+The public entry point should be:
+
+```python
+occn_replay_fitness(
+    occn: OCCausalNet,
+    replay_units: Iterable[OCCNReplayUnit],
+    *,
+    max_states: Optional[int] = 1000,
+) -> OCCNReplayFitnessResult
+```
+
+The library function receives an already deserialized `OCCausalNet` and
+storage-independent replay units. It must not read project assets, query
+Django models, or choose an extraction strategy.
+
+The module should define:
+
+- `OCCNReplayStatus`: `FITTING`, `NON_FITTING`, or `INCONCLUSIVE`;
+- `OCCNReplayUnitResult`: unit identifier, status, event count, failure
+  position when proven, explored-state count, and optional limit reason;
+- `OCCNReplayFitnessResult`: aggregate fitness, coverage, counts per status,
+  and ordered per-unit results.
+
+The exact replay-unit input structure is finalized in Pass 3 with #221.
+
+### 5.3 Exact replay procedure
+
+Fitness should use iterative, event-layered state exploration rather than the
+external recursive depth-first function:
+
+1. Start with a frontier containing the empty state.
+2. Before an object's first event, introduce it through all enabled start
+   bindings.
+3. For each visible event, generate successors through
+   `enabled_bindings_for_objects`.
+4. Deduplicate exactly equal successor states.
+5. After all visible events, execute one `END_<type>` event per involved
+   object in deterministic type/identifier order.
+6. Report `FITTING` when at least one branch reaches the empty state.
+7. Report `NON_FITTING` when the complete, uncapped frontier becomes empty or
+   no terminal branch reaches the empty state.
+
+Artificial start and end events are internal replay steps. They must not be
+inserted into the stored event log or exposed as user events.
+
+## 6. Search Safeguards and Result Semantics
+
+### 6.1 Exact-state deduplication
+
+At each event index, equal states represent the same remaining search problem
+and can be merged. A state signature must ignore empty counters and use the
+activity, predecessor, object identifier, object type, and obligation count.
+
+Layered exploration removes recursion-depth risk. The event index always
+advances, so the search cannot loop indefinitely even when the OCCN contains
+cycles.
+
+### 6.2 Binding cache
+
+Enabled visible bindings depend on the activity, its relevant outstanding
+obligations, and the event's exact object set. Results should be cached under
+that key. Start and end binding results can be cached by model, activity,
+object type, and object identifier where applicable.
+
+### 6.3 Deterministic state limit
+
+`max_states` should count distinct `(replay position, state)` pairs admitted
+across all frontiers of one replay unit. The initial default should be `1000`,
+matching the existing precision safeguard, while `None` requests an uncapped
+exact search.
+
+A state cap is preferred over a library-level wall-clock timeout because it is
+deterministic and testable. Request-level cancellation or timeouts can still
+be added by the backend.
+
+The implementation may stop as soon as an empty terminal state is found,
+because fitting is existential. If the state cap is reached before fitting or
+non-fitting is proven, the unit status must be `INCONCLUSIVE`.
+
+### 6.4 Aggregate fitness and coverage
+
+An inconclusive unit must not be counted as non-fitting. Aggregate values
+should be:
+
+```text
+fitness = fitting / (fitting + non_fitting)
+coverage = (fitting + non_fitting) / total
+```
+
+Fitness is `None` when there are no conclusive units. The result must always
+report total, fitting, non-fitting, and inconclusive counts so the frontend
+cannot display a partial result as complete.
+
+### 6.5 Failure information
+
+If exact exploration produces no successor for a visible event, that event
+index can be reported as the proven failure position. If visible events can be
+replayed but no terminal empty state is reachable, the failure phase is
+`completion`.
+
+No causal explanation should be invented. An `INCONCLUSIVE` result reports
+only the configured limit and explored-state count.
+
+### 6.6 Remaining extraction risks
 
 Connected components can become very large when a few objects connect most of
-the log. The extraction strategy is deterministic, but it does not guarantee
-small replay units.
+the log. #221 must preserve deterministic event ordering and define a stable
+secondary order for timestamp ties. These concerns belong to extraction and
+must not be hidden inside the fitness function.
 
-### Event ordering
+## 7. Pass 2 Decisions
 
-Sorting only by timestamp leaves ties dependent on input order. #221 must
-define a stable secondary ordering that is preserved between in-memory and
-DuckDB-backed logs.
-
-### Source-code licensing
-
-The external reference file carries an AGPL license header while this project
-uses the MIT license. Its behavior and published algorithm can guide an
-independent implementation, but source code must not be copied directly
-without confirming a compatible licensing path.
-
-## 6. Pass 1 Conclusion
-
-- The external replay-fitness behavior maps cleanly to the current OCCN model.
-- The external implementation cannot be ported as a direct source-level copy.
-- Current semantics already provide the exact-object binding operation needed
-  for observed event replay.
-- Current event-log and extraction APIs contain the required information, but
-  #221 must establish a stable replay-unit boundary.
-- Search control and reuse of the precision replay machinery are the main
-  architecture decisions remaining for Pass 2.
+- Implement replay fitness independently against the current semantics API.
+- Place metric-independent successor generation in internal `occn/replay.py`.
+- Place the public fitness API and result types in
+  `occn/replay_fitness.py`.
+- Reuse exact-object binding behavior and exact state deduplication.
+- Do not reuse precision's dominance pruning for fitness.
+- Use iterative layered exploration with a deterministic state cap.
+- Represent capped searches as `INCONCLUSIVE`, never as non-fitting.
+- Exclude inconclusive units from fitness and report coverage separately.
+- Keep replay-unit extraction outside the fitness module.
