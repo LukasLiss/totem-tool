@@ -398,3 +398,156 @@ must not be hidden inside the fitness function.
 - Represent capped searches as `INCONCLUSIVE`, never as non-fitting.
 - Exclude inconclusive units from fitness and report coverage separately.
 - Keep replay-unit extraction outside the fitness module.
+
+## 8. Replay-Unit Contract
+
+Issue #221 should define the storage-independent input consumed by #222 in:
+
+`totem_lib/src/totem_lib/occn/replay_units.py`
+
+The initial strategy identifier is `connected_components`. The extraction API
+may accept either the in-memory or DuckDB-backed OCEL representation, but it
+must return the same contract.
+
+### 8.1 Event structure
+
+```python
+@dataclass(frozen=True)
+class OCCNReplayEvent:
+    event_id: str
+    activity: str
+    timestamp_unix: Union[int, float]
+    objects_by_type: Tuple[
+        Tuple[str, Tuple[str, ...]],
+        ...
+    ]
+```
+
+Contract rules:
+
+- object types are sorted by name;
+- object identifiers within a type are sorted;
+- every object identifier occurs at most once in an event;
+- `objects_by_type` is immutable and hashable;
+- event ordering is not inferred again by the fitness module.
+
+The flattened object set needed by `enabled_bindings_for_objects` is derived
+from `objects_by_type`.
+
+### 8.2 Replay-unit structure
+
+```python
+@dataclass(frozen=True)
+class OCCNReplayUnit:
+    unit_id: str
+    strategy: str
+    events: Tuple[OCCNReplayEvent, ...]
+```
+
+Contract rules:
+
+- `events` contains only visible log events;
+- every event identifier occurs once within the unit;
+- event order is ascending by `(timestamp_unix, event_id)`;
+- `unit_id` is deterministic for an unchanged log and strategy;
+- artificial start and end events are not part of the contract;
+- an empty replay unit is invalid.
+
+For connected components, units are sorted by the ordering key of their first
+event. Identifiers use that deterministic position:
+
+```text
+connected_components:000001
+connected_components:000002
+...
+```
+
+The endpoint may combine this library identifier with a file identifier, but
+the library contract must not depend on Django models.
+
+### 8.3 Connected-component extraction
+
+The initial extraction procedure is:
+
+1. Create one object-graph node per object.
+2. Connect objects that participate in the same event.
+3. Compute connected components of the object graph.
+4. Assign every event to the component containing its objects.
+5. Sort events in each component by `(timestamp_unix, event_id)`.
+6. Sort components by the first event's ordering key.
+7. Build one `OCCNReplayUnit` per component.
+
+All objects of one event belong to the same component because that event
+connects them. An event without objects cannot be replayed by the current OCCN
+semantics. Extraction should retain such an event as a deterministic singleton
+unit so it is reported as non-fitting instead of silently disappearing.
+
+Connected-component extraction produces concrete executions. Variant grouping
+may group their results for reporting later, but a representative variant
+must not replace all of its concrete executions in the initial fitness
+calculation.
+
+### 8.4 Boundary between #221 and #222
+
+Issue #221 owns:
+
+- reading events and objects from the selected OCEL representation;
+- connected-component construction;
+- deterministic event and unit ordering;
+- stable unit identifiers;
+- construction and validation of `OCCNReplayUnit` values.
+
+Issue #222 owns:
+
+- introduction of artificial start activities;
+- exact-object binding search;
+- artificial end activities and the empty-state check;
+- state limits and replay status;
+- aggregate fitness and coverage.
+
+Issue #222 must not query an event log, compute connected components, or group
+variants. Issue #221 must not depend on an OCCN or decide replayability.
+
+## 9. Follow-Up Implementation Guidance
+
+| Issue | Required implementation outcome |
+|---|---|
+| #221 | Add `replay_units.py`, connected-component extraction, contract validation, and deterministic fixtures for in-memory and DuckDB-backed logs. |
+| #222 | Add `replay.py` and `replay_fitness.py`, exact layered search, three-state results, aggregate fitness, coverage, and bounded-search tests. |
+| #223 | Deserialize the selected OCCN asset, request replay units from #221, call #222, and serialize its result without changing metric semantics. |
+| #224 | Initially expose only `connected_components`; do not present unimplemented strategies. |
+| #225 | Display fitness together with coverage and visibly separate inconclusive units from non-fitting units. |
+| #226 | Use the event and object data already present in replay-unit results; display a failure position only when the search proves one. |
+| #227 | Document the connected-component interpretation, state cap, inconclusive status, and the difference between fitness and precision. |
+
+## 10. Known Limitations and Review Points
+
+- Connected components may collapse a highly connected log into one large
+  replay unit.
+- Timestamp ties are resolved by event identifier because the different
+  storage backends do not expose one shared source-row index.
+- A state cap of `1000` is an initial deterministic safeguard, not an
+  empirically calibrated universal value.
+- Fitness with coverage below `1.0` is a partial result and must be labeled as
+  such by the API and frontend.
+- The initial metric weights concrete replay units equally, matching the
+  reference algorithm. Variant-weighted reporting is out of scope.
+- The AGPL reference implementation is not copied. The implementation is
+  derived independently from the algorithm and the current public semantics
+  API.
+
+The three-state replay result and initial state cap should be reviewed with
+the project owner, but they do not block implementation: they are conservative
+defaults that avoid reporting unproven deviations as non-fitting.
+
+## 11. Issue #220 Outcome
+
+The compatibility analysis is complete:
+
+- the external replay behavior has been mapped to current OCCN semantics;
+- source-level incompatibilities and licensing constraints are documented;
+- the implementation target modules are identified;
+- safe reuse and unsafe precision-specific behavior are distinguished;
+- the extraction/fitness contract is defined;
+- termination behavior and incomplete-search semantics are defined;
+- #221 through #227 have concrete implementation boundaries.
