@@ -748,8 +748,8 @@ def _build_ocel_db_from_path(path: str) -> OcelDuckDB:
 # We can't use Django's cache here even though LocMemCache is "in-process":
 # LocMemCache pickles every value on set() to preserve copy-on-read
 # semantics, and `duckdb.DuckDBPyConnection` is a native C handle that
-# cannot be pickled. Serializable derived results (totem_discovery_{pk},
-# mlpa_discovery_{pk}) still use Django's cache normally.
+# cannot be pickled. Serializable derived results go through the "results"
+# cache instead — see `cache_utils` (get_cached_result/set_cached_result).
 #
 # Concurrency model — a DuckDB connection is documented as "thread-safe but
 # only one thread can execute a query at a time". Worse, our algorithms

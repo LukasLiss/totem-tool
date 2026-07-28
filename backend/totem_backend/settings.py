@@ -175,7 +175,10 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     },
     "results": {
-        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        # LRU subclass of Django's FileBasedCache — the stock backend evicts a
+        # random selection of entries at the size cap, which can discard hot
+        # results while keeping cold ones.
+        "BACKEND": "api.lru_filecache.LRUFileBasedCache",
         "LOCATION": str(RESULT_CACHE_DIR),
         "OPTIONS": {
             "MAX_ENTRIES": RESULT_CACHE_MAX_ENTRIES,
