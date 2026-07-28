@@ -2,7 +2,6 @@ import { createContext, useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 import axios from "axios";
-import { API_BASE_URL } from "@/config/apiBaseUrl";
 
 type AuthState = "authenticated" | "anonymous" | "expired";
 
@@ -15,7 +14,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 async function guestReAuth() {
   const resp = await axios.post(
-    `${API_BASE_URL}/token/`,
+    "http://localhost:8000/token/",
     { username: "Guest", password: "guest" },
     { headers: { "Content-Type": "application/json" } }
   );

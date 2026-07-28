@@ -13,12 +13,11 @@ import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
-import { API_BASE_URL } from "./config/apiBaseUrl";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 async function guestLogin() {
-  const { data } = await axios.post(`${API_BASE_URL}/token/`, {
+  const { data } = await axios.post("http://localhost:8000/token/", {
     username: "Guest",
     password: "guest",
   });

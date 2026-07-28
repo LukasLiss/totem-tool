@@ -1,12 +1,11 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { API_BASE_URL } from "@/config/apiBaseUrl";
 
 export const Logout = () => {
   useEffect(() => {
     const logout = async () => {
       try {
-        await fetch(`${API_BASE_URL}/logout/`, {
+        await fetch('http://localhost:8000/logout/', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

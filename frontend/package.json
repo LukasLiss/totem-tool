@@ -10,7 +10,6 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "build-no-typecheck": "vite build",
-    "typecheck": "tsc -b",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
