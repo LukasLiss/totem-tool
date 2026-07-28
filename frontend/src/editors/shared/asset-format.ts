@@ -29,7 +29,6 @@ import {
   type TotemRelation,
   type XY,
 } from '@/editors/shared/model-types';
-import { assertCanonicalAsset } from '@/editors/shared/canonical-asset-validation';
 
 // ---------------------------------------------------------------------------
 // Shared
@@ -38,12 +37,6 @@ import { assertCanonicalAsset } from '@/editors/shared/canonical-asset-validatio
 export const TOTEM_SCHEMA = 'totem' as const;
 export const OCCN_SCHEMA = 'occn' as const;
 export const SCHEMA_VERSION = 1 as const;
-
-/** Canonical fields to retain while the editor-visible model semantics stay unchanged. */
-export type CanonicalAssetSource = {
-  content: Record<string, unknown>;
-  editorSemantics: string;
-};
 
 /** Layout entry for one node: optional position and color. */
 export type LayoutNode = { position?: XY; color?: string };
@@ -65,30 +58,10 @@ const asName = (value: unknown): string | null =>
 const toAssetCardinality = (value: string): string =>
   value.replace('0..1', '0...1').replace('0..*', '0...*');
 
-const toEditorCardinality = (value: string): string =>
-  value.replace('0...1', '0..1').replace('0...*', '0..*');
-
 /** True when a parsed JSON object looks like an asset-store model of `schema`. */
 export function isAssetModel(raw: unknown, schema: string): boolean {
   return isRecord(raw) && raw.schema === schema;
 }
-
-const tupleKey = (...parts: string[]) => JSON.stringify(parts);
-
-const unorderedPairKey = (left: string, right: string) =>
-  tupleKey(...[left, right].sort((a, b) => a.localeCompare(b)));
-
-const cloneAsset = (asset: Record<string, unknown>): Record<string, unknown> =>
-  JSON.parse(JSON.stringify(asset)) as Record<string, unknown>;
-
-const withFreshLayout = (
-  asset: Record<string, unknown>,
-  layout: Record<string, unknown> | null,
-) => {
-  delete asset.layout;
-  if (layout) asset.layout = layout;
-  return asset;
-};
 
 // ---------------------------------------------------------------------------
 // TOTeM
@@ -130,16 +103,7 @@ const relationGenerality: Record<TemporalRelation, number> = {
 };
 
 /** Editor TOTeM model -> canonical asset JSON (with optional `layout`). */
-export function totemModelToAsset(
-  model: TotemModelFile,
-  source?: CanonicalAssetSource | null,
-): Record<string, unknown> {
-  const layout = totemLayout(model);
-  // Discovery metadata is not editable; layout-only saves must not erase it.
-  if (source && source.editorSemantics === totemSemanticFingerprint(model)) {
-    return withFreshLayout(cloneAsset(source.content), layout);
-  }
-
+export function totemModelToAsset(model: TotemModelFile): Record<string, unknown> {
   const nodes = model.objectTypes.map((t) => t.name).sort();
 
   const tempgraph: Record<string, unknown> = { nodes };
@@ -188,6 +152,7 @@ export function totemModelToAsset(
     object_type_to_event_types: {},
   };
 
+  const layout = totemLayout(model);
   if (layout) asset.layout = layout;
   return asset;
 }
@@ -219,8 +184,8 @@ function totemLayout(model: TotemModelFile): Record<string, unknown> | null {
 export function assetToTotemModel(
   raw: unknown,
   name: string,
-): { model: TotemModelFile; warnings: string[]; source: CanonicalAssetSource } {
-  assertCanonicalAsset(raw, TOTEM_SCHEMA);
+): { model: TotemModelFile; warnings: string[] } {
+  if (!isRecord(raw)) throw new Error('TOTeM asset must be a JSON object.');
   const tempgraph = isRecord(raw.tempgraph) ? raw.tempgraph : {};
 
   const layout = isRecord(raw.layout) ? raw.layout : {};
@@ -245,22 +210,16 @@ export function assetToTotemModel(
       const from = asName(entry.from);
       const to = asName(entry.to);
       if (!from || !to) continue;
-      cardByPair.set(tupleKey(from, to), {
-        log:
-          typeof entry.log_cardinality === 'string'
-            ? toEditorCardinality(entry.log_cardinality)
-            : '1',
-        event:
-          typeof entry.event_cardinality === 'string'
-            ? toEditorCardinality(entry.event_cardinality)
-            : '1',
+      cardByPair.set(`${from} ${to}`, {
+        log: typeof entry.log_cardinality === 'string' ? entry.log_cardinality : '1',
+        event: typeof entry.event_cardinality === 'string' ? entry.event_cardinality : '1',
       });
     }
   }
 
   // Collect the directed temporal relation for each ordered (source, target).
   const directed = new Map<string, TemporalRelation>();
-  const order: Array<[string, string]> = [];
+  const order: string[] = [];
   for (const temporal of TOTEM_RELATION_KEYS) {
     const edges = Array.isArray(tempgraph[temporal]) ? (tempgraph[temporal] as unknown[]) : [];
     for (const edge of edges) {
@@ -268,8 +227,8 @@ export function assetToTotemModel(
       const source = asName(edge[0]);
       const target = asName(edge[1]);
       if (!source || !target) continue;
-      const key = tupleKey(source, target);
-      if (!directed.has(key)) order.push([source, target]);
+      const key = `${source} ${target}`;
+      if (!directed.has(key)) order.push(key);
       directed.set(key, temporal);
     }
   }
@@ -280,14 +239,14 @@ export function assetToTotemModel(
   const handledPairs = new Set<string>();
   let relationIndex = 0;
 
-  for (const [source, target] of order) {
-    const orderedKey = tupleKey(source, target);
-    const pairKey = unorderedPairKey(source, target);
+  for (const orderedKey of order) {
+    const [source, target] = orderedKey.split(' ');
+    const pairKey = [source, target].slice().sort().join(' ');
     if (handledPairs.has(pairKey)) continue;
     handledPairs.add(pairKey);
 
     const forwardRel = directed.get(orderedKey) as TemporalRelation;
-    const reverseRel = directed.get(tupleKey(target, source));
+    const reverseRel = directed.get(`${target} ${source}`);
     let temporal: TemporalRelation = forwardRel;
 
     // A well-formed file has the exact inverse the other way. If not, keep the
@@ -304,8 +263,8 @@ export function assetToTotemModel(
       );
     }
 
-    const forwardCard = cardByPair.get(tupleKey(source, target));
-    const backwardCard = cardByPair.get(tupleKey(target, source));
+    const forwardCard = cardByPair.get(`${source} ${target}`);
+    const backwardCard = cardByPair.get(`${target} ${source}`);
     relations.push({
       id: `relation-${(relationIndex += 1)}`,
       source,
@@ -322,17 +281,15 @@ export function assetToTotemModel(
     });
   }
 
-  const model: TotemModelFile = {
-    format: TOTEM_FORMAT,
-    version: 1,
-    name,
-    objectTypes,
-    relations,
-  };
   return {
-    model,
+    model: {
+      format: TOTEM_FORMAT,
+      version: 1,
+      name,
+      objectTypes,
+      relations,
+    },
     warnings,
-    source: { content: cloneAsset(raw), editorSemantics: totemSemanticFingerprint(model) },
   };
 }
 
@@ -357,21 +314,7 @@ type ResolvedGroup = { support_count: number | null; markers: ResolvedMarker[] }
  * log-derived fields (`activity_count`, `relative_occurrence_threshold`) the
  * editor has no data for -- exactly what `OCCausalNet.from_dict` does.
  */
-export function occnModelToAsset(
-  model: OccnModelFile,
-  source?: CanonicalAssetSource | null,
-): Record<string, unknown> {
-  // Counts, thresholds, and supports have no editor controls, so retain them
-  // until an editor-visible semantic change requires a newly derived model.
-  if (source && source.editorSemantics === occnSemanticFingerprint(model)) {
-    const activitySet = new Set(model.activities.map((activity) => activity.name));
-    const objectTypeSet = new Set(model.objectTypes.map((type) => type.name));
-    return withFreshLayout(
-      cloneAsset(source.content),
-      occnLayout(model, activitySet, objectTypeSet, dependencyEdgeSet(source.content)),
-    );
-  }
-
+export function occnModelToAsset(model: OccnModelFile): Record<string, unknown> {
   const activities = model.activities.map((a) => a.name);
   const activitySet = new Set(activities);
 
@@ -399,7 +342,7 @@ export function occnModelToAsset(
   const edgeSet = new Set<string>();
   const edges: Array<{ source: string; target: string; object_type: string }> = [];
   const addEdge = (source: string, target: string, objectType: string) => {
-    const key = tupleKey(source, target, objectType);
+    const key = `${source} ${target} ${objectType}`;
     if (edgeSet.has(key)) return;
     edgeSet.add(key);
     edges.push({ source, target, object_type: objectType });
@@ -517,7 +460,7 @@ function occnLayout(
   // Only arcs the marker groups did NOT already imply need explicit storage.
   const extraArcs: Array<{ source: string; target: string; object_type: string }> = [];
   for (const arc of model.arcs) {
-    const key = tupleKey(arc.source, arc.target, arc.objectType);
+    const key = `${arc.source} ${arc.target} ${arc.objectType}`;
     if (edgeSet.has(key)) continue;
     if (!activitySet.has(arc.source) || !activitySet.has(arc.target)) continue;
     if (!objectTypeSet.has(arc.objectType)) continue;
@@ -532,11 +475,8 @@ function occnLayout(
 }
 
 /** Canonical OCCN asset JSON -> editor model file (`markerGroups` shape). */
-export function assetToOccnModel(
-  raw: unknown,
-  name: string,
-): { model: OccnModelFile; source: CanonicalAssetSource } {
-  assertCanonicalAsset(raw, OCCN_SCHEMA);
+export function assetToOccnModel(raw: unknown, name: string): OccnModelFile {
+  if (!isRecord(raw)) throw new Error('OCCN asset must be a JSON object.');
 
   const activityNames = Array.isArray(raw.activities)
     ? raw.activities.filter((a): a is string => typeof a === 'string')
@@ -604,7 +544,7 @@ export function assetToOccnModel(
   const arcs: OccnModelFile['arcs'] = [];
   const arcKeys = new Set<string>();
   const addArc = (source: string, target: string, objectType: string) => {
-    const key = tupleKey(source, target, objectType);
+    const key = `${source} ${target} ${objectType}`;
     if (arcKeys.has(key)) return;
     arcKeys.add(key);
     arcs.push({ source, target, objectType });
@@ -629,7 +569,7 @@ export function assetToOccnModel(
     }
   }
 
-  const model: OccnModelFile = {
+  return {
     format: OCCN_FORMAT,
     version: 1,
     name,
@@ -637,10 +577,6 @@ export function assetToOccnModel(
     activities,
     arcs,
     markerGroups,
-  };
-  return {
-    model,
-    source: { content: cloneAsset(raw), editorSemantics: occnSemanticFingerprint(model) },
   };
 }
 
@@ -656,75 +592,4 @@ function sortKeys<T>(value: Record<string, T>): Record<string, T> {
   const result: Record<string, T> = {};
   for (const key of Object.keys(value).sort()) result[key] = value[key];
   return result;
-}
-
-function dependencyEdgeSet(asset: Record<string, unknown>): Set<string> {
-  const graph = isRecord(asset.dependency_graph) ? asset.dependency_graph : {};
-  const edges = Array.isArray(graph.edges) ? graph.edges : [];
-  const result = new Set<string>();
-  for (const edge of edges) {
-    if (!isRecord(edge)) continue;
-    if (
-      typeof edge.source === 'string' &&
-      typeof edge.target === 'string' &&
-      typeof edge.object_type === 'string'
-    ) {
-      result.add(tupleKey(edge.source, edge.target, edge.object_type));
-    }
-  }
-  return result;
-}
-
-function totemSemanticFingerprint(model: TotemModelFile): string {
-  const relations = model.relations
-    .map((relation) => {
-      const forward = relation.source.localeCompare(relation.target) <= 0;
-      return forward
-        ? [
-            relation.source,
-            relation.target,
-            relation.temporal,
-            relation.sourceToTarget,
-            relation.targetToSource,
-          ]
-        : [
-            relation.target,
-            relation.source,
-            inverseRelation(relation.temporal),
-            relation.targetToSource,
-            relation.sourceToTarget,
-          ];
-    })
-    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return JSON.stringify({
-    objectTypes: model.objectTypes.map((type) => type.name).sort(),
-    relations,
-  });
-}
-
-function occnSemanticFingerprint(model: OccnModelFile): string {
-  const markerGroups = Object.entries(model.markerGroups)
-    .map(([activity, bindings]) => [
-      activity,
-      ...(['img', 'omg'] as const).map((side) => [
-        side,
-        (bindings[side] ?? [])
-          .map((group) =>
-            group
-              .map(([related, objectType, range, key]) => [related, objectType, range, key])
-              .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-          )
-          .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-      ]),
-    ])
-    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-
-  return JSON.stringify({
-    activities: model.activities.map((activity) => activity.name).sort(),
-    objectTypes: model.objectTypes.map((type) => type.name).sort(),
-    arcs: model.arcs
-      .map((arc) => [arc.source, arc.target, arc.objectType])
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
-    markerGroups,
-  });
 }

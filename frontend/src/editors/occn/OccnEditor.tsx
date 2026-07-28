@@ -30,7 +30,6 @@ import {
   assetToOccnModel,
   isAssetModel,
   occnModelToAsset,
-  type CanonicalAssetSource,
 } from '@/editors/shared/asset-format';
 import { assignTypeColors, nextFreeColor } from '@/editors/shared/colors';
 import EditorShell from '@/editors/shared/EditorShell';
@@ -124,7 +123,6 @@ function OccnEditorInner() {
   const reactFlow = useReactFlow<OccnNode, OccnEdge>();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const dragSnapshotRef = useRef<OccnModelFile | null>(null);
-  const assetSourceRef = useRef<CanonicalAssetSource | null>(null);
 
   // -------------------------------------------------------------------------
   // Serialization / loading
@@ -976,7 +974,6 @@ function OccnEditorInner() {
   // -------------------------------------------------------------------------
 
   const onNew = useCallback(() => {
-    assetSourceRef.current = null;
     void applyModel(emptyOccnModel(modelName), { keepName: true });
     history.reset();
   }, [applyModel, history, modelName]);
@@ -988,11 +985,8 @@ function OccnEditorInner() {
       // Accept both the canonical asset-store JSON ("schema": "occn") and the
       // legacy editor file ("format": "occn").
       let candidate = raw;
-      let assetSource: CanonicalAssetSource | null = null;
       if (isAssetModel(raw, OCCN_SCHEMA)) {
-        const converted = assetToOccnModel(raw, occnAssetName(raw) ?? modelName);
-        candidate = converted.model;
-        assetSource = converted.source;
+        candidate = assetToOccnModel(raw, occnAssetName(raw) ?? modelName);
       }
       const parsed = parseOccnModelFile(candidate);
       if (parsed.ok === false) {
@@ -1003,7 +997,6 @@ function OccnEditorInner() {
       // replacement is undoable instead of a silent data-loss path.
       history.record(serialize());
       await applyModel(parsed.model, { fit: true });
-      assetSourceRef.current = assetSource;
       toast.success(`Loaded "${parsed.model.name}".`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not read the file.');
@@ -1015,7 +1008,7 @@ function OccnEditorInner() {
     // Save in the canonical asset-store format so the file can be uploaded to
     // the project model asset store directly; the editor's layout (positions,
     // colors, bindingless arcs) travels in the optional `layout` block.
-    downloadJson(filename, occnModelToAsset(serialize(), assetSourceRef.current));
+    downloadJson(filename, occnModelToAsset(serialize()));
     toast.success(`Saved ${filename}.json`);
   }, [modelName, serialize]);
 
@@ -1028,7 +1021,6 @@ function OccnEditorInner() {
     // Loading the example replaces the whole model — snapshot the current one
     // so the replacement is undoable instead of a silent data-loss path.
     history.record(serialize());
-    assetSourceRef.current = null;
     await applyModel(parsed.model, { fit: true });
     toast.success('Loaded the shipping example.');
   }, [applyModel, history, serialize]);
@@ -1036,16 +1028,17 @@ function OccnEditorInner() {
   const bridge = useProjectAssetBridge({
     assetType: 'OCCN',
     modelName,
-    serializeAsset: () => occnModelToAsset(serialize(), assetSourceRef.current),
-    onOpen: async (content, assetName) => {
-      const { model, source } = assetToOccnModel(content, assetName);
+    serializeAsset: () => occnModelToAsset(serialize()),
+    onOpen: (content, assetName) => {
+      const model = assetToOccnModel(content, assetName);
       const parsed = parseOccnModelFile(model);
       if (parsed.ok === false) {
-        throw new Error(parsed.error);
+        toast.error(parsed.error);
+        return;
       }
       history.record(serialize());
-      await applyModel(parsed.model, { fit: true });
-      assetSourceRef.current = source;
+      void applyModel(parsed.model, { fit: true });
+      toast.success(`Loaded "${parsed.model.name}".`);
     },
   });
 

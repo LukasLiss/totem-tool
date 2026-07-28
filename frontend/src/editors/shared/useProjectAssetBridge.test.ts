@@ -8,10 +8,7 @@ import { getAsset, type ProjectAsset } from '@/api/assetsApi';
 import { DashboardContext } from '@/contexts/DashboardContext';
 import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 
-import {
-  openProjectAsset,
-  useProjectAssetBridge,
-} from './useProjectAssetBridge';
+import { useProjectAssetBridge } from './useProjectAssetBridge';
 
 vi.mock('@/api/assetsApi', async () => {
   const actual = await vi.importActual<typeof import('@/api/assetsApi')>(
@@ -36,24 +33,6 @@ const asset: ProjectAsset = {
   created_at: '2026-07-22T10:00:00Z',
   updated_at: '2026-07-22T10:00:00Z',
 };
-
-describe('openProjectAsset', () => {
-  it('returns the opened-asset identity only after the editor accepts the content', async () => {
-    const onOpen = vi.fn().mockResolvedValue(undefined);
-
-    await expect(openProjectAsset(asset, onOpen)).resolves.toEqual({
-      id: asset.id,
-      name: asset.name,
-    });
-    expect(onOpen).toHaveBeenCalledWith(asset.content_json, asset.name);
-  });
-
-  it('propagates editor load failures instead of marking the asset as opened', async () => {
-    const onOpen = vi.fn().mockRejectedValue(new Error('Invalid canonical model'));
-
-    await expect(openProjectAsset(asset, onOpen)).rejects.toThrow('Invalid canonical model');
-  });
-});
 
 describe('useProjectAssetBridge auto-open', () => {
   afterEach(() => {

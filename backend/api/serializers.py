@@ -53,10 +53,6 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
     def validate_asset_type(self, value):
         if value not in ProjectAsset.AssetType.values:
             raise serializers.ValidationError("Unsupported asset type.")
-        if self.instance is not None and value != self.instance.asset_type:
-            raise serializers.ValidationError(
-                "Asset type cannot be changed after creation."
-            )
         return value
 
     def validate_project(self, value):

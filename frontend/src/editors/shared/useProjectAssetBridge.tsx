@@ -47,7 +47,7 @@ type UseProjectAssetBridgeArgs = {
   /** Build the canonical asset JSON for the current model. */
   serializeAsset: () => Record<string, unknown>;
   /** Load a stored asset's content into the editor. */
-  onOpen: (content: Record<string, unknown>, name: string) => void | Promise<void>;
+  onOpen: (content: Record<string, unknown>, name: string) => void;
 };
 
 type UseProjectAssetBridge = {
@@ -60,14 +60,6 @@ type UseProjectAssetBridge = {
 };
 
 const assetLabel = (assetType: AssetType) => (assetType === 'TOTEM' ? 'TOTeM' : 'OCCN');
-
-export async function openProjectAsset(
-  asset: ProjectAsset,
-  onOpen: (content: Record<string, unknown>, name: string) => void | Promise<void>,
-): Promise<{ id: number; name: string }> {
-  await onOpen(asset.content_json, asset.name);
-  return { id: asset.id, name: asset.name };
-}
 
 export function useProjectAssetBridge({
   assetType,
@@ -96,9 +88,9 @@ export function useProjectAssetBridge({
   onOpenRef.current = onOpen;
 
   const loadIntoEditor = useCallback(
-    async (asset: ProjectAsset) => {
-      const opened = await openProjectAsset(asset, onOpenRef.current);
-      setOpenedAsset(opened);
+    (asset: ProjectAsset) => {
+      onOpenRef.current(asset.content_json, asset.name);
+      setOpenedAsset({ id: asset.id, name: asset.name });
     },
     [],
   );
@@ -113,7 +105,7 @@ export function useProjectAssetBridge({
     void (async () => {
       try {
         const asset = await getAsset(targetId);
-        await loadIntoEditor(asset);
+        loadIntoEditor(asset);
         toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(extractAssetApiError(error).message);
@@ -199,10 +191,10 @@ export function useProjectAssetBridge({
   }, [projectId, assetType]);
 
   const chooseAsset = useCallback(
-    async (asset: ProjectAsset) => {
+    (asset: ProjectAsset) => {
+      setOpenOpen(false);
       try {
-        await loadIntoEditor(asset);
-        setOpenOpen(false);
+        loadIntoEditor(asset);
         toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Could not open the asset.');

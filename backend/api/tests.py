@@ -1209,25 +1209,6 @@ class ProjectAssetApiTests(TestCase):
         asset.refresh_from_db()
         self.assertEqual(asset.content_json["schema"], "totem")
 
-    def test_patch_rejects_asset_type_change_without_content(self):
-        asset = self._create_asset(
-            self.project,
-            "Typed model",
-            ProjectAsset.AssetType.TOTEM,
-        )
-
-        response = self.client.patch(
-            f"/api/assets/{asset.pk}/",
-            {"asset_type": ProjectAsset.AssetType.OCCN},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("asset_type", response.data)
-        asset.refresh_from_db()
-        self.assertEqual(asset.asset_type, ProjectAsset.AssetType.TOTEM)
-        self.assertEqual(asset.content_json["schema"], "totem")
-
     def test_patch_rejects_duplicate_name_in_project(self):
         self._create_asset(self.project, "Existing", ProjectAsset.AssetType.TOTEM)
         asset = self._create_asset(
