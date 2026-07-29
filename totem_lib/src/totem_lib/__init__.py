@@ -16,11 +16,14 @@ from .totem import (
 )
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCausalNet,
     OCCausalNetSemantics,
     OCCausalNetState,
     OCCNContextDetail,
     OCCNPrecisionResult,
+    OCCNReplayEvent,
+    OCCNReplayUnit,
     discover_occn,
     occn_from_dict,
     occn_playout,
@@ -38,6 +41,7 @@ from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_
 __all__ = [
     "calculate_layout",
     "CCDFG",
+    "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "conformance_of_totem",
     "convert_ocel_polars_to_pm4py",
     "discover_occn",
@@ -53,6 +57,8 @@ __all__ = [
     "OCCausalNetState",
     "OCCNContextDetail",
     "OCCNPrecisionResult",
+    "OCCNReplayEvent",
+    "OCCNReplayUnit",
     "occn_from_dict",
     "occn_playout",
     "occn_precision",
