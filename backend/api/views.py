@@ -2588,11 +2588,10 @@ def run_simulation(request):
 
         # Build simulation model based on mode
         if mode == "advanced":
-            simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(ocel, process_area)
+            simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(
+                ocel, process_area, resource_types=list(resource_pool.keys())
+            )
         else:
-            # Resource types are the keys of the pool (disjoint from the process
-            # area's object types); pass them so cooldowns and calendars are
-            # discovered for the right types even without frontend overrides.
             simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(
                 ocel, process_area, resource_types=list(resource_pool.keys())
             )
