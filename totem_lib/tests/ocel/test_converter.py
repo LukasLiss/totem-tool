@@ -2,7 +2,12 @@ import pytest
 import totem_lib
 import pandas as pd
 import polars as pl
+from pathlib import Path
 from pandas.api.types import is_datetime64_any_dtype, is_string_dtype, is_object_dtype
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
+
+TEST_DATA = Path(__file__).parent.parent.parent / "test_data" / "small"
 
 OCEL_FILES = [
     "example_data/ContainerLogistics.json",
@@ -289,3 +294,59 @@ def test_e2e(loaded_ocel):
 def test_object_changes(loaded_ocel):
     """Tests that the object changes are converted correctly with expected values."""
     raise NotImplementedError()
+
+
+@pytest.fixture(scope="module")
+def loaded_ocel_duckdb():
+    """Build OcelDuckDB from the Polars OCEL and convert both to pm4py for comparison."""
+    ocel_polars = totem_lib.import_ocel(str(TEST_DATA / "container_logistics.json"))
+    ocel_db = OcelDuckDB(ocel_polars)
+    converted_polars = totem_lib.convert_ocel_polars_to_pm4py(ocel_polars)
+    converted_db = convert_ocel_duckdb_to_pm4py(ocel_db)
+    return {
+        "converted_polars": converted_polars,
+        "converted_db": converted_db,
+    }
+
+
+def test_duckdb_columns(loaded_ocel_duckdb):
+    """DuckDB-converted OCEL has the same column structure as the Polars-converted one."""
+    db = loaded_ocel_duckdb["converted_db"]
+    pl_ocel = loaded_ocel_duckdb["converted_polars"]
+    assert set(db.events.columns) == set(pl_ocel.events.columns)
+    assert set(db.objects.columns) == set(pl_ocel.objects.columns)
+    assert set(db.relations.columns) == set(pl_ocel.relations.columns)
+
+
+def test_duckdb_events_match_polars(loaded_ocel_duckdb):
+    """Events table from DuckDB adapter equals Polars adapter output."""
+    db = loaded_ocel_duckdb["converted_db"]
+    pl_ocel = loaded_ocel_duckdb["converted_polars"]
+    pd.testing.assert_frame_equal(
+        db.events.sort_values(db.event_id_column).reset_index(drop=True),
+        pl_ocel.events.sort_values(pl_ocel.event_id_column).reset_index(drop=True),
+        check_like=True,
+    )
+
+
+def test_duckdb_objects_match_polars(loaded_ocel_duckdb):
+    """Objects table from DuckDB adapter equals Polars adapter output (dead objects excluded)."""
+    db = loaded_ocel_duckdb["converted_db"]
+    pl_ocel = loaded_ocel_duckdb["converted_polars"]
+    pd.testing.assert_frame_equal(
+        db.objects.sort_values(db.object_id_column).reset_index(drop=True),
+        pl_ocel.objects.sort_values(pl_ocel.object_id_column).reset_index(drop=True),
+        check_like=True,
+    )
+
+
+def test_duckdb_relations_match_polars(loaded_ocel_duckdb):
+    """Relations table from DuckDB adapter equals Polars adapter output."""
+    db = loaded_ocel_duckdb["converted_db"]
+    pl_ocel = loaded_ocel_duckdb["converted_polars"]
+    sort_cols = [db.event_id_column, db.object_id_column]
+    pd.testing.assert_frame_equal(
+        db.relations.sort_values(sort_cols).reset_index(drop=True),
+        pl_ocel.relations.sort_values(sort_cols).reset_index(drop=True),
+        check_like=True,
+    )

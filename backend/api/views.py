@@ -4,31 +4,33 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
-from .models import EventLog, Project, Dashboard, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, FilterStackComponent
-from .serializers import EventLogSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .models import EventLog, Project, ProjectAsset, Dashboard, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent
+from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
 # DuckDB-backed implementations (`OCDFGDb`, `totemDiscovery_db`, `find_variants`
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
-# Django side. Polars-only algorithms (`discover_oc_petri_net_polars`,
-# `discover_occn`) are not currently wired into the UI.
-from totem_lib.dfg import OCDFGDb
+# Django side.
+from totem_lib.dfg import OCDFGDb, NewOCDFGDb
+from totem_lib import discover_occn, serialize_occn
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
-from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem
 from totem_lib.ocel import OcelDuckDB, import_ocel_db, FilterStack, apply_filter_stack
+from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
+from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
+from collections import OrderedDict
 import networkx as nx
 
-from collections import defaultdict
+
 
 from django.core.cache import cache
 
 import os
 from hashlib import sha1
 import json
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 
 
 TOTEM_MOCK = {
@@ -336,7 +338,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
-            serialized = _serialize_totem(totem)
+            serialized = totem_to_dict(totem)
 
             cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
@@ -406,6 +408,108 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=["get"])
+    def oc_dotted_chart(self, request, pk=None):
+        """Returns sampled event data for the object-centric dotted chart."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            row_min = _optional_int(request.query_params.get("row_min"))
+            row_max = _optional_int(request.query_params.get("row_max"))
+            max_points = int(request.query_params.get("max_points", 3000))
+            sample_seed = int(request.query_params.get("sample_seed", 0))
+        except ValueError:
+            return Response(
+                {"error": "row_min, row_max, max_points, and sample_seed must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = get_oc_dotted_chart_data(
+                    db,
+                    t_min=request.query_params.get("t_min"),
+                    t_max=request.query_params.get("t_max"),
+                    row_min=row_min,
+                    row_max=row_max,
+                    x_axis=request.query_params.get("x_axis", "time"),
+                    y_axis=request.query_params.get("y_axis"),
+                    color_by=request.query_params.get("color_by", "activity"),
+                    shape_by=request.query_params.get("shape_by", "none"),
+                    sort_by=request.query_params.get("sort_by", "time"),
+                    row_order=request.query_params.get("row_order", "first_occurrence"),
+                    max_points=max_points,
+                    sample_seed=sample_seed,
+                )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to load OC dotted chart data: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def oc_dotted_chart_columns(self, request, pk=None):
+        """Returns configurable dimensions for the object-centric dotted chart."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                result = get_oc_dotted_chart_columns(db)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to load OC dotted chart columns: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class ProjectAssetViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectAssetSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        queryset = ProjectAsset.objects.filter(
+            project__users=self.request.user,
+        ).select_related("project", "created_by")
+
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+
+        asset_type = self.request.query_params.get("asset_type")
+        if asset_type:
+            queryset = queryset.filter(asset_type=asset_type)
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        asset_type = request.query_params.get("asset_type")
+        if asset_type and asset_type not in ProjectAsset.AssetType.values:
+            return Response(
+                {"asset_type": "Unsupported asset type."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=["get"])
+    def download(self, request, pk=None):
+        asset = self.get_object()
+        response = Response(asset.content_json, status=status.HTTP_200_OK)
+        filename = f"{slugify(asset.name) or 'model-asset'}.json"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -459,6 +563,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == 'OCDFGComponent':
                 components.append(OCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCDottedChartComponent':
+                components.append(OCDottedChartComponent.objects.get(id=comp.id))
+            elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
+                components.append(NewOCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCCNComponent':
+                components.append(OCCNComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -570,6 +680,50 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
+                )
+            elif component_name == 'OCDottedChartComponent':
+                OCDottedChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    file_id=item.get('file_id'),
+                    x_axis=item.get('x_axis') or 'time',
+                    y_axis=item.get('y_axis') or 'activity',
+                    color_by=item.get('color_by') or 'activity',
+                    shape_by=item.get('shape_by') or 'none',
+                    row_order=item.get('row_order') or 'first_occurrence',
+                    max_points=item.get('max_points', 10000),
+                    show_minimap=item.get('show_minimap', True),
+                    show_controls=item.get('show_controls', True),
+                )
+            elif component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
+                NewOCDFGComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    layout_direction=item.get('layout_direction', 'TB'),
+                )
+            elif component_name == 'OCCNComponent':
+                OCCNComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    relative_occurrence_threshold=item.get('relative_occurrence_threshold', 0.0),
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    layout_direction=item.get('layout_direction', 'LR'),
+                    object_types=item.get('object_types') or '',
                 )
             elif component_name == 'FilterStackComponent':
                 FilterStackComponent.objects.create(
@@ -748,6 +902,10 @@ def _activities_with_counts(db: OcelDuckDB) -> list[dict]:
             "SELECT activity, COUNT(*) FROM events GROUP BY activity ORDER BY activity"
         ).fetchall()
     ]
+def _optional_int(value):
+    if value in (None, ""):
+        return None
+    return int(value)
 
 
 def _layout_shim(db: OcelDuckDB):
@@ -764,143 +922,12 @@ def _layout_shim(db: OcelDuckDB):
     return SimpleNamespace(obj_type_map=obj_type_map)
 
 
-def _extract_trace_variants_per_type(
-    db: OcelDuckDB, object_types: set[str]
-) -> dict:
-    """
-    Per-object-type activity-sequence variants — pushed entirely into SQL.
-
-    For each object of the requested types, builds a `'|'`-joined activity
-    sequence (the trace) ordered by event timestamp, then groups by
-    `(obj_type, trace)` to count instances. The shape of the returned dict
-    matches what this helper produced in its previous polars implementation:
-
-        {obj_type: {
-            "variants": [
-                {"trace": ["a", "b", ...], "count": N, "objects": ["o1", ...]},
-                ...
-            ],
-            "total_objects": M,
-        }}
-    """
-    if not object_types:
-        return {}
-
-    types_list = list(object_types)
-    placeholders = ", ".join(["?"] * len(types_list))
-
-    # total_objects per type (including objects with no events).
-    totals = {
-        t: n
-        for t, n in db.conn.execute(
-            f"SELECT obj_type, COUNT(*) FROM objects "
-            f"WHERE obj_type IN ({placeholders}) GROUP BY obj_type",
-            types_list,
-        ).fetchall()
-    }
-
-    variants_by_type: dict[str, list[dict]] = defaultdict(list)
-    rows = db.conn.execute(
-        f"""
-        WITH per_obj_traces AS (
-            SELECT
-                o.obj_id,
-                o.obj_type,
-                STRING_AGG(e.activity, '|'
-                           ORDER BY e.timestamp_unix, e.event_id) AS trace
-            FROM objects o
-            JOIN event_object eo ON eo.obj_id   = o.obj_id
-            JOIN events       e  ON eo.event_id = e.event_id
-            WHERE o.obj_type IN ({placeholders})
-            GROUP BY o.obj_id, o.obj_type
-        )
-        SELECT
-            obj_type,
-            trace,
-            COUNT(*)                 AS cnt,
-            LIST(obj_id ORDER BY obj_id) AS objects
-        FROM per_obj_traces
-        GROUP BY obj_type, trace
-        ORDER BY obj_type, cnt DESC
-        """,
-        types_list,
-    ).fetchall()
-
-    for obj_type, trace, cnt, objects in rows:
-        variants_by_type[obj_type].append({
-            "trace": trace.split("|") if trace else [],
-            "count": int(cnt),
-            "objects": list(objects),
-        })
-
-    result: dict = {}
-    for t in object_types:
-        result[t] = {
-            "variants": variants_by_type.get(t, []),
-            "total_objects": int(totals.get(t, 0)),
-        }
-    return result
+# NOTE: _extract_trace_variants_per_type and _apply_trace_limits have been
+# removed from this file. That logic now lives in totem-lib:
+#   NewOCDFGDb.compute_variants()               (variant extraction)
+#   NewOCDFGDb.from_ocel_db_with_variant_ranks() (full annotated graph)
 
 
-def _serialize_totem(totem: Totem) -> dict:
-    """
-    Convert a Totem object into a JSON-serializable structure matching the frontend contract.
-    """
-    tempgraph = {}
-    raw_tempgraph = getattr(totem, "tempgraph", {}) or {}
-
-    nodes = raw_tempgraph.get("nodes", [])
-    if isinstance(nodes, set):
-        tempgraph["nodes"] = sorted(nodes)
-    else:
-        tempgraph["nodes"] = list(nodes) if isinstance(nodes, (list, tuple)) else nodes
-
-    for relation, edges in raw_tempgraph.items():
-        if relation == "nodes":
-            continue
-        if isinstance(edges, set):
-            tempgraph[relation] = [list(edge) for edge in sorted(edges)]
-        elif isinstance(edges, list):
-            tempgraph[relation] = [list(edge) if isinstance(edge, tuple) else edge for edge in edges]
-        else:
-            tempgraph[relation] = edges
-
-    cardinalities = []
-    for (source, target), data in getattr(totem, "cardinalities", {}).items():
-        if not isinstance(data, dict):
-            continue
-        cardinalities.append({
-            "from": source,
-            "to": target,
-            "log_cardinality": data.get("LC"),
-            "event_cardinality": data.get("EC"),
-        })
-    cardinalities.sort(key=lambda item: (item["from"], item["to"]))
-
-    type_relations = []
-    for relation in getattr(totem, "type_relations", set()):
-        relation_list = sorted(list(relation)) if isinstance(relation, (set, frozenset)) else relation
-        type_relations.append(relation_list)
-    type_relations.sort()
-
-    all_event_types = sorted(getattr(totem, "all_event_types", []))
-
-    object_type_to_event_types = {}
-    for obj_type, events in getattr(totem, "object_type_to_event_types", {}).items():
-        if isinstance(events, set):
-            object_type_to_event_types[obj_type] = sorted(events)
-        elif isinstance(events, (list, tuple)):
-            object_type_to_event_types[obj_type] = list(events)
-        else:
-            object_type_to_event_types[obj_type] = []
-
-    return {
-        "tempgraph": tempgraph,
-        "cardinalities": cardinalities,
-        "type_relations": type_relations,
-        "all_event_types": all_event_types,
-        "object_type_to_event_types": object_type_to_event_types,
-    }
 
 
 def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
@@ -933,7 +960,7 @@ def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
         })
 
     # Also include the serialized totem data for edge information
-    totem_data = _serialize_totem(totem)
+    totem_data = totem_to_dict(totem)
 
     return {
         "layers": layers,
@@ -1095,7 +1122,7 @@ def variants(request):
     }, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def OCDFGViewSet(request):
     """
 
@@ -2197,10 +2224,13 @@ def OCDFGViewSet(request):
     if raw_object_types:
         object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         with _with_ocel_db(user_file) as db:
@@ -2238,7 +2268,7 @@ def OCDFGViewSet(request):
                         dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
 
                     # Per-object-type trace variants for the filtered types.
-                    trace_variants = _extract_trace_variants_per_type(db, object_type_filter)
+                    trace_variants = NewOCDFGDb.compute_variants(db, object_types=list(object_type_filter))
                 except Exception as e:
                     # Gracefully fall back to unfiltered graph to avoid
                     # frontend breakage, but surface warning.
@@ -2251,9 +2281,9 @@ def OCDFGViewSet(request):
             # all object types from the OCEL when no filter is specified.
             if trace_variants is None:
                 try:
-                    all_object_types = set(_object_types(db))
+                    all_object_types = _object_types(db)
                     if all_object_types:
-                        trace_variants = _extract_trace_variants_per_type(db, all_object_types)
+                        trace_variants = NewOCDFGDb.compute_variants(db, object_types=all_object_types)
                 except Exception as e:
                     print(f"[OCDFG] Failed to compute trace variants: {e}")
 
@@ -2268,7 +2298,172 @@ def OCDFGViewSet(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def NewOCDFGViewSet(request):
+    """
+    Thin routing layer for the New OC-DFG endpoint.
+
+    Delegates all computation to ``NewOCDFGDb.from_ocel_db_with_variant_ranks``
+    in totem-lib.  The only Django-layer responsibilities are:
+      1. Parse / validate query params.
+      2. Resolve the EventLog → open OcelDuckDB.
+      3. Call the lib method.
+      4. Serialize the NetworkX graph to JSON and return.
+
+    Variant filtering is now done **entirely on the frontend** using the
+    ``variant_rank`` attribute annotated on every edge by the lib.  No
+    ``trace_limits`` query parameter is accepted or processed here.
+    """
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Optional object-type filter (comma-separated)
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = sorted(
+            t.strip() for t in raw_object_types.split(",") if t.strip()
+        ) or None
+
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
+    try:
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        with _with_ocel_db(user_file) as db:
+            # Delegate all process-mining logic to totem-lib.
+            # Returns the annotated graph and per-type variant counts for sliders.
+            ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
+                db, object_types=object_type_filter
+            )
+
+            if len(ocdfg.nodes) == 0:
+                dfg_json = {
+                    "directed": True, "multigraph": True,
+                    "graph": {"kind": "new_ocdfg"}, "nodes": [], "links": [],
+                }
+            else:
+                dfg_json = nx.node_link_data(ocdfg, edges="links")
+
+            all_nodes = [
+                {
+                    "id": n.get("id"),
+                    "types": n.get("types", []),
+                    "role": n.get("role"),
+                    "object_type": n.get("object_type"),
+                }
+                for n in dfg_json.get("nodes", [])
+            ]
+
+        return Response(
+            {
+                "dfg": dfg_json,
+                "all_nodes": all_nodes,
+                "variant_counts": variant_counts,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# OCCN discovery dominates request time (seconds to ~1 min per log) while
+# thresholding is a cheap marker filter, so cache the threshold-0 base net per
+# (file, object-type filter) and apply the requested threshold per request —
+# the pattern discover_occn's own docstring recommends. In-process cache: it
+# is cleared on backend restart/reload and sized small because nets can be
+# large in memory.
+#
+# The key has no user component on purpose: the cache is only ever reached
+# after the ownership check on the event log below, so a hit already implies
+# the caller may read that log. Keep the lookup above the cache read.
+_OCCN_CACHE_MAX_ENTRIES = 4
+_occn_base_cache = OrderedDict()
+_occn_cache_lock = threading.Lock()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def OCCNViewSet(request):
+    """
+    Discover and return a serialized OCCN for the given event log file.
+
+    Query params:
+        file_id (required)         — ID of the EventLog to mine
+        object_types (optional)    — comma-separated object type filter
+        relativeOccuranceThreshold — float in [0, 1], default 0.0
+    """
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Parse optional comma-separated object type filter.
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = [t.strip() for t in raw_object_types.split(",") if t.strip()] or None
+
+    # Parse and validate threshold.
+    raw_threshold = request.query_params.get("relativeOccuranceThreshold", "0.0")
+    try:
+        threshold = float(raw_threshold)
+        if not (0.0 <= threshold <= 1.0):
+            return Response(
+                {"error": "relativeOccuranceThreshold must be a float in [0, 1]"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "relativeOccuranceThreshold must be a float"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
+    try:
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        parameters = {"object_types": object_type_filter} if object_type_filter else None
+        cache_key = (user_file.id, tuple(object_type_filter) if object_type_filter else None)
+
+        with _occn_cache_lock:
+            base_occn = _occn_base_cache.get(cache_key)
+            if base_occn is not None:
+                _occn_base_cache.move_to_end(cache_key)
+
+        if base_occn is None:
+            with _with_ocel_db(user_file) as db:
+                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            with _occn_cache_lock:
+                _occn_base_cache[cache_key] = base_occn
+                _occn_base_cache.move_to_end(cache_key)
+                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                    _occn_base_cache.popitem(last=False)
+
+        occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
+
+        result = serialize_occn(occn)
+        return Response(result, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['DELETE'])
+
 @permission_classes([IsAuthenticated])
 def delete_user_data(request):
     confirm = request.data.get("confirm")

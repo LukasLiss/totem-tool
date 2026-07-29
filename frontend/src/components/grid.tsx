@@ -150,7 +150,8 @@ const GridContent: React.FC = () => {
 
 const Grid: React.FC = () => {
   const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
-  const { selectedDashboard: dashboardId } = useContext(DashboardContext);
+  const { viewMode } = useContext(DashboardContext);
+  const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
   console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
