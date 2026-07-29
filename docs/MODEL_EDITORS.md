@@ -91,6 +91,17 @@ bind disjoint objects. Clicking a marker opens its group in the side panel;
 **dragging a marker onto another marker** of the same activity side merges
 the two groups into one AND group.
 
+The read-only OCCN **discovery visualizer** (Dashboard / Analysis / Overview,
+`react_component/OCCNVisualizer.tsx`) renders discovered nets with these same
+editor primitives (`editors/occn/`: nodes, arcs, marker overlay, ELK layout),
+so discovered and hand-authored nets share one notation. On top of the editor
+rendering it adds discovery-only affordances: an occurrence-threshold slider,
+group-support and dependence-measure tooltips, activity counts, self-loop
+arcs, and "+N in / +N out" chips when an activity's marker groups exceed the
+per-side render cap. A possible follow-up is an "Open in Editor" bridge that
+converts a discovered net into this file format for hand-editing (needs an
+unsaved-session confirmation and a size guard for huge nets).
+
 ## OCPN format (`"format": "ocpn"`)
 
 An object-centric Petri net `(N, pt, F_var)`: places typed by object type

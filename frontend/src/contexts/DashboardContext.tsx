@@ -1,18 +1,23 @@
 import React, { createContext, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-export type AnalysisComponent = 'processArea' | 'ocdfg' | 'variants' | 'dottedChart';
-export type ConformanceComponent = 'totem' | 'occn';
+export type AnalysisComponent =
+  | "processArea"
+  | "ocdfg"
+  | "variants"
+  | "dottedChart"
+  | "occn";
+export type ConformanceComponent = "totem" | "occn";
 
-export type EditorComponent = 'totem' | 'occn' | 'ocpn';
+export type EditorComponent = "totem" | "occn" | "ocpn";
 
 export type ViewMode =
-  | { type: 'overview' }
-  | { type: 'modelAssets' }
-  | { type: 'analysis'; component: AnalysisComponent }
-  | { type: 'conformance'; component: ConformanceComponent }
-  | { type: 'editor'; component: EditorComponent }
-  | { type: 'dashboard'; id: number };
+  | { type: "overview" }
+  | { type: "modelAssets" }
+  | { type: "analysis"; component: AnalysisComponent }
+  | { type: "conformance"; component: ConformanceComponent }
+  | { type: "editor"; component: EditorComponent }
+  | { type: "dashboard"; id: number };
 
 type DashboardContextType = {
   viewMode: ViewMode;
@@ -20,12 +25,14 @@ type DashboardContextType = {
 };
 
 export const DashboardContext = createContext<DashboardContextType>({
-  viewMode: { type: 'overview' },
+  viewMode: { type: "overview" },
   setViewMode: () => {},
 });
 
-export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [viewMode, setViewModeState] = useState<ViewMode>({ type: 'overview' });
+export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [viewMode, setViewModeState] = useState<ViewMode>({ type: "overview" });
   const navigate = useNavigate();
 
   // Selecting any view from the navbar also navigates to the main process

@@ -4,22 +4,23 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
-from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, UserSettings
+from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, UserSettings
 from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
 # DuckDB-backed implementations (`OCDFGDb`, `totemDiscovery_db`, `find_variants`
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
-# Django side. Polars-only algorithms (`discover_oc_petri_net_polars`,
-# `discover_occn`) are not currently wired into the UI.
+# Django side.
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
+from totem_lib import discover_occn, serialize_occn
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
+from collections import OrderedDict
 import networkx as nx
 
 
@@ -530,6 +531,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(OCDottedChartComponent.objects.get(id=comp.id))
             elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == 'OCCNComponent':
+                components.append(OCCNComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -671,6 +674,20 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_controls=item.get('show_controls', True),
                     initial_interaction_locked=item.get('initial_interaction_locked', True),
                     layout_direction=item.get('layout_direction', 'TB'),
+                )
+            elif component_name == 'OCCNComponent':
+                OCCNComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    relative_occurrence_threshold=item.get('relative_occurrence_threshold', 0.0),
+                    show_controls=item.get('show_controls', True),
+                    initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    layout_direction=item.get('layout_direction', 'LR'),
+                    object_types=item.get('object_types') or '',
                 )
             # Add more as needed
 
@@ -1057,7 +1074,7 @@ def variants(request):
     return Response(result, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def OCDFGViewSet(request):
     """
 
@@ -2159,10 +2176,13 @@ def OCDFGViewSet(request):
     if raw_object_types:
         object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     # --- Cache lookup (#72 / #74) ---
     ocdfg_cache_params = {
@@ -2241,7 +2261,7 @@ def OCDFGViewSet(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def NewOCDFGViewSet(request):
     """
     Thin routing layer for the New OC-DFG endpoint.
@@ -2269,10 +2289,13 @@ def NewOCDFGViewSet(request):
             t.strip() for t in raw_object_types.split(",") if t.strip()
         ) or None
 
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
     try:
-        user_file = EventLog.objects.get(id=file_id)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         with _with_ocel_db(user_file) as db:
@@ -2312,6 +2335,92 @@ def NewOCDFGViewSet(request):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# OCCN discovery dominates request time (seconds to ~1 min per log) while
+# thresholding is a cheap marker filter, so cache the threshold-0 base net per
+# (file, object-type filter) and apply the requested threshold per request —
+# the pattern discover_occn's own docstring recommends. In-process cache: it
+# is cleared on backend restart/reload and sized small because nets can be
+# large in memory.
+#
+# The key has no user component on purpose: the cache is only ever reached
+# after the ownership check on the event log below, so a hit already implies
+# the caller may read that log. Keep the lookup above the cache read.
+_OCCN_CACHE_MAX_ENTRIES = 4
+_occn_base_cache = OrderedDict()
+_occn_cache_lock = threading.Lock()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def OCCNViewSet(request):
+    """
+    Discover and return a serialized OCCN for the given event log file.
+
+    Query params:
+        file_id (required)         — ID of the EventLog to mine
+        object_types (optional)    — comma-separated object type filter
+        relativeOccuranceThreshold — float in [0, 1], default 0.0
+    """
+    file_id = request.query_params.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Parse optional comma-separated object type filter.
+    raw_object_types = request.query_params.get("object_types")
+    object_type_filter = None
+    if raw_object_types:
+        object_type_filter = [t.strip() for t in raw_object_types.split(",") if t.strip()] or None
+
+    # Parse and validate threshold.
+    raw_threshold = request.query_params.get("relativeOccuranceThreshold", "0.0")
+    try:
+        threshold = float(raw_threshold)
+        if not (0.0 <= threshold <= 1.0):
+            return Response(
+                {"error": "relativeOccuranceThreshold must be a float in [0, 1]"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "relativeOccuranceThreshold must be a float"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Scope the lookup to the caller's projects: an id alone must not grant
+    # access to another user's log. ValueError covers a non-numeric ?file_id,
+    # which would otherwise escape as a 500.
+    try:
+        user_file = EventLog.objects.get(id=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError):
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        parameters = {"object_types": object_type_filter} if object_type_filter else None
+        cache_key = (user_file.id, tuple(object_type_filter) if object_type_filter else None)
+
+        with _occn_cache_lock:
+            base_occn = _occn_base_cache.get(cache_key)
+            if base_occn is not None:
+                _occn_base_cache.move_to_end(cache_key)
+
+        if base_occn is None:
+            with _with_ocel_db(user_file) as db:
+                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            with _occn_cache_lock:
+                _occn_base_cache[cache_key] = base_occn
+                _occn_base_cache.move_to_end(cache_key)
+                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                    _occn_base_cache.popitem(last=False)
+
+        occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
+
+        result = serialize_occn(occn)
+        return Response(result, status=status.HTTP_200_OK)
+
+    except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
