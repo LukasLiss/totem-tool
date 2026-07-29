@@ -9,4 +9,7 @@ from .replay_units import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
+    extract_occn_replay_events,
+    replay_events_from_duckdb,
+    replay_events_from_ocel,
 )

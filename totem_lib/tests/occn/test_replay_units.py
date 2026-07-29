@@ -1,12 +1,18 @@
 from dataclasses import FrozenInstanceError
 
+import polars as pl
 import pytest
 
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
+    extract_occn_replay_events,
+    replay_events_from_duckdb,
+    replay_events_from_ocel,
 )
+from totem_lib.ocel.ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEventLog
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 
 
 def make_event(
@@ -20,6 +26,73 @@ def make_event(
         activity=activity,
         timestamp_unix=timestamp,
         objects_by_type=objects_by_type,
+    )
+
+
+def make_ocel(
+    *,
+    events=None,
+    objects=None,
+):
+    if events is None:
+        events = [
+            {
+                "_eventId": "e3",
+                "_activity": "Ship Order",
+                "_timestampUnix": 3,
+                "_objects": ["o1"],
+                "_qualifiers": [None],
+                "_attributes": "",
+            },
+            {
+                "_eventId": "e1",
+                "_activity": "Create Order",
+                "_timestampUnix": 1,
+                "_objects": ["o1"],
+                "_qualifiers": [None],
+                "_attributes": "",
+            },
+            {
+                "_eventId": "e4",
+                "_activity": "Audit",
+                "_timestampUnix": 2,
+                "_objects": [],
+                "_qualifiers": [],
+                "_attributes": "",
+            },
+            {
+                "_eventId": "e2",
+                "_activity": "Add Item",
+                "_timestampUnix": 2,
+                "_objects": ["o1", "i1"],
+                "_qualifiers": [None, None],
+                "_attributes": "",
+            },
+        ]
+    if objects is None:
+        objects = [
+            {
+                "_objId": "o1",
+                "_objType": "Order",
+                "_targetObjects": [],
+                "_qualifiers": [],
+            },
+            {
+                "_objId": "i1",
+                "_objType": "Item",
+                "_targetObjects": [],
+                "_qualifiers": [],
+            },
+            {
+                "_objId": "unused",
+                "_objType": "Order",
+                "_targetObjects": [],
+                "_qualifiers": [],
+            },
+        ]
+    return ObjectCentricEventLog(
+        events=pl.DataFrame(events, schema=EVENTS_SCHEMA),
+        objects=pl.DataFrame(objects, schema=OBJECTS_SCHEMA),
     )
 
 
@@ -107,6 +180,98 @@ def test_replay_event_is_frozen_and_serializes_deterministically():
             "Order": ["o1", "o2"],
         },
     }
+
+
+def test_polars_ocel_adapter_normalizes_all_events_deterministically():
+    events = replay_events_from_ocel(make_ocel())
+
+    assert tuple(event.event_id for event in events) == (
+        "e1",
+        "e2",
+        "e4",
+        "e3",
+    )
+    assert events[1].objects_by_type == (
+        ("Item", ("i1",)),
+        ("Order", ("o1",)),
+    )
+    assert events[2].objects_by_type == ()
+
+
+def test_duckdb_adapter_matches_polars_adapter_and_keeps_objectless_events():
+    source = make_ocel()
+    database = OcelDuckDB(source)
+    try:
+        polars_events = replay_events_from_ocel(source)
+        duckdb_events = replay_events_from_duckdb(database)
+    finally:
+        database.conn.close()
+
+    assert duckdb_events == polars_events
+    assert "e4" in {event.event_id for event in duckdb_events}
+
+
+def test_replay_event_dispatcher_supports_both_ocel_representations():
+    source = make_ocel()
+    database = OcelDuckDB(source)
+    try:
+        assert extract_occn_replay_events(source) == replay_events_from_ocel(
+            source
+        )
+        assert extract_occn_replay_events(
+            database
+        ) == replay_events_from_duckdb(database)
+    finally:
+        database.conn.close()
+
+
+def test_polars_ocel_adapter_rejects_missing_columns():
+    source = make_ocel()
+    source.events = source.events.drop("_objects")
+
+    with pytest.raises(ValueError, match="_objects"):
+        replay_events_from_ocel(source)
+
+
+def test_polars_ocel_adapter_rejects_duplicate_event_ids():
+    events = make_ocel().events.to_dicts()
+    events.append(dict(events[0]))
+
+    with pytest.raises(ValueError, match="duplicate event id"):
+        replay_events_from_ocel(make_ocel(events=events))
+
+
+def test_polars_ocel_adapter_rejects_duplicate_object_ids():
+    objects = make_ocel().objects.to_dicts()
+    objects.append(dict(objects[0]))
+
+    with pytest.raises(ValueError, match="duplicate object id"):
+        replay_events_from_ocel(make_ocel(objects=objects))
+
+
+def test_polars_ocel_adapter_rejects_unknown_objects():
+    events = make_ocel().events.to_dicts()
+    events[0]["_objects"] = ["missing"]
+
+    with pytest.raises(ValueError, match="unknown object"):
+        replay_events_from_ocel(make_ocel(events=events))
+
+
+def test_duckdb_adapter_rejects_relations_to_unknown_objects():
+    database = OcelDuckDB(make_ocel())
+    try:
+        database.conn.execute(
+            "INSERT INTO event_object VALUES ('e4', 'missing', NULL)"
+        )
+        with pytest.raises(ValueError, match="has no object type"):
+            replay_events_from_duckdb(database)
+    finally:
+        database.conn.close()
+
+
+def test_replay_event_dispatcher_rejects_unsupported_sources():
+    with pytest.raises(TypeError, match="ObjectCentricEventLog or OcelDuckDB"):
+        extract_occn_replay_events(object())
 
 
 def test_replay_unit_orders_events_and_exposes_summary_fields():

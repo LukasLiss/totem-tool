@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any, Dict, FrozenSet, Iterable, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Iterable, Tuple, Union
+
+if TYPE_CHECKING:
+    from ..ocel.ocel import ObjectCentricEventLog
+    from ..ocel.ocel_duckdb import OcelDuckDB
 
 
 CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components"
@@ -134,6 +139,207 @@ class OCCNReplayEvent:
                 for object_type, object_ids in self.objects_by_type
             },
         }
+
+
+def _normalize_replay_event_rows(
+    rows: Iterable[Tuple[Any, Any, Any, Any, Any]],
+) -> Tuple[OCCNReplayEvent, ...]:
+    events: Dict[str, Dict[str, Any]] = {}
+
+    for event_id, activity, timestamp_unix, object_id, object_type in rows:
+        _require_non_empty_string(event_id, "event_id")
+        event = events.get(event_id)
+        if event is None:
+            event = {
+                "activity": activity,
+                "timestamp_unix": timestamp_unix,
+                "objects_by_type": defaultdict(list),
+            }
+            events[event_id] = event
+        elif (
+            event["activity"] != activity
+            or event["timestamp_unix"] != timestamp_unix
+        ):
+            raise ValueError(
+                f"event {event_id!r} has inconsistent activity or timestamp"
+            )
+
+        if object_id is None:
+            if object_type is not None:
+                raise ValueError(
+                    f"event {event_id!r} has an object type without an object id"
+                )
+            continue
+        if object_type is None:
+            raise ValueError(
+                f"object {object_id!r} referenced by event {event_id!r} "
+                "has no object type"
+            )
+
+        _require_non_empty_string(object_id, "object_id")
+        _require_non_empty_string(object_type, "object_type")
+        event["objects_by_type"][object_type].append(object_id)
+
+    replay_events = [
+        OCCNReplayEvent(
+            event_id=event_id,
+            activity=event["activity"],
+            timestamp_unix=event["timestamp_unix"],
+            objects_by_type=tuple(event["objects_by_type"].items()),
+        )
+        for event_id, event in events.items()
+    ]
+    return tuple(
+        sorted(
+            replay_events,
+            key=lambda event: (event.timestamp_unix, event.event_id),
+        )
+    )
+
+
+def replay_events_from_ocel(
+    ocel: "ObjectCentricEventLog",
+) -> Tuple[OCCNReplayEvent, ...]:
+    """Normalize a Polars-backed OCEL into canonical replay events."""
+    from ..ocel.ocel import ObjectCentricEventLog
+
+    if not isinstance(ocel, ObjectCentricEventLog):
+        raise TypeError("ocel must be an ObjectCentricEventLog")
+
+    required_event_columns = {
+        "_eventId",
+        "_activity",
+        "_timestampUnix",
+        "_objects",
+    }
+    missing_event_columns = required_event_columns - set(ocel.events.columns)
+    if missing_event_columns:
+        raise ValueError(
+            "OCEL events are missing required columns: "
+            f"{sorted(missing_event_columns)}"
+        )
+
+    required_object_columns = {"_objId", "_objType"}
+    missing_object_columns = required_object_columns - set(ocel.objects.columns)
+    if missing_object_columns:
+        raise ValueError(
+            "OCEL objects are missing required columns: "
+            f"{sorted(missing_object_columns)}"
+        )
+
+    object_types: Dict[str, str] = {}
+    for object_id, object_type in ocel.objects.select(
+        ["_objId", "_objType"]
+    ).iter_rows():
+        _require_non_empty_string(object_id, "object_id")
+        _require_non_empty_string(object_type, "object_type")
+        if object_id in object_types:
+            raise ValueError(f"duplicate object id in OCEL: {object_id!r}")
+        object_types[object_id] = object_type
+
+    rows = []
+    seen_event_ids: set[str] = set()
+    for event in ocel.events.select(
+        ["_eventId", "_activity", "_timestampUnix", "_objects"]
+    ).iter_rows(named=True):
+        event_id = event["_eventId"]
+        _require_non_empty_string(event_id, "event_id")
+        if event_id in seen_event_ids:
+            raise ValueError(f"duplicate event id in OCEL: {event_id!r}")
+        seen_event_ids.add(event_id)
+
+        object_ids = event["_objects"]
+        if object_ids is None:
+            object_ids = []
+        elif isinstance(object_ids, (str, bytes)):
+            raise ValueError(
+                f"objects for event {event_id!r} must be an iterable "
+                "of object ids, not a string"
+            )
+
+        try:
+            object_ids = list(object_ids)
+        except TypeError as exc:
+            raise ValueError(
+                f"objects for event {event_id!r} must be iterable"
+            ) from exc
+
+        if not object_ids:
+            rows.append(
+                (
+                    event_id,
+                    event["_activity"],
+                    event["_timestampUnix"],
+                    None,
+                    None,
+                )
+            )
+            continue
+
+        for object_id in object_ids:
+            _require_non_empty_string(object_id, "object_id")
+            if object_id not in object_types:
+                raise ValueError(
+                    f"event {event_id!r} references unknown object "
+                    f"{object_id!r}"
+                )
+            rows.append(
+                (
+                    event_id,
+                    event["_activity"],
+                    event["_timestampUnix"],
+                    object_id,
+                    object_types[object_id],
+                )
+            )
+
+    return _normalize_replay_event_rows(rows)
+
+
+def replay_events_from_duckdb(
+    ocel: "OcelDuckDB",
+) -> Tuple[OCCNReplayEvent, ...]:
+    """Normalize a DuckDB-backed OCEL while retaining objectless events."""
+    from ..ocel.ocel_duckdb import OcelDuckDB
+
+    if not isinstance(ocel, OcelDuckDB):
+        raise TypeError("ocel must be an OcelDuckDB")
+
+    rows = ocel.conn.execute(
+        """
+        SELECT
+            e.event_id,
+            e.activity,
+            e.timestamp_unix,
+            eo.obj_id,
+            o.obj_type
+        FROM events e
+        LEFT JOIN event_object eo ON eo.event_id = e.event_id
+        LEFT JOIN objects o ON o.obj_id = eo.obj_id
+        ORDER BY
+            e.timestamp_unix,
+            e.event_id,
+            o.obj_type,
+            eo.obj_id
+        """
+    ).fetchall()
+    return _normalize_replay_event_rows(rows)
+
+
+def extract_occn_replay_events(
+    source: Union["ObjectCentricEventLog", "OcelDuckDB"],
+) -> Tuple[OCCNReplayEvent, ...]:
+    """Normalize a supported OCEL representation into replay events."""
+    from ..ocel.ocel import ObjectCentricEventLog
+    from ..ocel.ocel_duckdb import OcelDuckDB
+
+    if isinstance(source, ObjectCentricEventLog):
+        return replay_events_from_ocel(source)
+    if isinstance(source, OcelDuckDB):
+        return replay_events_from_duckdb(source)
+    raise TypeError(
+        "source must be an ObjectCentricEventLog or OcelDuckDB"
+    )
 
 
 @dataclass(frozen=True)
