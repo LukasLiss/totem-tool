@@ -7,6 +7,8 @@ from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
+    OCCausalNetSemantics,
+    OCCausalNetState,
     build_connected_component_replay_units,
     extract_occn_replay_events,
     extract_occn_replay_units,
@@ -15,6 +17,7 @@ from totem_lib import (
 )
 from totem_lib.ocel.ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEventLog
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
+from tests.assets.example_occns import occn_basic
 
 
 def make_event(
@@ -526,3 +529,40 @@ def test_replay_unit_extraction_matches_both_sources_and_ignores_unused_objects(
 def test_replay_unit_extraction_rejects_unknown_strategies():
     with pytest.raises(ValueError, match="unsupported"):
         extract_occn_replay_units(make_ocel(), strategy="variants")
+
+
+def test_replay_event_contract_supplies_exact_objects_to_occn_semantics():
+    event = make_event(
+        activity="a",
+        objects_by_type=(
+            ("order", ("o1",)),
+            ("item", ("i1",)),
+        ),
+    )
+    state = OCCausalNetState()
+    occn = occn_basic()
+
+    for object_type, object_ids in event.objects_by_type:
+        for object_id in object_ids:
+            start_bindings = OCCausalNetSemantics.enabled_bindings_start_activity(
+                occn,
+                f"START_{object_type}",
+                object_type,
+                {object_id},
+            )
+            assert start_bindings
+            state = OCCausalNetSemantics.bind_activity(
+                start_bindings[0],
+                state,
+            )
+
+    visible_bindings = OCCausalNetSemantics.enabled_bindings_for_objects(
+        occn,
+        event.activity,
+        state,
+        event.object_ids,
+    )
+
+    assert visible_bindings
+    assert event.object_ids == frozenset({"o1", "i1"})
+    assert not event.activity.startswith(("START_", "END_"))
