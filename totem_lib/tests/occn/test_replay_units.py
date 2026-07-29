@@ -7,7 +7,9 @@ from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
+    build_connected_component_replay_units,
     extract_occn_replay_events,
+    extract_occn_replay_units,
     replay_events_from_duckdb,
     replay_events_from_ocel,
 )
@@ -380,3 +382,147 @@ def test_replay_unit_serializes_complete_contract():
             }
         ],
     }
+
+
+def test_connected_components_group_events_that_share_objects():
+    events = (
+        make_event(
+            event_id="e4",
+            activity="Audit",
+            timestamp=4,
+            objects_by_type=(),
+        ),
+        make_event(
+            event_id="e3",
+            activity="Create Invoice",
+            timestamp=3,
+            objects_by_type=(("Invoice", ("invoice-1",)),),
+        ),
+        make_event(
+            event_id="e2",
+            activity="Add Item",
+            timestamp=2,
+            objects_by_type=(
+                ("Order", ("order-1",)),
+                ("Item", ("item-1",)),
+            ),
+        ),
+        make_event(
+            event_id="e1",
+            activity="Create Order",
+            timestamp=1,
+            objects_by_type=(("Order", ("order-1",)),),
+        ),
+    )
+
+    units = build_connected_component_replay_units(events)
+
+    assert tuple(unit.unit_id for unit in units) == (
+        "connected_components:000001",
+        "connected_components:000002",
+        "connected_components:000003",
+    )
+    assert tuple(unit.event_ids for unit in units) == (
+        ("e1", "e2"),
+        ("e3",),
+        ("e4",),
+    )
+    assert units[0].object_ids == frozenset({"order-1", "item-1"})
+    assert units[1].object_ids == frozenset({"invoice-1"})
+    assert units[2].object_ids == frozenset()
+
+
+def test_connected_component_units_are_stable_for_shuffled_input():
+    events = (
+        make_event(
+            event_id="e1",
+            timestamp=2,
+            objects_by_type=(("Order", ("order-1",)),),
+        ),
+        make_event(
+            event_id="e2",
+            timestamp=1,
+            objects_by_type=(("Invoice", ("invoice-1",)),),
+        ),
+        make_event(
+            event_id="e3",
+            timestamp=1,
+            objects_by_type=(("Order", ("order-1",)),),
+        ),
+    )
+
+    forward = build_connected_component_replay_units(events)
+    reverse = build_connected_component_replay_units(reversed(events))
+
+    assert reverse == forward
+    assert tuple(unit.event_ids for unit in forward) == (
+        ("e2",),
+        ("e3", "e1"),
+    )
+
+
+def test_event_and_object_ids_use_separate_graph_namespaces():
+    events = (
+        make_event(
+            event_id="e1",
+            timestamp=1,
+            objects_by_type=(("Order", ("e2",)),),
+        ),
+        make_event(
+            event_id="e2",
+            timestamp=2,
+            objects_by_type=(("Order", ("other",)),),
+        ),
+    )
+
+    units = build_connected_component_replay_units(events)
+
+    assert tuple(unit.event_ids for unit in units) == (("e1",), ("e2",))
+
+
+def test_connected_component_extraction_handles_empty_events():
+    assert build_connected_component_replay_units(()) == ()
+
+
+def test_replay_unit_extraction_handles_empty_ocel_sources():
+    source = make_ocel(events=[], objects=[])
+    database = OcelDuckDB(source)
+    try:
+        assert extract_occn_replay_units(source) == ()
+        assert extract_occn_replay_units(database) == ()
+    finally:
+        database.conn.close()
+
+
+def test_connected_component_extraction_rejects_invalid_events():
+    with pytest.raises(ValueError, match="OCCNReplayEvent"):
+        build_connected_component_replay_units(("e1",))
+
+    event = make_event()
+    with pytest.raises(ValueError, match="unique"):
+        build_connected_component_replay_units((event, event))
+
+
+def test_replay_unit_extraction_matches_both_sources_and_ignores_unused_objects():
+    source = make_ocel()
+    database = OcelDuckDB(source)
+    try:
+        polars_units = extract_occn_replay_units(source)
+        duckdb_units = extract_occn_replay_units(database)
+    finally:
+        database.conn.close()
+
+    assert duckdb_units == polars_units
+    assert tuple(unit.event_ids for unit in polars_units) == (
+        ("e1", "e2", "e3"),
+        ("e4",),
+    )
+    assert all(
+        "unused" not in unit.object_ids
+        for unit in polars_units
+    )
+
+
+def test_replay_unit_extraction_rejects_unknown_strategies():
+    with pytest.raises(ValueError, match="unsupported"):
+        extract_occn_replay_units(make_ocel(), strategy="variants")

@@ -24,8 +24,10 @@ from .occn import (
     OCCNPrecisionResult,
     OCCNReplayEvent,
     OCCNReplayUnit,
+    build_connected_component_replay_units,
     discover_occn,
     extract_occn_replay_events,
+    extract_occn_replay_units,
     occn_from_dict,
     occn_playout,
     occn_precision,
@@ -42,6 +44,7 @@ from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
 # All other symbols may be imported directly from their respective submodules.
 __all__ = [
+    "build_connected_component_replay_units",
     "calculate_layout",
     "CCDFG",
     "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
@@ -63,6 +66,7 @@ __all__ = [
     "OCCNReplayEvent",
     "OCCNReplayUnit",
     "extract_occn_replay_events",
+    "extract_occn_replay_units",
     "occn_from_dict",
     "occn_playout",
     "occn_precision",

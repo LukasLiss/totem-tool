@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Iterable, Tuple, Union
 
+import networkx as nx
+
 if TYPE_CHECKING:
     from ..ocel.ocel import ObjectCentricEventLog
     from ..ocel.ocel_duckdb import OcelDuckDB
@@ -430,3 +432,70 @@ class OCCNReplayUnit:
             "object_types": list(self.object_types),
             "events": [event.to_dict() for event in self.events],
         }
+
+
+def build_connected_component_replay_units(
+    events: Iterable[OCCNReplayEvent],
+) -> Tuple[OCCNReplayUnit, ...]:
+    """Group canonical events by connected event-object components."""
+    try:
+        replay_events = tuple(events)
+    except TypeError as exc:
+        raise ValueError("events must be an iterable") from exc
+
+    if not all(isinstance(event, OCCNReplayEvent) for event in replay_events):
+        raise ValueError("events must contain OCCNReplayEvent values")
+
+    events_by_id = {event.event_id: event for event in replay_events}
+    if len(events_by_id) != len(replay_events):
+        raise ValueError("event ids must be unique across replay units")
+    if not replay_events:
+        return ()
+
+    graph = nx.Graph()
+    for event in replay_events:
+        event_node = ("event", event.event_id)
+        graph.add_node(event_node)
+        for object_id in event.object_ids:
+            graph.add_edge(event_node, ("object", object_id))
+
+    component_events = []
+    for component in nx.connected_components(graph):
+        ordered_events = tuple(
+            sorted(
+                (
+                    events_by_id[node_id]
+                    for node_type, node_id in component
+                    if node_type == "event"
+                ),
+                key=lambda event: (event.timestamp_unix, event.event_id),
+            )
+        )
+        if ordered_events:
+            component_events.append(ordered_events)
+
+    component_events.sort(
+        key=lambda group: tuple(
+            (event.timestamp_unix, event.event_id) for event in group
+        )
+    )
+    return tuple(
+        OCCNReplayUnit(
+            unit_id=f"{CONNECTED_COMPONENTS_REPLAY_STRATEGY}:{index:06d}",
+            strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            events=events,
+        )
+        for index, events in enumerate(component_events, start=1)
+    )
+
+
+def extract_occn_replay_units(
+    source: Union["ObjectCentricEventLog", "OcelDuckDB"],
+    strategy: str = CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+) -> Tuple[OCCNReplayUnit, ...]:
+    """Extract deterministic replay units using the selected strategy."""
+    if strategy != CONNECTED_COMPONENTS_REPLAY_STRATEGY:
+        raise ValueError(f"unsupported OCCN replay unit strategy: {strategy!r}")
+
+    events = extract_occn_replay_events(source)
+    return build_connected_component_replay_units(events)
