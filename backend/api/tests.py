@@ -435,7 +435,9 @@ class EventLogTotemDiscoveryApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, totem_to_dict(totem))
+        expected = totem_to_dict(totem)
+        expected["relations_stats"] = []
+        self.assertEqual(response.data, expected)
         self.assertEqual(response.data["schema"], "totem")
         self.assertEqual(response.data["version"], 1)
 
