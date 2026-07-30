@@ -9,6 +9,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 *.md
 !docs/MODEL_ASSETS.md
 !docs/EDGE_CASE_TAXONOMY.md
+!totem_lib/test_data/edge_cases/README.md
 !.claude/**/*.md
 *.txt
 
