@@ -281,6 +281,39 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 # Run with tau=0.0 so the frontend can filter the full relation set.
                 totem = totemDiscovery_db(db, tau=0.0)
             serialized = totem_to_dict(totem)
+            
+            # Augment with relations_stats for frontend tau filtering
+            h_log = getattr(totem, "h_log_cardinalities", {})
+            h_event = getattr(totem, "h_event_cardinalities", {})
+            h_tr = getattr(totem, "h_temporal_relations", {})
+            
+            all_pairs = set(h_log.keys()) | set(h_event.keys()) | set(h_tr.keys())
+            relations_stats = []
+            for t1, t2 in all_pairs:
+                log_card = h_log.get((t1, t2), {})
+                event_card = h_event.get((t1, t2), {})
+                tr_rel = h_tr.get((t1, t2), {})
+
+                lc_total = log_card.get("total", 0)
+                ec_total = event_card.get("total", 0)
+                tr_total = tr_rel.get("total", 0)
+
+                lc_pct = {k: log_card[k] / lc_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in log_card and lc_total > 0}
+                ec_pct = {k: event_card[k] / ec_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in event_card and ec_total > 0}
+                tr_pct = {k: tr_rel[k] / tr_total for k in ["D", "Di", "I", "Ii", "P"] if k in tr_rel and tr_total > 0}
+
+                relations_stats.append({
+                    "from": t1,
+                    "to": t2,
+                    "lc_total": lc_total,
+                    "ec_total": ec_total,
+                    "tr_total": tr_total,
+                    "lc_percentages": lc_pct,
+                    "ec_percentages": ec_pct,
+                    "tr_percentages": tr_pct
+                })
+            
+            serialized["relations_stats"] = relations_stats
 
             cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
