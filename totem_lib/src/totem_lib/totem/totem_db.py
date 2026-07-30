@@ -264,7 +264,7 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
     # Phase 6: Build temporal graph (identical logic to totemDiscovery)
     # ------------------------------------------------------------------
     tempgraph: dict = {
-        "nodes": set(),
+        "nodes": set(obj_typ_to_ev_type.keys()),
         TR_PARALLEL: set(),
         TR_INITIATING: set(),
         TR_DEPENDENT: set(),
