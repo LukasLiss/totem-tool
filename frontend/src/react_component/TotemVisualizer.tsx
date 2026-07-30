@@ -227,7 +227,7 @@ type ProcessAreaMetrics = {
   detailMinDistance: number;
 };
 
-const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
+const DEFAULT_BACKEND = 'http://localhost:8000';
 const DEFAULT_PROCESS_AREA_SCALE = 0.9;
 const MIN_PROCESS_AREA_SCALE = 0.2;
 const MAX_PROCESS_AREA_SCALE = 1.2;
