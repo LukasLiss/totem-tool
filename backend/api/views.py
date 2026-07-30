@@ -18,6 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.playout import (
     PlayoutEvent,
@@ -2537,8 +2538,9 @@ def OCCNViewSet(request):
                 _occn_base_cache.move_to_end(cache_key)
 
         if base_occn is None:
-            with _with_ocel_db(user_file) as db:
-                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            user_file_db = _get_or_load_ocel_db(user_file)
+            user_file_db._lock_pk = int(user_file.pk)
+            base_occn = discover_occn(user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters)
             with _occn_cache_lock:
                 _occn_base_cache[cache_key] = base_occn
                 _occn_base_cache.move_to_end(cache_key)
