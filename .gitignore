@@ -8,6 +8,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
 !docs/MODEL_ASSETS.md
+!docs/EDGE_CASE_TAXONOMY.md
 !.claude/**/*.md
 *.txt
 
