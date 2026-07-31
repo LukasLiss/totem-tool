@@ -10,6 +10,7 @@ import { AnalysisView } from "./components/AnalysisView";
 import { ConformancePlaceholderView } from "./components/ConformancePlaceholderView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { EditorView } from "./editors/EditorView";
+import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
 
 export function ProcessOverview() {
@@ -27,6 +28,8 @@ export function ProcessOverview() {
         return <ConformancePlaceholderView />;
       case 'editor':
         return <EditorView />;
+      case 'playout':
+        return <PlayoutView />;
       case 'dashboard':
         return <Grid />;
       default:
