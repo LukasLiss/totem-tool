@@ -18,6 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.playout import (
     PlayoutEvent,
@@ -2515,17 +2516,11 @@ def NewOCDFGViewSet(request):
 
 # OCCN discovery dominates request time (seconds to ~1 min per log) while
 # thresholding is a cheap marker filter, so cache the threshold-0 base net per
-# (file, object-type filter) and apply the requested threshold per request —
-# the pattern discover_occn's own docstring recommends. In-process cache: it
-# is cleared on backend restart/reload and sized small because nets can be
-# large in memory.
-#
-# The key has no user component on purpose: the cache is only ever reached
-# after the ownership check on the event log below, so a hit already implies
-# the caller may read that log. Keep the lookup above the cache read.
+# (file, object-type filter) and apply the requested threshold per request.
 _OCCN_CACHE_MAX_ENTRIES = 4
 _occn_base_cache = OrderedDict()
 _occn_cache_lock = threading.Lock()
+_occn_inflight = {}
 
 
 @api_view(['GET'])
@@ -2582,13 +2577,40 @@ def OCCNViewSet(request):
                 _occn_base_cache.move_to_end(cache_key)
 
         if base_occn is None:
-            with _with_ocel_db(user_file) as db:
-                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            # Single-flight deduplication: ensure only one thread mines OCCN for a given cache_key
+            event = None
+            is_primary = False
             with _occn_cache_lock:
-                _occn_base_cache[cache_key] = base_occn
-                _occn_base_cache.move_to_end(cache_key)
-                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
-                    _occn_base_cache.popitem(last=False)
+                base_occn = _occn_base_cache.get(cache_key)
+                if base_occn is None:
+                    event = _occn_inflight.get(cache_key)
+                    if event is None:
+                        event = threading.Event()
+                        _occn_inflight[cache_key] = event
+                        is_primary = True
+
+            if not is_primary and base_occn is None and event is not None:
+                event.wait(timeout=120)
+                with _occn_cache_lock:
+                    base_occn = _occn_base_cache.get(cache_key)
+
+            if is_primary:
+                try:
+                    with _with_ocel_db(user_file) as db:
+                        ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
+                    with _occn_cache_lock:
+                        _occn_base_cache[cache_key] = base_occn
+                        _occn_base_cache.move_to_end(cache_key)
+                        while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                            _occn_base_cache.popitem(last=False)
+                finally:
+                    with _occn_cache_lock:
+                        _occn_inflight.pop(cache_key, None)
+                    event.set()
+
+        if base_occn is None:
+            return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
 
