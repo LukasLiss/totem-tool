@@ -50,7 +50,7 @@ Polars `find_variants`). "DuckDB path" = `import_ocel_db` + the `OcelDuckDB` min
 | **out_of_order_timestamps** | Events listed in the file in non-chronological order | All pipelines **OK** — miners sort by timestamp internally, result is order-independent. |
 | **null_attributes** | Missing / explicitly-null event and object attribute values | All pipelines **OK** — null attributes must not break import or mining. |
 | **unicode_names** | Unicode / special characters (en-dash, CJK, emoji) in activity & object-type names | Polars path, TOTeM, OCDFG, OCPN, OCCN **OK**. DuckDB `find_variants` **XFAIL** (`UnicodeEncodeError`: the variants signature path assumes ASCII). |
-| **duplicate_event_ids** | Two events sharing the same id | DuckDB `import_ocel_db(graceful_import=True)` **dedups** (second occurrence dropped → 1 event). The Polars `import_ocel` **does not** dedup — it warns (`UserWarning: Duplicate event IDs detected`) and keeps both rows. TOTeM, OCDFG, Variants **OK** on both paths. `discover_oc_petri_net_polars` **XFAIL** (`KeyError`: pm4py OCPN discovery on two events sharing id `e1` with different activities). `discover_occn`/`occn_precision` **XFAIL** on the un-deduped Polars log. *Note:* this is the one **invalid** log in the corpus (event ids must be unique). It is kept not as a case the miners must survive, but to pin the user-visible divergence above: the same file yields 1 event on the DuckDB path and 2 on the Polars path. Hard rejection of duplicate ids is owned by the OCEL-upload-validation epic (#166), not here. |
+| **duplicate_event_ids** | Two events sharing the same id | DuckDB `import_ocel_db(graceful_import=True)` **dedups** (second occurrence dropped → 1 event). The Polars `import_ocel` **does not** dedup — it warns (`UserWarning: Duplicate event IDs detected`) and keeps both rows. TOTeM, OCDFG, Variants **OK** on both paths. `discover_oc_petri_net_polars` **OK** (pm4py 2.7.22.4 no longer raises on duplicate ids). `discover_occn`/`occn_precision` **XFAIL** on the un-deduped Polars log. *Note:* this is the one **invalid** log in the corpus (event ids must be unique). It is kept not as a case the miners must survive, but to pin the user-visible divergence above: the same file yields 1 event on the DuckDB path and 2 on the Polars path. Hard rejection of duplicate ids is owned by the OCEL-upload-validation epic (#166), not here. |
 
 ## Summary of currently-documented crashes (XFAIL)
 
@@ -59,7 +59,6 @@ Polars `find_variants`). "DuckDB path" = `import_ocel_db` + the `OcelDuckDB` min
 | empty | Polars `import_ocel` (+ all Polars miners) | `polars.exceptions.SchemaError` | Harden zero-event Polars import |
 | cyclic | `discover_occn` / `occn_precision` | `TypeError` | OCCN support for cyclic control flow |
 | duplicate_event_ids | `discover_occn` / `occn_precision` | `Exception` | OCCN vs duplicate ids (Polars no-dedup) |
-| duplicate_event_ids | `discover_oc_petri_net_polars` | `KeyError` | pm4py OCPN vs duplicate ids (Polars no-dedup) |
 | unicode_names | DuckDB `find_variants` | `UnicodeEncodeError` | ASCII assumption in variants signature |
 
 As of the last verified run: **186 passed, 13 xfailed, 0 failed** (`pytest tests/edge_cases/`).

@@ -89,11 +89,10 @@ XFAIL_VARIANTS_POLARS = {"empty": _EMPTY_POLARS}
 
 XFAIL_OCPN_POLARS = {
     "empty": _EMPTY_POLARS,
-    "duplicate_event_ids": (
-        "pm4py OCPN discovery raises KeyError on duplicate event ids (two events "
-        "share id 'e1' with different activities). Follow-up under Epic #200.",
-        KeyError,
-    ),
+    # NOTE: an xfail was previously pinned for duplicate_event_ids ("pm4py OCPN
+    # discovery raises KeyError on duplicate event ids"). Newer pm4py (verified on
+    # 2.7.22.4) tolerates duplicate ids and no longer raises, so the entry turned
+    # into an XPASS-failure and was removed per the strict-xfail discipline.
 }
 
 XFAIL_OCCN = {
