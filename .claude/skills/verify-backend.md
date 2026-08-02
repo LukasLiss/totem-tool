@@ -78,7 +78,7 @@ Expected: `401` with `{"detail":"Authentication credentials were not provided."}
 curl -s -X POST http://localhost:8000/token/ -H "Content-Type: application/json" -d "{\"username\": \"Guest\", \"password\": \"guest\"}"
 ```
 
-The `Guest`/`guest` user is seeded by the data migration `authentification/migrations/0001_seed_guest_user.py` on **every** `manage.py migrate` — it works with or without `LOCAL_MODE=1` (`LOCAL_MODE` only relaxes JWT lifetimes and drives frontend auto-login). If the password ever drifted on an existing DB, re-running `python manage.py migrate` resets it to `guest`.
+The `Guest`/`guest` user is seeded by the data migration `backend/authentification/migrations/0001_seed_guest_user.py` on **every** `manage.py migrate` — it works with or without `LOCAL_MODE=1` (`LOCAL_MODE` only relaxes JWT lifetimes and drives frontend auto-login). If the password ever drifted on an existing DB, re-running `python manage.py migrate` resets it to `guest`.
 
 Copy the `access` token into the next calls:
 

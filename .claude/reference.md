@@ -183,7 +183,7 @@ with _with_ocel_db(user_file) as db:
 ### Success
 - ViewSets: standard DRF list/detail/pagination shapes.
 - `variants` → `{"variants": [{"id", "support", "signature", "signature_hash", "graph": {"nodes", "edges", "objects"}}], "object_types": [...]}`
-- `ocdfg` → `{"dfg": <networkx node_link_data with `edges="links"`>, "all_nodes": [...], optional "filter_error", "trace_variants"}`
+- `ocdfg` → `{"dfg": <networkx node_link_data serialized with edges=\"links\">, "all_nodes": [...], optional "filter_error", "trace_variants"}`
 - `new-ocdfg` → `{"dfg": {...}, "all_nodes": [...], "variant_counts": {...}}`
 - `occn` → serialized OCCN dict from `totem_lib.serialize_occn`
 - `statistics` → `{"num_events", "num_unique_activities", "num_objects", "num_object_types", "earliest_timestamp", "newest_timestamp"}`
@@ -227,7 +227,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 
 ### `LOCAL_MODE` (Electron / local dev)
 - Set env var `LOCAL_MODE=1` to enable. JWT lifetimes extend to 8 h access / 7 days refresh.
-- A `Guest` user (password `guest`) is **always seeded by the data migration** `authentification/migrations/0001_seed_guest_user.py` — it runs on every `manage.py migrate` regardless of `LOCAL_MODE`; `LOCAL_MODE` mainly toggles the JWT lifetimes and the frontend's auto-login (`VITE_LOCAL_MODE=1`).
+- A `Guest` user (password `guest`) is **always seeded by the data migration** `backend/authentification/migrations/0001_seed_guest_user.py` — it runs on every `manage.py migrate` regardless of `LOCAL_MODE`; `LOCAL_MODE` mainly toggles the JWT lifetimes and the frontend's auto-login (`VITE_LOCAL_MODE=1`).
 - For full-stack headless verification combining this with Playwright, see `.claude/skills/verify/SKILL.md`.
 
 ---

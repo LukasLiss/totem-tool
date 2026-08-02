@@ -245,7 +245,7 @@ python manage.py test api
 - [ ] Component registered in `DashboardComponentPolymorphicSerializer` (dashboard components only)
 - [ ] View created; queryset scoped by `project__users=request.user`
 - [ ] `_with_ocel_db` used for ALL `OcelDuckDB` access
-- [ ] Expensive results cached via `django.core.cache` (serialsed data only)
+- [ ] Expensive results cached via `django.core.cache` (serialized data only)
 - [ ] Errors follow `{"error": msg}` convention with correct status codes
 - [ ] Numeric inputs validated/clamped (no 500s from adversarial JSON)
 - [ ] Route added in `urls.py` (+ import)
