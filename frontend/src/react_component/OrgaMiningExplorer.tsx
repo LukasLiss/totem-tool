@@ -1090,9 +1090,22 @@ function ResourceGraph({
           onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); setEdgeTooltip(null); }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
-          {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip */}
-          {showClusters && showClusterOverlay && clusterHulls.map((hull, ci) => {
-            if (!hull) return null;
+          {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip.
+              Sorted largest-first so smaller (inner) hulls paint on top and receive clicks first. */}
+          {showClusters && showClusterOverlay && clusterHulls
+            .map((hull, ci) => ({ hull, ci }))
+            .filter(({ hull }) => hull !== null)
+            .sort((a, b) => {
+              const area = (h: NonNullable<typeof a.hull>) =>
+                h.type === "circle"
+                  ? Math.PI * h.r * h.r
+                  : Math.abs(h.pts.reduce((s, p, i, arr) => {
+                      const q = arr[(i + 1) % arr.length];
+                      return s + (p.x * q.y - q.x * p.y);
+                    }, 0)) / 2;
+              return area(b.hull!) - area(a.hull!);
+            })
+            .map(({ hull, ci }) => {
             const color = clusterColors[ci % clusterColors.length];
 
             const onHullClick = (e: React.MouseEvent) => {
