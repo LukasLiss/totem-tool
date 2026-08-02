@@ -2707,7 +2707,7 @@ function HandoverGraph({
               );
             })}
             <clipPath id="node-label-clip">
-              <circle r={NODE_R - 2} />
+              <circle r={NODE_R - 1} />
             </clipPath>
           </defs>
 
@@ -2782,7 +2782,7 @@ function HandoverGraph({
             const nodeOpacity = highlightedNodeIds
               ? (highlightedNodeIds.has(node.id) ? 1 : 0.15)
               : 1;
-            const label = node.id.length > 8 ? node.id.slice(0, 7) + "…" : node.id;
+            const label = node.id.length > 9 ? node.id.slice(0, 8) + "…" : node.id;
             return (
               <g
                 key={node.id}
