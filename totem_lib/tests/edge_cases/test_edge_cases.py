@@ -89,10 +89,19 @@ XFAIL_VARIANTS_POLARS = {"empty": _EMPTY_POLARS}
 
 XFAIL_OCPN_POLARS = {
     "empty": _EMPTY_POLARS,
-    # NOTE: an xfail was previously pinned for duplicate_event_ids ("pm4py OCPN
-    # discovery raises KeyError on duplicate event ids"). Newer pm4py (verified on
-    # 2.7.22.4) tolerates duplicate ids and no longer raises, so the entry turned
-    # into an XPASS-failure and was removed per the strict-xfail discipline.
+    # NOTE: pm4py's behavior on duplicate event ids is version-dependent.
+    # pm4py 2.7.17.x (installed by CI) raises KeyError; pm4py 2.7.22.4 (e.g.
+    # some dev venvs) is more lenient and returns normally. Because the crash
+    # is real on CI, the xfail is pinned with `raises=KeyError`. Devs on newer
+    # pm4py may see an XPASS-failure locally — treat that as noise until we
+    # pin pm4py in pyproject (pyproject currently allows `pm4py>=2.7.17.1`).
+    "duplicate_event_ids": (
+        "pm4py OCPN discovery is version-dependent on duplicate event ids "
+        "(two events share id 'e1' with different activities): KeyError on "
+        "pm4py<=2.7.17.x (CI), silently OK on newer (e.g. 2.7.22.4). Follow-up "
+        "under Epic #200.",
+        KeyError,
+    ),
 }
 
 XFAIL_OCCN = {
