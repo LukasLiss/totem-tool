@@ -78,7 +78,11 @@ Expected: `401` with `{"detail":"Authentication credentials were not provided."}
 curl -s -X POST http://localhost:8000/token/ -H "Content-Type: application/json" -d "{\"username\": \"Guest\", \"password\": \"guest\"}"
 ```
 
-The `Guest`/`guest` user is seeded by the data migration `backend/authentification/migrations/0001_seed_guest_user.py` on **every** `manage.py migrate` — it works with or without `LOCAL_MODE=1` (`LOCAL_MODE` only relaxes JWT lifetimes and drives frontend auto-login). If the password ever drifted on an existing DB, re-running `python manage.py migrate` resets it to `guest`.
+The `Guest`/`guest` user is seeded by the initial data migration `backend/authentification/migrations/0001_seed_guest_user.py` when applied to a database. Note that Django runs data migrations only once per database — re-running `python manage.py migrate` on an existing database will not rerun the migration or reset a modified password. If the password ever drifted on an existing DB, reset it via the Django shell:
+
+```bash
+python manage.py shell -c "from django.contrib.auth.models import User; u = User.objects.get(username='Guest'); u.set_password('guest'); u.save()"
+```
 
 Copy the `access` token into the next calls:
 

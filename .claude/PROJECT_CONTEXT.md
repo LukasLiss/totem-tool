@@ -38,8 +38,8 @@ Totem-Tool is a web-based process mining application for analyzing Object-Centri
 │         TOTEM_LIB (Python - Core Analysis)                  │
 │  Location: ./totem_lib/                                     │
 │  - ALL computation and analysis logic                       │
-│  - OCEL data structures (Polars DataFrames)                 │
-│  - Process mining algorithms (variants, TOTEM, OCDFG)       │
+│  - DuckDB SQLite connection and query backend               │
+│  - Process mining algorithms (variants, TOTEM, OCDFG, OCCN) │
 │  - NO web/HTTP concerns                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -86,61 +86,70 @@ Totem-Tool is a web-based process mining application for analyzing Object-Centri
 User (Django built-in)
 Project - users (ManyToMany), name, created_at
 EventLog - project (FK), file (FileField), uploaded_at
+ProjectAsset - project (FK), name, asset_type (TOTEM/OCCN), content_json, metadata, created_by
 Dashboard - project (FK), name, order_in_project, created_at
-DashboardComponent (base) - dashboard (FK), x, y, w, h, component_name
-  ├─ TextBoxComponent - text, font_size
+DashboardComponent (base) - dashboard (FK), x, y, w, h, component_name, order
   ├─ NumberofEventsComponent - color
-  └─ ImageComponent - image (ImageField)
+  ├─ TextBoxComponent - text, font_size
+  ├─ ImageComponent - image (ImageField)
+  ├─ VariantsComponent - automatic_loading, leading_object_type, extraction, iso, timeout_s
+  ├─ ProcessAreaComponent
+  ├─ LogStatisticsComponent - show_num_events, show_num_activities, show_num_objects, etc.
+  ├─ OCDFGComponent - show_controls, initial_interaction_locked
+  ├─ OCDottedChartComponent - file_id, x_axis, y_axis, color_by, max_points, etc.
+  ├─ NewOCDFGComponent - show_controls, initial_interaction_locked, layout_direction
+  └─ OCCNComponent - relative_occurrence_threshold, layout_direction, object_types
 ```
 
 ### Key API Endpoints
 
-**File Management**:
-- `GET /api/files/` - List user's files
-- `POST /api/files/` - Upload new OCEL file
-- `GET /api/files/{id}/NoE/` - Get number of events
-- `GET /api/files/{id}/object_types/` - Get object types in OCEL
+**File & Asset Management**:
+- `GET /api/files/` - List user's event log files
+- `POST /api/files/` - Upload new OCEL file (.sqlite, .json, .xml)
+- `GET /api/assets/` - List project assets (TOTeM / OCCN JSON)
+- `POST /api/assets/` - Upload or create project asset
 
-**Analysis**:
-- `GET /api/variants/?file_id={id}&leading_type={type}` - Discover variants
-- `GET /api/ocdfg/` - Object-Centric DFG (currently mock data)
+**Analysis & Visualization**:
+- `GET /api/variants/?file_id={id}&leading_type={type}` - Discover process variants
+- `GET /api/ocdfg/?file_id={id}` - Object-Centric DFG discovery
+- `GET /api/new-ocdfg/?file_id={id}` - Enhanced OCDFG with variant frequencies
+- `GET /api/occn/?file_id={id}` - Object-Centric Causal Network discovery
+- `GET /api/oc-dotted-chart/?file_id={id}` - OC-Dotted Chart sampling data
+- `GET /api/statistics/?file_id={id}` - Event log summary statistics
+- `POST /api/playout/` - Playout execution engine for OCPN/OCCN/TOTeM models
+- `POST /api/playout/export-ocel/` - Export playout runs as OCEL 2.0 JSON
 
 **Dashboard Management**:
 - `GET /api/dashboard/` - List dashboards
 - `POST /api/dashboard/` - Create dashboard
 - `PATCH /api/dashboard/{id}/rename/` - Rename dashboard
 - `DELETE /api/dashboard/{id}/` - Delete dashboard
-- `GET /api/dashboard/{id}/get_layout/` - Get dashboard components
+- `GET /api/dashboard/{id}/get_layout/` - Get dashboard components (polymorphic)
 - `POST /api/dashboard/{id}/save_layout/` - Save component layout
 
-**Authentication**:
+**Authentication & Health**:
 - `POST /token/` - Obtain JWT access/refresh tokens
 - `POST /token/refresh/` - Refresh access token
 - `POST /logout/` - Blacklist refresh token
+- `GET /api/health-check/` - Unauthenticated health check endpoint
 
 ### Important Backend Functions
 
-**`_build_ocel_from_path(path: str)` in views.py**:
-- Detects file format (.sqlite, .json, .xml)
-- Calls totem_lib loaders
-- Returns `ObjectCentricEventLog` instance
-- **Cached with 3600s timeout**
+**`_with_ocel_db(file_id, request_user)` context manager in views.py**:
+- Verifies user ownership/permission for `file_id`.
+- Ensures thread-safe worker connection to DuckDB OCEL storage (`_ocel_dbs` connection pool guarded by `_ocel_db_lock`).
+- Grants exclusive DuckDB access during query execution to prevent race conditions.
 
 **`variants(request)` view**:
-- Loads OCEL from cache or disk
-- Calls `totem_lib.find_variants(ocel, leading_type)`
-- For each variant, calls `totem_lib.calculate_layout(variant, ocel)`
-- Returns variant graphs with nodes, edges, objects for frontend rendering
+- Uses `_with_ocel_db` to acquire DuckDB connection.
+- Calls `totem_lib` discovery routines.
+- For each variant, calls `totem_lib.calculate_layout(variant, db)`.
+- Returns variant graphs with nodes, edges, and objects for frontend rendering.
 
 ### Caching Strategy
-```python
-cache_key = f"ocel_object_{file_id}"
-ocel = cache.get(cache_key)
-if not ocel:
-    ocel = _build_ocel_from_path(file_path)
-    cache.set(cache_key, ocel, timeout=3600)
-```
-OCEL parsing is expensive, so we cache for 1 hour.
+
+- **DuckDB Worker Connections**: `_ocel_dbs` holds worker-bound DuckDB connections initialized from SQLite OCEL files. Double-checked locking via `_ocel_db_lock` ensures single connection setup per worker.
+- **OCCN Base Net Cache**: `_occn_base_cache` (LRU OrderedDict, max 4 entries) caches raw threshold-0 base nets keyed by `(file_id, object_types_tuple)` to avoid costly discovery on slider changes. `apply_relative_occurrence_threshold()` filters network on demand.
 
 ---
 

@@ -192,7 +192,13 @@ with _with_ocel_db(user_file) as db:
 - `variants`/`ocdfg`/`occn` discovery endpoints → long-running; see §5 caching notes
 - `download` → raw `content_json` + `Content-Disposition: attachment; filename="{slug}.json"`
 
-### Errors — every error response has an `"error"` key
+### Errors — Custom View & Computation Error Responses
+
+Custom function-based views in `api/views.py` format error responses with an `"error"` string key (e.g., `{"error": "File not found or access denied"}`). Note that standard DRF error responses differ:
+- Authentication and permission failures return `{"detail": "..."}`.
+- Serializer validation errors return field-keyed error dicts (e.g., `{"name": ["This field is required."]}` or `{"non_field_errors": [...]}`).
+- ViewSet parameter validation errors (such as invalid `asset_type` filter choices) return field-keyed errors (e.g., `{"asset_type": [...]}`).
+
 | Status | When |
 |---|---|
 | 400 | Missing/invalid query params (`Missing ?file_id`), validation failure, bad enums, malformed body, ambiguous input |
@@ -227,7 +233,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 
 ### `LOCAL_MODE` (Electron / local dev)
 - Set env var `LOCAL_MODE=1` to enable. JWT lifetimes extend to 8 h access / 7 days refresh.
-- A `Guest` user (password `guest`) is **always seeded by the data migration** `backend/authentification/migrations/0001_seed_guest_user.py` — it runs on every `manage.py migrate` regardless of `LOCAL_MODE`; `LOCAL_MODE` mainly toggles the JWT lifetimes and the frontend's auto-login (`VITE_LOCAL_MODE=1`).
+- A `Guest` user (password `guest`) is seeded by the initial data migration `backend/authentification/migrations/0001_seed_guest_user.py` when applied to a database. Note that Django runs data migrations only once per database — re-running `manage.py migrate` on an existing database will not rerun the migration or reset a modified password. To reset a drifted password, run `python manage.py shell -c "from django.contrib.auth.models import User; u = User.objects.get(username='Guest'); u.set_password('guest'); u.save()"`. `LOCAL_MODE` mainly toggles the JWT lifetimes and the frontend's auto-login (`VITE_LOCAL_MODE=1`).
 - For full-stack headless verification combining this with Playwright, see `.claude/skills/verify/SKILL.md`.
 
 ---
