@@ -1010,6 +1010,21 @@ def ochandover(request):
 
     if include_bindings:
         response_data["bindings"] = graph.graph.get("bindings", [])
+        from collections import defaultdict
+        raw_bindings = graph.graph.get("bindings", [])
+        for direction in ["output", "input"]:
+            print(f"\n=== {direction.upper()} BINDINGS ===")
+            by_resource = defaultdict(list)
+            for b in raw_bindings:
+                if b["type"] == direction:
+                    by_resource[b["resource"]].append(b)
+            for resource in sorted(by_resource):
+                print(f"  {resource}:")
+                for b in by_resource[resource]:
+                    bo_type = b["arcs"][0]["bo_type"]
+                    arcs = {(a["other_resource"], a["mark"], "filled" if not a["is_gapped"] else "hollow") for a in b["arcs"]}
+                    line = b["line_type"] or "solo"
+                    print(f"    [{bo_type}]  {arcs}  [{line}]  ×{b['count']}")
 
     return Response(response_data, status=status.HTTP_200_OK)
 
