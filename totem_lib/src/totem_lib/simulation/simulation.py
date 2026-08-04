@@ -28,7 +28,9 @@ from totem_lib.simulation.utils.resource_statistics import (
     resource_cooldown_distribution,
     sample_cooldown,
 )
+from totem_lib.simulation.utils.state_space import StateSpaceModel
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
+from totem_lib.variants.state_space_executions import find_object_structure_variants
 
 ### Default Configuration
 RESOURCE_CONSTRAINT_VIOLATION_DEGREE = 0.0  # Degree to which resource constraints can be violated. Value between 0 and 1 where 0 means strictly following all constraints and 1 allows to ignore all constraints.
@@ -180,6 +182,25 @@ def _estimate_expected_constraint_slots(
                 mean = _distribution_mean(stats.get("count_distribution", {}))
                 total += expected_visits * max(0.0, mean)
     return total
+
+
+def _estimate_structure_activity_occurrences(structure_variant, model, rng, n_samples):
+    """Monte-Carlo estimate of expected activity occurrences for one structure. - Needed for the advanced playout, 
+    as the events of the variant, are not already given be the input variant
+
+    Generates ``n_samples`` executions over a fresh clone of the structure's
+    skeleton and averages the activity counts. Feeds the per-structure violation
+    budget (the state-space analogue of the variant playout's expected-slot count,
+    where the DAG makes the occurrences exact).
+    """
+    totals = Counter()
+    for i in range(n_samples):
+        graph, _ = model.new_generator(
+            structure_variant.instantiate(-(i + 1)), rng
+        ).run()
+        for _, data in graph.nodes(data=True):
+            totals[data["label"]] += 1
+    return {activity: n / n_samples for activity, n in totals.items()}
 
 
 def _make_violation_budget(total_slots, simulation_config):
@@ -806,52 +827,341 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_advanced_simulation(cls, ocel, process_area):
-        # TODO: Implement advanced simulation model (state-space, connected components + arrival distribution)
+    def for_advanced_simulation(
+        cls, ocel, process_area, resource_types=None, runtime_context_provider=None
+    ):
+        # Discover ToTem Model and MLPA
+        totem_model = totemDiscovery(ocel)
+        mlpa = mlpaDiscovery(totem_model)
+
+        # Discover resource availability calendars
+        type_calendars = {}
+        if resource_types:
+            type_calendars = {
+                rtype: cal.probability
+                for rtype, cal in discover_resource_calendars(
+                    ocel, resource_types, ocel.obj_type_map
+                ).items()
+            }
 
         # Calculate Resource Cooldown Distribution
+        cooldown_types = resource_types if resource_types else process_area.object_types
         resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, process_area.object_types, process_area.activities
+            ocel, cooldown_types, process_area.activities, calendars=type_calendars
         )
 
         # Filter event log on Process Area
-        mlpa = mlpaDiscovery(cls.totem_model)
-        filtered_ocel = ocel.filter_by_process_area(
-            mlpa, get_level_of_process_area(mlpa, process_area), process_area
+        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+
+        # Object-structure variants: the arrival units (object connected components
+        # clustered by structure). This mirrors for_simple_simulation — everything
+        # the simple mode keys on a Variant, the advanced mode keys on one of these.
+        structure_variants = find_object_structure_variants(filtered_ocel)
+
+        # Arrival distribution per structure variant.
+        arrival_distribution = compute_variant_arrival_distribution(
+            filtered_ocel, structure_variants
         )
 
-        # Calculate State-Space
+        # Generative transition model: activities + participants over a structure.
+        state_space_model = StateSpaceModel.build(filtered_ocel)
 
-        # Calculate Connected Components
+        # Playout strategy
+        playout_strategy = StateSpacePlayoutStrategy(
+            state_space_model,
+            structure_variants,
+            arrival_distribution,
+            runtime_context_provider,
+        )
 
-        # Calculate Connected Component Arrival Distribution
-
-        # Initilize Playout Strategy
-        playout_strategy = StateSpacePlayoutStrategy()
-
-        # Calculate Resource Constraints
+        # Per-structure resource constraints, plus a pooled global fallback.
         resource_constraints, fallback_constraints = generate_resource_constraints(
             filtered_ocel,
-            process_area,
+            structure_variants,
             ocel.obj_type_map,
             support_threshold_percentage=0.8,
         )
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map
+            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, type_calendars
         )
+
+        # Per-structure needed resources per activity.
+        needed_resources_per_activity = resource_distribution_of_variants(
+            filtered_ocel, structure_variants, ocel.obj_type_map
+        )
+
+        # First event of the filtered log — the default simulation start.
+        source_log_start_unix = (
+            filtered_ocel.events.select("_timestampUnix").to_series().min()
+        )
+
+        # Inter-activity delays (for the duration model)
+        activity_delays = activity_delay_distribution(filtered_ocel)
 
         return cls(
             playout_strategy,
             resource_constraints,
             resource_allocation_strategy,
             resource_cooldown_dist,
-            None,
-            None,
+            totem_model,
+            needed_resources_per_activity,
             OCProcessAreaSimulationConfiguration(),
+            source_log_start_unix,
+            activity_delays=activity_delays,
+            type_calendars=type_calendars,
             fallback_constraints=fallback_constraints,
         )
+
+
+# --- Shared playout helpers --------------------------------------------------
+# Both playout strategies drive the same tick-based resource/cooldown/calendar/
+# duration loop; only the *source of the next event* differs (replay a discovered
+# variant DAG vs. generate the next event from the state space). These module-level
+# helpers hold the machinery both loops share, so each ``run`` stays focused on its
+# own spawning + firing logic instead of one class inheriting the other's loop.
+
+
+def generate_arrival_schedule(
+    payloads, arrival_distributions, start_datetime, sim_duration_s: int
+) -> list:
+    """Pre-compute a Poisson arrival schedule for the simulation period.
+
+    Iterates hour by hour over the simulation period. For each hour slot, draws
+    ``n ~ Poisson(sum of avg_arrivals_per_hour across all payloads)`` arrivals,
+    assigns each a payload proportional to its ``avg_arrivals_per_hour[weekday]
+    [hour]`` and a uniformly random offset within the hour.
+
+    Args:
+        payloads: The arrival units to schedule — the discovered variants for the
+            variant playout, or ``[None]`` for the state-space playout (a single
+            aggregate arrival stream).
+        arrival_distributions: ``{payload: {"avg_arrivals_per_hour": {weekday:
+            {hour: rate}}}}``.
+        start_datetime: datetime of simulation start.
+        sim_duration_s: total simulation duration in seconds.
+
+    Returns:
+        list of ``(arrival_time_s, payload)`` tuples, sorted ascending by time.
+    """
+    payload_list = list(payloads)
+    schedule = []
+    hour_s = 3600
+
+    current_s = 0
+    while current_s < sim_duration_s:
+        slot_dt = dt.datetime.fromtimestamp(
+            start_datetime.timestamp() + current_s, tz=dt.timezone.utc
+        )
+        weekday = WEEKDAY_NAMES[slot_dt.weekday()]
+        hour = slot_dt.hour
+
+        avg_per_payload = [
+            arrival_distributions.get(p, {})
+            .get("avg_arrivals_per_hour", {})
+            .get(weekday, {})
+            .get(hour, 0.0)
+            for p in payload_list
+        ]
+        total_avg = sum(avg_per_payload)
+
+        if total_avg > 0:
+            n_arrivals = np.random.poisson(total_avg)
+            for _ in range(n_arrivals):
+                chosen = random.choices(payload_list, weights=avg_per_payload, k=1)[0]
+                offset_s = random.randint(0, hour_s - 1)
+                arrival_s = current_s + offset_s
+                if arrival_s < sim_duration_s:
+                    schedule.append((arrival_s, chosen))
+
+        current_s += hour_s
+
+    schedule.sort(key=lambda x: x[0])
+    return schedule
+
+
+def _expand_resource_pool(resource_pool):
+    """Expand ``{res_type: count}`` into concrete resource ids and free queues.
+
+    Returns ``(resource_pool_expanded, resource_id_type_map, resource_queues)``:
+    ids are ``f"{res_type}_{i+1}"`` and every resource starts free (available).
+    """
+    resource_pool_expanded = {}
+    resource_id_type_map = {}
+    for res_type, count in resource_pool.items():
+        res_ids = [f"{res_type}_{i + 1}" for i in range(count)]
+        resource_pool_expanded[res_type] = res_ids
+        for rid in res_ids:
+            resource_id_type_map[rid] = res_type
+    resource_queues = {
+        res_type: list(rids) for res_type, rids in resource_pool_expanded.items()
+    }
+    return resource_pool_expanded, resource_id_type_map, resource_queues
+
+
+def _release_elapsed_cooldowns(
+    blocked_resources, tick, resource_queues, resource_id_type_map
+):
+    """Free every resource whose cooldown has elapsed by ``tick``.
+
+    Appends freed resources back onto their queue (mutating ``resource_queues``)
+    and returns the still-blocked set.
+    """
+    freed = set()
+    for res_id, cooldown_end in blocked_resources:
+        if cooldown_end <= tick:
+            freed.add((res_id, cooldown_end))
+            resource_queues[resource_id_type_map[res_id]].append(res_id)
+    return blocked_resources - freed
+
+
+def _partition_due_instances(active_executions, tick):
+    """Split active instances into ``(due_now, waiting)`` at ``tick``.
+
+    The due list is shuffled to avoid FIFO bias in resource granting; the caller
+    re-queues processed instances onto ``waiting``.
+    """
+    due = []
+    waiting = []
+    for inst in active_executions:
+        (due if inst["next_wake"] <= tick else waiting).append(inst)
+    random.shuffle(due)
+    return due, waiting
+
+
+def _sample_needed_resources(activity_res_dist, resource_pool_expanded):
+    """Draw the resource demand of one activity occurrence.
+
+    Returns ``{res_type: count}`` for the pool-present types this occurrence needs
+    (count > 0).
+    """
+    needed = {}
+    for res_type, stats in activity_res_dist.items():
+        if res_type not in resource_pool_expanded:
+            continue
+        n = _sample_resource_count(stats)
+        if n > 0:
+            needed[res_type] = n
+    return needed
+
+
+def _calendar_filtered_queues(
+    calendar_gate, resource_queues, needed_res_types, hour_index, hour_ts
+):
+    """Restrict the free queues to resources present this hour (calendar gating).
+
+    Returns the full queues unchanged when no calendars are active.
+    """
+    if not calendar_gate.active:
+        return resource_queues
+    return {
+        t: [
+            rid
+            for rid in resource_queues.get(t, ())
+            if calendar_gate.is_available(rid, t, hour_index, hour_ts)
+        ]
+        for t in needed_res_types
+    }
+
+
+def _commit_resource_allocation(
+    allocated,
+    activity,
+    resource_queues,
+    resource_id_type_map,
+    cooldown_dist,
+    calendar_gate,
+    hour_ts,
+    base_ts,
+    blocked_resources,
+):
+    """Remove allocated resources from the free queues and put them on cooldown.
+
+    Mutates ``resource_queues`` and ``blocked_resources`` in place; returns the
+    flat list of allocated resource ids.
+    """
+    all_allocated_rids = []
+    for res_type, res_ids in allocated.items():
+        for rid in res_ids:
+            resource_queues[res_type].remove(rid)
+            all_allocated_rids.append(rid)
+            cd = sample_cooldown(cooldown_dist.get(activity, {}).get(res_type, {}))
+            cooldown_end = (
+                calendar_gate.cooldown_end(rid, res_type, hour_ts, cd) - base_ts
+            )
+            blocked_resources.add((rid, cooldown_end))
+    return all_allocated_rids
+
+
+def _record_instance_firing(inst, activity, allocated_rids, resource_id_type_map):
+    """Record a fired event on the instance for constraint tracking.
+
+    Updates ``simulated_events`` and the incremental ``resources_by_activity``
+    cache the constraint allocator reads.
+    """
+    inst["simulated_events"].append(
+        {"_activity": activity, "process_area_resources": allocated_rids}
+    )
+    act_resources = inst["resources_by_activity"].setdefault(activity, {})
+    for rid in allocated_rids:
+        rtype = resource_id_type_map.get(rid)
+        if rtype:
+            act_resources.setdefault(rtype, []).append(rid)
+
+
+def _jittered_event_time(base_ts, tick, tick_size_s, sim_duration_s):
+    """Absolute event timestamp with sub-tick jitter, so events are not tied to
+    tick boundaries (jitter stays inside the remaining horizon)."""
+    jitter_window = min(tick_size_s, sim_duration_s - tick)
+    jitter = random.randint(0, jitter_window - 1) if jitter_window > 0 else 0
+    return base_ts + tick + jitter
+
+
+def _schedule_next_tick(
+    tick, sim_duration_s, tick_size_s, active_executions, schedule, schedule_idx
+):
+    """Next grid tick to jump to, or ``None`` to end the run.
+
+    Fast-forwards to the earliest tick where something can happen — the next
+    instance wake or the next arrival — snapped up to the tick grid. Returns
+    ``None`` at the horizon or when nothing is left to do.
+    """
+    if tick >= sim_duration_s:
+        return None
+    candidates = []
+    if active_executions:
+        candidates.append(min(inst["next_wake"] for inst in active_executions))
+    if schedule_idx < len(schedule):
+        candidates.append(schedule[schedule_idx][0])
+    if not candidates:
+        return None
+    target = min(candidates)
+    next_tick = ((target + tick_size_s - 1) // tick_size_s) * tick_size_s
+    if next_tick <= tick:
+        next_tick = tick + tick_size_s
+    return min(next_tick, sim_duration_s)
+
+
+def _build_output_log(event_output, object_output):
+    """Assemble the simulated ``ObjectCentricEventLog`` from collected events and
+    objects (events sorted by timestamp to undo the sub-tick jitter)."""
+    if event_output:
+        events_df = pl.DataFrame(event_output, schema=EVENTS_SCHEMA).sort(
+            "_timestampUnix"
+        )
+    else:
+        events_df = pl.DataFrame(schema=EVENTS_SCHEMA)
+    obj_data = [
+        {"_objId": oid, "_objType": otype, "_targetObjects": [], "_qualifiers": []}
+        for oid, otype in object_output.items()
+    ]
+    objects_df = (
+        pl.DataFrame(obj_data, schema=OBJECTS_SCHEMA)
+        if obj_data
+        else pl.DataFrame(schema=OBJECTS_SCHEMA)
+    )
+    return ObjectCentricEventLog(events_df, objects_df)
 
 
 class VariantPlayoutStrategy:
@@ -868,60 +1178,71 @@ class VariantPlayoutStrategy:
         self.variant_arrival_distribution = variant_arrival_distribution
         return
 
-    def generate_arrival_schedule(self, start_datetime, sim_duration_s: int) -> list:
+    def _spawn_instance(
+        self,
+        variant,
+        instance_id,
+        tick,
+        object_output,
+        resource_constraints,
+        fallback_constraints,
+        resource_distribution,
+        resource_pool_expanded,
+        simulation_config,
+    ):
+        """Build one active-instance record from a variant arrival.
+
+        Clones the variant's representative graph, mints fresh object ids, sizes
+        the per-instance violation budget, and precomputes the static graph
+        structure the playout loop walks. Subclasses override this to spawn
+        instances differently (e.g. by generating them from a state space).
         """
-        Pre-computes an arrival schedule for the simulation.
+        inst_graph = variant.graph.copy()
+        obj_map = {}
+        obj_id_to_type = {}
+        for _, _, data in inst_graph.edges(data=True):
+            types = data.get("type", "").split("|")
+            for orig_oid in data.get("objects", []):
+                if orig_oid not in obj_id_to_type and types[0]:
+                    obj_id_to_type[orig_oid] = types[0]
+        for orig_oid, otype in obj_id_to_type.items():
+            new_oid = f"{otype}_inst{instance_id}_{len(obj_map)}"
+            obj_map[orig_oid] = new_oid
+            object_output[new_oid] = otype
 
-        Iterates hour by hour over the simulation period. For each hour slot,
-        draws n ~ Poisson(sum of avg_arrivals_per_hour across all variants) to
-        determine how many instances arrive. Each instance is then assigned a
-        variant proportionally to avg_arrivals_per_hour[weekday][hour] and a
-        uniformly random offset within that hour.
+        total_slots = _estimate_constraint_slots(
+            resource_constraints.get(variant, fallback_constraints),
+            resource_distribution.get(variant, {}),
+            resource_pool_expanded,
+        )
+        violation_budget = _make_violation_budget(total_slots, simulation_config)
 
-        Args:
-            start_datetime: datetime of simulation start
-            sim_duration_s: total simulation duration in seconds
-
-        Returns:
-            list of (arrival_time_s, variant) tuples, sorted ascending by arrival_time_s
-        """
-        variant_list = list(self.variants)
-        schedule = []
-        hour_s = 3600
-
-        current_s = 0
-        while current_s < sim_duration_s:
-            slot_dt = dt.datetime.fromtimestamp(
-                start_datetime.timestamp() + current_s, tz=dt.timezone.utc
-            )
-            weekday = WEEKDAY_NAMES[slot_dt.weekday()]
-            hour = slot_dt.hour
-
-            # avg arrivals per variant for this slot
-            avg_per_variant = [
-                self.variant_arrival_distribution.get(v, {})
-                .get("avg_arrivals_per_hour", {})
-                .get(weekday, {})
-                .get(hour, 0.0)
-                for v in variant_list
-            ]
-            total_avg = sum(avg_per_variant)
-
-            if total_avg > 0:
-                n_arrivals = np.random.poisson(total_avg)
-                for _ in range(n_arrivals):
-                    chosen_variant = random.choices(
-                        variant_list, weights=avg_per_variant, k=1
-                    )[0]
-                    offset_s = random.randint(0, hour_s - 1)
-                    arrival_s = current_s + offset_s
-                    if arrival_s < sim_duration_s:
-                        schedule.append((arrival_s, chosen_variant))
-
-            current_s += hour_s
-
-        schedule.sort(key=lambda x: x[0])
-        return schedule
+        nodes = list(inst_graph.nodes())
+        preds_map = {n: tuple(inst_graph.predecessors(n)) for n in nodes}
+        node_objects = {n: _get_node_objects(inst_graph, n) for n in nodes}
+        node_labels = {n: inst_graph.nodes[n]["label"] for n in nodes}
+        pending_preds = {n: len(preds_map[n]) for n in nodes}
+        return {
+            "id": instance_id,
+            "succ_map": {n: tuple(inst_graph.successors(n)) for n in nodes},
+            "preds_map": preds_map,
+            "node_objects": node_objects,
+            "node_labels": node_labels,
+            "pending_preds": pending_preds,
+            "enabled_set": {n for n in nodes if pending_preds[n] == 0},
+            "total_nodes": len(nodes),
+            "finished_nodes": set(),
+            "simulated_events": [],
+            "variant": variant,
+            "obj_map": obj_map,
+            "violation_budget": violation_budget,
+            "spawn_tick": tick,
+            "finish_tick": {},
+            "ready_at": {},
+            "needed_res": {},
+            "resources_by_activity": {},
+            "next_wake": tick,
+        }
 
     def run(
         self,
@@ -976,25 +1297,19 @@ class VariantPlayoutStrategy:
             simulation_config.model_activity_durations and activity_delays
         )
 
-        schedule = self.generate_arrival_schedule(start_datetime, sim_duration_s)
-
-        # Generate resource IDs and initialize queues: {resource_type: [(available_at_s, resource_id), ...]}
-        resource_pool_expanded = {}
-        resource_id_type_map = {}
-        for res_type, count in resource_pool.items():
-            res_ids = [f"{res_type}_{i+1}" for i in range(count)]
-            resource_pool_expanded[res_type] = res_ids
-            for rid in res_ids:
-                resource_id_type_map[rid] = res_type
+        schedule = generate_arrival_schedule(
+            self.variants,
+            self.variant_arrival_distribution,
+            start_datetime,
+            sim_duration_s,
+        )
 
         # TODO: Find solution to start with realistic initial resource availability => If all immediately available, not realistic
-        resource_queues = {
-            res_type: list(rids) for res_type, rids in resource_pool_expanded.items()
-        }
+        resource_pool_expanded, resource_id_type_map, resource_queues = (
+            _expand_resource_pool(resource_pool)
+        )
 
-        blocked_resources = (
-            set()
-        )  # Track resources currently blocked due to constraints
+        blocked_resources = set()  # Resources currently blocked (on cooldown)
         active_executions = []
         finished_count = 0
         event_output = []
@@ -1018,91 +1333,36 @@ class VariantPlayoutStrategy:
 
             # Phase A: Spawn new instances from arrival schedule
             while schedule_idx < len(schedule) and schedule[schedule_idx][0] <= tick:
-                _, variant = schedule[schedule_idx]
+                _, payload = schedule[schedule_idx]
                 schedule_idx += 1
-                # Build obj_map that maps original object IDs to new simulated IDs
-                inst_graph = variant.graph.copy()
-                obj_map = {}
-                obj_id_to_type = {}
-                for _, _, data in inst_graph.edges(data=True):
-                    edge_type = data.get("type", "")
-                    types = edge_type.split("|")
-                    for orig_oid in data.get("objects", []):
-                        if orig_oid not in obj_id_to_type and types[0]:
-                            obj_id_to_type[orig_oid] = types[0]
-                for orig_oid, otype in obj_id_to_type.items():
-                    new_oid = f"{otype}_inst{instance_counter}_{len(obj_map)}"
-                    obj_map[orig_oid] = new_oid
-                    object_output[new_oid] = otype
-
-                # Calculate Violation Budget for this instance
-                total_slots = _estimate_constraint_slots(
-                    resource_constraints.get(variant, fallback_constraints),
-                    resource_distribution_of_variants.get(variant, {}),
-                    resource_pool_expanded,
-                )
-                violation_budget = _make_violation_budget(
-                    total_slots, simulation_config
-                )
-
-                # Precompute the static graph structure
-                nodes = list(inst_graph.nodes())
-                preds_map = {n: tuple(inst_graph.predecessors(n)) for n in nodes}
-                node_objects = {n: _get_node_objects(inst_graph, n) for n in nodes}
-                node_labels = {n: inst_graph.nodes[n]["label"] for n in nodes}
-                pending_preds = {n: len(preds_map[n]) for n in nodes}
-                enabled_set = {n for n in nodes if pending_preds[n] == 0}
-
                 active_executions.append(
-                    {
-                        "id": instance_counter,
-                        "succ_map": {n: tuple(inst_graph.successors(n)) for n in nodes},
-                        "preds_map": preds_map,
-                        "node_objects": node_objects,
-                        "node_labels": node_labels,
-                        "pending_preds": pending_preds,
-                        "enabled_set": enabled_set,
-                        "total_nodes": len(nodes),
-                        "finished_nodes": set(),
-                        "simulated_events": [],
-                        "variant": variant,
-                        "obj_map": obj_map,
-                        "violation_budget": violation_budget,
-                        "spawn_tick": tick,
-                        "finish_tick": {},
-                        "ready_at": {},
-                        "needed_res": {},
-                        "resources_by_activity": {},
-                        "next_wake": tick,
-                    }
+                    self._spawn_instance(
+                        payload,
+                        instance_counter,
+                        tick,
+                        object_output,
+                        resource_constraints,
+                        fallback_constraints,
+                        resource_distribution_of_variants,
+                        resource_pool_expanded,
+                        simulation_config,
+                    )
                 )
-
                 instance_counter += 1
 
-            # Phase B: Free up resources that have completed their cooldown
-            freed = set()
-            for res_id, cooldown_end in blocked_resources:
-                if cooldown_end <= tick:
-                    freed.add((res_id, cooldown_end))
-                    res_type = resource_id_type_map[res_id]
-                    resource_queues[res_type].append(res_id)
-            blocked_resources -= freed
+            # Phase B: free resources whose cooldown elapsed.
+            blocked_resources = _release_elapsed_cooldowns(
+                blocked_resources, tick, resource_queues, resource_id_type_map
+            )
 
             # Current clock hour, used for calendar-based shift gating.
             hour_ts = base_ts + tick
             hour_index = hour_ts // 3600
 
-            # Phase C: Try executing enabled activities for each active instance.
-            # Only instances that are due this tick are examined;
-            next_active = []
-            due_instances = []
-            for inst in active_executions:
-                if inst["next_wake"] <= tick:
-                    due_instances.append(inst)
-                else:
-                    next_active.append(inst)
-            # Reshuffle instances to avoid FIFO bias
-            random.shuffle(due_instances)
+            # Phase C: try executing enabled activities for each due instance.
+            due_instances, next_active = _partition_due_instances(
+                active_executions, tick
+            )
             for inst in due_instances:
                 finished_nodes = inst["finished_nodes"]
                 preds_map = inst["preds_map"]
@@ -1145,31 +1405,20 @@ class VariantPlayoutStrategy:
                     # Determine how many resources of each type this activity needs
                     needed_res_types = needed_res_cache.get(node)
                     if needed_res_types is None:
-                        activity_res_dist = variant_res_dist.get(activity, {})
-                        needed_res_types = {}
-                        for res_type, stats in activity_res_dist.items():
-                            if res_type not in resource_pool_expanded:
-                                continue
-                            n = _sample_resource_count(stats)
-                            if n > 0:
-                                needed_res_types[res_type] = n
+                        needed_res_types = _sample_needed_resources(
+                            variant_res_dist.get(activity, {}), resource_pool_expanded
+                        )
                         needed_res_cache[node] = needed_res_types
 
                     # Restrict to resources available this hour (calendar gating);
                     # falls back to the full free pool when no calendars are set.
-                    if calendar_gate.active:
-                        available_queues = {
-                            t: [
-                                rid
-                                for rid in resource_queues.get(t, ())
-                                if calendar_gate.is_available(
-                                    rid, t, hour_index, hour_ts
-                                )
-                            ]
-                            for t in needed_res_types
-                        }
-                    else:
-                        available_queues = resource_queues
+                    available_queues = _calendar_filtered_queues(
+                        calendar_gate,
+                        resource_queues,
+                        needed_res_types,
+                        hour_index,
+                        hour_ts,
+                    )
 
                     # Cheap availability pre-check: skip the full constraint
                     # allocation when a needed type plainly lacks free units
@@ -1205,38 +1454,20 @@ class VariantPlayoutStrategy:
                     fired_any = True
 
                     # --- Execute the activity ---
-
-                    # Remove allocated resources from queues and block them
-                    all_allocated_rids = []
-                    for res_type, res_ids in allocated.items():
-                        for rid in res_ids:
-                            resource_queues[res_type].remove(rid)
-                            all_allocated_rids.append(rid)
-
-                            # Schedule resource cooldown return
-                            stats = cooldown_dist.get(activity, {}).get(res_type, {})
-                            cd = sample_cooldown(stats)
-                            cooldown_end = (
-                                calendar_gate.cooldown_end(rid, res_type, hour_ts, cd)
-                                - base_ts
-                            )
-                            blocked_resources.add((rid, cooldown_end))
-
-                    # Record simulated event for constraint tracking
-                    inst["simulated_events"].append(
-                        {
-                            "_activity": activity,
-                            "process_area_resources": all_allocated_rids,
-                        }
+                    all_allocated_rids = _commit_resource_allocation(
+                        allocated,
+                        activity,
+                        resource_queues,
+                        resource_id_type_map,
+                        cooldown_dist,
+                        calendar_gate,
+                        hour_ts,
+                        base_ts,
+                        blocked_resources,
                     )
-                    # Keep the incremental constraint cache in sync
-                    act_resources = inst["resources_by_activity"].setdefault(
-                        activity, {}
+                    _record_instance_firing(
+                        inst, activity, all_allocated_rids, resource_id_type_map
                     )
-                    for rid in all_allocated_rids:
-                        rtype = resource_id_type_map.get(rid)
-                        if rtype:
-                            act_resources.setdefault(rtype, []).append(rid)
 
                     # Build event from the precomputed incident objects (#A).
                     obj_map = inst["obj_map"]
@@ -1245,14 +1476,9 @@ class VariantPlayoutStrategy:
                         for oid in inst["node_objects"][node]
                         if oid in obj_map
                     ]
-
-                    # Set Event Timestamp with slight random jitter within the tick to avoid Events being tied to tick boundaries
-                    jitter_window = min(tick_size_s, sim_duration_s - tick)
-                    jitter = (
-                        random.randint(0, jitter_window - 1) if jitter_window > 0 else 0
+                    abs_ts = _jittered_event_time(
+                        base_ts, tick, tick_size_s, sim_duration_s
                     )
-                    abs_ts = int(start_datetime.timestamp()) + tick + jitter
-
                     event_output.append(
                         {
                             "_eventId": f"sim_e_{inst['id']}_{node}",
@@ -1313,118 +1539,89 @@ class VariantPlayoutStrategy:
 
             active_executions = next_active
 
-            # --- Advance the clock ---
-            # Jump to the earliest tick where something can actually happen:
-            if tick >= sim_duration_s:
+            # --- Advance the clock to the next tick where something can happen. ---
+            next_tick = _schedule_next_tick(
+                tick,
+                sim_duration_s,
+                tick_size_s,
+                active_executions,
+                schedule,
+                schedule_idx,
+            )
+            if next_tick is None:
                 break
-            candidates = []
-            if active_executions:
-                candidates.append(min(inst["next_wake"] for inst in active_executions))
-            if schedule_idx < len(schedule):
-                candidates.append(schedule[schedule_idx][0])
-            if not candidates:
-                break  # nothing active and no arrivals left
-
-            target = min(candidates)
-            next_tick = ((target + tick_size_s - 1) // tick_size_s) * tick_size_s
-            if next_tick <= tick:
-                next_tick = tick + tick_size_s
-            tick = min(next_tick, sim_duration_s)
-
-        # --- 3. Build output OCEL ---
-        if event_output:
-            # Sort by timestamp: to regain order, resulting from the additional jitter
-            events_df = pl.DataFrame(event_output, schema=EVENTS_SCHEMA).sort(
-                "_timestampUnix"
-            )
-        else:
-            events_df = pl.DataFrame(schema=EVENTS_SCHEMA)
-
-        obj_data = []
-        for oid, otype in object_output.items():
-            obj_data.append(
-                {
-                    "_objId": oid,
-                    "_objType": otype,
-                    "_targetObjects": [],
-                    "_qualifiers": [],
-                }
-            )
-
-        if obj_data:
-            objects_df = pl.DataFrame(obj_data, schema=OBJECTS_SCHEMA)
-        else:
-            objects_df = pl.DataFrame(schema=OBJECTS_SCHEMA)
+            tick = next_tick
 
         return (
-            ObjectCentricEventLog(events_df, objects_df),
+            _build_output_log(event_output, object_output),
             finished_count,
             instance_counter,
         )
 
 
 class StateSpacePlayoutStrategy:
+    """Incremental state-space playout: the next event is generated *inside* the loop.
+
+    Instead of replaying a discovered variant, each arrival draws an object
+    structure and gets an ``ExecutionGenerator``; its next event is generated only
+    when the instance is ready to fire it, so a ``runtime_context`` (resource
+    utilisation, clock — extend as needed) can steer the generation probabilities
+    at the decision point. The resource / cooldown / calendar / duration machinery
+    is shared with the variant playout.
+
+    Generation is **sequential per instance** (one event at a time). Intra-instance
+    concurrency of a pre-generated DAG is traded for this runtime awareness — a
+    minor loss for object-centric processes where events share a leading object and
+    the DAG is nearly a chain. Concurrency *between* instances is unchanged.
+
+    The arrival units are ``ObjectStructureVariant``s (object connected components
+    clustered by structure): the schedule draws *which* structure arrives *when*,
+    its skeleton is cloned, and the state-space model generates the activities over
+    it. Resource demand and constraints are keyed **per structure variant** (with a
+    pooled fallback) — exactly as the variant playout keys them per variant. This is
+    a standalone strategy — it shares the tick-loop machinery with
+    ``VariantPlayoutStrategy`` through the module-level helpers, not by inheritance.
     """
-    A more complex playout strategy that simulates the execution of the process based on the stochastic state-space of the process.
-    It can be used to simulate the process using a Stochastic State-space approach, receiving just Connected-Components of Objects as Input, and calculating the connected Events, based on the state space.
-    Input needed:
-    - Stochastic State-space: A representation of the process behavior in terms of states and transitions, capturing the probabilities of events appearances and object interactions.
-    - Connected Component Distribution: A distribution of the connected components of objects, used for simulating the arrival of new cases in the process.
-    """
 
-    def __init__(self, state_space, connected_component_distribution):
-        self.state_space = state_space
-        self.connected_component_distribution = connected_component_distribution
-        return
-
-    def expected_activity_occurrences(self):
-        """
-        [SCAFFOLD] Expected number of occurrences of each activity per instance.
-
-        For a stochastic state space this is the expected number of visits to the
-        transitions labelled with each activity before an instance reaches an
-        absorbing (end) state — e.g. derived from the fundamental matrix
-        ``N = (I − Q)^-1`` of the absorbing Markov chain, or by power-iterating
-        the transition probabilities until convergence.
-
-        Returns:
-            dict {activity: expected_occurrences (float)}.
-        """
-        # TODO(advanced-simulation): compute from self.state_space once it exists.
-        raise NotImplementedError(
-            "expected_activity_occurrences requires the stochastic state space, "
-            "which is not implemented yet."
-        )
-
-    def estimate_constraint_slots(
+    def __init__(
         self,
-        simulation_model,
-        resource_pool_expanded,
-        constrained_activities,
+        state_space_model,
+        structure_variants,
+        arrival_distribution,
+        runtime_context_provider=None,
     ):
+        self.state_space_model = state_space_model
+        # Arrival units (object connected components clustered by structure) and
+        # their per-structure arrival distribution ({structure_variant: profile}).
+        self.structure_variants = structure_variants
+        self.arrival_distribution = arrival_distribution
+        # Optional hook: ``provider(runtime_state) -> context`` decides what the
+        # generation sees each step. Default = the raw runtime_state below.
+        self.runtime_context_provider = runtime_context_provider
+
+    def _runtime_context(self, tick, abs_time, resource_queues, resource_pool_expanded):
+        """Runtime facts handed to ``generator.step`` each step (the conditioning
+        seam — the models ignore it for now).
+
+        Builds a base ``runtime_state`` of clock + resource facts; a
+        ``runtime_context_provider`` can map it to any context the generation model
+        wants (e.g. add attributes, or flag a utilisation threshold). Resource
+        utilisation is just the default example, not a fixed contract.
         """
-        [SCAFFOLD] Expected constraint-relevant resource slots of a state-space instance.
-
-        Wraps ``_estimate_expected_constraint_slots`` with the state-space-derived
-        expected activity occurrences. Used to size the per-instance violation
-        budget via ``_make_violation_budget`` (mirroring the exact computation in
-        the variant playout).
-
-        Args:
-            simulation_model: The OCProcessAreaSimulationModel (provides the
-                expected resource demand per activity).
-            resource_pool_expanded: Resource types available in the pool.
-            constrained_activities: Activities carrying a resource constraint.
-
-        Returns:
-            Expected slot count as a float.
-        """
-        return _estimate_expected_constraint_slots(
-            self.expected_activity_occurrences(),
-            constrained_activities,
-            simulation_model.needed_resources_per_activity or {},
-            resource_pool_expanded,
-        )
+        free = {rt: len(resource_queues.get(rt, ())) for rt in resource_pool_expanded}
+        total = {rt: len(ids) for rt, ids in resource_pool_expanded.items()}
+        runtime_state = {
+            "tick": tick,
+            "abs_time": abs_time,
+            "resource_pool": total,
+            "resource_free": free,
+            "resource_utilization": {
+                rt: (1.0 - free[rt] / total[rt] if total[rt] else 0.0) for rt in total
+            },
+        }
+        if self.runtime_context_provider is not None:
+            return self.runtime_context_provider(runtime_state)
+        return runtime_state
 
     def run(
         self,
@@ -1435,14 +1632,261 @@ class StateSpacePlayoutStrategy:
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ) -> dict:
-        # TODO(advanced-simulation): mirror VariantPlayoutStrategy.run but spawn
-        # instances from the state space + connected-component arrival distribution.
-        # The per-instance violation budget would be created with:
-        #     total_slots = self.estimate_constraint_slots(
-        #         simulation_model, resource_pool_expanded, constrained_activities
-        #     )
-        #     budget = _make_violation_budget(total_slots, simulation_model.simulation_config)
-        raise NotImplementedError(
-            "State-space playout is not implemented yet (requires the stochastic "
-            "state space and connected-component arrival distribution)."
+        if start_datetime is None:
+            start_datetime = dt.datetime.fromtimestamp(
+                simulation_model.source_log_start_unix, tz=dt.timezone.utc
+            )
+        allocation_strategy = simulation_model.resource_allocation_strategy
+        cooldown_dist = simulation_model.resource_cooldown_distribution
+        resource_constraints = simulation_model.resource_constraints or {}
+        # Structures without their own mined constraints fall back to the pooled set.
+        fallback_constraints = simulation_model.fallback_constraints or {}
+        # Resource demand per structure variant: {structure_variant: {activity: ...}}.
+        resource_distribution = simulation_model.needed_resources_per_activity or {}
+        simulation_config = simulation_model.simulation_config
+        calendar_gate = _CalendarGate(
+            simulation_model.type_calendars, simulation_model.resource_calendars
+        )
+        base_ts = int(start_datetime.timestamp())
+        activity_delays = simulation_model.activity_delays or {}
+        model_durations = bool(
+            simulation_config.model_activity_durations and activity_delays
+        )
+
+        schedule = generate_arrival_schedule(
+            self.structure_variants,
+            self.arrival_distribution,
+            start_datetime,
+            sim_duration_s,
+        )
+
+        resource_pool_expanded, resource_id_type_map, resource_queues = (
+            _expand_resource_pool(resource_pool)
+        )
+
+        # Per-structure violation budget: a structure's expected activity
+        # occurrences (Monte-Carlo) × its resource demand. Mirrors the variant
+        # playout's per-variant budget; only worth it when soft violations are
+        # enabled and the structure carries constraints.
+        expected_slots_by_variant = {}
+        if simulation_config.resource_constraint_violation_degree > 0:
+            for structure_variant in self.structure_variants:
+                variant_constraints = resource_constraints.get(
+                    structure_variant, fallback_constraints
+                )
+                if not variant_constraints:
+                    continue
+                expected_occurrences = _estimate_structure_activity_occurrences(
+                    structure_variant, self.state_space_model, random, n_samples=200
+                )
+                expected_slots_by_variant[structure_variant] = (
+                    _estimate_expected_constraint_slots(
+                        expected_occurrences,
+                        set(variant_constraints),
+                        resource_distribution.get(structure_variant, {}),
+                        resource_pool_expanded,
+                    )
+                )
+
+        blocked_resources = set()
+        active_executions = []
+        finished_count = 0
+        event_output = []
+        object_output = {}
+        instance_counter = 0
+        schedule_idx = 0
+
+        tick = 0
+        while True:
+            if progress_callback is not None:
+                progress_callback(
+                    min(tick, sim_duration_s) / sim_duration_s
+                    if sim_duration_s
+                    else 1.0
+                )
+
+            # Phase A: spawn — the scheduled structure variant arrives; clone its
+            # skeleton and attach a generator (do not pre-run it).
+            while schedule_idx < len(schedule) and schedule[schedule_idx][0] <= tick:
+                _, structure_variant = schedule[schedule_idx]
+                schedule_idx += 1
+                object_graph = structure_variant.instantiate(instance_counter)
+                generator = self.state_space_model.new_generator(object_graph, random)
+                active_executions.append(
+                    {
+                        "id": instance_counter,
+                        "structure_variant": structure_variant,
+                        "generator": generator,
+                        "obj_types": generator.object_type_map,
+                        "pending": None,
+                        "event_index": 0,
+                        "last_finish": tick,
+                        "ready_at": tick,
+                        "simulated_events": [],
+                        "resources_by_activity": {},
+                        "violation_budget": _make_violation_budget(
+                            expected_slots_by_variant.get(structure_variant, 0.0),
+                            simulation_config,
+                        ),
+                        "next_wake": tick,
+                    }
+                )
+                instance_counter += 1
+
+            # Phase B: free resources whose cooldown elapsed.
+            blocked_resources = _release_elapsed_cooldowns(
+                blocked_resources, tick, resource_queues, resource_id_type_map
+            )
+
+            hour_ts = base_ts + tick
+            hour_index = hour_ts // 3600
+
+            # Phase C: step + fire due instances.
+            due_instances, next_active = _partition_due_instances(
+                active_executions, tick
+            )
+
+            for inst in due_instances:
+                # Lazily generate the next event when none is pending.
+                if inst["pending"] is None:
+                    event = inst["generator"].step(
+                        self._runtime_context(
+                            tick, hour_ts, resource_queues, resource_pool_expanded
+                        )
+                    )
+                    if event is None:
+                        finished_count += 1
+                        continue  # instance complete; drop it
+                    inst["pending"] = event
+                    # The first event of a case has no predecessor, so it fires at
+                    # the arrival tick with no inter-activity delay — mirrors the
+                    # variant playout, where execution-start nodes (no predecessors)
+                    # fire immediately and only successor nodes carry a sampled delay.
+                    delay = (
+                        _sample_activity_delay(event[0], activity_delays)
+                        if model_durations and inst["event_index"] > 0
+                        else 0
+                    )
+                    inst["ready_at"] = inst["last_finish"] + delay
+
+                activity, participants = inst["pending"]
+
+                # Duration model: hold the event until its ready tick.
+                if model_durations and tick < inst["ready_at"]:
+                    inst["next_wake"] = inst["ready_at"]
+                    next_active.append(inst)
+                    continue
+
+                # Resource demand + constraints of this instance's structure
+                # (fall back to the pooled constraint set), mirroring the variant
+                # playout's per-variant lookup.
+                structure_variant = inst["structure_variant"]
+                variant_res_dist = resource_distribution.get(structure_variant, {})
+                variant_constraints = resource_constraints.get(
+                    structure_variant, fallback_constraints
+                )
+
+                # Resources this activity needs.
+                needed_res_types = _sample_needed_resources(
+                    variant_res_dist.get(activity, {}), resource_pool_expanded
+                )
+                available_queues = _calendar_filtered_queues(
+                    calendar_gate,
+                    resource_queues,
+                    needed_res_types,
+                    hour_index,
+                    hour_ts,
+                )
+
+                resource_blocked = any(
+                    len(available_queues.get(t, ())) < cnt
+                    for t, cnt in needed_res_types.items()
+                )
+                allocated, new_budget = None, inst["violation_budget"]
+                if not resource_blocked:
+                    allocated, new_budget = _allocate_resources(
+                        activity,
+                        variant_constraints,
+                        inst["simulated_events"],
+                        available_queues,
+                        resource_id_type_map,
+                        allocation_strategy,
+                        needed_res_types,
+                        simulation_config,
+                        inst["violation_budget"],
+                        prior_assignments_full=inst["resources_by_activity"],
+                    )
+                    resource_blocked = allocated is None
+
+                if resource_blocked:
+                    # Keep the pending event; retry when a resource frees.
+                    nf = _next_resource_free(blocked_resources, tick)
+                    wake = nf if nf is not None else tick + tick_size_s
+                    if calendar_gate.active:
+                        wake = min(wake, (hour_index + 1) * 3600 - base_ts)
+                    inst["next_wake"] = wake
+                    next_active.append(inst)
+                    continue
+
+                # --- Fire the event ---
+                inst["violation_budget"] = new_budget
+                all_allocated_rids = _commit_resource_allocation(
+                    allocated,
+                    activity,
+                    resource_queues,
+                    resource_id_type_map,
+                    cooldown_dist,
+                    calendar_gate,
+                    hour_ts,
+                    base_ts,
+                    blocked_resources,
+                )
+                _record_instance_firing(
+                    inst, activity, all_allocated_rids, resource_id_type_map
+                )
+
+                # Register only the participating objects (coverage is enforced by
+                # the generator's END-block, so unused pool objects never appear).
+                for oid in participants:
+                    object_output[oid] = inst["obj_types"].get(oid)
+
+                event_output.append(
+                    {
+                        "_eventId": f"sim_e_{inst['id']}_{inst['event_index']}",
+                        "_activity": activity,
+                        "_timestampUnix": _jittered_event_time(
+                            base_ts, tick, tick_size_s, sim_duration_s
+                        ),
+                        "_objects": sorted(set(participants)),
+                        "_qualifiers": [],
+                        "_attributes": json.dumps(
+                            {"process_area_resources": all_allocated_rids}
+                        ),
+                    }
+                )
+                inst["event_index"] += 1
+                inst["last_finish"] = tick
+                inst["pending"] = None
+                inst["next_wake"] = tick + tick_size_s
+                next_active.append(inst)
+
+            active_executions = next_active
+
+            # --- Advance the clock to the next tick where something can happen. ---
+            next_tick = _schedule_next_tick(
+                tick,
+                sim_duration_s,
+                tick_size_s,
+                active_executions,
+                schedule,
+                schedule_idx,
+            )
+            if next_tick is None:
+                break
+            tick = next_tick
+
+        return (
+            _build_output_log(event_output, object_output),
+            finished_count,
+            instance_counter,
         )
