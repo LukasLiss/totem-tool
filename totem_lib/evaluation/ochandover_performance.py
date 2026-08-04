@@ -78,6 +78,16 @@ DATASETS = [
         "file": TEST_DATA / "order-management.json",
         "fallback_configs": [],
     },
+    {
+        "name": "hiring",
+        "file": TEST_DATA / "03_hiring.xml",
+        "fallback_configs": [],
+    },
+    {
+        "name": "hospital",
+        "file": TEST_DATA / "04_hospital.xml",
+        "fallback_configs": [],
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -135,7 +145,7 @@ def _mlpa_configs(ocel) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 
 def _timed_handover(
-    ocel,
+    path: Path,
     resource_types: list[str],
     bo_types: list[str],
     parallel_threshold: float | None = None,
@@ -154,6 +164,9 @@ def _timed_handover(
     """
 
     with contextlib.redirect_stdout(io.StringIO()):
+
+        # Fresh OCEL load for each run to avoid any shared state from previous runs.
+        ocel = import_ocel(str(path))
 
         # ── Phase 1: EOG construction ──────────────────────────────────────
         t0 = time.perf_counter()
@@ -229,6 +242,27 @@ def _timed_handover(
         )
 
         n_bo_objects = len(bo_ids)
+
+        # Number of (BO object, resource event) co-occurrences — the actual BFS starting-point count.
+        _res_event_ids = set(event_resources.get_column("_eventId").to_list())
+        n_bo_resource_cooccurrences = (
+            event_bos
+            .filter(pl.col("_eventId").is_in(_res_event_ids))
+            .select(["businessobject_id", "_eventId"])
+            .unique()
+            .height
+        )
+
+        # Average number of resource objects per resource event.
+        # High values mean BFS generates O(k²) pairs per bridge (combinatorial fan-out).
+        avg_resources_per_event = round(
+            event_resources
+            .with_columns(pl.col("resources").list.len().alias("n"))
+            .select("n")
+            .mean()
+            .item() or 0.0,
+            2,
+        )
 
         # ── Parallel filter (part of EOG phase) ───────────────────────────
         if parallel_threshold is not None:
@@ -310,6 +344,18 @@ def _timed_handover(
             .height
         )
 
+        # EOG node count = unique event IDs that appear as source or target of any arc.
+        # EOG density = arcs / nodes (average arc count per node, a proxy for graph connectivity).
+        n_eog_nodes = (
+            pl.concat([
+                eog_arcs.select(pl.col("source_event").alias("e")),
+                eog_arcs.select(pl.col("target_event").alias("e")),
+            ])
+            .unique()
+            .height
+        )
+        eog_density = round(eog_arc_count_effective / n_eog_nodes, 2) if n_eog_nodes > 0 else 0.0
+
         event_ts = (
             event_bos
             .select(["_eventId", "_timestampUnix"])
@@ -321,9 +367,35 @@ def _timed_handover(
         # ── Phase 2: BFS / handover detection ─────────────────────────────
         t1 = time.perf_counter()
 
-        raw_handovers = OCHANDOVER._resource_pairs_from_eog(
-            eog_arcs, event_resources, event_ts, max_gap=None
-        )
+        _resource_event_set = set(event_resources.get_column("_eventId").to_list())
+        _event_resources_dict = {r["_eventId"]: r["resources"] for r in event_resources.to_dicts()}
+        _event_ts_dict = {r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()}
+
+        _bo_type_map, _raw = OCHANDOVER._bfs_bridges(eog_arcs, _resource_event_set, None)
+        _, _canonical = OCHANDOVER._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
+
+        # Number of canonical bridges and average gap across them.
+        n_canonicals = len(_canonical)
+        avg_gap = round(sum(_canonical.values()) / n_canonicals, 2) if _canonical else 0.0
+
+        # Expand canonical to (source, target, bo_type, time_delta) rows.
+        _pair_rows: dict = {}
+        for (_src_eid, _tgt_eid, _bid), _ in _canonical.items():
+            _btype = _bo_type_map[_bid]
+            _src_ts = _event_ts_dict.get(_src_eid, 0)
+            _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
+            for _src in _event_resources_dict.get(_src_eid, []):
+                for _tgt in _event_resources_dict.get(_tgt_eid, []):
+                    _k = (_src_eid, _tgt_eid, _src, _tgt, _btype)
+                    if _k not in _pair_rows:
+                        _pair_rows[_k] = {
+                            "source": _src, "target": _tgt,
+                            "businessobject_type": _btype,
+                            "time_delta": _tgt_ts - _src_ts,
+                        }
+
+        _schema = {"source": pl.Utf8, "target": pl.Utf8, "businessobject_type": pl.Utf8, "time_delta": pl.Int64}
+        raw_handovers = pl.DataFrame(list(_pair_rows.values()), schema=_schema) if _pair_rows else pl.DataFrame(schema=_schema)
 
         t_bfs = time.perf_counter() - t1
 
@@ -341,22 +413,31 @@ def _timed_handover(
                 )
             )
             n_pairs          = len(handover_edges)
+            n_instances      = int(handover_edges.select(pl.col("weight").sum()).item())
             n_resource_pairs = handover_edges.select(["source", "target"]).unique().height
         else:
             n_pairs          = 0
+            n_instances      = 0
             n_resource_pairs = 0
 
         t_agg = time.perf_counter() - t2
 
     return {
-        "t_eog":                  round(t_eog, 3),
-        "t_bfs":                  round(t_bfs, 3),
-        "t_agg":                  round(t_agg, 3),
-        "t_total":                round(t_eog + t_bfs + t_agg, 3),
-        "n_pairs":                n_pairs,
-        "n_resource_pairs":       n_resource_pairs,
-        "n_bo_objects":           n_bo_objects,
-        "eog_arc_count_effective": eog_arc_count_effective,
+        "t_eog":                   round(t_eog, 3),
+        "t_bfs":                   round(t_bfs, 3),
+        "t_agg":                   round(t_agg, 3),
+        "t_total":                 round(t_eog + t_bfs + t_agg, 3),
+        "avg_gap":                 avg_gap,
+        "n_canonicals":            n_canonicals,
+        "n_pairs":                 n_pairs,
+        "n_instances":             n_instances,
+        "n_resource_pairs":        n_resource_pairs,
+        "n_bo_objects":              n_bo_objects,
+        "n_bo_res_cooc":             n_bo_resource_cooccurrences,
+        "avg_res_per_event":         avg_resources_per_event,
+        "eog_arc_count_effective":   eog_arc_count_effective,
+        "n_eog_nodes":               n_eog_nodes,
+        "eog_density":               eog_density,
     }
 
 
@@ -413,7 +494,7 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
 
             try:
                 stats = _timed_handover(
-                    ocel, resource_types, bo_types,
+                    path, resource_types, bo_types,
                     parallel_threshold=pt,
                     min_parallel_observations=MIN_PARALLEL_OBSERVATIONS,
                 )
@@ -429,12 +510,22 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
                     "bo_types":                _fmt_types(bo_types),
                     "parallel":                p_col,
                     "n_bo_objects":            stats["n_bo_objects"],
+                    "n_bo_res_cooc":           stats["n_bo_res_cooc"],
+                    "avg_res_per_event":       stats["avg_res_per_event"],
+                    "complexity_est":          round(
+                        stats["n_bo_res_cooc"] * stats["eog_density"] * stats["avg_res_per_event"], 1
+                    ),
                     "eog_arc_count_effective": stats["eog_arc_count_effective"],
+                    "n_eog_nodes":             stats["n_eog_nodes"],
+                    "eog_density":             stats["eog_density"],
                     "t_eog":                   stats["t_eog"],
                     "t_bfs":                   stats["t_bfs"],
                     "t_agg":                   stats["t_agg"],
                     "t_total":                 stats["t_total"],
+                    "avg_gap":                 stats["avg_gap"],
+                    "n_canonicals":            stats["n_canonicals"],
                     "n_pairs":                 stats["n_pairs"],
+                    "n_instances":             stats["n_instances"],
                     "n_resource_pairs":        stats["n_resource_pairs"],
                 })
             except Exception as exc:
@@ -449,13 +540,17 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
 
 HEADER = (
     "| Log | Events | Level | Resource Types | BO Types | Parallel "
-    "| BO Objects | EOG Arcs | EOG (s) | BFS (s) | Agg. (s) | Total (s) | Handover Pairs | Resource Pairs |"
+    "| BO Objects | BO×Res Co-occ. | Avg Res/Event | Complexity Est. | EOG Arcs | EOG Nodes | EOG Density "
+    "| EOG (s) | BFS (s) | Agg. (s) | Total (s) "
+    "| Avg Gap | Canonicals | Handover Pairs | Handover Instances | Resource Pairs |"
 )
-SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 ROW_FMT = (
     "| {name} | {events} | {level} | {resource_types} | {bo_types} | {parallel} "
-    "| {n_bo_objects} | {eog_arc_count_effective} "
-    "| {t_eog} | {t_bfs} | {t_agg} | {t_total} | {n_pairs} | {n_resource_pairs} |"
+    "| {n_bo_objects} | {n_bo_res_cooc} | {avg_res_per_event} | {complexity_est} | {eog_arc_count_effective} "
+    "| {n_eog_nodes} | {eog_density} "
+    "| {t_eog} | {t_bfs} | {t_agg} | {t_total} "
+    "| {avg_gap} | {n_canonicals} | {n_pairs} | {n_instances} | {n_resource_pairs} |"
 )
 
 

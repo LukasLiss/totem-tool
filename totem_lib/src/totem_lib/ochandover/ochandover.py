@@ -544,7 +544,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         resource_event_set = set(event_resources_dict.keys())
         _ts = event_ts_dict or {}
         bo_type_map, raw = cls._bfs_bridges(eog_arcs, resource_event_set, max_gap)
-        canonical = cls._canonical_from_raw(raw, event_resources_dict, _ts)
+        _, canonical = cls._canonical_from_raw(raw, event_resources_dict, _ts)
 
         # Expand canonical into per-(src_event, bid) output and input maps.
         # Both directions use the same resource-level canonical: the resource-level
@@ -710,6 +710,67 @@ class OCHANDOVER(nx.MultiDiGraph):
         _build(tgt_obj_in,  "input")
         return result
 
+    def bindings_table(self) -> pl.DataFrame:
+        """
+        Return all bindings as a flat Polars DataFrame.
+
+        One row per arc within each binding.  Columns:
+          binding_id   – integer grouping all arcs that belong to the same binding
+          direction    – "output" or "input"
+          resource     – the resource node this binding is attached to
+          other_resource – the arc's counterpart (equals resource for self-loops)
+          is_self_loop – True when other_resource == resource
+          bo_type      – business-object type carried by this arc
+          mark         – "dot" (single object) or "square" (multiple objects)
+          is_gapped    – True if any occurrence had intermediate non-resource events
+          line_type    – "solid", "dotted", or None (solo / single-arc binding)
+          count        – how often this binding pattern was observed
+          pattern      – human-readable binding pattern, e.g. "{A, B, A(self)}"
+        """
+        bindings: list[dict] = self.graph.get("bindings", [])
+        if not bindings:
+            return pl.DataFrame()
+
+        rows = []
+        for binding_id, b in enumerate(bindings):
+            resource = b["resource"]
+            pattern_parts = []
+            for arc in b["arcs"]:
+                label = arc["other_resource"]
+                if arc["other_resource"] == resource:
+                    label += " (self)"
+                pattern_parts.append(label)
+            pattern = "{" + ", ".join(sorted(pattern_parts)) + "}"
+
+            for arc in b["arcs"]:
+                rows.append({
+                    "binding_id":    binding_id,
+                    "direction":     b["type"],
+                    "resource":      resource,
+                    "other_resource": arc["other_resource"],
+                    "is_self_loop":  arc["other_resource"] == resource,
+                    "bo_type":       arc["bo_type"],
+                    "mark":          arc["mark"],
+                    "is_gapped":     arc["is_gapped"],
+                    "line_type":     b["line_type"],
+                    "count":         b["count"],
+                    "pattern":       pattern,
+                })
+
+        return pl.DataFrame(rows, schema={
+            "binding_id":     pl.Int32,
+            "direction":      pl.Utf8,
+            "resource":       pl.Utf8,
+            "other_resource": pl.Utf8,
+            "is_self_loop":   pl.Boolean,
+            "bo_type":        pl.Utf8,
+            "mark":           pl.Utf8,
+            "is_gapped":      pl.Boolean,
+            "line_type":      pl.Utf8,
+            "count":          pl.Int32,
+            "pattern":        pl.Utf8,
+        })
+
     @staticmethod
     def _bfs_bridges(
         eog_arcs: pl.DataFrame,
@@ -767,28 +828,24 @@ class OCHANDOVER(nx.MultiDiGraph):
         raw: dict[tuple[str, str, str], int],
         event_resources_dict: dict[str, list[str]],
         event_ts_dict: dict[str, int],
-    ) -> dict[tuple[str, str, str], int]:
+    ) -> tuple[dict[tuple, tuple[str, int]], dict[tuple[str, str, str], int]]:
         """
-        Apply resource-level two-pass deduplication to raw BFS bridges and return
-        a canonical bridge set {(src_ev, tgt_ev, bid): gap}.
+        Apply resource-level two-pass deduplication to raw BFS bridges.
+
+        Returns (p1, canonical) where:
+          p1        — {(src_ev, src_res, tgt_res, bid): (tgt_ev, gap)}
+                      The exact 5-tuple handovers per Definition 4.8.  Use this
+                      for resource-pair expansion to avoid phantom duplicates.
+          canonical — {(src_ev, tgt_ev, bid): gap}
+                      Event-level bridge set for binding computation (which needs
+                      event-level connectivity, not resource-pair specificity).
 
         Pass 2 — key (src_res, tgt_res, bid, tgt_ev): within each resource pair,
-        keep the bridge with the latest source timestamp.  Sources at different
-        resource pairs never compete, so independent handovers from different
-        source resources to the same target are both preserved.
+        keep the bridge with the latest source timestamp (Definition 4.8 latest-
+        source condition).
 
         Pass 1 — key (src_ev, src_res, tgt_res, bid): keep the bridge to the
-        earliest target event, removing phantom extra targets created by orphan
-        repair arcs.
-
-        The same canonical is correct for both handover computation and binding
-        computation:
-        - Orphan-repair duplicates within a resource pair are resolved by Pass 2
-          (dead-end repair source, being later, wins and the orphan-repair source
-          is dropped — so a bid no longer appears at the orphan-repair source
-          event and cannot collide with other bids there).
-        - Simultaneous arrivals from different resource pairs survive intact
-          because they have different Pass-2 keys.
+        earliest target event (Definition 4.8 earliest-target condition).
         """
         # Pass 2: per (src_res, tgt_res, bid, tgt_ev) keep bridge with latest src ts.
         p2: dict[tuple, tuple[str, int]] = {}
@@ -814,7 +871,7 @@ class OCHANDOVER(nx.MultiDiGraph):
             key = (src_ev, tgt_ev, bid)
             if key not in canonical or gap < canonical[key]:
                 canonical[key] = gap
-        return canonical
+        return p1, canonical
 
     @classmethod
     def _resource_pairs_from_eog(
@@ -844,29 +901,28 @@ class OCHANDOVER(nx.MultiDiGraph):
         }
 
         _bo_type_map, _raw = cls._bfs_bridges(eog_arcs, _resource_event_set, max_gap)
-        _canonical = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
+        _p1, _ = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
 
-        # Expand canonical bridges to (src_event, tgt_event, src_res, tgt_res, bo_type)
-        # rows.  All bo_ids sharing the same event-pair and type are accumulated.
+        # Expand p1 (the exact 5-tuple handovers per Definition 4.8) into rows.
+        # Each entry already encodes the unique (src_res, tgt_res) assignment for
+        # its bid — no Cartesian re-expansion needed.
         _pair_rows: dict[tuple[str, str, str, str, str], dict] = {}
-        for (_src_eid, _tgt_eid, _bid), _ in _canonical.items():
+        for (_src_eid, _src_res, _tgt_res, _bid), (_tgt_eid, _) in _p1.items():
             _btype = _bo_type_map[_bid]
             _src_ts = _event_ts_dict.get(_src_eid, 0)
             _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
-            for _src in _event_resources_dict.get(_src_eid, []):
-                for _tgt in _event_resources_dict.get(_tgt_eid, []):
-                    _pair_key = (_src_eid, _tgt_eid, _src, _tgt, _btype)
-                    if _pair_key not in _pair_rows:
-                        _pair_rows[_pair_key] = {
-                            "source": _src,
-                            "target": _tgt,
-                            "businessobject_type": _btype,
-                            "businessobject_ids": [_bid],
-                            "time_delta": _tgt_ts - _src_ts,
-                            "start_unix": _src_ts,
-                        }
-                    else:
-                        _pair_rows[_pair_key]["businessobject_ids"].append(_bid)
+            _pair_key = (_src_eid, _tgt_eid, _src_res, _tgt_res, _btype)
+            if _pair_key not in _pair_rows:
+                _pair_rows[_pair_key] = {
+                    "source": _src_res,
+                    "target": _tgt_res,
+                    "businessobject_type": _btype,
+                    "businessobject_ids": [_bid],
+                    "time_delta": _tgt_ts - _src_ts,
+                    "start_unix": _src_ts,
+                }
+            else:
+                _pair_rows[_pair_key]["businessobject_ids"].append(_bid)
         _rows = list(_pair_rows.values())
 
         if _rows:
