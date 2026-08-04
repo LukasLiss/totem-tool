@@ -1665,6 +1665,16 @@ function HandoverGraph({
     pathMapRef.current = map;
   });
 
+  // Bindings that contain both a self-loop arc and regular arcs — the connection between
+  // the self-loop mark and the regular-arc marks cannot be drawn visually.
+  const suppressedBindingCount = useMemo(() => {
+    if (!bindingsData) return 0;
+    return bindingsData.filter(b =>
+      b.arcs.some(a => a.other_resource === b.resource) &&
+      b.arcs.some(a => a.other_resource !== b.resource)
+    ).length;
+  }, [bindingsData]);
+
   // Render C-net binding overlay imperatively so we can use getPointAtLength on live SVG paths
   useLayoutEffect(() => {
     const layer = bindingsLayerRef.current;
@@ -1676,8 +1686,18 @@ function HandoverGraph({
     const pathMap = pathMapRef.current;
     const BASE = 18;      // px from node boundary along edge path to first slot
     const SLOT_STEP = 11; // px between slots for multiple bindings on same arc
-    const DOT_R = 4;      // circle mark radius
-    const SQ_SZ = 4.5;   // half-size of square mark
+    const DOT_R = 2.5;    // circle mark radius
+    const SQ_SZ = 3;      // half-size of square mark
+    const HALO = 2;       // white halo size around marks
+    const SELF_STEP = 16; // px between successive marks along a self-loop path
+
+    // Per (side, resource, bo_type) counter so each bo_type's marks step independently.
+    // A small per-bo_type stagger (SELF_STAGGER per new bo_type seen on a node) offsets
+    // the starting positions so different object types don't land at the exact same spot.
+    const SELF_STAGGER = 6; // px offset added per additional bo_type on the same self-loop
+    const selfLoopMarkIdx  = new Map<string, number>(); // key: side:resource:bo_type
+    const selfLoopBtOrder  = new Map<string, number>(); // key: side:resource:bo_type → bt index
+    const selfLoopBtNext   = new Map<string, number>(); // key: side:resource → next bt index
 
     for (const side of ["output", "input"] as const) {
       // Process solos (arcs.length === 1) first so they occupy the inner slots
@@ -1738,12 +1758,29 @@ function HandoverGraph({
             angle = Math.atan2(ptBoundary.y - cy, ptBoundary.x - cx);
             px = cx + totalR * Math.cos(angle);
             py = cy + totalR * Math.sin(angle);
+          } else if (isSelfLoop) {
+            // Per-bo_type counter so each type steps independently.
+            // A small stagger (SELF_STAGGER × bt_order) shifts each type's start slightly
+            // so different object types don't land at the exact same position.
+            const selfKey  = `${side}:${binding.resource}:${binding.arcs[i].bo_type}`;
+            const nodeKey  = `${side}:${binding.resource}`;
+            if (!selfLoopBtOrder.has(selfKey)) {
+              selfLoopBtOrder.set(selfKey, selfLoopBtNext.get(nodeKey) ?? 0);
+              selfLoopBtNext.set(nodeKey, (selfLoopBtNext.get(nodeKey) ?? 0) + 1);
+            }
+            const btStagger = (selfLoopBtOrder.get(selfKey) ?? 0) * SELF_STAGGER;
+            const idx = selfLoopMarkIdx.get(selfKey) ?? 0;
+            selfLoopMarkIdx.set(selfKey, idx + 1);
+            const selfOffset = Math.min(btStagger + (idx + 1) * SELF_STEP, len * 0.45);
+            const pt = path.getPointAtLength(isOutput ? selfOffset : len - selfOffset);
+            px = pt.x; py = pt.y;
+            angle = nodePos ? Math.atan2(pt.y - nodePos.y, pt.x - nodePos.x) : 0;
           } else {
-            // Self-loop or no node position: place dot on the path
+            // No node position fallback: place on path using slotOffset.
             const offset = Math.min(slotOffset, len * 0.45);
             const pt = path.getPointAtLength(isOutput ? offset : len - offset);
             px = pt.x; py = pt.y;
-            angle = nodePos ? Math.atan2(pt.y - nodePos.y, pt.x - nodePos.x) : 0;
+            angle = 0;
           }
           dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark, isSelfLoop });
         }
@@ -1784,7 +1821,6 @@ function HandoverGraph({
 
         // Marks: filled = direct, hollow ring = gapped; circle = dot, square = square
         // Each mark is rendered as a white halo first, then the colored shape on top.
-        const HALO = 2;
         for (const dot of dots) {
           if (dot.mark === "square") {
             const halo = document.createElementNS(NS, "rect");
@@ -1826,6 +1862,7 @@ function HandoverGraph({
         }
       }
     }
+
   });
 
   const playAnimation = () => {
@@ -2840,6 +2877,17 @@ function HandoverGraph({
           {/* Animation dots layer — populated imperatively by updateDotLayer */}
           <g ref={dotsLayerRef} />
         </svg>
+
+        {suppressedBindingCount > 0 && bindingsData && (
+          <div style={{
+            position: "absolute", bottom: 10, left: 10, zIndex: 10,
+            fontSize: 11, color: "#64748b", background: "rgba(255,255,255,0.85)",
+            border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px",
+            pointerEvents: "none",
+          }}>
+            {suppressedBindingCount} self-loop binding{suppressedBindingCount > 1 ? "s" : ""} not fully visualized
+          </div>
+        )}
 
         {highlightedObjectType && (
           <div style={{

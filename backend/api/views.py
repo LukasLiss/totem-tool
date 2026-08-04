@@ -1026,6 +1026,16 @@ def ochandover(request):
                     line = b["line_type"] or "solo"
                     print(f"    [{bo_type}]  {arcs}  [{line}]  ×{b['count']}")
 
+        suppressed = [b for b in raw_bindings
+                      if any(a["other_resource"] == b["resource"] for a in b["arcs"])
+                      and any(a["other_resource"] != b["resource"] for a in b["arcs"])]
+        if suppressed:
+            print("\n=== SUPPRESSED (self-loop + regular arcs, connection not visualized) ===")
+            for b in suppressed:
+                bo_type = b["arcs"][0]["bo_type"]
+                arcs = {(a["other_resource"], a["mark"], "filled" if not a["is_gapped"] else "hollow") for a in b["arcs"]}
+                print(f"  [{b['type']}] {b['resource']}:  [{bo_type}]  {arcs}  [{b['line_type'] or 'solo'}]  ×{b['count']}")
+
     return Response(response_data, status=status.HTTP_200_OK)
 
 
