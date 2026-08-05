@@ -10,10 +10,13 @@ For each dataset the script:
      manual configs defined in DATASETS.
   3. Times the handover computation in three phases for both parallel=off and
      parallel=on:
-       EOG  — building the Event-Object Graph (including footprint + arc
-              modification when parallel is enabled)
-       BFS  — bridge detection through the EOG (_resource_pairs_from_eog)
-       Agg. — aggregation and normalisation of the handover edges
+       EOG    — building the Event-Object Graph (including footprint + arc
+                modification when parallel is enabled)
+       BFS    — raw resource segment extraction (_bfs_bridges only)
+       Expansion — expand 3-tuples to 5-tuples and apply latest-source /
+                earliest-target filtering (_canonical_from_raw)
+       Collapse  — fold object dimension into handover instances
+       Agg.   — group_by aggregation and normalisation
   4. Reports handover pairs (per BO type) and resource pairs (across BO types).
 
 Run from the totem_lib/ directory:
@@ -37,9 +40,10 @@ from totem_lib.ochandover.ochandover import OCHANDOVER
 # Paths
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR   = Path(__file__).parent
-TEST_DATA    = SCRIPT_DIR.parent / "test_data" / "small"
-RESULTS_FILE = SCRIPT_DIR / "OCHANDOVER_PERFORMANCE_RESULTS.md"
+SCRIPT_DIR        = Path(__file__).parent
+TEST_DATA         = SCRIPT_DIR.parent / "test_data" / "small"
+RESULTS_FILE      = SCRIPT_DIR / "OCHANDOVER_PERFORMANCE_RESULTS.md"
+LOG_CHAR_FILE     = SCRIPT_DIR / "OCHANDOVER_LOG_CHARACTERISTICS.md"
 
 # ---------------------------------------------------------------------------
 # Parallel filter configuration
@@ -364,21 +368,26 @@ def _timed_handover(
 
         t_eog = time.perf_counter() - t0
 
-        # ── Phase 2: BFS / handover detection ─────────────────────────────
-        t1 = time.perf_counter()
-
+        # ── Phase 2: BFS (raw resource segments) ──────────────────────────
         _resource_event_set = set(event_resources.get_column("_eventId").to_list())
         _event_resources_dict = {r["_eventId"]: r["resources"] for r in event_resources.to_dicts()}
         _event_ts_dict = {r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()}
 
+        t1 = time.perf_counter()
         _bo_type_map, _raw = OCHANDOVER._bfs_bridges(eog_arcs, _resource_event_set, None)
-        _, _canonical = OCHANDOVER._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
+        t_bfs = time.perf_counter() - t1
+        n_raw = len(_raw)
 
-        # Number of canonical bridges and average gap across them.
+        # ── Phase 3: Expansion (3-tuple → 5-tuple + filtering) ────────────
+        t2 = time.perf_counter()
+        _p1, _canonical = OCHANDOVER._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
+        n_five_tuples = len(_p1)
         n_canonicals = len(_canonical)
         avg_gap = round(sum(_canonical.values()) / n_canonicals, 2) if _canonical else 0.0
+        t_expansion = time.perf_counter() - t2
 
-        # Expand canonical to (source, target, bo_type, time_delta) rows.
+        # ── Phase 4: Collapse (fold object dimension → instances) ──────────
+        t3 = time.perf_counter()
         _pair_rows: dict = {}
         for (_src_eid, _tgt_eid, _bid), _ in _canonical.items():
             _btype = _bo_type_map[_bid]
@@ -393,15 +402,12 @@ def _timed_handover(
                             "businessobject_type": _btype,
                             "time_delta": _tgt_ts - _src_ts,
                         }
-
         _schema = {"source": pl.Utf8, "target": pl.Utf8, "businessobject_type": pl.Utf8, "time_delta": pl.Int64}
         raw_handovers = pl.DataFrame(list(_pair_rows.values()), schema=_schema) if _pair_rows else pl.DataFrame(schema=_schema)
+        t_collapse = time.perf_counter() - t3
 
-        t_bfs = time.perf_counter() - t1
-
-        # ── Phase 3: Aggregation & normalisation ───────────────────────────
-        t2 = time.perf_counter()
-
+        # ── Phase 5: Aggregation & normalisation ───────────────────────────
+        t4 = time.perf_counter()
         if not raw_handovers.is_empty():
             handover_edges = (
                 raw_handovers
@@ -419,15 +425,18 @@ def _timed_handover(
             n_pairs          = 0
             n_instances      = 0
             n_resource_pairs = 0
-
-        t_agg = time.perf_counter() - t2
+        t_agg = time.perf_counter() - t4
 
     return {
         "t_eog":                   round(t_eog, 3),
         "t_bfs":                   round(t_bfs, 3),
+        "t_expansion":                round(t_expansion, 3),
+        "t_collapse":                round(t_collapse, 3),
         "t_agg":                   round(t_agg, 3),
-        "t_total":                 round(t_eog + t_bfs + t_agg, 3),
+        "t_total":                 round(t_eog + t_bfs + t_expansion + t_collapse + t_agg, 3),
         "avg_gap":                 avg_gap,
+        "n_raw":                   n_raw,
+        "n_five_tuples":           n_five_tuples,
         "n_canonicals":            n_canonicals,
         "n_pairs":                 n_pairs,
         "n_instances":             n_instances,
@@ -449,19 +458,21 @@ def _fmt_types(types: list[str]) -> str:
     return ", ".join(types)
 
 
-def evaluate_dataset(dataset: dict) -> list[dict]:
+def evaluate_dataset(dataset: dict) -> tuple[list[dict], dict | None]:
     path: Path = dataset["file"]
     name: str  = dataset["name"]
 
     if not path.exists():
         print(f"  SKIP: file not found: {path}")
-        return []
+        return [], None
 
     print(f"  importing ...", end=" ", flush=True)
     with contextlib.redirect_stdout(io.StringIO()):
         ocel = import_ocel(str(path))
     n_events = len(ocel.events)
     print(f"{n_events} events, {len(ocel.object_types)} object types")
+
+    char = log_characteristics(name, ocel)
 
     print(f"  running MLPA ...", end=" ", flush=True)
     configs = _mlpa_configs(ocel)
@@ -473,7 +484,7 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
 
     if not configs:
         print("  SKIP: no valid resource/BO type configuration available")
-        return []
+        return [], char
 
     rows: list[dict] = []
     for cfg in configs:
@@ -520,9 +531,13 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
                     "eog_density":             stats["eog_density"],
                     "t_eog":                   stats["t_eog"],
                     "t_bfs":                   stats["t_bfs"],
+                    "t_expansion":                stats["t_expansion"],
+                    "t_collapse":                stats["t_collapse"],
                     "t_agg":                   stats["t_agg"],
                     "t_total":                 stats["t_total"],
                     "avg_gap":                 stats["avg_gap"],
+                    "n_raw":                   stats["n_raw"],
+                    "n_five_tuples":           stats["n_five_tuples"],
                     "n_canonicals":            stats["n_canonicals"],
                     "n_pairs":                 stats["n_pairs"],
                     "n_instances":             stats["n_instances"],
@@ -531,7 +546,7 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
             except Exception as exc:
                 print(f"FAILED: {exc}")
 
-    return rows
+    return rows, char
 
 
 # ---------------------------------------------------------------------------
@@ -541,16 +556,16 @@ def evaluate_dataset(dataset: dict) -> list[dict]:
 HEADER = (
     "| Log | Events | Level | Resource Types | BO Types | Parallel "
     "| BO Objects | BO×Res Co-occ. | Avg Res/Event | Complexity Est. | EOG Arcs | EOG Nodes | EOG Density "
-    "| EOG (s) | BFS (s) | Agg. (s) | Total (s) "
-    "| Avg Gap | Canonicals | Handover Pairs | Handover Instances | Resource Pairs |"
+    "| EOG (s) | BFS (s) | Expansion (s) | Collapse (s) | Agg. (s) | Total (s) "
+    "| Avg Gap | Raw 3-Tuples | 5-Tuples | Canonicals | Handover Pairs | Handover Instances | Resource Pairs |"
 )
-SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 ROW_FMT = (
     "| {name} | {events} | {level} | {resource_types} | {bo_types} | {parallel} "
     "| {n_bo_objects} | {n_bo_res_cooc} | {avg_res_per_event} | {complexity_est} | {eog_arc_count_effective} "
     "| {n_eog_nodes} | {eog_density} "
-    "| {t_eog} | {t_bfs} | {t_agg} | {t_total} "
-    "| {avg_gap} | {n_canonicals} | {n_pairs} | {n_instances} | {n_resource_pairs} |"
+    "| {t_eog} | {t_bfs} | {t_expansion} | {t_collapse} | {t_agg} | {t_total} "
+    "| {avg_gap} | {n_raw} | {n_five_tuples} | {n_canonicals} | {n_pairs} | {n_instances} | {n_resource_pairs} |"
 )
 
 
@@ -582,17 +597,65 @@ def write_results(rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Log characteristics
+# ---------------------------------------------------------------------------
+
+def log_characteristics(name: str, ocel) -> dict:
+    """Extract log-level structural properties from a loaded OCEL."""
+    n_events       = len(ocel.events)
+    n_object_types = len(ocel.object_types)
+    n_objects      = len(ocel.objects)
+    n_activities   = ocel.events["_activity"].n_unique()
+
+    # _objects is a list column — average its length for avg objects per event.
+    avg_obj_per_event = round(
+        ocel.events.select(pl.col("_objects").list.len()).mean().item(), 2
+    ) if n_events > 0 else 0.0
+
+    return {
+        "name":              name,
+        "n_events":          n_events,
+        "n_activities":      n_activities,
+        "n_object_types":    n_object_types,
+        "n_objects":         n_objects,
+        "avg_obj_per_event": avg_obj_per_event,
+    }
+
+
+LOG_CHAR_HEADER = (
+    "| Log | Events | Activities | Object Types | Objects | Avg Objects/Event |"
+)
+LOG_CHAR_SEPARATOR = "|---|---|---|---|---|---|"
+LOG_CHAR_ROW_FMT = (
+    "| {name} | {n_events} | {n_activities} | {n_object_types} | {n_objects} | {avg_obj_per_event} |"
+)
+
+
+def write_log_characteristics(char_rows: list[dict]) -> None:
+    with open(LOG_CHAR_FILE, "w") as f:
+        f.write("# OC-Handover — Event Log Characteristics\n\n")
+        f.write("One row per event log; properties are independent of level or parallel configuration.\n\n")
+        f.write(f"{LOG_CHAR_HEADER}\n{LOG_CHAR_SEPARATOR}\n")
+        for r in char_rows:
+            f.write(LOG_CHAR_ROW_FMT.format(**r) + "\n")
+    print(f"Log characteristics written to {LOG_CHAR_FILE}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    all_rows: list[dict] = []
+    all_rows:  list[dict] = []
+    char_rows: list[dict] = []
 
     for dataset in DATASETS:
         print(f"\n{dataset['name']}")
         try:
-            rows = evaluate_dataset(dataset)
+            rows, char = evaluate_dataset(dataset)
             all_rows.extend(rows)
+            if char is not None:
+                char_rows.append(char)
         except Exception as exc:
             print(f"  FAILED: {exc}")
 
@@ -601,6 +664,9 @@ def main() -> None:
         write_results(all_rows)
     else:
         print("\nNo results — place OCEL files in test_data/small/ and check DATASETS.")
+
+    if char_rows:
+        write_log_characteristics(char_rows)
 
 
 if __name__ == "__main__":
