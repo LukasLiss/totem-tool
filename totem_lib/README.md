@@ -52,6 +52,36 @@ To run all tests, execute:
 pytest ./tests/
 ```
 
+## Evaluation logs
+
+Runtime evaluation runs against real OCEL logs published on
+[ocel-standard.org](https://www.ocel-standard.org/event-logs/overview/). A log's "size"
+means its **number of events**.
+
+| Log | Events | Location |
+|---|---|---|
+| `ocel2-p2p` | 14,671 | `test_data/small/` (in git) |
+| `order-management` | 21,008 | `test_data/small/` (in git) |
+| `container_logistics` | 35,372 | `test_data/small/` (in git) |
+
+These ship with the repo and need no setup. Larger logs do not belong in git, so
+`test_data/large/` is gitignored and populated on demand by a download script. Run from
+the `totem_lib/` directory:
+
+```bash
+python evaluation/download_logs.py --list
+python evaluation/download_logs.py --logs <name>
+python evaluation/log_sizes.py
+```
+
+`evaluation/datasets.py` is the manifest — names, source links, locations and recorded
+event counts, with the full details in its module docstring. `log_sizes.py` re-measures
+the event counts and reports any that have drifted from what the manifest records.
+
+The module docstring also records why the largest available OCEL log (Age of Empires 2,
+2.4M events) cannot be used yet: it has 831 activity types, and `import_ocel`'s SQLite
+path exceeds SQLite's compound-`SELECT` limit on logs that wide.
+
 ## Acknowledgements
 The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
 The TOTeM visualization function is adapted from [this repository](https://github.com/loeseke/object-centric-streaming-discovery/).
