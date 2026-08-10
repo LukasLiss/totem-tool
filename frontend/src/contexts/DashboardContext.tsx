@@ -16,6 +16,7 @@ export type ViewMode =
   | { type: "analysis"; component: AnalysisComponent }
   | { type: "conformance"; component: ConformanceComponent; assetId?: number }
   | { type: "editor"; component: EditorComponent; openAssetId?: number }
+  | { type: "playout" }
   | { type: "dashboard"; id: number };
 
 type DashboardContextType = {

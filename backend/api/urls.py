@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check
+from .views import EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -17,5 +17,7 @@ urlpatterns = [
     path('occn/', OCCNViewSet, name='occn'),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
+    path("playout/", playout, name="playout"),
+    path("playout/export-ocel/", playout_export_ocel, name="playout-export-ocel"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
 ]

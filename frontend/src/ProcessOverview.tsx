@@ -11,6 +11,7 @@ import { ConformancePlaceholderView } from "./components/ConformancePlaceholderV
 import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { EditorView } from "./editors/EditorView";
+import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
 
 export function ProcessOverview() {
@@ -30,6 +31,8 @@ export function ProcessOverview() {
           : <ConformancePlaceholderView />;
       case 'editor':
         return <EditorView />;
+      case 'playout':
+        return <PlayoutView />;
       case 'dashboard':
         return <Grid />;
       default:
