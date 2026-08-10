@@ -3,6 +3,7 @@ import json
 from contextlib import nullcontext
 from unittest.mock import patch
 
+import polars as pl
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from django.core.cache import cache
@@ -17,7 +18,14 @@ from totem_lib import (
     OCCNReplayFitnessResult,
     OCCNReplayStatus,
     OCCNReplayUnitResult,
+    occn_to_dict,
 )
+from totem_lib.ocel.ocel import (
+    EVENTS_SCHEMA,
+    OBJECTS_SCHEMA,
+    ObjectCentricEventLog,
+)
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 from totem_lib.totem import Totem, totem_to_dict
 
 from .models import EventLog, Project, ProjectAsset
@@ -101,6 +109,25 @@ def valid_occn_content_json():
         "activity_count": {"START_Order": 1, "END_Order": 1},
         "relative_occurrence_threshold": 0.0,
     }
+
+
+def replayable_occn_content_json():
+    return occn_to_dict(
+        OCCausalNet.from_dict(
+            {
+                "START_Order": {
+                    "omg": [[("Create Order", "Order", (1, 1), 1)]]
+                },
+                "Create Order": {
+                    "img": [[("START_Order", "Order", (1, 1), 1)]],
+                    "omg": [[("END_Order", "Order", (1, 1), 1)]],
+                },
+                "END_Order": {
+                    "img": [[("Create Order", "Order", (1, 1), 1)]]
+                },
+            }
+        )
+    )
 
 
 class ProjectAssetModelTests(TestCase):
@@ -1115,6 +1142,62 @@ class OCCNConformanceApiTests(TestCase):
         deserialized_occn, called_units = fitness.call_args.args
         self.assertIsInstance(deserialized_occn, OCCausalNet)
         self.assertIs(called_units, replay_units)
+
+    def test_valid_request_runs_real_extraction_and_replay(self):
+        ProjectAsset.objects.filter(pk=self.occn_asset.pk).update(
+            content_json=replayable_occn_content_json()
+        )
+        source = ObjectCentricEventLog(
+            events=pl.DataFrame(
+                [
+                    {
+                        "_eventId": "e1",
+                        "_activity": "Create Order",
+                        "_timestampUnix": 1,
+                        "_objects": ["o1"],
+                        "_qualifiers": [None],
+                        "_attributes": "",
+                    }
+                ],
+                schema=EVENTS_SCHEMA,
+            ),
+            objects=pl.DataFrame(
+                [
+                    {
+                        "_objId": "o1",
+                        "_objType": "Order",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    }
+                ],
+                schema=OBJECTS_SCHEMA,
+            ),
+        )
+        database = OcelDuckDB(source)
+        try:
+            with patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(database),
+            ):
+                response = self.client.post(
+                    self.url,
+                    {"asset_id": self.occn_asset.pk},
+                    format="json",
+                )
+        finally:
+            database.conn.close()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["fitness"], 1.0)
+        self.assertEqual(response.data["coverage"], 1.0)
+        self.assertEqual(response.data["total_units"], 1)
+        self.assertEqual(response.data["fitting_units"], 1)
+        self.assertEqual(response.data["non_fitting_units"], 0)
+        self.assertEqual(response.data["inconclusive_units"], 0)
+        self.assertEqual(
+            response.data["unit_results"][0]["status"],
+            OCCNReplayStatus.FITTING.value,
+        )
 
     def test_valid_request_executes_conformance_and_returns_result(self):
         replay_units = (object(), object())
