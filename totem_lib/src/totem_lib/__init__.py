@@ -16,16 +16,24 @@ from .totem import (
 )
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     OCCausalNet,
     OCCausalNetSemantics,
     OCCausalNetState,
     OCCNContextDetail,
     OCCNPrecisionResult,
+    OCCNReplayEvent,
+    OCCNReplayUnit,
+    build_connected_component_replay_units,
     discover_occn,
+    extract_occn_replay_events,
+    extract_occn_replay_units,
     occn_from_dict,
     occn_playout,
     occn_precision,
     occn_to_dict,
+    replay_events_from_duckdb,
+    replay_events_from_ocel,
     validate_occn_dict,
     serialize_occn,
 )
@@ -53,9 +61,11 @@ from .playout import (
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
 # All other symbols may be imported directly from their respective submodules.
 __all__ = [
+    "build_connected_component_replay_units",
     "calculate_layout",
     "canonicalize_execution",
     "CCDFG",
+    "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "conformance_of_totem",
     "convert_ocel_polars_to_pm4py",
     "create_occn_engine",
@@ -74,6 +84,10 @@ __all__ = [
     "OCCausalNetState",
     "OCCNContextDetail",
     "OCCNPrecisionResult",
+    "OCCNReplayEvent",
+    "OCCNReplayUnit",
+    "extract_occn_replay_events",
+    "extract_occn_replay_units",
     "occn_from_dict",
     "occn_playout",
     "occn_precision",
@@ -89,6 +103,8 @@ __all__ = [
     "PlayoutStep",
     "PlayoutVariant",
     "process_execution_edit_distance",
+    "replay_events_from_duckdb",
+    "replay_events_from_ocel",
     "run_playout",
     "serialize_occn",
     "TooManyBindingsError",

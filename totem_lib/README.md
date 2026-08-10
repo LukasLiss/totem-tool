@@ -47,6 +47,40 @@ metrics per directed type pair, and aggregate and detailed histograms. Its
 type pairs are represented as records with named fields so object-type names do
 not need delimiter escaping.
 
+## OCCN replay-unit extraction
+
+OCCN conformance checks concrete event sets called replay units. The initial
+extraction strategy groups events by connected components of their shared
+objects:
+
+```python
+from totem_lib import extract_occn_replay_units, import_ocel
+
+event_log = import_ocel("example_data/ocel2-p2p.json")
+replay_units = extract_occn_replay_units(event_log)
+```
+
+The same API accepts an `ObjectCentricEventLog` or an `OcelDuckDB`. Both paths
+produce immutable `OCCNReplayUnit` values with the same deterministic contract:
+
+- events are ordered by `(timestamp_unix, event_id)`;
+- units are ordered by their first event and receive IDs such as
+  `connected_components:000001`;
+- activity names, event IDs, timestamps, object IDs, and object types remain
+  available for replay and diagnostics;
+- events without objects remain visible as singleton units;
+- objects without events do not create empty units;
+- an empty log produces no replay units.
+
+Replay units contain only visible log events. Artificial `START_<type>` and
+`END_<type>` activities are introduced internally by replay fitness and are
+not added to the event log or extraction result.
+
+The initial strategy can produce a very large unit when a few objects connect
+most of a log. It does not yet support variant-based or leading-object
+extraction, and timestamp ties are resolved by event ID because the supported
+storage backends do not expose a shared source-row index.
+
 ## Installation
 
 To set up a development environment for totem-lib, follow these steps. This is required for development only.
