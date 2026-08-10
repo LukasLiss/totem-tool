@@ -20,7 +20,7 @@ from django.db.models import Max
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
 # Django side.
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
-from totem_lib import discover_occn, serialize_occn
+from totem_lib import discover_occn, occn_from_dict, serialize_occn
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import (
@@ -374,6 +374,45 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if not request_serializer.is_valid():
             return Response(
                 request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCCN:
+            return Response(
+                {"asset_id": "Model asset must have type OCCN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            occn_from_dict(asset.content_json)
+        except (AssertionError, TypeError, ValueError) as exc:
+            return Response(
+                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
