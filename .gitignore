@@ -8,6 +8,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
 !docs/MODEL_ASSETS.md
+!docs/OCCN_REPLAY_FITNESS.md
 !.claude/**/*.md
 *.txt
 
