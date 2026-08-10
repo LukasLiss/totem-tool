@@ -1,11 +1,13 @@
 import json
 
 import pytest
+import totem_lib
 
 from totem_lib.occn.replay_fitness import (
     OCCNReplayFitnessResult,
     OCCNReplayStatus,
     OCCNReplayUnitResult,
+    occn_replay_fitness,
 )
 
 
@@ -16,6 +18,13 @@ def _unit_result(unit_id: str, status: OCCNReplayStatus):
         event_count=2,
         explored_state_count=3,
     )
+
+
+def test_replay_fitness_contract_is_available_from_the_public_api():
+    assert totem_lib.occn_replay_fitness is occn_replay_fitness
+    assert totem_lib.OCCNReplayFitnessResult is OCCNReplayFitnessResult
+    assert totem_lib.OCCNReplayStatus is OCCNReplayStatus
+    assert totem_lib.OCCNReplayUnitResult is OCCNReplayUnitResult
 
 
 def test_unit_result_exposes_binary_and_inconclusive_outcomes():
