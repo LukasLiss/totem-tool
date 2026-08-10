@@ -31,19 +31,40 @@ from .occn import (
 )
 from .dfg import OCDFG, CCDFG
 from .variants import calculate_layout, Edit, EditCosts, process_execution_edit_distance
+from .playout import (
+    canonicalize_execution,
+    create_occn_engine,
+    create_ocpn_engine,
+    event_letter,
+    playout_from_model_dict,
+    run_playout,
+    variants_to_ocel_dict,
+    PlayoutConfig,
+    PlayoutEngine,
+    PlayoutEvent,
+    PlayoutProgress,
+    PlayoutResult,
+    PlayoutStep,
+    PlayoutVariant,
+    TooManyBindingsError,
+)
 
 # Should be kept alphabetically sorted.
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
 # All other symbols may be imported directly from their respective submodules.
 __all__ = [
     "calculate_layout",
+    "canonicalize_execution",
     "CCDFG",
     "conformance_of_totem",
     "convert_ocel_polars_to_pm4py",
+    "create_occn_engine",
+    "create_ocpn_engine",
     "discover_occn",
     "discover_oc_petri_net_polars",
     "Edit",
     "EditCosts",
+    "event_letter",
     "filter_dead_objects",
     "import_ocel",
     "mlpaDiscovery",
@@ -59,8 +80,18 @@ __all__ = [
     "occn_to_dict",
     "OCDFG",
     "ocpns_are_similar",
+    "playout_from_model_dict",
+    "PlayoutConfig",
+    "PlayoutEngine",
+    "PlayoutEvent",
+    "PlayoutProgress",
+    "PlayoutResult",
+    "PlayoutStep",
+    "PlayoutVariant",
     "process_execution_edit_distance",
+    "run_playout",
     "serialize_occn",
+    "TooManyBindingsError",
     "Totem",
     "TotemConformanceResult",
     "totemDiscovery",
@@ -68,4 +99,5 @@ __all__ = [
     "totem_to_dict",
     "validate_occn_dict",
     "validate_totem_dict",
+    "variants_to_ocel_dict",
 ]
