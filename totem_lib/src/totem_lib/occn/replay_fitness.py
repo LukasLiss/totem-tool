@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+
+from .occn import OCCausalNet, OCCausalNetState
+from .replay import (
+    end_object_successors,
+    start_object_successors,
+    state_signature,
+    visible_event_successors,
+)
+from .replay_units import OCCNReplayUnit
 
 
 class OCCNReplayStatus(str, Enum):
@@ -123,3 +132,226 @@ class OCCNReplayFitnessResult:
 
     def _count(self, status: OCCNReplayStatus) -> int:
         return sum(result.status is status for result in self.unit_results)
+
+
+class _ReplayStateLimitReached(Exception):
+    """Raised when a replay unit reaches its deterministic state limit."""
+
+
+class _ReplayStateBudget:
+    """Count distinct states admitted at each successive replay position."""
+
+    def __init__(self, max_states: Optional[int]) -> None:
+        self.max_states = max_states
+        self.explored_state_count = 0
+
+    def admit(self, state: OCCausalNetState, seen: Set[Tuple]) -> bool:
+        signature = state_signature(state)
+        if signature in seen:
+            return False
+        if self.max_states is not None and self.explored_state_count >= self.max_states:
+            raise _ReplayStateLimitReached()
+        seen.add(signature)
+        self.explored_state_count += 1
+        return True
+
+
+SuccessorFunction = Callable[[OCCausalNetState], Tuple[OCCausalNetState, ...]]
+
+
+def occn_replay_fitness(
+    occn: OCCausalNet,
+    replay_units: Iterable[OCCNReplayUnit],
+    *,
+    max_states: Optional[int] = 1000,
+) -> OCCNReplayFitnessResult:
+    """Replay complete event sets and calculate their aggregate fitness.
+
+    Replay follows OCCN binding semantics exactly. Every object is introduced
+    through its artificial start activity before its first visible event, each
+    visible event must bind exactly its observed objects, and all objects must
+    reach their artificial end activities. A replay unit is fitting iff at
+    least one binding sequence finishes in the empty state.
+
+    ``max_states`` bounds the distinct replay-position/state pairs explored
+    per unit. Pass ``None`` for exhaustive binary replay. A bounded search that
+    reaches the limit is reported as inconclusive and excluded from fitness;
+    coverage reports the conclusive share.
+    """
+    if not isinstance(occn, OCCausalNet):
+        raise TypeError("occn must be an OCCausalNet")
+    if max_states is not None and (
+        isinstance(max_states, bool)
+        or not isinstance(max_states, int)
+        or max_states < 1
+    ):
+        raise ValueError("max_states must be a positive int or None")
+
+    try:
+        units = tuple(replay_units)
+    except TypeError as exc:
+        raise ValueError("replay_units must be an iterable") from exc
+    if not all(isinstance(unit, OCCNReplayUnit) for unit in units):
+        raise ValueError("replay_units must contain OCCNReplayUnit values")
+    unit_ids = [unit.unit_id for unit in units]
+    if len(unit_ids) != len(set(unit_ids)):
+        raise ValueError("replay unit identifiers must be unique")
+
+    return OCCNReplayFitnessResult(
+        unit_results=tuple(_replay_unit(occn, unit, max_states) for unit in units)
+    )
+
+
+def _replay_unit(
+    occn: OCCausalNet,
+    unit: OCCNReplayUnit,
+    max_states: Optional[int],
+) -> OCCNReplayUnitResult:
+    object_types = _object_types_by_id(unit)
+    budget = _ReplayStateBudget(max_states)
+    frontier = (OCCausalNetState(),)
+    budget.admit(frontier[0], set())
+    started_objects: Set[str] = set()
+
+    try:
+        for event_index, event in enumerate(unit.events):
+            new_objects = sorted(
+                event.object_ids - started_objects,
+                key=lambda object_id: (object_types[object_id], object_id),
+            )
+            for object_id in new_objects:
+                object_type = object_types[object_id]
+                frontier, _ = _advance_frontier(
+                    frontier,
+                    lambda state, object_id=object_id, object_type=object_type: (
+                        start_object_successors(
+                            occn,
+                            state,
+                            object_id,
+                            object_type,
+                        )
+                    ),
+                    budget,
+                )
+                if not frontier:
+                    return _non_fitting_result(
+                        unit,
+                        budget,
+                        event_index,
+                    )
+                started_objects.add(object_id)
+
+            frontier, _ = _advance_frontier(
+                frontier,
+                lambda state, event=event: visible_event_successors(
+                    occn,
+                    state,
+                    event,
+                ),
+                budget,
+            )
+            if not frontier:
+                return _non_fitting_result(unit, budget, event_index)
+
+        ordered_objects = sorted(
+            object_types,
+            key=lambda object_id: (object_types[object_id], object_id),
+        )
+        for object_index, object_id in enumerate(ordered_objects):
+            object_type = object_types[object_id]
+            is_final_end = object_index == len(ordered_objects) - 1
+            frontier, found_empty = _advance_frontier(
+                frontier,
+                lambda state, object_id=object_id, object_type=object_type: (
+                    end_object_successors(
+                        occn,
+                        state,
+                        object_id,
+                        object_type,
+                    )
+                ),
+                budget,
+                stop_on_empty=is_final_end,
+            )
+            if found_empty:
+                return OCCNReplayUnitResult(
+                    unit_id=unit.unit_id,
+                    status=OCCNReplayStatus.FITTING,
+                    event_count=len(unit.events),
+                    explored_state_count=budget.explored_state_count,
+                )
+            if not frontier:
+                return _non_fitting_result(unit, budget)
+
+        status = (
+            OCCNReplayStatus.FITTING
+            if any(state.is_empty for state in frontier)
+            else OCCNReplayStatus.NON_FITTING
+        )
+        return OCCNReplayUnitResult(
+            unit_id=unit.unit_id,
+            status=status,
+            event_count=len(unit.events),
+            explored_state_count=budget.explored_state_count,
+        )
+    except _ReplayStateLimitReached:
+        return OCCNReplayUnitResult(
+            unit_id=unit.unit_id,
+            status=OCCNReplayStatus.INCONCLUSIVE,
+            event_count=len(unit.events),
+            explored_state_count=budget.explored_state_count,
+            limit_reason="max_states",
+        )
+
+
+def _advance_frontier(
+    frontier: Iterable[OCCausalNetState],
+    successors: SuccessorFunction,
+    budget: _ReplayStateBudget,
+    *,
+    stop_on_empty: bool = False,
+) -> Tuple[Tuple[OCCausalNetState, ...], bool]:
+    next_frontier: List[OCCausalNetState] = []
+    seen: Set[Tuple] = set()
+    for state in frontier:
+        for successor in successors(state):
+            if not budget.admit(successor, seen):
+                continue
+            next_frontier.append(successor)
+            if stop_on_empty and successor.is_empty:
+                return (successor,), True
+    return tuple(next_frontier), False
+
+
+def _object_types_by_id(unit: OCCNReplayUnit) -> Dict[str, str]:
+    object_types: Dict[str, str] = {}
+    for event in unit.events:
+        for object_type, object_ids in event.objects_by_type:
+            for object_id in object_ids:
+                previous_type = object_types.setdefault(object_id, object_type)
+                if previous_type != object_type:
+                    raise ValueError(
+                        f"object {object_id!r} has inconsistent types in "
+                        f"replay unit {unit.unit_id!r}"
+                    )
+    return object_types
+
+
+def _non_fitting_result(
+    unit: OCCNReplayUnit,
+    budget: _ReplayStateBudget,
+    failure_event_index: Optional[int] = None,
+) -> OCCNReplayUnitResult:
+    failure_event_id = (
+        unit.events[failure_event_index].event_id
+        if failure_event_index is not None
+        else None
+    )
+    return OCCNReplayUnitResult(
+        unit_id=unit.unit_id,
+        status=OCCNReplayStatus.NON_FITTING,
+        event_count=len(unit.events),
+        explored_state_count=budget.explored_state_count,
+        failure_event_index=failure_event_index,
+        failure_event_id=failure_event_id,
+    )
