@@ -20,7 +20,13 @@ from django.db.models import Max
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
 # Django side.
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
-from totem_lib import discover_occn, occn_from_dict, serialize_occn
+from totem_lib import (
+    discover_occn,
+    extract_occn_replay_units,
+    occn_from_dict,
+    occn_replay_fitness,
+    serialize_occn,
+)
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import (
@@ -409,16 +415,44 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            occn_from_dict(asset.content_json)
+            occn = occn_from_dict(asset.content_json)
         except (AssertionError, TypeError, ValueError) as exc:
             return Response(
                 {"asset_id": f"Stored OCCN model is invalid: {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        replay_unit_strategy = request_serializer.validated_data[
+            "replay_unit_strategy"
+        ]
+        try:
+            with _with_ocel_db(user_file) as db:
+                replay_units = extract_occn_replay_units(
+                    db,
+                    strategy=replay_unit_strategy,
+                )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to extract OCCN replay units: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            result = occn_replay_fitness(occn, replay_units)
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate OCCN conformance: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         return Response(
-            {"error": "OCCN conformance execution is not implemented yet."},
-            status=status.HTTP_501_NOT_IMPLEMENTED,
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                "replay_unit_strategy": replay_unit_strategy,
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=["get"])
