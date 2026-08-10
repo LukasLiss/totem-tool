@@ -2,7 +2,11 @@ import json
 
 from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
-from totem_lib import validate_occn_dict, validate_totem_dict
+from totem_lib import (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    validate_occn_dict,
+    validate_totem_dict,
+)
 from .models import EventLog, Project, ProjectAsset
 from .models import Dashboard
 from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
@@ -11,6 +15,14 @@ from django.db.models import Max
 
 class TotemConformanceRequestSerializer(serializers.Serializer):
     asset_id = serializers.IntegerField(min_value=1)
+
+
+class OCCNConformanceRequestSerializer(serializers.Serializer):
+    asset_id = serializers.IntegerField(min_value=1)
+    replay_unit_strategy = serializers.ChoiceField(
+        choices=(CONNECTED_COMPONENTS_REPLAY_STRATEGY,),
+        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    )
 
 
 class EventLogSerializer(serializers.ModelSerializer):

@@ -5,7 +5,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
-from .serializers import EventLogSerializer, ProjectAssetSerializer, TotemConformanceRequestSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .serializers import (
+    DashboardComponentPolymorphicSerializer,
+    DashboardSerializer,
+    EventLogSerializer,
+    OCCNConformanceRequestSerializer,
+    ProjectAssetSerializer,
+    TotemConformanceRequestSerializer,
+)
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -13,7 +20,13 @@ from django.db.models import Max
 # with an `OcelDuckDB` arg), so we never construct the polars OCEL on the
 # Django side.
 from totem_lib.dfg import OCDFGDb, NewOCDFGDb
-from totem_lib import discover_occn, serialize_occn
+from totem_lib import (
+    discover_occn,
+    extract_occn_replay_units,
+    occn_from_dict,
+    occn_replay_fitness,
+    serialize_occn,
+)
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import (
@@ -355,6 +368,88 @@ class EventLogViewSet(viewsets.ModelViewSet):
             {
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def occn_conformance(self, request, pk=None):
+        """Check one stored OCCN asset against this event log."""
+        request_serializer = OCCNConformanceRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCCN:
+            return Response(
+                {"asset_id": "Model asset must have type OCCN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            occn = occn_from_dict(asset.content_json)
+        except (AssertionError, TypeError, ValueError) as exc:
+            return Response(
+                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        replay_unit_strategy = request_serializer.validated_data[
+            "replay_unit_strategy"
+        ]
+        try:
+            with _with_ocel_db(user_file) as db:
+                replay_units = extract_occn_replay_units(
+                    db,
+                    strategy=replay_unit_strategy,
+                )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to extract OCCN replay units: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            result = occn_replay_fitness(occn, replay_units)
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate OCCN conformance: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                "replay_unit_strategy": replay_unit_strategy,
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,
