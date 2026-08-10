@@ -5,7 +5,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
-from .serializers import EventLogSerializer, ProjectAssetSerializer, TotemConformanceRequestSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
+from .serializers import (
+    DashboardComponentPolymorphicSerializer,
+    DashboardSerializer,
+    EventLogSerializer,
+    OCCNConformanceRequestSerializer,
+    ProjectAssetSerializer,
+    TotemConformanceRequestSerializer,
+)
 from django.db.models import Max
 
 # DuckDB-first imports. All algorithms exercised by the views below have
@@ -358,6 +365,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def occn_conformance(self, request, pk=None):
+        """Check one stored OCCN asset against this event log."""
+        request_serializer = OCCNConformanceRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {"error": "OCCN conformance execution is not implemented yet."},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
         )
 
     @action(detail=True, methods=["get"])
