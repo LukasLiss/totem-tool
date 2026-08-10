@@ -51,6 +51,48 @@ def _synchronizing_net() -> OCCausalNet:
     )
 
 
+def _branching_net() -> OCCausalNet:
+    return OCCausalNet.from_dict(
+        {
+            "START_order": {"omg": [[("route", "order", (1, 1), 1)]]},
+            "route": {
+                "img": [[("START_order", "order", (1, 1), 1)]],
+                "omg": [
+                    [("finish", "order", (1, 1), 1)],
+                    [("dead_end", "order", (1, 1), 1)],
+                ],
+            },
+            "finish": {
+                "img": [[("route", "order", (1, 1), 1)]],
+                "omg": [[("END_order", "order", (1, 1), 1)]],
+            },
+            "dead_end": {
+                "img": [[("route", "order", (1, 1), 1)]],
+                "omg": [[("END_order", "order", (1, 1), 1)]],
+            },
+            "END_order": {
+                "img": [
+                    [("finish", "order", (1, 1), 1)],
+                    [("dead_end", "order", (1, 1), 1)],
+                ]
+            },
+        }
+    )
+
+
+def _same_type_join_net() -> OCCausalNet:
+    return OCCausalNet.from_dict(
+        {
+            "START_order": {"omg": [[("join", "order", (1, 1), 1)]]},
+            "join": {
+                "img": [[("START_order", "order", (2, 2), 1)]],
+                "omg": [[("END_order", "order", (2, 2), 1)]],
+            },
+            "END_order": {"img": [[("join", "order", (1, 1), 1)]]},
+        }
+    )
+
+
 def _unit(
     unit_id: str,
     *activities: str,
@@ -112,6 +154,42 @@ def test_replays_one_event_that_synchronizes_multiple_object_types():
     assert result.unit_results[0].status is OCCNReplayStatus.FITTING
 
 
+def test_keeps_alternative_output_bindings_until_one_fits():
+    result = occn_replay_fitness(
+        _branching_net(),
+        (_unit("branch", "route", "finish"),),
+        max_states=None,
+    )
+
+    assert result.unit_results[0].status is OCCNReplayStatus.FITTING
+
+
+def test_respects_same_type_object_cardinality():
+    two_orders = OCCNReplayUnit(
+        unit_id="two-orders",
+        strategy="test",
+        events=(
+            OCCNReplayEvent(
+                event_id="join-two",
+                activity="join",
+                timestamp_unix=1,
+                objects_by_type=(("order", ("o1", "o2")),),
+            ),
+        ),
+    )
+    one_order = _unit("one-order", "join")
+
+    result = occn_replay_fitness(
+        _same_type_join_net(),
+        (two_orders, one_order),
+        max_states=None,
+    )
+
+    assert result.unit_results[0].status is OCCNReplayStatus.FITTING
+    assert result.unit_results[1].status is OCCNReplayStatus.NON_FITTING
+    assert result.unit_results[1].failure_event_index == 0
+
+
 def test_reports_the_first_visible_event_that_cannot_be_replayed():
     result = occn_replay_fitness(
         _sequential_net(),
@@ -123,6 +201,19 @@ def test_reports_the_first_visible_event_that_cannot_be_replayed():
     assert unit_result.status is OCCNReplayStatus.NON_FITTING
     assert unit_result.failure_event_index == 0
     assert unit_result.failure_event_id == "unknown-e1"
+
+
+def test_reports_an_object_type_missing_from_the_model_as_non_fitting():
+    result = occn_replay_fitness(
+        _sequential_net(),
+        (_unit("missing-type", "a", object_id="i1", object_type="item"),),
+        max_states=None,
+    )
+
+    unit_result = result.unit_results[0]
+    assert unit_result.status is OCCNReplayStatus.NON_FITTING
+    assert unit_result.failure_event_index == 0
+    assert unit_result.failure_event_id == "missing-type-e1"
 
 
 def test_reports_completion_failure_after_visible_events_replay():
@@ -167,3 +258,20 @@ def test_state_limit_returns_inconclusive_without_false_deviation():
     assert unit_result.explored_state_count == 1
     assert result.fitness is None
     assert result.coverage == pytest.approx(0.0)
+
+
+def test_state_limit_is_deterministic_for_a_branching_replay():
+    first = occn_replay_fitness(
+        _branching_net(),
+        (_unit("limited-branch", "route", "finish"),),
+        max_states=2,
+    )
+    second = occn_replay_fitness(
+        _branching_net(),
+        (_unit("limited-branch", "route", "finish"),),
+        max_states=2,
+    )
+
+    assert first.to_dict() == second.to_dict()
+    assert first.unit_results[0].status is OCCNReplayStatus.INCONCLUSIVE
+    assert first.unit_results[0].explored_state_count == 2
