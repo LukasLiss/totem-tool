@@ -183,7 +183,7 @@ export function ModelAssetsView() {
               onConformanceClick={(asset) =>
                 setViewMode({
                   type: "conformance",
-                  component: "totem",
+                  component: asset.asset_type === "TOTEM" ? "totem" : "occn",
                   assetId: asset.id,
                 })
               }
@@ -541,19 +541,17 @@ function AssetList({
                 {formatDate(asset.updated_at)}
               </span>
               <div className="flex justify-end gap-0.5">
-                {asset.asset_type === "TOTEM" && (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    title={`Use ${asset.name} for conformance`}
-                    aria-label={`Use ${asset.name} for conformance`}
-                    onClick={() => onConformanceClick(asset)}
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <GitCompareArrows />
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Use ${asset.name} for conformance`}
+                  aria-label={`Use ${asset.name} for conformance`}
+                  onClick={() => onConformanceClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <GitCompareArrows />
+                </Button>
                 <Button
                   type="button"
                   size="icon"

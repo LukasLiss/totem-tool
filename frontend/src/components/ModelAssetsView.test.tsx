@@ -66,37 +66,40 @@ describe("ModelAssetsView row actions", () => {
     vi.clearAllMocks();
   });
 
-  it("opens TOTeM conformance with the row model preselected", async () => {
-    const setViewMode = vi.fn();
-    render(
-      <SelectedFileContext.Provider
-        value={{
-          selectedFile: { id: 12, project: 7, file: "event-log.xml" },
-          setSelectedFile: vi.fn(),
-        }}
-      >
-        <DashboardContext.Provider
-          value={{ viewMode: { type: "modelAssets" }, setViewMode }}
+  it.each([
+    ["Reference TOTeM", "totem", 42],
+    ["Reference OCCN", "occn", 43],
+  ] as const)(
+    "opens %s conformance with the row model preselected",
+    async (name, component, assetId) => {
+      const setViewMode = vi.fn();
+      render(
+        <SelectedFileContext.Provider
+          value={{
+            selectedFile: { id: 12, project: 7, file: "event-log.xml" },
+            setSelectedFile: vi.fn(),
+          }}
         >
-          <ModelAssetsView />
-        </DashboardContext.Provider>
-      </SelectedFileContext.Provider>
-    );
+          <DashboardContext.Provider
+            value={{ viewMode: { type: "modelAssets" }, setViewMode }}
+          >
+            <ModelAssetsView />
+          </DashboardContext.Provider>
+        </SelectedFileContext.Provider>
+      );
 
-    await waitFor(() => expect(screen.getByText("Reference TOTeM")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(name)).toBeTruthy());
+      fireEvent.click(
+        screen.getByRole("button", { name: `Use ${name} for conformance` })
+      );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Use Reference TOTeM for conformance",
-      })
-    );
-
-    expect(setViewMode).toHaveBeenCalledWith({
-      type: "conformance",
-      component: "totem",
-      assetId: 42,
-    });
-  });
+      expect(setViewMode).toHaveBeenCalledWith({
+        type: "conformance",
+        component,
+        assetId,
+      });
+    }
+  );
 
   it.each([
     ["Reference TOTeM", "totem", 42],
