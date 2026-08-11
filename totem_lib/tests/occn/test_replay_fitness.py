@@ -126,6 +126,7 @@ def test_replays_a_complete_sequence_to_the_empty_state():
     assert result.fitting_units == 1
     assert result.unit_results[0].status is OCCNReplayStatus.FITTING
     assert result.unit_results[0].replayable is True
+    assert result.unit_results[0].object_types == ("order",)
 
 
 def test_replays_one_event_that_synchronizes_multiple_object_types():
@@ -152,6 +153,7 @@ def test_replays_one_event_that_synchronizes_multiple_object_types():
     )
 
     assert result.unit_results[0].status is OCCNReplayStatus.FITTING
+    assert result.unit_results[0].object_types == ("item", "order")
 
 
 def test_keeps_alternative_output_bindings_until_one_fits():
@@ -199,6 +201,7 @@ def test_reports_the_first_visible_event_that_cannot_be_replayed():
 
     unit_result = result.unit_results[0]
     assert unit_result.status is OCCNReplayStatus.NON_FITTING
+    assert unit_result.object_types == ("order",)
     assert unit_result.failure_event_index == 0
     assert unit_result.failure_event_id == "unknown-e1"
 
@@ -212,6 +215,7 @@ def test_reports_an_object_type_missing_from_the_model_as_non_fitting():
 
     unit_result = result.unit_results[0]
     assert unit_result.status is OCCNReplayStatus.NON_FITTING
+    assert unit_result.object_types == ("item",)
     assert unit_result.failure_event_index == 0
     assert unit_result.failure_event_id == "missing-type-e1"
 
@@ -256,6 +260,7 @@ def test_state_limit_returns_inconclusive_without_false_deviation():
     assert unit_result.status is OCCNReplayStatus.INCONCLUSIVE
     assert unit_result.replayable is None
     assert unit_result.explored_state_count == 1
+    assert unit_result.object_types == ("order",)
     assert result.fitness is None
     assert result.coverage == pytest.approx(0.0)
 

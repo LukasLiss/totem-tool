@@ -6,7 +6,6 @@ import {
   LoaderCircle,
   Network,
   Play,
-  SquareCheckBig,
 } from "lucide-react";
 
 import {
@@ -20,6 +19,8 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnAssetSelector } from "./OccnAssetSelector";
+import { OccnConformanceSummary } from "./OccnConformanceSummary";
+import { OccnReplayUnitExplorer } from "./OccnReplayUnitExplorer";
 import { useOccnConformanceWorkflow } from "./useOccnConformanceWorkflow";
 
 type SelectedEventLog = {
@@ -140,14 +141,10 @@ export function OccnConformanceView({
               description="The replay result will appear here when the calculation finishes."
             />
           ) : workflow.result ? (
-            <StatusMessage
-              tone="success"
-              icon={<SquareCheckBig />}
-              title="Conformance completed"
-              description={`Replay finished for ${
-                assetSelection.selectedAsset?.name ?? "the selected OCCN model"
-              }.`}
-            />
+            <div className="grid gap-4">
+              <OccnConformanceSummary result={workflow.result} />
+              <OccnReplayUnitExplorer units={workflow.result.unit_results} />
+            </div>
           ) : assetSelection.selectedAsset ? (
             <StatusMessage
               tone="neutral"
@@ -177,7 +174,7 @@ function StatusMessage({
   title,
   description,
 }: {
-  tone: "neutral" | "error" | "success";
+  tone: "neutral" | "error";
   icon: ReactNode;
   title: string;
   description: string;
@@ -185,8 +182,6 @@ function StatusMessage({
   const toneClasses = {
     neutral: "border-border bg-muted/30 text-foreground",
     error: "border-destructive/30 bg-destructive/5 text-destructive",
-    success:
-      "border-emerald-600/30 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300",
   }[tone];
 
   return (

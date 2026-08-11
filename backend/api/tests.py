@@ -1198,9 +1198,13 @@ class OCCNConformanceApiTests(TestCase):
             response.data["unit_results"][0]["status"],
             OCCNReplayStatus.FITTING.value,
         )
+        self.assertEqual(
+            response.data["unit_results"][0]["object_types"],
+            ["Order"],
+        )
 
     def test_valid_request_executes_conformance_and_returns_result(self):
-        replay_units = (object(), object())
+        replay_units = (object(), object(), object())
         result = OCCNReplayFitnessResult(
             unit_results=(
                 OCCNReplayUnitResult(
@@ -1208,14 +1212,24 @@ class OCCNConformanceApiTests(TestCase):
                     status=OCCNReplayStatus.FITTING,
                     event_count=2,
                     explored_state_count=4,
+                    object_types=("Order",),
                 ),
                 OCCNReplayUnitResult(
                     unit_id="connected_components:000002",
                     status=OCCNReplayStatus.NON_FITTING,
                     event_count=1,
                     explored_state_count=2,
+                    object_types=("Order", "Item"),
                     failure_event_index=0,
                     failure_event_id="e3",
+                ),
+                OCCNReplayUnitResult(
+                    unit_id="connected_components:000003",
+                    status=OCCNReplayStatus.INCONCLUSIVE,
+                    event_count=8,
+                    explored_state_count=1000,
+                    object_types=("Delivery", "Order"),
+                    limit_reason="max_states",
                 ),
             )
         )
@@ -1260,6 +1274,40 @@ class OCCNConformanceApiTests(TestCase):
         deserialized_occn, called_units = fitness.call_args.args
         self.assertIsInstance(deserialized_occn, OCCausalNet)
         self.assertIs(called_units, replay_units)
+        self.assertEqual(response.data["fitness"], 0.5)
+        self.assertAlmostEqual(response.data["coverage"], 2 / 3)
+        self.assertEqual(response.data["inconclusive_units"], 1)
+
+    def test_empty_replay_result_preserves_complete_aggregate_contract(self):
+        result = OCCNReplayFitnessResult(unit_results=())
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(),
+            ),
+            patch(
+                "api.views.occn_replay_fitness",
+                return_value=result,
+            ),
+        ):
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.occn_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["fitness"])
+        self.assertEqual(response.data["coverage"], 1.0)
+        self.assertEqual(response.data["total_units"], 0)
+        self.assertEqual(response.data["fitting_units"], 0)
+        self.assertEqual(response.data["non_fitting_units"], 0)
+        self.assertEqual(response.data["inconclusive_units"], 0)
+        self.assertEqual(response.data["unit_results"], [])
 
 
 class ProjectAssetApiTests(TestCase):

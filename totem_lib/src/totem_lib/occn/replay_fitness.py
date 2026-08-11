@@ -35,6 +35,7 @@ class OCCNReplayUnitResult:
     failure_event_index: Optional[int] = None
     failure_event_id: Optional[str] = None
     limit_reason: Optional[str] = None
+    object_types: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.unit_id, str) or not self.unit_id:
@@ -45,6 +46,20 @@ class OCCNReplayUnitResult:
             raise ValueError("event_count must be non-negative")
         if self.explored_state_count < 0:
             raise ValueError("explored_state_count must be non-negative")
+        if isinstance(self.object_types, (str, bytes)):
+            raise ValueError("object_types must be an iterable of strings")
+        try:
+            object_types = tuple(self.object_types)
+        except TypeError as exc:
+            raise ValueError("object_types must be an iterable of strings") from exc
+        if any(
+            not isinstance(object_type, str) or not object_type
+            for object_type in object_types
+        ):
+            raise ValueError("object_types must contain non-empty strings")
+        if len(object_types) != len(set(object_types)):
+            raise ValueError("object_types must not contain duplicates")
+        object.__setattr__(self, "object_types", tuple(sorted(object_types)))
         if self.failure_event_index is not None and not (
             0 <= self.failure_event_index < self.event_count
         ):
@@ -65,6 +80,7 @@ class OCCNReplayUnitResult:
             "replayable": self.replayable,
             "event_count": self.event_count,
             "explored_state_count": self.explored_state_count,
+            "object_types": list(self.object_types),
             "failure_event_index": self.failure_event_index,
             "failure_event_id": self.failure_event_id,
             "limit_reason": self.limit_reason,
@@ -279,6 +295,7 @@ def _replay_unit(
                     status=OCCNReplayStatus.FITTING,
                     event_count=len(unit.events),
                     explored_state_count=budget.explored_state_count,
+                    object_types=unit.object_types,
                 )
             if not frontier:
                 return _non_fitting_result(unit, budget)
@@ -293,6 +310,7 @@ def _replay_unit(
             status=status,
             event_count=len(unit.events),
             explored_state_count=budget.explored_state_count,
+            object_types=unit.object_types,
         )
     except _ReplayStateLimitReached:
         return OCCNReplayUnitResult(
@@ -300,6 +318,7 @@ def _replay_unit(
             status=OCCNReplayStatus.INCONCLUSIVE,
             event_count=len(unit.events),
             explored_state_count=budget.explored_state_count,
+            object_types=unit.object_types,
             limit_reason="max_states",
         )
 
@@ -352,6 +371,7 @@ def _non_fitting_result(
         status=OCCNReplayStatus.NON_FITTING,
         event_count=len(unit.events),
         explored_state_count=budget.explored_state_count,
+        object_types=unit.object_types,
         failure_event_index=failure_event_index,
         failure_event_id=failure_event_id,
     )
