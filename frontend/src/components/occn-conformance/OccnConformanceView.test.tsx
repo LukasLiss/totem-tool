@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectAsset } from "@/api/assetsApi";
@@ -12,6 +18,10 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnConformanceView } from "./OccnConformanceView";
 import { useOccnConformanceWorkflow } from "./useOccnConformanceWorkflow";
+import {
+  useOccnReplayUnitDetail,
+  type OccnReplayUnitDetailState,
+} from "./useOccnReplayUnitDetail";
 
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("./OccnAssetSelector", () => ({
@@ -20,8 +30,12 @@ vi.mock("./OccnAssetSelector", () => ({
 vi.mock("./useOccnConformanceWorkflow", () => ({
   useOccnConformanceWorkflow: vi.fn(),
 }));
+vi.mock("./useOccnReplayUnitDetail", () => ({
+  useOccnReplayUnitDetail: vi.fn(),
+}));
 
 const useWorkflowMock = vi.mocked(useOccnConformanceWorkflow);
+const useReplayUnitDetailMock = vi.mocked(useOccnReplayUnitDetail);
 
 const asset: ProjectAsset = {
   id: 42,
@@ -89,7 +103,18 @@ function renderView(
     file: "event-log.xml",
   }
 ) {
-  return render(
+  return render(viewElement(initialAssetId, selectedFile));
+}
+
+function viewElement(
+  initialAssetId?: number,
+  selectedFile: { id: number; project: number; file: string } | null = {
+    id: 12,
+    project: 7,
+    file: "event-log.xml",
+  }
+) {
+  return (
     <SelectedFileContext.Provider
       value={{ selectedFile, setSelectedFile: vi.fn() }}
     >
@@ -98,9 +123,23 @@ function renderView(
   );
 }
 
+function replayUnitDetailState(): OccnReplayUnitDetailState {
+  return {
+    detail: null,
+    loading: false,
+    error: null,
+    requestedOffset: 0,
+    loadPage: vi.fn(),
+    retry: vi.fn(),
+    previousPage: vi.fn(),
+    nextPage: vi.fn(),
+  };
+}
+
 describe("OccnConformanceView", () => {
   beforeEach(() => {
     useWorkflowMock.mockReturnValue(workflowState());
+    useReplayUnitDetailMock.mockReturnValue(replayUnitDetailState());
   });
 
   afterEach(() => {
@@ -147,6 +186,149 @@ describe("OccnConformanceView", () => {
       screen.getByRole("region", { name: "Replay units" }).textContent
     ).toContain("connected_components:000001");
     expect(screen.queryByText("Conformance completed")).toBeNull();
+  });
+
+  it("loads detail for a controlled unit selection", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    renderView();
+
+    expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+      12,
+      null,
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+  });
+
+  it("clears replay-unit inspection when the result or log changes", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    const view = renderView();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+
+    const nextResult = {
+      ...response,
+      unit_results: response.unit_results.map((unit) => ({ ...unit })),
+    };
+    useWorkflowMock.mockReturnValue(workflowState({ result: nextResult }));
+    view.rerender(viewElement());
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        nextResult.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+
+    view.rerender(
+      viewElement(undefined, {
+        id: 13,
+        project: 7,
+        file: "replacement-log.xml",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        13,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+  });
+
+  it("clears replay-unit inspection when the selected model changes", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    const view = renderView();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+
+    const replacementAsset = {
+      ...asset,
+      id: 43,
+      name: "Replacement OCCN",
+    };
+    useWorkflowMock.mockReturnValue(
+      workflowState({
+        result: response,
+        assetSelection: {
+          ...workflowState().assetSelection,
+          assets: [replacementAsset],
+          selectedAssetId: replacementAsset.id,
+          selectedAsset: replacementAsset,
+        },
+      })
+    );
+    view.rerender(viewElement());
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
   });
 
   it("renders an inconclusive response without a success claim", () => {

@@ -10,6 +10,7 @@ from .serializers import (
     DashboardSerializer,
     EventLogSerializer,
     OCCNConformanceRequestSerializer,
+    OCCNReplayUnitDetailRequestSerializer,
     ProjectAssetSerializer,
     TotemConformanceRequestSerializer,
 )
@@ -451,6 +452,95 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
                 **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["get"])
+    def occn_replay_unit_detail(self, request, pk=None):
+        """Return one bounded event page for a derived OCCN replay unit."""
+        request_serializer = OCCNReplayUnitDetailRequestSerializer(
+            data=request.query_params
+        )
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        replay_unit_strategy = request_serializer.validated_data[
+            "replay_unit_strategy"
+        ]
+        try:
+            with _with_ocel_db(user_file) as db:
+                replay_units = extract_occn_replay_units(
+                    db,
+                    strategy=replay_unit_strategy,
+                )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to extract OCCN replay units: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        unit_id = request_serializer.validated_data["unit_id"]
+        replay_unit = next(
+            (unit for unit in replay_units if unit.unit_id == unit_id),
+            None,
+        )
+        if replay_unit is None:
+            return Response(
+                {"unit_id": "Replay unit not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        offset = request_serializer.validated_data["offset"]
+        limit = request_serializer.validated_data["limit"]
+        total_count = len(replay_unit.events)
+        event_page = replay_unit.events[offset : offset + limit]
+        returned_count = len(event_page)
+        has_previous = offset > 0 and total_count > 0
+        has_next = offset + returned_count < total_count
+        last_page_offset = (
+            ((total_count - 1) // limit) * limit if total_count > 0 else 0
+        )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "unit_id": replay_unit.unit_id,
+                "replay_unit_strategy": replay_unit_strategy,
+                "event_count": total_count,
+                "object_types": list(replay_unit.object_types),
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": returned_count,
+                    "total_count": total_count,
+                    "has_previous": has_previous,
+                    "has_next": has_next,
+                    "previous_offset": (
+                        min(max(0, offset - limit), last_page_offset)
+                        if has_previous
+                        else None
+                    ),
+                    "next_offset": offset + limit if has_next else None,
+                },
+                "events": [
+                    {
+                        "event_index": offset + index,
+                        **event.to_dict(),
+                    }
+                    for index, event in enumerate(event_page)
+                ],
             },
             status=status.HTTP_200_OK,
         )

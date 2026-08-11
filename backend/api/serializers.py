@@ -25,6 +25,16 @@ class OCCNConformanceRequestSerializer(serializers.Serializer):
     )
 
 
+class OCCNReplayUnitDetailRequestSerializer(serializers.Serializer):
+    unit_id = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    replay_unit_strategy = serializers.ChoiceField(
+        choices=(CONNECTED_COMPONENTS_REPLAY_STRATEGY,),
+        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    )
+    offset = serializers.IntegerField(min_value=0, default=0)
+    limit = serializers.IntegerField(min_value=1, max_value=250, default=50)
+
+
 class EventLogSerializer(serializers.ModelSerializer):
      class Meta:
         #not including user to ensure security

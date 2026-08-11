@@ -1,4 +1,4 @@
-import { useContext, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   FileText,
@@ -10,6 +10,8 @@ import {
 
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  type OCCNConformanceResponse,
+  type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
 import { Button } from "@/components/ui/button";
@@ -20,8 +22,10 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnAssetSelector } from "./OccnAssetSelector";
 import { OccnConformanceSummary } from "./OccnConformanceSummary";
+import { OccnReplayUnitDetail } from "./OccnReplayUnitDetail";
 import { OccnReplayUnitExplorer } from "./OccnReplayUnitExplorer";
 import { useOccnConformanceWorkflow } from "./useOccnConformanceWorkflow";
+import { useOccnReplayUnitDetail } from "./useOccnReplayUnitDetail";
 
 type SelectedEventLog = {
   id?: number;
@@ -32,6 +36,12 @@ type SelectedEventLog = {
 const REPLAY_UNIT_STRATEGY_LABELS: Record<OCCNReplayUnitStrategy, string> = {
   [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Connected components",
 };
+
+interface ReplayUnitSelection {
+  contextKey: string;
+  result: OCCNConformanceResponse;
+  unitId: string;
+}
 
 export function OccnConformanceView({
   initialAssetId,
@@ -49,6 +59,36 @@ export function OccnConformanceView({
     positiveId(initialAssetId)
   );
   const { assetSelection } = workflow;
+  const [replayUnitSelection, setReplayUnitSelection] =
+    useState<ReplayUnitSelection | null>(null);
+  const replayUnitContextKey =
+    eventLogId && projectId && assetSelection.selectedAssetId
+      ? `${eventLogId}:${projectId}:${assetSelection.selectedAssetId}:${workflow.replayUnitStrategy}`
+      : null;
+  const selectedReplayUnit = resolveSelectedReplayUnit(
+    replayUnitSelection,
+    replayUnitContextKey,
+    workflow.result
+  );
+
+  useEffect(() => {
+    setReplayUnitSelection(null);
+  }, [replayUnitContextKey, workflow.result]);
+
+  const replayUnitDetail = useOccnReplayUnitDetail(
+    eventLogId,
+    selectedReplayUnit,
+    workflow.replayUnitStrategy
+  );
+
+  function selectReplayUnit(unit: OCCNReplayUnitResult) {
+    if (!replayUnitContextKey || !workflow.result) return;
+    setReplayUnitSelection({
+      contextKey: replayUnitContextKey,
+      result: workflow.result,
+      unitId: unit.unit_id,
+    });
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -143,7 +183,17 @@ export function OccnConformanceView({
           ) : workflow.result ? (
             <div className="grid gap-4">
               <OccnConformanceSummary result={workflow.result} />
-              <OccnReplayUnitExplorer units={workflow.result.unit_results} />
+              <OccnReplayUnitExplorer
+                units={workflow.result.unit_results}
+                selectedUnitId={selectedReplayUnit?.unit_id ?? null}
+                onSelectUnit={selectReplayUnit}
+              />
+              {selectedReplayUnit ? (
+                <OccnReplayUnitDetail
+                  unit={selectedReplayUnit}
+                  detailState={replayUnitDetail}
+                />
+              ) : null}
             </div>
           ) : assetSelection.selectedAsset ? (
             <StatusMessage
@@ -165,6 +215,26 @@ export function OccnConformanceView({
         </div>
       </main>
     </div>
+  );
+}
+
+function resolveSelectedReplayUnit(
+  selection: ReplayUnitSelection | null,
+  contextKey: string | null,
+  result: OCCNConformanceResponse | null
+): OCCNReplayUnitResult | null {
+  if (
+    !selection ||
+    !contextKey ||
+    selection.contextKey !== contextKey ||
+    selection.result !== result
+  ) {
+    return null;
+  }
+
+  return (
+    result.unit_results.find((unit) => unit.unit_id === selection.unitId) ??
+    null
   );
 }
 

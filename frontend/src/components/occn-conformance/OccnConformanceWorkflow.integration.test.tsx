@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  getOCCNReplayUnitDetail,
   runOCCNConformance,
   type OCCNConformanceResponse,
+  type OCCNReplayUnitDetailResponse,
 } from "@/api/occnConformanceApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -25,7 +27,11 @@ vi.mock("@/api/occnConformanceApi", async () => {
   const actual = await vi.importActual<
     typeof import("@/api/occnConformanceApi")
   >("@/api/occnConformanceApi");
-  return { ...actual, runOCCNConformance: vi.fn() };
+  return {
+    ...actual,
+    getOCCNReplayUnitDetail: vi.fn(),
+    runOCCNConformance: vi.fn(),
+  };
 });
 
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
@@ -56,6 +62,7 @@ vi.mock("./OccnAssetSelector", () => ({
 }));
 
 const listAssetsMock = vi.mocked(listAssets);
+const getReplayUnitDetailMock = vi.mocked(getOCCNReplayUnitDetail);
 const runOCCNConformanceMock = vi.mocked(runOCCNConformance);
 
 const asset: ProjectAsset = {
@@ -111,6 +118,50 @@ const nonFittingResponse: OCCNConformanceResponse = {
   ],
 };
 
+const replayUnitDetail: OCCNReplayUnitDetailResponse = {
+  file_id: 12,
+  unit_id: response.unit_results[0].unit_id,
+  replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  event_count: 3,
+  object_types: ["Order"],
+  pagination: {
+    offset: 0,
+    limit: 50,
+    returned_count: 3,
+    total_count: 3,
+    has_previous: false,
+    has_next: false,
+    previous_offset: null,
+    next_offset: null,
+  },
+  events: [
+    {
+      event_index: 0,
+      event_id: "event-1",
+      activity: "Create Order",
+      timestamp_unix: 1_735_689_600,
+      objects_by_type: { Order: ["order-1"] },
+    },
+    {
+      event_index: 1,
+      event_id: "event-2",
+      activity: "Ship Order",
+      timestamp_unix: 1_735_689_660,
+      objects_by_type: {
+        Item: ["item-1"],
+        Order: ["order-1"],
+      },
+    },
+    {
+      event_index: 2,
+      event_id: "event-3",
+      activity: "Close Order",
+      timestamp_unix: 1_735_689_720,
+      objects_by_type: { Order: ["order-1"] },
+    },
+  ],
+};
+
 function renderWorkflow(
   initialAssetId?: number,
   selectedFile: { id: number; project: number; file: string } | null = {
@@ -138,8 +189,10 @@ function renderWorkflow(
 describe("OCCN conformance workflow integration", () => {
   beforeEach(() => {
     listAssetsMock.mockReset();
+    getReplayUnitDetailMock.mockReset();
     runOCCNConformanceMock.mockReset();
     listAssetsMock.mockResolvedValue([asset]);
+    getReplayUnitDetailMock.mockResolvedValue(replayUnitDetail);
     runOCCNConformanceMock.mockResolvedValue(response);
   });
 
@@ -179,6 +232,26 @@ describe("OCCN conformance workflow integration", () => {
       asset.id,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY
     );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(getReplayUnitDetailMock).toHaveBeenCalledWith(
+        12,
+        response.unit_results[0].unit_id,
+        {
+          replayUnitStrategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+          offset: 0,
+          limit: 50,
+        }
+      )
+    );
+    expect(
+      screen.getByRole("region", { name: "Replay unit detail" }).textContent
+    ).toContain("Create Order");
   });
 
   it("replaces the visible result when conformance is run again", async () => {
@@ -195,6 +268,17 @@ describe("OCCN conformance workflow integration", () => {
       ).toContain("Every replay unit can be replayed")
     );
 
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+
     fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
     await waitFor(() =>
       expect(
@@ -203,6 +287,11 @@ describe("OCCN conformance workflow integration", () => {
     );
 
     expect(runOCCNConformanceMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
     expect(screen.queryByText("Conformance completed")).toBeNull();
   });
 
@@ -221,6 +310,61 @@ describe("OCCN conformance workflow integration", () => {
         CONNECTED_COMPONENTS_REPLAY_STRATEGY
       )
     );
+  });
+
+  it("shows a known failure in the loaded replay-unit detail", async () => {
+    runOCCNConformanceMock.mockResolvedValue(nonFittingResponse);
+    renderWorkflow(asset.id);
+
+    await waitFor(() =>
+      expect(screen.getByText("Ready to calculate")).toBeTruthy()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
+    await waitFor(() =>
+      expect(screen.getByText("Deviations found")).toBeTruthy()
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+
+    await waitFor(() => expect(screen.getByText("Failure point")).toBeTruthy());
+    expect(
+      screen.getByText("First failing event").parentElement?.textContent
+    ).toContain("Event 2 of 3 / event-2");
+  });
+
+  it("retries a failed replay-detail request", async () => {
+    getReplayUnitDetailMock
+      .mockRejectedValueOnce(new Error("Detail service unavailable"))
+      .mockResolvedValueOnce(replayUnitDetail);
+    renderWorkflow(asset.id);
+
+    await waitFor(() =>
+      expect(screen.getByText("Ready to calculate")).toBeTruthy()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Conformance result" }).textContent
+      ).toContain("Every replay unit can be replayed")
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Detail service unavailable"
+      )
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByText("Create Order")).toBeTruthy());
+    expect(getReplayUnitDetailMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not load models or enable execution without an event log", () => {
