@@ -36,6 +36,7 @@ from totem_lib.simulation.utils.resource_constraints import generate_resource_co
 from totem_lib.simulation.utils.resource_calendar import discover_resource_calendars
 from totem_lib.simulation.utils.resource_statistics import resource_cooldown_distribution as compute_resource_cooldown, calculate_resource_allocation_strategy
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
+from totem_lib.variants.state_space_executions import find_object_structure_variants
 import networkx as nx
 import polars as pl
 
@@ -2485,8 +2486,14 @@ def _apply_simulation_overrides(simulation_model, overrides):
         simulation_model.resource_calendars = resource_calendars
 
     # --- Variant-keyed overrides (need the ordered variant list) ---
+    # The simple playout keys everything on control-flow ``variants``; the advanced
+    # (state-space) playout keys on ``structure_variants`
     playout = simulation_model.playout_strategy
-    variants = list(getattr(playout, "variants", []) or [])
+    variants = list(
+        getattr(playout, "variants", None)
+        or getattr(playout, "structure_variants", None)
+        or []
+    )
     if not variants:
         return
 
@@ -2506,8 +2513,10 @@ def _apply_simulation_overrides(simulation_model, overrides):
         simulation_model.resource_constraints = merged
 
     arrival_overrides = overrides.get("arrival_distributions") or {}
-    if arrival_overrides:
-        arrival_dist = playout.variant_arrival_distribution
+    arrival_dist = getattr(playout, "variant_arrival_distribution", None)
+    if arrival_dist is None:
+        arrival_dist = getattr(playout, "arrival_distribution", None)
+    if arrival_overrides and arrival_dist is not None:
         for idx, variant in enumerate(variants):
             per_variant = arrival_overrides.get(str(idx))
             if per_variant is None:
@@ -2998,6 +3007,7 @@ def get_simulation_details(request):
     support_threshold = request.data.get("support_threshold", 0.8)
     min_variant_frequency = request.data.get("min_variant_frequency", 0.05)
     min_variant_executions = request.data.get("min_variant_executions", 5)
+    mode = request.data.get("mode", "simple")
     progress_id = request.data.get("progress_id")
 
     if not file_id:
@@ -3029,9 +3039,18 @@ def get_simulation_details(request):
         mlpa = mlpaDiscovery(totem)
         filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
 
-        # Compute variants
-        _report_progress(progress_id, _SIM_DETAILS_STEPS, 2)
-        variants = find_object_variants_connected_component(filtered_ocel)
+        # Compute variants_report_progress(progress_id, _SIM_DETAILS_STEPS, 2)
+        if mode == "advanced":
+            variants = find_object_structure_variants(filtered_ocel)
+            eid_to_activity = dict(
+                zip(
+                    filtered_ocel.events["_eventId"].to_list(),
+                    filtered_ocel.events["_activity"].to_list(),
+                )
+            )
+        else:
+            variants = find_object_variants_connected_component(filtered_ocel)
+            eid_to_activity = None
 
         # Compute arrival distribution
         arrival_dist = compute_variant_arrival_distribution(filtered_ocel, variants)
@@ -3082,9 +3101,17 @@ def get_simulation_details(request):
             var_constraints = per_variant_constraints.get(variant, {})
             uses_fallback = variant not in per_variant_constraints
 
-            # Get activity sequence from variant graph
+            # Get activity sequence
             activity_sequence = []
-            if hasattr(variant, 'graph') and variant.graph is not None:
+            if eid_to_activity is not None:
+                acts = set()
+                for execution in variant.executions:
+                    for eid in execution:
+                        act = eid_to_activity.get(eid)
+                        if act:
+                            acts.add(act)
+                activity_sequence = sorted(acts)
+            elif hasattr(variant, 'graph') and variant.graph is not None:
                 for _, node_data in sorted(variant.graph.nodes(data=True), key=lambda x: x[0]):
                     activity_sequence.append(node_data.get('label', ''))
 

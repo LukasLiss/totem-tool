@@ -203,6 +203,7 @@ export type SimulationDetailsRequest = {
   support_threshold?: number;
   min_variant_frequency?: number;
   min_variant_executions?: number;
+  mode?: SimulationMode;
   // Client-generated id under which the backend publishes step progress
   progress_id?: string;
 };

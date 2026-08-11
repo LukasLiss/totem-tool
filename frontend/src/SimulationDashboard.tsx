@@ -150,21 +150,15 @@ const StepProgress: React.FC<{ steps: string[]; active: number; percent?: number
 
 const SimulationStepper: React.FC<{
   phase: Phase;
-  mode: SimulationMode;
   onGoConfigure: () => void;
   onGoDetails: () => void;
-}> = ({ phase, mode, onGoConfigure, onGoDetails }) => {
-  const steps: { key: string; title: string }[] =
-    mode === "advanced"
-      ? [
-          { key: "configure", title: "Basics" },
-          { key: "results", title: "Results" },
-        ]
-      : [
-          { key: "configure", title: "Basics" },
-          { key: "details", title: "Details" },
-          { key: "results", title: "Results" },
-        ];
+}> = ({ phase, onGoConfigure, onGoDetails }) => {
+  // review and adjust the discovered parameters before running, in either mode.
+  const steps: { key: string; title: string }[] = [
+    { key: "configure", title: "Basics" },
+    { key: "details", title: "Details" },
+    { key: "results", title: "Results" },
+  ];
 
   // "running" is a transient state that belongs to the final (Results) step.
   const phaseKey = phase === "running" ? "results" : phase;
@@ -497,7 +491,7 @@ export const SimulationDashboard: React.FC = () => {
     if (!fileId) return;
 
     const resourceTypes = Object.keys(resourcePool).filter((k) => resourcePool[k] > 0);
-    const cacheKey = `${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${supportThreshold}_${minVariantFrequency}_${minVariantExecutions}`;
+    const cacheKey = `${mode}_${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${supportThreshold}_${minVariantFrequency}_${minVariantExecutions}`;
 
     setDetailsLoading(true);
     setDetailsError("");
@@ -518,6 +512,7 @@ export const SimulationDashboard: React.FC = () => {
             support_threshold: supportThreshold,
             min_variant_frequency: minVariantFrequency,
             min_variant_executions: minVariantExecutions,
+            mode,
             progress_id: progressId,
           });
         } finally {
@@ -785,7 +780,6 @@ export const SimulationDashboard: React.FC = () => {
       {/* Wizard step indicator */}
       <SimulationStepper
         phase={phase}
-        mode={mode}
         onGoConfigure={() => { setPhase("configure"); setDetails(null); }}
         onGoDetails={() => setPhase("details")}
       />
@@ -1078,16 +1072,10 @@ export const SimulationDashboard: React.FC = () => {
                 {/* Wrapper span keeps the tooltip firing even when the button is
                     disabled (a disabled button emits no pointer events). */}
                 <span className="block w-full">
-                  {mode === "simple" ? (
-                    <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
-                      onClick={handleLoadDetails}>
-                      {detailsLoading ? "Loading details..." : "Load Simulation Details"}
-                    </Button>
-                  ) : (
-                    <Button className="w-full" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
-                      Run Advanced Simulation
-                    </Button>
-                  )}
+                  <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
+                    onClick={handleLoadDetails}>
+                    {detailsLoading ? "Loading details..." : "Load Simulation Details"}
+                  </Button>
                 </span>
               </TooltipTrigger>
               {loadDetailsHint && <TooltipContent>{loadDetailsHint}</TooltipContent>}
@@ -1098,7 +1086,7 @@ export const SimulationDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Phase: Details (Simple mode) */}
+      {/* Phase: Details*/}
       {phase === "details" && details && (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
