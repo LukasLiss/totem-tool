@@ -16,6 +16,7 @@ export interface OCCNReplayUnitResult {
   replayable: boolean | null;
   event_count: number;
   explored_state_count: number;
+  object_types: string[];
   failure_event_index: number | null;
   failure_event_id: string | null;
   limit_reason: string | null;

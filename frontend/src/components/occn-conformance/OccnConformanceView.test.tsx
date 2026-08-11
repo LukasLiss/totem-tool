@@ -45,7 +45,19 @@ const response: OCCNConformanceResponse = {
   fitting_units: 1,
   non_fitting_units: 0,
   inconclusive_units: 0,
-  unit_results: [],
+  unit_results: [
+    {
+      unit_id: "connected_components:000001",
+      status: "fitting",
+      replayable: true,
+      event_count: 3,
+      explored_state_count: 7,
+      object_types: ["Order"],
+      failure_event_index: null,
+      failure_event_id: null,
+      limit_reason: null,
+    },
+  ],
 };
 
 function workflowState(overrides: Record<string, unknown> = {}) {
@@ -111,7 +123,7 @@ describe("OccnConformanceView", () => {
     expect(useWorkflowMock).toHaveBeenCalledWith(12, 7, 42);
   });
 
-  it("shows running, failure, and completion states", () => {
+  it("shows running, failure, and result states", () => {
     useWorkflowMock.mockReturnValue(
       workflowState({ running: true, canRun: false })
     );
@@ -128,8 +140,43 @@ describe("OccnConformanceView", () => {
     cleanup();
     useWorkflowMock.mockReturnValue(workflowState({ result: response }));
     renderView();
-    expect(screen.getByText("Conformance completed")).toBeTruthy();
-    expect(screen.getByText(/Replay finished for Reference OCCN/)).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Conformance result" }).textContent
+    ).toContain("Every replay unit can be replayed");
+    expect(
+      screen.getByRole("region", { name: "Replay units" }).textContent
+    ).toContain("connected_components:000001");
+    expect(screen.queryByText("Conformance completed")).toBeNull();
+  });
+
+  it("renders an inconclusive response without a success claim", () => {
+    useWorkflowMock.mockReturnValue(
+      workflowState({
+        result: {
+          ...response,
+          fitness: null,
+          coverage: 0,
+          fitting_units: 0,
+          inconclusive_units: 1,
+          unit_results: [
+            {
+              ...response.unit_results[0],
+              status: "inconclusive",
+              replayable: null,
+              explored_state_count: 1000,
+              limit_reason: "max_states",
+            },
+          ],
+        },
+      })
+    );
+    renderView();
+
+    const summary = screen.getByRole("region", { name: "Conformance result" });
+    expect(summary.textContent).toContain("Inconclusive");
+    expect(summary.textContent).toContain("Not available");
+    expect(summary.textContent).toContain("0%");
+    expect(screen.queryByText("Conformance completed")).toBeNull();
   });
 
   it("disables execution without an event log", () => {

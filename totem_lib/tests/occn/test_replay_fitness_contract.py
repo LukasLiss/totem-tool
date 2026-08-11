@@ -17,6 +17,7 @@ def _unit_result(unit_id: str, status: OCCNReplayStatus):
         status=status,
         event_count=2,
         explored_state_count=3,
+        object_types=("order", "item"),
     )
 
 
@@ -36,6 +37,37 @@ def test_unit_result_exposes_binary_and_inconclusive_outcomes():
     assert non_fitting.replayable is False
     assert inconclusive.replayable is None
     assert inconclusive.to_dict()["status"] == "inconclusive"
+    assert inconclusive.object_types == ("item", "order")
+    assert inconclusive.to_dict()["object_types"] == ["item", "order"]
+
+
+def test_unit_result_rejects_invalid_object_type_summaries():
+    for object_types in (("order", "order"), ("",), (1,), "order"):
+        with pytest.raises(ValueError, match="object_types"):
+            OCCNReplayUnitResult(
+                unit_id="invalid-object-types",
+                status=OCCNReplayStatus.FITTING,
+                event_count=1,
+                explored_state_count=1,
+                object_types=object_types,
+            )
+
+
+def test_object_types_do_not_change_existing_positional_arguments():
+    result = OCCNReplayUnitResult(
+        "positional",
+        OCCNReplayStatus.NON_FITTING,
+        2,
+        3,
+        1,
+        "event-2",
+        None,
+        ("order",),
+    )
+
+    assert result.failure_event_index == 1
+    assert result.failure_event_id == "event-2"
+    assert result.object_types == ("order",)
 
 
 def test_aggregate_result_reports_fitness_coverage_and_counts():

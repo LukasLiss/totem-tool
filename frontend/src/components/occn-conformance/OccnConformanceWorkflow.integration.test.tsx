@@ -80,7 +80,35 @@ const response: OCCNConformanceResponse = {
   fitting_units: 1,
   non_fitting_units: 0,
   inconclusive_units: 0,
-  unit_results: [],
+  unit_results: [
+    {
+      unit_id: "connected_components:000001",
+      status: "fitting",
+      replayable: true,
+      event_count: 3,
+      explored_state_count: 7,
+      object_types: ["Order"],
+      failure_event_index: null,
+      failure_event_id: null,
+      limit_reason: null,
+    },
+  ],
+};
+
+const nonFittingResponse: OCCNConformanceResponse = {
+  ...response,
+  fitness: 0,
+  fitting_units: 0,
+  non_fitting_units: 1,
+  unit_results: [
+    {
+      ...response.unit_results[0],
+      status: "non_fitting",
+      replayable: false,
+      failure_event_index: 1,
+      failure_event_id: "event-2",
+    },
+  ],
 };
 
 function renderWorkflow(
@@ -120,7 +148,7 @@ describe("OCCN conformance workflow integration", () => {
     vi.clearAllMocks();
   });
 
-  it("selects a stored model, runs conformance, and confirms completion", async () => {
+  it("selects a stored model, runs conformance, and renders its result", async () => {
     renderWorkflow();
 
     await waitFor(() =>
@@ -139,13 +167,43 @@ describe("OCCN conformance workflow integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Conformance completed")).toBeTruthy()
+      expect(
+        screen.getByRole("region", { name: "Conformance result" }).textContent
+      ).toContain("Every replay unit can be replayed")
     );
+    expect(
+      screen.getByRole("region", { name: "Replay units" }).textContent
+    ).toContain("connected_components:000001");
     expect(runOCCNConformanceMock).toHaveBeenCalledWith(
       12,
       asset.id,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY
     );
+  });
+
+  it("replaces the visible result when conformance is run again", async () => {
+    runOCCNConformanceMock
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce(nonFittingResponse);
+    renderWorkflow(asset.id);
+
+    await waitFor(() => expect(screen.getByText("Ready to calculate")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Conformance result" }).textContent
+      ).toContain("Every replay unit can be replayed")
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Conformance result" }).textContent
+      ).toContain("Deviations found")
+    );
+
+    expect(runOCCNConformanceMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Conformance completed")).toBeNull();
   });
 
   it("runs directly with an asset preselected by Model Assets", async () => {

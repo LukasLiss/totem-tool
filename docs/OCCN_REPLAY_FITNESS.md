@@ -56,6 +56,12 @@ added to the event log or returned as visible events.
 - `inconclusive`: the configured state limit was reached before either outcome
   was proven.
 
+Each unit result also contains its event count, involved object types, explored
+state count, and any available failure or search-limit information. Object
+types are returned in deterministic alphabetical order. The result contract
+does not include full event or object details; those remain replay-unit input
+data rather than aggregate fitness data.
+
 Inconclusive units are not treated as deviations. Aggregate values are:
 
 ```text
