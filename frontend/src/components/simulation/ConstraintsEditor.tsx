@@ -253,24 +253,29 @@ const ConstraintList: React.FC<{
 }> = ({ constraints, onRemove }) => (
   <div className="space-y-1 max-h-48 overflow-y-auto">
     {constraints.map(({ act1, act2, resType, type }, idx) => (
-      <div key={idx} className="flex items-center gap-2 text-xs bg-muted/30 rounded px-2 py-1.5">
+      <div
+        key={idx}
+        className="grid grid-cols-[auto_1fr_auto_1fr_auto] items-center gap-2 text-xs bg-muted/30 rounded px-2 py-1.5"
+      >
         <Badge variant="outline" className="text-[10px] shrink-0" title={`Resource type: ${resType}`}>
           {resType}
         </Badge>
-        <span className="font-medium truncate max-w-[140px]" title={act1}>{act1}</span>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] border ${constraintColor(type)}`}>
+        <span className="font-medium truncate min-w-0 text-right" title={act1}>{act1}</span>
+        <span className={`justify-self-center whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] border ${constraintColor(type)}`}>
           {type.replace("_", " ")}
         </span>
-        <span className="font-medium truncate max-w-[140px]" title={act2}>{act2}</span>
-        {onRemove && (
+        <span className="font-medium truncate min-w-0 text-left" title={act2}>{act2}</span>
+        {onRemove ? (
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
+            className="justify-self-end h-5 w-5 p-0 text-muted-foreground hover:text-destructive"
             onClick={() => onRemove(act1, act2, resType)}
           >
             x
           </Button>
+        ) : (
+          <span aria-hidden />
         )}
       </div>
     ))}
