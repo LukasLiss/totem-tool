@@ -97,9 +97,14 @@ export function FileUploadValidator() {
       setShowConversionModal(false);
       setIsConverting(false);
       navigate("/overview");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Upload failed:", err);
-      toast.error("Upload failed");
+      const errorDesc =
+        err?.response?.data?.error ||
+        err?.response?.data?.file?.[0] ||
+        err?.response?.data?.detail ||
+        "Upload failed";
+      toast.error("Upload failed", { description: errorDesc });
       setIsConverting(false);
     }
   };
@@ -145,15 +150,30 @@ export function FileUploadValidator() {
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
                 <span>{file?.name ?? "No file chosen"}</span>
             </div>
-              <Button className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
+              <Button className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit" disabled={isConverting}>Validate & Upload</Button>
           </div>
         </CardFooter>
       </form>
     </CardContent>
   </Card>
 
-  <Dialog open={showConversionModal} onOpenChange={setShowConversionModal}>
-    <DialogContent showCloseButton={!isConverting}>
+  <Dialog open={showConversionModal} onOpenChange={(open) => {
+    if (!isConverting) {
+      setShowConversionModal(open);
+    }
+  }}>
+    <DialogContent
+      showCloseButton={!isConverting}
+      onEscapeKeyDown={(e) => {
+        if (isConverting) e.preventDefault();
+      }}
+      onPointerDownOutside={(e) => {
+        if (isConverting) e.preventDefault();
+      }}
+      onInteractOutside={(e) => {
+        if (isConverting) e.preventDefault();
+      }}
+    >
       <DialogHeader>
         <DialogTitle>DuckDB Conversion Required</DialogTitle>
         <DialogDescription>

@@ -113,7 +113,15 @@ def import_ocel_db(
         )
     size_mb = os.path.getsize(file_path) / 1024 / 1024
     dispatchers = stream if size_mb >= streaming_threshold_mb else bulk
-    return dispatchers[fmt](file_path, db_path, graceful_import)
+    try:
+        return dispatchers[fmt](file_path, db_path, graceful_import)
+    except Exception:
+        if db_path != ":memory:" and os.path.exists(db_path):
+            try:
+                os.remove(db_path)
+            except OSError:
+                pass
+        raise
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
 from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
 from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
@@ -240,20 +240,50 @@ class EventLogViewSet(viewsets.ModelViewSet):
             base_name, _ = os.path.splitext(file_path)
             new_path = base_name + ".duckdb"
             
-            # Import and convert the file into the new DuckDB database
-            db = import_ocel_db(file_path, db_path=new_path)
-            db.close()
-            
-            # Remove the original uploaded file from disk
+            db = None
             try:
-                os.remove(file_path)
-            except OSError:
-                pass
-            
-            # Update the event_log to point to the new file
-            original_name, _ = os.path.splitext(event_log.file.name)
-            event_log.file.name = original_name + ".duckdb"
-            event_log.save(update_fields=['file'])
+                try:
+                    # Import and convert the file into the new DuckDB database
+                    db = import_ocel_db(file_path, db_path=new_path)
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+                
+                # Remove the original uploaded file from disk
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+                
+                # Update the event_log to point to the new file
+                original_name, _ = os.path.splitext(event_log.file.name)
+                event_log.file.name = original_name + ".duckdb"
+                event_log.save(update_fields=['file'])
+            except Exception as e:
+                # Clean up half-written .duckdb file if it exists
+                if os.path.exists(new_path):
+                    try:
+                        os.remove(new_path)
+                    except OSError:
+                        pass
+                
+                # Clean up original uploaded file if it still exists
+                try:
+                    if event_log.file and os.path.exists(event_log.file.path):
+                        os.remove(event_log.file.path)
+                except OSError:
+                    pass
+
+                # Delete event_log and project records
+                event_log.delete()
+                project.delete()
+
+                raise serializers.ValidationError(
+                    {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
+                )
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):
