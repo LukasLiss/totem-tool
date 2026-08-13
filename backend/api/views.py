@@ -222,37 +222,68 @@ class EventLogViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
 
-        user = self.request.user
+        user = self.request.user if self.request.user.is_authenticated else None
 
         file_name = serializer.validated_data['file'].name
-        project_name = f"{slugify(file_name)}_{user.username}"    
+        project_name = f"{slugify(file_name)}_{user.username if user else 'anonymous'}"    
 
         project = Project.objects.create(name=project_name)
-        project.users.add(user)
-        project.save()
+        if user:
+            project.users.add(user)
+            project.save()
         serializer.save(project=project)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        self.perform_create(serializer)
-        user_file = serializer.instance
-        
         from totem_lib.ocel.validation import OCELValidationException
         try:
+            self.perform_create(serializer)
+            user_file = serializer.instance
+            
             db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db
                 _OCEL_DB_LOCKS[pk] = threading.Lock()
         except OCELValidationException as e:
-            user_file.project.delete()
-            user_file.delete()
+            if hasattr(serializer, 'instance') and serializer.instance:
+                user_file = serializer.instance
+                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
+                    try:
+                        os.remove(user_file.file.path)
+                    except OSError:
+                        pass
+                if hasattr(user_file, 'project') and user_file.project:
+                    try:
+                        user_file.project.delete()
+                    except Exception:
+                        pass
+                if user_file.pk:
+                    try:
+                        user_file.delete()
+                    except Exception:
+                        pass
             return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            user_file.project.delete()
-            user_file.delete()
+            if hasattr(serializer, 'instance') and serializer.instance:
+                user_file = serializer.instance
+                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
+                    try:
+                        os.remove(user_file.file.path)
+                    except OSError:
+                        pass
+                if hasattr(user_file, 'project') and user_file.project:
+                    try:
+                        user_file.project.delete()
+                    except Exception:
+                        pass
+                if user_file.pk:
+                    try:
+                        user_file.delete()
+                    except Exception:
+                        pass
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         headers = self.get_success_headers(serializer.data)
