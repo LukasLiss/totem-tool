@@ -197,13 +197,14 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton className="flex w-full items-center justify-between">
-                      <Dialog open={open} onOpenChange={setOpen}>
-                        <DialogTrigger className="pr-9 hover:bg-accent rounded flex w-full items-center justify-between">
-                          <Plus className="w-4 h-4"/>
-                          <span >Add Dashboard</span>
+                    <Dialog open={open} onOpenChange={setOpen}>
+                      <SidebarMenuSubButton asChild className="cursor-pointer">
+                        <DialogTrigger>
+                          <Plus className="w-4 h-4 shrink-0" />
+                          <span className="truncate">Add Dashboard</span>
                         </DialogTrigger>
-                        <DialogContent className="sm:max-w-[425px]">
+                      </SidebarMenuSubButton>
+                      <DialogContent className="sm:max-w-[425px]">
                           <form
                             onSubmit={async (e) => {
                               e.preventDefault();
