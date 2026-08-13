@@ -18,6 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.playout import (
     PlayoutEvent,
