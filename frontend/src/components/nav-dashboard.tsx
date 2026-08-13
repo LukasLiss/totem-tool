@@ -243,7 +243,6 @@ export function NavDashboard({
                           </form>
                         </DialogContent>
                       </Dialog>
-                    </SidebarMenuSubButton>
                   </SidebarMenuSubItem>
                 </SidebarMenuSub>
               </CollapsibleContent>
