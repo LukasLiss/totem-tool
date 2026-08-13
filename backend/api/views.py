@@ -231,7 +231,6 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if user:
             project.users.add(user)
             project.save()
-        
         event_log = serializer.save(project=project)
         
         # Check if the file needs DuckDB conversion
