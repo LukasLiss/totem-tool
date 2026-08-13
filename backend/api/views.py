@@ -222,14 +222,15 @@ class EventLogViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
 
-        user = self.request.user
+        user = self.request.user if self.request.user.is_authenticated else None
 
         file_name = serializer.validated_data['file'].name
-        project_name = f"{slugify(file_name)}_{user.username}"    
+        project_name = f"{slugify(file_name)}_{user.username if user else 'anonymous'}"    
 
         project = Project.objects.create(name=project_name)
-        project.users.add(user)
-        project.save()
+        if user:
+            project.users.add(user)
+            project.save()
         
         event_log = serializer.save(project=project)
         
@@ -243,8 +244,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             db = None
             try:
                 try:
-                    # Import and convert the file into the new DuckDB database
-                    db = import_ocel_db(file_path, db_path=new_path)
+                    # Import and convert the file into the new DuckDB database with strict validation
+                    db = import_ocel_db(file_path, db_path=new_path, strict_mode=True)
                 finally:
                     if db is not None:
                         try:
@@ -262,7 +263,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 original_name, _ = os.path.splitext(event_log.file.name)
                 event_log.file.name = original_name + ".duckdb"
                 event_log.save(update_fields=['file'])
-            except Exception as e:
+            except Exception:
                 # Clean up half-written .duckdb file if it exists
                 if os.path.exists(new_path):
                     try:
@@ -278,12 +279,72 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     pass
 
                 # Delete event_log and project records
-                event_log.delete()
-                project.delete()
+                try:
+                    event_log.delete()
+                except Exception:
+                    pass
+                try:
+                    project.delete()
+                except Exception:
+                    pass
 
-                raise serializers.ValidationError(
-                    {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
-                )
+                raise
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        from totem_lib.ocel.validation import OCELValidationException
+        try:
+            self.perform_create(serializer)
+            user_file = serializer.instance
+            
+            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
+            with _OCEL_DB_REGISTRY_LOCK:
+                pk = int(user_file.pk)
+                _OCEL_DB_REGISTRY[pk] = db
+                _OCEL_DB_LOCKS[pk] = threading.Lock()
+        except OCELValidationException as e:
+            if hasattr(serializer, 'instance') and serializer.instance:
+                user_file = serializer.instance
+                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
+                    try:
+                        os.remove(user_file.file.path)
+                    except OSError:
+                        pass
+                if hasattr(user_file, 'project') and user_file.project:
+                    try:
+                        user_file.project.delete()
+                    except Exception:
+                        pass
+                if user_file.pk:
+                    try:
+                        user_file.delete()
+                    except Exception:
+                        pass
+            return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            if hasattr(serializer, 'instance') and serializer.instance:
+                user_file = serializer.instance
+                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
+                    try:
+                        os.remove(user_file.file.path)
+                    except OSError:
+                        pass
+                if hasattr(user_file, 'project') and user_file.project:
+                    try:
+                        user_file.project.delete()
+                    except Exception:
+                        pass
+                if user_file.pk:
+                    try:
+                        user_file.delete()
+                    except Exception:
+                        pass
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):
@@ -776,14 +837,21 @@ class DashboardViewSet(viewsets.ModelViewSet):
 # Long-term we may also persist the converted DuckDB to disk on upload so
 # cache misses skip the re-import — that's a follow-up, not done here.
 
-def _build_ocel_db_from_path(path: str) -> OcelDuckDB:
+def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB:
     """Open an uploaded OCEL file as an `OcelDuckDB`, dispatching on extension."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".duckdb":
-        return OcelDuckDB.load(path)
+        db = OcelDuckDB.load(path)
+        if strict_mode:
+            from totem_lib.ocel.validation import validate_ocel, OCELValidationException
+            errors = validate_ocel(db.conn)
+            if errors:
+                db.close()
+                raise OCELValidationException(errors)
+        return db
     if ext in (".sqlite", ".db", ".json", ".xml", ".csv"):
         # `import_ocel_db` infers the format from the extension.
-        return import_ocel_db(path)
+        return import_ocel_db(path, strict_mode=strict_mode)
     raise ValueError(
         f"Unsupported file type: {ext}. "
         "Supported formats: .sqlite, .db, .json, .xml, .csv, .duckdb"
