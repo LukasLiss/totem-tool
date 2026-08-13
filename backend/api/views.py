@@ -262,7 +262,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 original_name, _ = os.path.splitext(event_log.file.name)
                 event_log.file.name = original_name + ".duckdb"
                 event_log.save(update_fields=['file'])
-            except Exception:
+            except Exception as e:
                 # Clean up half-written .duckdb file if it exists
                 if os.path.exists(new_path):
                     try:
@@ -287,7 +287,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 except Exception:
                     pass
 
-                raise
+                if isinstance(e, OCELValidationException):
+                    raise
+                raise serializers.ValidationError(
+                    {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
+                )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -303,6 +307,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db
                 _OCEL_DB_LOCKS[pk] = threading.Lock()
+        except serializers.ValidationError as e:
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
             if hasattr(serializer, 'instance') and serializer.instance:
                 user_file = serializer.instance
