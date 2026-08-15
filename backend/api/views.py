@@ -17,6 +17,11 @@ from totem_lib import discover_occn, serialize_occn
 from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
+from totem_lib.process_areas import (
+    INDICATOR_NAMES,
+    prepare_db,
+    process_areas_from_aggregates,
+)
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.playout import (
@@ -34,6 +39,7 @@ import networkx as nx
 
 from django.core.cache import cache
 
+import math
 import os
 from hashlib import sha1
 import json
@@ -312,6 +318,79 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=["get"])
+    def discover_process_areas(self, request, pk=None):
+        """
+        Advanced resource-based process area discovery (thesis section 4.1).
+
+        Same response schema as `discover_mlpa` — only the engine that decides
+        the layering differs, so the frontend can switch between the two by
+        changing the URL and nothing else.
+
+        Query parameters: `w_temporal`, `w_cardinality`, `w_divergence`,
+        `alpha`, `beta`.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            params = _parse_process_area_params(request.query_params)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Every parameter is part of the key. `discover_mlpa` keys on the
+            # file alone, which is fine because it takes no parameters; copying
+            # that here would make the UI sliders silently return the first
+            # result for an hour.
+            cache_key = _process_area_cache_key(user_file.pk, params)
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
+            # Two-tier cache. Preparation reads the log and depends only on it;
+            # the weights and alpha/beta only affect scoring and the ILP solve.
+            # Caching the two separately turns a slider change into a solve
+            # instead of a full rediscovery.
+            prep_key = f"process_area_prep_{user_file.pk}"
+            aggregates = cache.get(prep_key)
+            totem_key = f"totem_discovery_{user_file.pk}"
+            totem_data = cache.get(totem_key)
+
+            if aggregates is None or totem_data is None:
+                with _with_ocel_db(user_file) as db:
+                    if aggregates is None:
+                        aggregates = prepare_db(db)
+                        cache.set(prep_key, aggregates, timeout=3600)
+                    if totem_data is None:
+                        totem_data = totem_to_dict(totemDiscovery_db(db))
+                        cache.set(totem_key, totem_data, timeout=3600)
+
+            process_view = process_areas_from_aggregates(
+                aggregates,
+                weights=params["weights"],
+                alpha=params["alpha"],
+                beta=params["beta"],
+            )
+
+            serialized = {
+                "layers": _serialize_process_layers(process_view),
+                "tempgraph": totem_data["tempgraph"],
+                "type_relations": totem_data["type_relations"],
+                "all_event_types": totem_data["all_event_types"],
+                "object_type_to_event_types": totem_data["object_type_to_event_types"],
+            }
+
+            cache.set(cache_key, serialized, timeout=3600)
+            return Response(serialized, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"An error occurred during process area discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
@@ -843,19 +922,76 @@ def _layout_shim(db: OcelDuckDB):
 
 
 
-def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
-    """
-    Convert MLPA output into a JSON-serializable structure for the frontend.
+# Defaults reproduce the thesis: uniform indicator weights, both objective
+# terms weighted equally, and the thesis margin of exactly 1 (`margin_scale`
+# is a reference-implementation extension and is not exposed over HTTP).
+PROCESS_AREA_DEFAULTS = {"alpha": 1.0, "beta": 1.0, "weight": 1.0}
 
-    MLPA returns: {level: [(object_types_set, event_types_set), ...], ...}
-    We convert to: {layers: [{level, areas: [{objectTypes, eventTypes}]}], ...}
+
+def _positive_float(params, name: str, default: float) -> float:
+    """
+    Read one non-negative, finite float query parameter.
+
+    Raises `ValueError` so the caller can answer 400 — letting a bad value
+    through surfaces later as a ZeroDivisionError or a NaN in the ILP, i.e. a
+    500 for what is really a malformed request.
+    """
+    raw = params.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number, got {raw!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _parse_process_area_params(params) -> dict:
+    """Validate the query parameters of the process-area discovery endpoint."""
+    weights = {
+        name: _positive_float(
+            params, f"w_{name}", PROCESS_AREA_DEFAULTS["weight"]
+        )
+        for name in INDICATOR_NAMES
+    }
+    if sum(weights.values()) <= 0:
+        raise ValueError(
+            "at least one of "
+            + ", ".join(f"w_{name}" for name in INDICATOR_NAMES)
+            + " must be greater than zero"
+        )
+    return {
+        "weights": weights,
+        "alpha": _positive_float(params, "alpha", PROCESS_AREA_DEFAULTS["alpha"]),
+        "beta": _positive_float(params, "beta", PROCESS_AREA_DEFAULTS["beta"]),
+    }
+
+
+def _process_area_cache_key(file_pk, params: dict) -> str:
+    """Cache key covering the file and every discovery parameter."""
+    parts = [f"{name}={params['weights'][name]:.6g}" for name in INDICATOR_NAMES]
+    parts.append(f"alpha={params['alpha']:.6g}")
+    parts.append(f"beta={params['beta']:.6g}")
+    return f"process_areas_{file_pk}_" + "_".join(parts)
+
+
+def _serialize_process_layers(process_view: dict) -> list:
+    """
+    Convert a process view — the shape both `mlpaDiscovery` and
+    `discover_process_areas` return — into the frontend's layer list.
+
+    {level: [(object_types, event_types), ...]}
+      -> [{"level": int, "areas": [{"objectTypes": [...], "eventTypes": [...]}]}]
     """
     layers = []
 
-    # Sort levels (they are floats like 0.0, 1.0, 2.0)
-    sorted_levels = sorted(process_view.keys())
-
-    for level in sorted_levels:
+    # Sort levels (MLPA produces floats like 0.0, 1.0, 2.0; the process-area
+    # discovery produces ints)
+    for level in sorted(process_view.keys()):
         areas = []
         for object_types_set, event_types_set in process_view[level]:
             # Convert sets to sorted lists for JSON serialization
@@ -872,11 +1008,21 @@ def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
             "areas": areas,
         })
 
+    return layers
+
+
+def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
+    """
+    Convert MLPA output into a JSON-serializable structure for the frontend.
+
+    MLPA returns: {level: [(object_types_set, event_types_set), ...], ...}
+    We convert to: {layers: [{level, areas: [{objectTypes, eventTypes}]}], ...}
+    """
     # Also include the serialized totem data for edge information
     totem_data = totem_to_dict(totem)
 
     return {
-        "layers": layers,
+        "layers": _serialize_process_layers(process_view),
         "tempgraph": totem_data["tempgraph"],
         "type_relations": totem_data["type_relations"],
         "all_event_types": totem_data["all_event_types"],

@@ -12,9 +12,16 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory
 from totem_lib.totem import Totem, totem_to_dict
+from totem_lib.process_areas import (
+    CardinalityCounts,
+    DivergenceCounts,
+    LogAggregates,
+    TemporalCounts,
+)
 
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+from .views import _parse_process_area_params, _process_area_cache_key
 
 
 def valid_totem_content_json():
@@ -975,3 +982,197 @@ class PlayoutEndpointTests(TestCase):
         raw = '{"variants": [{"events": [], "objectCounts": {"A": 1e400}}]}'
         response = self.client.post(EXPORT_OCEL_URL, data=raw, content_type="application/json")
         self.assertEqual(response.status_code, 400, response.content)
+
+
+class ProcessAreaDiscoveryApiTests(TestCase):
+    """
+    `discover_process_areas` — the advanced (thesis section 4.1) layering
+    engine, exposed alongside `discover_mlpa` rather than replacing it.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="process-area-user")
+        self.project = Project.objects.create(name="Project PA")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _totem(self):
+        return Totem(
+            tempgraph={
+                "nodes": {"Order", "Item", "Worker"},
+                "D": {("Order", "Item")},
+                "Di": set(),
+                "I": set(),
+                "Ii": set(),
+                "P": {("Order", "Worker")},
+            },
+            cardinalities={("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
+            type_relations={
+                frozenset(("Order", "Item")),
+                frozenset(("Order", "Worker")),
+            },
+            all_event_types={"Create Order", "Pick Item"},
+            object_type_to_event_types={
+                "Order": {"Create Order"},
+                "Item": {"Pick Item"},
+                "Worker": {"Pick Item"},
+            },
+        )
+
+    def _aggregates(self):
+        """
+        A three-type toy log: Worker outlives Order, which outlives Item.
+        Enough structure that the ILP produces a real hierarchy.
+        """
+        types = ("Item", "Order", "Worker")
+        temporal = {}
+        for source in types:
+            for target in types:
+                temporal[(source, target)] = TemporalCounts(total=10)
+        temporal[("Item", "Order")] = TemporalCounts(total=10, dependent=10)
+        temporal[("Order", "Worker")] = TemporalCounts(total=10, dependent=10)
+        temporal[("Item", "Worker")] = TemporalCounts(total=10, dependent=10)
+
+        return LogAggregates(
+            object_types=types,
+            object_counts={"Item": 30, "Order": 10, "Worker": 2},
+            temporal=temporal,
+            cardinality={
+                (source, target): CardinalityCounts(total=10, constant=10)
+                for source in types
+                for target in types
+            },
+            divergence={
+                (source, target): DivergenceCounts(related_sources=10)
+                for source in types
+                for target in types
+            },
+            event_types_by_object_type={
+                "Order": frozenset({"Create Order"}),
+                "Item": frozenset({"Pick Item"}),
+                "Worker": frozenset({"Pick Item"}),
+            },
+            all_event_types=frozenset({"Create Order", "Pick Item"}),
+            type_relations=frozenset(
+                {frozenset({"Order", "Item"}), frozenset({"Order", "Worker"})}
+            ),
+        )
+
+    def _get(self, query=""):
+        url = f"/api/files/{self.event_log.pk}/discover_process_areas/{query}"
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.totemDiscovery_db", return_value=self._totem()),
+            patch("api.views.prepare_db", return_value=self._aggregates()) as prepared,
+        ):
+            return self.client.get(url), prepared
+
+    def test_returns_the_same_schema_as_mlpa(self):
+        response, _ = self._get()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            set(response.data),
+            {
+                "layers",
+                "tempgraph",
+                "type_relations",
+                "all_event_types",
+                "object_type_to_event_types",
+            },
+        )
+        layers = response.data["layers"]
+        self.assertTrue(layers)
+        for layer in layers:
+            self.assertIn("level", layer)
+            for area in layer["areas"]:
+                self.assertIn("objectTypes", area)
+                self.assertIn("eventTypes", area)
+
+    def test_resources_land_on_the_higher_layers(self):
+        # alpha weights the resource force. Turning it up is exactly how a user
+        # asks for a hierarchy rather than a flat, cohesion-dominated view.
+        response, _ = self._get("?alpha=25")
+        level_of = {
+            object_type: layer["level"]
+            for layer in response.data["layers"]
+            for area in layer["areas"]
+            for object_type in area["objectTypes"]
+        }
+        self.assertGreater(level_of["Worker"], level_of["Order"])
+        self.assertGreater(level_of["Order"], level_of["Item"])
+
+    def test_each_parameter_gets_its_own_cache_entry(self):
+        first, _ = self._get("?alpha=1")
+        second, _ = self._get("?alpha=25")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertNotEqual(first.data["layers"], second.data["layers"])
+
+    def test_every_parameter_is_part_of_the_cache_key(self):
+        base = _parse_process_area_params({})
+        base_key = _process_area_cache_key(1, base)
+        for query, value in [
+            ("w_temporal", "0.5"),
+            ("w_cardinality", "0.5"),
+            ("w_divergence", "0.5"),
+            ("alpha", "2"),
+            ("beta", "3"),
+        ]:
+            changed = _parse_process_area_params({query: value})
+            self.assertNotEqual(
+                base_key, _process_area_cache_key(1, changed), query
+            )
+        self.assertNotEqual(base_key, _process_area_cache_key(2, base))
+
+    def test_preparation_is_cached_across_parameter_changes(self):
+        _, first_prepare = self._get("?alpha=1")
+        _, second_prepare = self._get("?alpha=25")
+        self.assertEqual(first_prepare.call_count, 1)
+        self.assertEqual(second_prepare.call_count, 0)
+
+    def test_repeated_identical_request_is_served_from_cache(self):
+        self._get("?alpha=4")
+        _, prepared = self._get("?alpha=4")
+        self.assertEqual(prepared.call_count, 0)
+
+    def test_unknown_file_is_a_404(self):
+        response = self.client.get("/api/files/999999/discover_process_areas/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_parameters_are_400_not_500(self):
+        for query in [
+            "?alpha=-1",
+            "?beta=-0.5",
+            "?alpha=abc",
+            "?beta=nan",
+            "?alpha=inf",
+            "?w_temporal=-2",
+            "?w_temporal=0&w_cardinality=0&w_divergence=0",
+        ]:
+            with self.subTest(query=query):
+                response = self.client.get(
+                    f"/api/files/{self.event_log.pk}/discover_process_areas/{query}"
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_400_BAD_REQUEST, query
+                )
+                self.assertIn("error", response.data)
+
+    def test_mlpa_cache_key_is_untouched(self):
+        totem = self._totem()
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.totemDiscovery_db", return_value=totem),
+        ):
+            response = self.client.get(
+                f"/api/files/{self.event_log.pk}/discover_mlpa/"
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(cache.get(f"mlpa_discovery_{self.event_log.pk}"))
