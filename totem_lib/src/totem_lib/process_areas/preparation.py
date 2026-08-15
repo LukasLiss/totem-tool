@@ -186,6 +186,51 @@ def _cardinality_counts(
     return counts
 
 
+def _activity_and_relation_data(ocel, type_to_objects):
+    """
+    Activities per object type, all activities, and co-occurring type pairs.
+
+    ``type_relations`` matches ``Totem.type_relations``: unordered pairs of
+    *distinct* object types that share at least one event. Explicit O2O edges do
+    not contribute, so that the process-area boxes drawn from it stay identical
+    to the ones ``mlpaDiscovery`` produces.
+    """
+    object_to_type: Dict[str, str] = {
+        obj: object_type
+        for object_type, objects in type_to_objects.items()
+        for obj in objects
+    }
+
+    event_types_by_object_type: Dict[str, Set[str]] = {}
+    all_event_types: Set[str] = set()
+    type_relations: Set[frozenset] = set()
+
+    for event_id in ocel.events["_eventId"]:
+        activity = ocel.get_event_activity(event_id)
+        all_event_types.add(activity)
+
+        types_in_event = {
+            object_to_type[obj]
+            for obj in ocel.get_event_objectIDs(event_id)
+            if obj in object_to_type
+        }
+        for object_type in types_in_event:
+            event_types_by_object_type.setdefault(object_type, set()).add(activity)
+        for type_a in types_in_event:
+            for type_b in types_in_event:
+                if type_a != type_b:
+                    type_relations.add(frozenset({type_a, type_b}))
+
+    return (
+        {
+            object_type: frozenset(activities)
+            for object_type, activities in event_types_by_object_type.items()
+        },
+        frozenset(all_event_types),
+        frozenset(type_relations),
+    )
+
+
 def _divergence_counts(
     ocel, object_types, o2o, type_to_objects
 ) -> Dict[Tuple[str, str], DivergenceCounts]:
@@ -268,6 +313,11 @@ def prepare(ocel) -> LogAggregates:
     """
     object_types = sorted(ocel.object_types)
     min_times, max_times, o2o, type_to_objects = _build_o2o(ocel)
+    (
+        event_types_by_object_type,
+        all_event_types,
+        type_relations,
+    ) = _activity_and_relation_data(ocel, type_to_objects)
 
     return LogAggregates(
         object_types=tuple(object_types),
@@ -280,4 +330,7 @@ def prepare(ocel) -> LogAggregates:
         ),
         cardinality=_cardinality_counts(object_types, o2o, type_to_objects),
         divergence=_divergence_counts(ocel, object_types, o2o, type_to_objects),
+        event_types_by_object_type=event_types_by_object_type,
+        all_event_types=all_event_types,
+        type_relations=type_relations,
     )

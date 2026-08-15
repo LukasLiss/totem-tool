@@ -13,7 +13,7 @@ between "read the log" and "score the log" has two consequences that matter:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from typing import Dict, FrozenSet, Tuple
 
 
 TypePair = Tuple[str, str]
@@ -84,6 +84,12 @@ class LogAggregates:
     :param temporal: temporal counters per ordered type pair.
     :param cardinality: cardinality counters per ordered type pair.
     :param divergence: divergence counters per ordered type pair.
+    :param event_types_by_object_type: activities each object type participates
+        in. Used to lift the layer assignment from object types to activities.
+    :param all_event_types: every activity in the log.
+    :param type_relations: unordered pairs of object types sharing at least one
+        event. Same definition as ``Totem.type_relations``, and used for the
+        same purpose: splitting a layer into connected process areas.
     """
 
     object_types: Tuple[str, ...]
@@ -91,3 +97,6 @@ class LogAggregates:
     temporal: Dict[TypePair, TemporalCounts] = field(default_factory=dict)
     cardinality: Dict[TypePair, CardinalityCounts] = field(default_factory=dict)
     divergence: Dict[TypePair, DivergenceCounts] = field(default_factory=dict)
+    event_types_by_object_type: Dict[str, FrozenSet[str]] = field(default_factory=dict)
+    all_event_types: FrozenSet[str] = frozenset()
+    type_relations: FrozenSet[FrozenSet[str]] = frozenset()

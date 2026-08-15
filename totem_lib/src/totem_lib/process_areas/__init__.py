@@ -26,6 +26,11 @@ from .aggregates import (
     LogAggregates,
     TemporalCounts,
 )
+from .discovery import (
+    build_process_view,
+    discover_process_areas,
+    process_areas_from_aggregates,
+)
 from .indicators import (
     INDICATOR_NAMES,
     CardinalityIndicator,
@@ -49,5 +54,8 @@ __all__ = [
     "ResourceIndicator",
     "TemporalIndicator",
     "assign_layers",
+    "build_process_view",
+    "discover_process_areas",
+    "process_areas_from_aggregates",
     "prepare",
 ]
