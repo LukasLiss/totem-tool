@@ -9,15 +9,55 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   RefreshCcw,
   ScanIcon,
+  SlidersHorizontal,
   ZoomOut,
   ZoomIn,
 } from 'lucide-react';
-import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
+import TotemVisualizer, {
+  PROCESS_AREA_ALGORITHM_LABELS,
+  type ProcessAreaAlgorithm,
+  type ProcessAreaParams,
+  type TotemVisualizerControls,
+} from './TotemVisualizer';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
+
+/**
+ * The five tunables of the advanced algorithm.
+ *
+ * `alpha` and `beta` are labelled by what they do rather than by their symbol:
+ * alpha decides how hard resources are pushed above the types they serve,
+ * beta how hard related types are pulled onto the same layer. Both are shown
+ * with their symbol so the panel maps onto the thesis.
+ */
+const PARAM_CONTROLS: Array<{
+  key: keyof ProcessAreaParams;
+  label: string;
+  hint: string;
+  max: number;
+}> = [
+  { key: 'wTemporal', label: 'Temporal', hint: 'Resources outlive what they serve', max: 2 },
+  { key: 'wCardinality', label: 'Cardinality', hint: 'Resources serve varying numbers of objects', max: 2 },
+  { key: 'wDivergence', label: 'Divergence', hint: 'Resources are swapped out between executions', max: 2 },
+  { key: 'alpha', label: 'Separation (α)', hint: 'How strongly resources are pushed upwards', max: 25 },
+  { key: 'beta', label: 'Cohesion (β)', hint: 'How strongly related types are pulled together', max: 25 },
+];
 
 export type ProcessAreaProps = {
   fileId?: number | string | null;
@@ -77,6 +117,81 @@ export default function ProcessArea({
         <CardAction className="flex items-center gap-2">
           {totemControls && (
             <>
+              <Select
+                value={totemControls.algorithm}
+                onValueChange={(value) =>
+                  totemControls.onAlgorithmChange(value as ProcessAreaAlgorithm)
+                }
+              >
+                <SelectTrigger className="h-8 w-[230px]" aria-label="Discovery algorithm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(PROCESS_AREA_ALGORITHM_LABELS) as ProcessAreaAlgorithm[]).map(
+                    (value) => (
+                      <SelectItem key={value} value={value}>
+                        {PROCESS_AREA_ALGORITHM_LABELS[value]}
+                      </SelectItem>
+                    ),
+                  )}
+                </SelectContent>
+              </Select>
+              {/* The parameters only exist for the advanced algorithm; showing
+                  them next to MLPA would suggest they do something. */}
+              {totemControls.algorithm === 'advanced' && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="rounded-full h-8 w-8"
+                      title="Indicator weights and layering parameters"
+                    >
+                      <SlidersHorizontal className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-[320px] space-y-4">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Resource indicators</p>
+                      <p className="text-xs text-muted-foreground">
+                        Which signals decide what counts as a resource, and how strongly
+                        the hierarchy is pulled apart.
+                      </p>
+                    </div>
+                    {PARAM_CONTROLS.map(({ key, label, hint, max }) => (
+                      <div key={key} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">{label}</Label>
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {totemControls.params[key].toFixed(2)}
+                          </span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={max}
+                          step={max > 5 ? 0.5 : 0.05}
+                          value={[totemControls.params[key]]}
+                          onValueChange={(values) =>
+                            totemControls.onParamChange(key, values?.[0] ?? 0)
+                          }
+                        />
+                        <p className="text-[11px] text-muted-foreground">{hint}</p>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      onClick={totemControls.onParamsReset}
+                    >
+                      Reset to defaults
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+              )}
+              <div className="w-px h-6 bg-border" />
               <div className="flex items-center gap-2">
                 <ZoomOut className="h-4 w-4 text-muted-foreground" />
                 <Slider

@@ -49,6 +49,53 @@ type ProcessLayer = {
   areas: ProcessAreaDefinition[];
 };
 
+/**
+ * Which engine decides the object-type hierarchy.
+ *
+ * - `mlpa`      — temporal relations only (Liss & van der Aalst, BPM 2025).
+ * - `advanced`  — the three resource indicators of Schlegelmilch's thesis
+ *                 section 4.1, tunable through {@link ProcessAreaParams}.
+ *
+ * Both endpoints return the same payload, so switching changes the URL and
+ * nothing else in the render path.
+ */
+export type ProcessAreaAlgorithm = 'mlpa' | 'advanced';
+
+/**
+ * Parameters of the advanced algorithm.
+ *
+ * The weights decide how much each indicator contributes. `alpha` and `beta`
+ * balance the two halves of the ILP objective, and follow the **thesis**
+ * convention: `alpha` weights the resource force (separation), `beta` the
+ * attractive force (cohesion). The reference implementation names them the
+ * other way round; getting this backwards makes both sliders feel inverted.
+ */
+export type ProcessAreaParams = {
+  wTemporal: number;
+  wCardinality: number;
+  wDivergence: number;
+  alpha: number;
+  beta: number;
+};
+
+export const DEFAULT_PROCESS_AREA_ALGORITHM: ProcessAreaAlgorithm = 'advanced';
+
+export const DEFAULT_PROCESS_AREA_PARAMS: ProcessAreaParams = {
+  wTemporal: 1,
+  wCardinality: 1,
+  wDivergence: 1,
+  alpha: 1,
+  beta: 1,
+};
+
+export const PROCESS_AREA_ALGORITHM_LABELS: Record<ProcessAreaAlgorithm, string> = {
+  mlpa: 'MLPA (temporal)',
+  advanced: 'Advanced (resource indicators)',
+};
+
+/** Every committed slider change is a backend round-trip; don't fire per pixel. */
+const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
+
 export type TotemVisualizerControls = {
   processAreaScale: number;
   onProcessAreaScaleChange: (value: number) => void;
@@ -57,6 +104,11 @@ export type TotemVisualizerControls = {
   minScale: number;
   maxScale: number;
   scaleStep: number;
+  algorithm: ProcessAreaAlgorithm;
+  onAlgorithmChange: (value: ProcessAreaAlgorithm) => void;
+  params: ProcessAreaParams;
+  onParamChange: (key: keyof ProcessAreaParams, value: number) => void;
+  onParamsReset: () => void;
 };
 
 type TotemVisualizerProps = {
@@ -4557,266 +4609,9 @@ function computeDetailLayout(
   return layout;
 }
 
-function computeLevelAssignments(data: TotemApiResponse): Map<string, number> {
-  const nodes = new Set<string>();
-
-  const ensureNode = (node: string | undefined | null) => {
-    if (!node) return;
-    nodes.add(node);
-  };
-
-  (data.tempgraph?.nodes ?? []).forEach((node) => ensureNode(node));
-
-  const collectEdgeNodes = (edges?: unknown) => {
-    if (!Array.isArray(edges)) return;
-    (edges as string[][]).forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        ensureNode(pair[0]);
-        ensureNode(pair[1]);
-      }
-    });
-  };
-
-  collectEdgeNodes(data.tempgraph?.D);
-  collectEdgeNodes((data.tempgraph as Record<string, unknown>)?.Di);
-  collectEdgeNodes(data.tempgraph?.P);
-
-  class UnionFind {
-    private parent = new Map<string, string>();
-    private rank = new Map<string, number>();
-
-    constructor(values: Iterable<string>) {
-      Array.from(values).forEach((value) => {
-        this.parent.set(value, value);
-        this.rank.set(value, 0);
-      });
-    }
-
-    find(value: string): string {
-      const parentValue = this.parent.get(value);
-      if (!parentValue || parentValue === value) return value;
-      const root = this.find(parentValue);
-      this.parent.set(value, root);
-      return root;
-    }
-
-    union(a?: string, b?: string) {
-      if (!a || !b) return;
-      const rootA = this.find(a);
-      const rootB = this.find(b);
-      if (rootA === rootB) return;
-      const rankA = this.rank.get(rootA) ?? 0;
-      const rankB = this.rank.get(rootB) ?? 0;
-      if (rankA < rankB) {
-        this.parent.set(rootA, rootB);
-      } else if (rankA > rankB) {
-        this.parent.set(rootB, rootA);
-      } else {
-        this.parent.set(rootB, rootA);
-        this.rank.set(rootA, rankA + 1);
-      }
-    }
-  }
-
-  const unionFind = new UnionFind(nodes);
-
-  const parallelEdges = data.tempgraph?.P as string[][];
-  if (Array.isArray(parallelEdges)) {
-    parallelEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        unionFind.union(pair[0], pair[1]);
-      }
-    });
-  }
-
-  const componentByNode = new Map<string, string>();
-  nodes.forEach((node) => {
-    componentByNode.set(node, unionFind.find(node));
-  });
-
-  const componentAdjacency = new Map<string, Set<string>>();
-  const componentIndegree = new Map<string, number>();
-
-  const ensureComponent = (component: string) => {
-    if (!componentAdjacency.has(component)) componentAdjacency.set(component, new Set());
-    if (!componentIndegree.has(component)) componentIndegree.set(component, 0);
-  };
-
-  componentByNode.forEach((component) => ensureComponent(component));
-
-  const registerComponentEdge = (source?: string, target?: string) => {
-    if (!source || !target) return;
-    const sourceComponent = componentByNode.get(source);
-    const targetComponent = componentByNode.get(target);
-    if (!sourceComponent || !targetComponent || sourceComponent === targetComponent) return;
-    ensureComponent(sourceComponent);
-    ensureComponent(targetComponent);
-    const neighbours = componentAdjacency.get(sourceComponent)!;
-    if (!neighbours.has(targetComponent)) {
-      neighbours.add(targetComponent);
-      componentIndegree.set(targetComponent, (componentIndegree.get(targetComponent) ?? 0) + 1);
-    }
-  };
-
-  const dependentEdges = data.tempgraph?.D as string[][];
-  if (Array.isArray(dependentEdges)) {
-    dependentEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        registerComponentEdge(pair[0], pair[1]);
-      }
-    });
-  }
-
-  const dependentInverseEdges = (data.tempgraph as Record<string, unknown>)?.Di as string[][];
-  if (Array.isArray(dependentInverseEdges)) {
-    dependentInverseEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        registerComponentEdge(pair[1], pair[0]);
-      }
-    });
-  }
-
-  const componentQueue: string[] = [];
-  componentIndegree.forEach((value, component) => {
-    if (value === 0) {
-      componentQueue.push(component);
-    }
-  });
-
-  const componentLevels = new Map<string, number>();
-  const visitedComponents = new Set<string>();
-
-  componentQueue.forEach((component) => {
-    if (!componentLevels.has(component)) {
-      componentLevels.set(component, 0);
-    }
-  });
-
-  while (componentQueue.length > 0) {
-    const component = componentQueue.shift()!;
-    visitedComponents.add(component);
-    const currentLevel = componentLevels.get(component) ?? 0;
-
-    componentAdjacency.get(component)?.forEach((neighbour) => {
-      const proposed = currentLevel + 1;
-      const previous = componentLevels.get(neighbour) ?? 0;
-      if (proposed > previous) {
-        componentLevels.set(neighbour, proposed);
-      }
-      const remaining = (componentIndegree.get(neighbour) ?? 0) - 1;
-      componentIndegree.set(neighbour, remaining);
-      if (remaining <= 0 && !visitedComponents.has(neighbour)) {
-        componentQueue.push(neighbour);
-      }
-    });
-  }
-
-  const sortedComponents = Array.from(new Set(componentByNode.values())).sort((a, b) => a.localeCompare(b));
-  sortedComponents.forEach((component) => {
-    if (!componentLevels.has(component)) {
-      componentLevels.set(component, 0);
-    }
-  });
-
-  const nodeLevels = new Map<string, number>();
-
-  componentByNode.forEach((component, node) => {
-    nodeLevels.set(node, componentLevels.get(component) ?? 0);
-  });
-
-  const levelValues = Array.from(nodeLevels.values());
-  const minLevel = levelValues.length > 0 ? Math.min(...levelValues) : 0;
-  if (minLevel !== 0 && Number.isFinite(minLevel)) {
-    nodeLevels.forEach((value, key) => {
-      nodeLevels.set(key, value - minLevel);
-    });
-  }
-
-  return nodeLevels;
-}
-
-function computeProcessAreas(
-  levels: Map<string, number>,
-  typeRelations?: Array<string[]>,
-): ProcessAreaDefinition[] {
-  const nodesByLevel = new Map<number, string[]>();
-  levels.forEach((level, node) => {
-    const numericLevel = Number.isFinite(level) ? level : 0;
-    if (!nodesByLevel.has(numericLevel)) {
-      nodesByLevel.set(numericLevel, []);
-    }
-    nodesByLevel.get(numericLevel)!.push(node);
-  });
-
-  const adjacency = new Map<string, Set<string>>();
-  typeRelations?.forEach((relation) => {
-    if (!Array.isArray(relation)) return;
-    for (let i = 0; i < relation.length; i += 1) {
-      for (let j = i + 1; j < relation.length; j += 1) {
-        const a = relation[i];
-        const b = relation[j];
-        if (!a || !b) continue;
-        if (!adjacency.has(a)) adjacency.set(a, new Set());
-        if (!adjacency.has(b)) adjacency.set(b, new Set());
-        adjacency.get(a)!.add(b);
-        adjacency.get(b)!.add(a);
-      }
-    }
-  });
-
-  const areas: ProcessAreaDefinition[] = [];
-  const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
-
-  sortedLevels.forEach((level) => {
-    const nodesAtLevel = nodesByLevel.get(level)?.slice().sort((a, b) => a.localeCompare(b)) ?? [];
-    const seen = new Set<string>();
-    let areaIndex = 0;
-
-    nodesAtLevel.forEach((node) => {
-      if (seen.has(node)) return;
-      const stack = [node];
-      const group: string[] = [];
-
-      while (stack.length > 0) {
-        const current = stack.pop()!;
-        if (seen.has(current)) continue;
-        seen.add(current);
-        group.push(current);
-        adjacency.get(current)?.forEach((neighbour) => {
-          if (!seen.has(neighbour) && (levels.get(neighbour) ?? level) === level) {
-            stack.push(neighbour);
-          }
-        });
-      }
-
-      group.sort((a, b) => a.localeCompare(b));
-      const alphabetIndex = String.fromCharCode(65 + (areaIndex % 26));
-      const repetition = areaIndex >= 26 ? Math.floor(areaIndex / 26) + 1 : '';
-      const suffix = group.length > 0 ? `-${alphabetIndex}${repetition}` : '';
-      areas.push({
-        id: `process-area-${level}-${areaIndex}`,
-        level,
-        label: `Process Area ${level}${suffix}`,
-        objectTypes: group,
-      });
-      areaIndex += 1;
-    });
-
-    if (nodesAtLevel.length === 0 && !areas.some((area) => area.level === level)) {
-      areas.push({
-        id: `process-area-${level}-empty`,
-        level,
-        label: `Process Area ${level}`,
-        objectTypes: [],
-      });
-    }
-  });
-
-  return areas;
-}
-
 function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
-  // Use pre-computed layers from the backend MLPA algorithm
+  // Both discovery algorithms return the same payload, so the only thing that
+  // ever builds layers is this: read what the backend decided.
   if (!data.layers || data.layers.length === 0) return [];
 
   // Sort layers by level descending (highest level first for display)
@@ -4835,39 +4630,6 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
-function buildLayersFromFrontend(data: TotemApiResponse): ProcessLayer[] {
-  // Use frontend's greedy MLPA-like algorithm
-  const levels = computeLevelAssignments(data);
-  if (levels.size === 0) return [];
-
-  const areas = computeProcessAreas(levels, data.type_relations);
-  const areasByLevel = new Map<number, ProcessAreaDefinition[]>();
-
-  areas.forEach((area) => {
-    if (!areasByLevel.has(area.level)) {
-      areasByLevel.set(area.level, []);
-    }
-    areasByLevel.get(area.level)!.push(area);
-  });
-
-  areasByLevel.forEach((entries) => {
-    entries.sort((a, b) => a.label.localeCompare(b.label));
-  });
-
-  const sortedLevels = Array.from(areasByLevel.keys()).sort((a, b) => b - a);
-  return sortedLevels.map((level) => ({
-    level,
-    areas: areasByLevel.get(level) ?? [],
-  }));
-}
-
-function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
-  if (useBackendMlpa && data.layers && data.layers.length > 0) {
-    return buildLayersFromBackend(data);
-  }
-  return buildLayersFromFrontend(data);
-}
-
 function TotemVisualizer({
   eventLogId,
   height = '100%',
@@ -4881,6 +4643,15 @@ function TotemVisualizer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
+  const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(
+    DEFAULT_PROCESS_AREA_ALGORITHM,
+  );
+  // `params` follows the sliders; `appliedParams` lags behind it by the
+  // debounce and is the only thing the fetch depends on.
+  const [params, setParams] = useState<ProcessAreaParams>(DEFAULT_PROCESS_AREA_PARAMS);
+  const [appliedParams, setAppliedParams] = useState<ProcessAreaParams>(
+    DEFAULT_PROCESS_AREA_PARAMS,
+  );
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -4988,6 +4759,27 @@ function TotemVisualizer({
     setProcessAreaScale(clamped);
   }, []);
 
+  const handleParamChange = useCallback((key: keyof ProcessAreaParams, value: number) => {
+    if (!Number.isFinite(value) || value < 0) return;
+    setParams((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleParamsReset = useCallback(() => {
+    setParams(DEFAULT_PROCESS_AREA_PARAMS);
+  }, []);
+
+  // Debounce the sliders. Weights that are all zero would be a 400, so the
+  // fetch is simply held back until at least one of them is non-zero again.
+  useEffect(() => {
+    const weightSum = params.wTemporal + params.wCardinality + params.wDivergence;
+    if (weightSum <= 0) return;
+    const timer = window.setTimeout(
+      () => setAppliedParams(params),
+      PROCESS_AREA_PARAM_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [params]);
+
   // Canvas panning handlers (only active when auto-zoom is disabled)
   const handlePanStart = useCallback(
     (e: React.MouseEvent) => {
@@ -5041,8 +4833,22 @@ function TotemVisualizer({
       minScale: MIN_PROCESS_AREA_SCALE,
       maxScale: MAX_PROCESS_AREA_SCALE,
       scaleStep: PROCESS_AREA_SCALE_STEP,
+      algorithm,
+      onAlgorithmChange: setAlgorithm,
+      params,
+      onParamChange: handleParamChange,
+      onParamsReset: handleParamsReset,
     });
-  }, [onControlsReady, processAreaScale, handleProcessAreaScaleChange, autoZoomEnabled]);
+  }, [
+    onControlsReady,
+    processAreaScale,
+    handleProcessAreaScaleChange,
+    autoZoomEnabled,
+    algorithm,
+    params,
+    handleParamChange,
+    handleParamsReset,
+  ]);
 
   useEffect(() => {
     smoothedProcessAreaScaleRef.current = smoothedProcessAreaScale;
@@ -5130,7 +4936,7 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, true) : []), [rawTotem]);
+  const layers = useMemo(() => (rawTotem ? buildLayersFromBackend(rawTotem) : []), [rawTotem]);
   const levelCount = layers.length;
   const extraTopPadding = useMemo(() => {
     const deficit = Math.max(0, 4 - levelCount);
@@ -5247,18 +5053,33 @@ function TotemVisualizer({
     setError(null);
     setRawTotem(null);
     try {
-      const { data: payload } = await axios.get<TotemApiResponse>(
-        `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
-      );
+      const url =
+        algorithm === 'advanced'
+          ? `${backendBaseUrl}/api/files/${eventLogId}/discover_process_areas/?` +
+            new URLSearchParams({
+              w_temporal: String(appliedParams.wTemporal),
+              w_cardinality: String(appliedParams.wCardinality),
+              w_divergence: String(appliedParams.wDivergence),
+              alpha: String(appliedParams.alpha),
+              beta: String(appliedParams.beta),
+            }).toString()
+          : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
+      const { data: payload } = await axios.get<TotemApiResponse>(url);
       setRawTotem(payload);
     } catch (err) {
       console.error('[TotemVisualizer] Failed to load Totem data', err);
-      setError(err instanceof Error ? err.message : 'Failed to load Totem data');
+      const message =
+        axios.isAxiosError(err) && err.response?.data?.error
+          ? String(err.response.data.error)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to load Totem data';
+      setError(message);
       setRawTotem(null);
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId]);
+  }, [backendBaseUrl, eventLogId, algorithm, appliedParams]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
