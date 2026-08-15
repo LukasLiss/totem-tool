@@ -654,7 +654,7 @@ def totemDiscovery(ocel, tau=0.9):
     # setup temporal graph
     print(f"building the temporal graph, start time: {datetime.now()}")
     tempgraph = {
-        "nodes": set(),
+        "nodes": set(obj_typ_to_ev_type.keys()),
         TR_PARALLEL: set(),
         TR_INITIATING: set(),
         TR_DEPENDENT: set(),
@@ -699,6 +699,9 @@ def totemDiscovery(ocel, tau=0.9):
     totem = Totem(
         tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type
     )
+    totem.h_event_cardinalities = h_event_cardinalities
+    totem.h_log_cardinalities = h_log_cardinalities
+    totem.h_temporal_relations = h_temporal_relations
     return totem
 
 

@@ -121,20 +121,21 @@ export function getLayoutedElements(
         edge.id,
         (edge as { sections?: unknown }).sections,
       ]));
+      const nodeMap = new Map(nodes.map(node => [node.id, node]));
       return {
-      nodes: (g.children ?? []).flatMap((layoutedNode) => {
-        const originalNode = nodes.find(node => node.id === layoutedNode.id);
-        if (!originalNode) return [];
-        return [{
-          ...originalNode,
-          position: { x: layoutedNode.x ?? 0, y: layoutedNode.y ?? 0 },
-        }];
-      }),
-      // ELK only supplies routing information. Keep React Flow edge data intact.
-      edges: edges.map(edge => Object.assign({}, edge, {
-        sections: sectionsByEdgeId.get(edge.id),
-      })),
-    };
+        nodes: (g.children ?? []).flatMap((layoutedNode) => {
+          const originalNode = nodeMap.get(layoutedNode.id);
+          if (!originalNode) return [];
+          return [{
+            ...originalNode,
+            position: { x: layoutedNode.x ?? 0, y: layoutedNode.y ?? 0 },
+          }];
+        }),
+        // ELK only supplies routing information. Keep React Flow edge data intact.
+        edges: edges.map(edge => Object.assign({}, edge, {
+          sections: sectionsByEdgeId.get(edge.id),
+        })),
+      };
     })
     .catch(error => {
       console.error(error);

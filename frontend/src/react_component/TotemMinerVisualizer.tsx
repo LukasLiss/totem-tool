@@ -259,12 +259,12 @@ function extractEdges(
   return edges;
 }
 
-// ─── Hierarchical layout (Sugiyama-style) ────────────────────────────────────
+// ─── Radial / Hub-centered layout with crossing minimization ────────────────
 
 /**
- * Assigns each node to a layer based on the longest path from a source node
- * in the Dependent (D) edges subgraph. Nodes with no incoming D-edges are at
- * layer 0 (top). Lays out nodes within each layer evenly spaced.
+ * Positions the highest-degree (hub) node at the center of the canvas and arranges
+ * surrounding connected nodes in an ellipse ordered by a DFS traversal to minimize
+ * edge crossings.
  */
 function computeHierarchicalLayout(
   nodeIds: string[],
@@ -535,6 +535,9 @@ function TotemMinerVisualizer({
     if (!rawData) return { nodeIds: [], edges: [], colorMap: {}, rawCardinalities: [] };
 
     const nodes = new Set<string>();
+    // Seed nodes from tempgraph to ensure isolated object types without relations are included
+    (rawData.tempgraph?.nodes || []).forEach((n) => nodes.add(n));
+
     const tempgraph: Record<string, string[][]> = {
       P: [],
       I: [],
@@ -580,11 +583,12 @@ function TotemMinerVisualizer({
           tempgraph[inverseTr] = tempgraph[inverseTr] || [];
           tempgraph[inverseTr].push([t2, t1]);
         }
-      } else {
-        if (tr && (tr === 'D' || tr === 'I' || tr === 'P')) {
-          tempgraph[tr] = tempgraph[tr] || [];
-          tempgraph[tr].push([t1, t2]);
-        }
+      } else if (tr && (tr === 'D' || tr === 'I' || tr === 'P')) {
+        tempgraph[tr] = tempgraph[tr] || [];
+        tempgraph[tr].push([t1, t2]);
+      } else if (tr_i && (tr_i === 'D' || tr_i === 'I')) {
+        tempgraph[tr_i] = tempgraph[tr_i] || [];
+        tempgraph[tr_i].push([t2, t1]);
       }
 
       cardinalities.push({
@@ -674,10 +678,6 @@ function TotemMinerVisualizer({
       return next.size === positions.size ? positions : next;
     });
   }, [nodeIds]);
-
-  useEffect(() => {
-    setManualNodePositions(new Map());
-  }, [eventLogId]);
 
   // ── Auto-fit on layout change ────────────────────────────────────────────────
   useEffect(() => {
