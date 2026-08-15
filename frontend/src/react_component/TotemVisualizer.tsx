@@ -5752,6 +5752,7 @@ function TotemVisualizer({
                   return (
                     <g 
                       key={`${edge.id}-${groupIndex}`}
+                      style={{ pointerEvents: 'auto' }}
                       onMouseEnter={(e) => {
                         if (edge.metrics) {
                           setTooltipState({

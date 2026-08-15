@@ -34,7 +34,7 @@ export function MetricTooltip({ x, y, metrics, label }: MetricTooltipProps) {
   if (!metrics) return null;
 
   const formatDuration = (seconds: number) => {
-    if (!Number.isFinite(seconds) || seconds === null) return 'N/A';
+    if (!Number.isFinite(seconds) || seconds === null || seconds < 0) return 'N/A';
     if (seconds < 60) return `${Math.round(seconds)} s`;
     if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
     if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} h`;
