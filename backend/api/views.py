@@ -673,6 +673,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item['w'],
                     h=item['h'],
                     component_name=component_name,
+                    algorithm=item.get('algorithm') or 'advanced',
+                    w_temporal=item.get('w_temporal', 1.0),
+                    w_cardinality=item.get('w_cardinality', 1.0),
+                    w_divergence=item.get('w_divergence', 1.0),
+                    alpha=item.get('alpha', 1.0),
+                    beta=item.get('beta', 1.0),
                 )
             elif component_name == 'LogStatisticsComponent':
                 LogStatisticsComponent.objects.create(

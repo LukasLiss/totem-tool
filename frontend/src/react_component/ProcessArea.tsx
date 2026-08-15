@@ -64,6 +64,13 @@ export type ProcessAreaProps = {
   embedded?: boolean;
   backendBaseUrl?: string;
   height?: string | number;
+  /** Persisted dashboard settings, if this instance lives in a dashboard. */
+  initialAlgorithm?: ProcessAreaAlgorithm;
+  initialParams?: Partial<ProcessAreaParams>;
+  onSettingsChange?: (settings: {
+    algorithm: ProcessAreaAlgorithm;
+    params: ProcessAreaParams;
+  }) => void;
 };
 
 export default function ProcessArea({
@@ -71,6 +78,9 @@ export default function ProcessArea({
   embedded = false,
   backendBaseUrl = 'http://localhost:8000',
   height = 600,
+  initialAlgorithm,
+  initialParams,
+  onSettingsChange,
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
@@ -96,6 +106,9 @@ export default function ProcessArea({
         title="Totem Visualizer"
         embedded={true}
         onControlsReady={handleControlsReady}
+        initialAlgorithm={initialAlgorithm}
+        initialParams={initialParams}
+        onSettingsChange={onSettingsChange}
       />
     </ReactFlowProvider>
   );

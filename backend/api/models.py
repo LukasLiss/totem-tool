@@ -123,7 +123,27 @@ class VariantsComponent(DashboardComponent):
 
 
 class ProcessAreaComponent(DashboardComponent):
-    pass
+    # Which engine decides the object-type hierarchy. "advanced" is the
+    # default: it is the thesis section 4.1 algorithm, it reproduces MLPA's
+    # hierarchy on the reference logs at these defaults, and it is faster.
+    ALGORITHM_CHOICES = [
+        ('mlpa', 'MLPA (temporal)'),
+        ('advanced', 'Advanced (resource indicators)'),
+    ]
+    algorithm = models.CharField(
+        max_length=16, choices=ALGORITHM_CHOICES, default='advanced'
+    )
+
+    # Parameters of the advanced algorithm. Weights per resource indicator,
+    # then the two halves of the ILP objective: alpha weights the resource
+    # force (separation), beta the attractive force (cohesion). These follow
+    # the thesis convention, not the reference implementation's, which swaps
+    # the two names.
+    w_temporal = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    w_cardinality = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    alpha = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
 
 
 class LogStatisticsComponent(DashboardComponent):

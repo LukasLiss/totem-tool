@@ -19,7 +19,7 @@ from totem_lib.process_areas import (
     TemporalCounts,
 )
 
-from .models import EventLog, Project, ProjectAsset
+from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
 from .views import _parse_process_area_params, _process_area_cache_key
 
@@ -1176,3 +1176,93 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(cache.get(f"mlpa_discovery_{self.event_log.pk}"))
+
+
+class ProcessAreaComponentPersistenceTests(TestCase):
+    """
+    Dashboard round-trip for the Process Area component's discovery settings.
+
+    Before this the model was an empty `pass`, so tuning the indicator weights
+    was lost on every reload.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="process-area-dash-user")
+        self.project = Project.objects.create(name="Project PA Dash")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="PA", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, extra=None):
+        item = {
+            "x": 0, "y": 0, "w": 6, "h": 6,
+            "component_name": "ProcessAreaComponent",
+        }
+        item.update(extra or {})
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [item]},
+            format="json",
+        )
+
+    def test_settings_survive_a_save_and_reload(self):
+        response = self._save({
+            "algorithm": "advanced",
+            "w_temporal": 0.5,
+            "w_cardinality": 0.0,
+            "w_divergence": 1.5,
+            "alpha": 8.0,
+            "beta": 0.5,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.status_code, status.HTTP_200_OK)
+        component = layout.data[0]
+        self.assertEqual(component["algorithm"], "advanced")
+        self.assertEqual(component["w_temporal"], 0.5)
+        self.assertEqual(component["w_cardinality"], 0.0)
+        self.assertEqual(component["w_divergence"], 1.5)
+        self.assertEqual(component["alpha"], 8.0)
+        self.assertEqual(component["beta"], 0.5)
+
+    def test_mlpa_selection_is_persisted(self):
+        self._save({"algorithm": "mlpa"})
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.data[0]["algorithm"], "mlpa")
+
+    def test_a_component_saved_without_settings_gets_the_defaults(self):
+        # This is the shape a dashboard created before this change sends back.
+        response = self._save()
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        component = layout.data[0]
+        self.assertEqual(component["algorithm"], "advanced")
+        self.assertEqual(component["w_temporal"], 1.0)
+        self.assertEqual(component["w_cardinality"], 1.0)
+        self.assertEqual(component["w_divergence"], 1.0)
+        self.assertEqual(component["alpha"], 1.0)
+        self.assertEqual(component["beta"], 1.0)
+
+    def test_existing_rows_are_backfilled_by_the_migration_defaults(self):
+        component = ProcessAreaComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=6, h=6,
+            component_name="ProcessAreaComponent",
+        )
+        component.refresh_from_db()
+        self.assertEqual(component.algorithm, "advanced")
+        self.assertEqual(component.alpha, 1.0)
+        self.assertEqual(component.beta, 1.0)
+
+    def test_get_layout_exposes_the_new_fields(self):
+        self._save({"alpha": 3.0})
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertLessEqual(
+            {"algorithm", "w_temporal", "w_cardinality", "w_divergence", "alpha", "beta"},
+            set(layout.data[0]),
+        )

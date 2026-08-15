@@ -121,6 +121,14 @@ type TotemVisualizerProps = {
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
+  /** Persisted starting values; changes to these re-seed the local state. */
+  initialAlgorithm?: ProcessAreaAlgorithm;
+  initialParams?: Partial<ProcessAreaParams>;
+  /** Fired whenever the user changes the algorithm or a parameter. */
+  onSettingsChange?: (settings: {
+    algorithm: ProcessAreaAlgorithm;
+    params: ProcessAreaParams;
+  }) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4639,19 +4647,40 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
+  initialAlgorithm,
+  initialParams,
+  onSettingsChange,
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
-  const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(
-    DEFAULT_PROCESS_AREA_ALGORITHM,
+  const seededAlgorithm = initialAlgorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM;
+  const seededParams = useMemo(
+    () => ({ ...DEFAULT_PROCESS_AREA_PARAMS, ...initialParams }),
+    [
+      initialParams?.wTemporal,
+      initialParams?.wCardinality,
+      initialParams?.wDivergence,
+      initialParams?.alpha,
+      initialParams?.beta,
+    ],
   );
+  const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(seededAlgorithm);
   // `params` follows the sliders; `appliedParams` lags behind it by the
   // debounce and is the only thing the fetch depends on.
-  const [params, setParams] = useState<ProcessAreaParams>(DEFAULT_PROCESS_AREA_PARAMS);
-  const [appliedParams, setAppliedParams] = useState<ProcessAreaParams>(
-    DEFAULT_PROCESS_AREA_PARAMS,
-  );
+  const [params, setParams] = useState<ProcessAreaParams>(seededParams);
+  const [appliedParams, setAppliedParams] = useState<ProcessAreaParams>(seededParams);
+
+  // Re-seed when the persisted settings change — a dashboard finishing its
+  // load, or the user editing the component's configuration.
+  useEffect(() => {
+    setAlgorithm(seededAlgorithm);
+  }, [seededAlgorithm]);
+
+  useEffect(() => {
+    setParams(seededParams);
+    setAppliedParams(seededParams);
+  }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -4759,14 +4788,40 @@ function TotemVisualizer({
     setProcessAreaScale(clamped);
   }, []);
 
-  const handleParamChange = useCallback((key: keyof ProcessAreaParams, value: number) => {
-    if (!Number.isFinite(value) || value < 0) return;
-    setParams((prev) => ({ ...prev, [key]: value }));
-  }, []);
+  // Reported only from the change handlers, never from the seeding effects —
+  // echoing a seed straight back to the owner would loop.
+  const onSettingsChangeRef = useRef(onSettingsChange);
+  useEffect(() => {
+    onSettingsChangeRef.current = onSettingsChange;
+  }, [onSettingsChange]);
+
+  const handleAlgorithmChange = useCallback(
+    (value: ProcessAreaAlgorithm) => {
+      setAlgorithm(value);
+      onSettingsChangeRef.current?.({ algorithm: value, params });
+    },
+    [params],
+  );
+
+  const handleParamChange = useCallback(
+    (key: keyof ProcessAreaParams, value: number) => {
+      if (!Number.isFinite(value) || value < 0) return;
+      setParams((prev) => {
+        const next = { ...prev, [key]: value };
+        onSettingsChangeRef.current?.({ algorithm, params: next });
+        return next;
+      });
+    },
+    [algorithm],
+  );
 
   const handleParamsReset = useCallback(() => {
     setParams(DEFAULT_PROCESS_AREA_PARAMS);
-  }, []);
+    onSettingsChangeRef.current?.({
+      algorithm,
+      params: DEFAULT_PROCESS_AREA_PARAMS,
+    });
+  }, [algorithm]);
 
   // Debounce the sliders. Weights that are all zero would be a 400, so the
   // fetch is simply held back until at least one of them is non-zero again.
@@ -4834,7 +4889,7 @@ function TotemVisualizer({
       maxScale: MAX_PROCESS_AREA_SCALE,
       scaleStep: PROCESS_AREA_SCALE_STEP,
       algorithm,
-      onAlgorithmChange: setAlgorithm,
+      onAlgorithmChange: handleAlgorithmChange,
       params,
       onParamChange: handleParamChange,
       onParamsReset: handleParamsReset,
@@ -4845,6 +4900,7 @@ function TotemVisualizer({
     handleProcessAreaScaleChange,
     autoZoomEnabled,
     algorithm,
+    handleAlgorithmChange,
     params,
     handleParamChange,
     handleParamsReset,
