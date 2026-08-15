@@ -24,9 +24,10 @@ import VariantsExplorer, {
 } from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
+  clampProcessAreaParams,
   DEFAULT_PROCESS_AREA_ALGORITHM,
-  DEFAULT_PROCESS_AREA_PARAMS,
   PROCESS_AREA_ALGORITHM_LABELS,
+  PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
 } from '@/react_component/TotemVisualizer';
@@ -556,13 +557,12 @@ const PROCESS_AREA_PARAM_FIELDS: Array<{
   nodeKey: 'w_temporal' | 'w_cardinality' | 'w_divergence' | 'alpha' | 'beta';
   paramKey: keyof ProcessAreaParams;
   label: string;
-  max: number;
 }> = [
-  { nodeKey: 'w_temporal', paramKey: 'wTemporal', label: 'Temporal weight', max: 2 },
-  { nodeKey: 'w_cardinality', paramKey: 'wCardinality', label: 'Cardinality weight', max: 2 },
-  { nodeKey: 'w_divergence', paramKey: 'wDivergence', label: 'Divergence weight', max: 2 },
-  { nodeKey: 'alpha', paramKey: 'alpha', label: 'Separation (α)', max: 25 },
-  { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)', max: 25 },
+  { nodeKey: 'w_temporal', paramKey: 'wTemporal', label: 'Temporal weight' },
+  { nodeKey: 'w_cardinality', paramKey: 'wCardinality', label: 'Cardinality weight' },
+  { nodeKey: 'w_divergence', paramKey: 'wDivergence', label: 'Divergence weight' },
+  { nodeKey: 'alpha', paramKey: 'alpha', label: 'Separation (α)' },
+  { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
 ];
 
 const ProcessAreaComponent: React.FC<ComponentProps> = ({
@@ -577,23 +577,23 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
   const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(
     node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM,
   );
-  const [params, setParams] = useState<ProcessAreaParams>({
-    wTemporal: node.w_temporal ?? DEFAULT_PROCESS_AREA_PARAMS.wTemporal,
-    wCardinality: node.w_cardinality ?? DEFAULT_PROCESS_AREA_PARAMS.wCardinality,
-    wDivergence: node.w_divergence ?? DEFAULT_PROCESS_AREA_PARAMS.wDivergence,
-    alpha: node.alpha ?? DEFAULT_PROCESS_AREA_PARAMS.alpha,
-    beta: node.beta ?? DEFAULT_PROCESS_AREA_PARAMS.beta,
-  });
+  // Clamped, so a dashboard saved with an alpha or beta of 0 — possible before
+  // the thesis' strictly-positive lower bound was enforced — opens on 0.1
+  // instead of a slider sitting below its own minimum.
+  const paramsFromNode = (): ProcessAreaParams =>
+    clampProcessAreaParams({
+      wTemporal: node.w_temporal,
+      wCardinality: node.w_cardinality,
+      wDivergence: node.w_divergence,
+      alpha: node.alpha,
+      beta: node.beta,
+    });
+
+  const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
 
   useEffect(() => {
     setAlgorithm(node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM);
-    setParams({
-      wTemporal: node.w_temporal ?? DEFAULT_PROCESS_AREA_PARAMS.wTemporal,
-      wCardinality: node.w_cardinality ?? DEFAULT_PROCESS_AREA_PARAMS.wCardinality,
-      wDivergence: node.w_divergence ?? DEFAULT_PROCESS_AREA_PARAMS.wDivergence,
-      alpha: node.alpha ?? DEFAULT_PROCESS_AREA_PARAMS.alpha,
-      beta: node.beta ?? DEFAULT_PROCESS_AREA_PARAMS.beta,
-    });
+    setParams(paramsFromNode());
   }, [
     node.algorithm,
     node.w_temporal,
@@ -662,7 +662,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
             </DropdownMenu>
           </div>
           {algorithm === 'advanced' &&
-            PROCESS_AREA_PARAM_FIELDS.map(({ nodeKey, paramKey, label, max }) => (
+            PROCESS_AREA_PARAM_FIELDS.map(({ nodeKey, paramKey, label }) => (
               <div className="space-y-2" key={nodeKey}>
                 <div className="flex items-center justify-between">
                   <Label htmlFor={`process-area-${nodeKey}`}>{label}</Label>
@@ -672,9 +672,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
                 </div>
                 <Slider
                   id={`process-area-${nodeKey}`}
-                  min={0}
-                  max={max}
-                  step={max > 5 ? 0.5 : 0.05}
+                  {...PROCESS_AREA_PARAM_RANGES[paramKey]}
                   value={[params[paramKey]]}
                   onValueChange={(values) =>
                     handleSettingsChange({

@@ -114,6 +114,20 @@ class TestParameters:
         with pytest.raises(ValueError):
             solve_for(container_logistics_aggregates, **kwargs)
 
+    def test_both_weights_zero_is_rejected(self, container_logistics_aggregates):
+        # The objective would be identically zero, making every assignment
+        # optimal and the answer an artefact of the solver.
+        with pytest.raises(ValueError, match="alpha and beta"):
+            solve_for(container_logistics_aggregates, alpha=0.0, beta=0.0)
+
+    def test_a_zero_weight_drops_its_half_of_the_model(
+        self, container_logistics_aggregates
+    ):
+        # alpha = 0 removes every ordering penalty, so nothing separates the
+        # types and they all collapse onto one layer.
+        cohesion_only = solve_for(container_logistics_aggregates, alpha=0.0, beta=1.0)
+        assert len(set(cohesion_only.values())) == 1
+
 
 class TestDegenerateInputs:
     def test_empty_log_yields_no_layers(self):

@@ -124,8 +124,14 @@ def build_process_view(
     remaining_event_types = set(all_event_types)
 
     for layer in used_layers:
-        components = connected_components_undirected(
-            sorted(types_by_layer[layer]), type_relations
+        # `connected_components_undirected` walks adjacency sets, whose
+        # iteration order depends on string hashing and therefore on
+        # PYTHONHASHSEED. Sorting here keeps the rendered area labels and the
+        # cached payload identical across backend restarts.
+        components = sorted(
+            (sorted(component) for component in
+             connected_components_undirected(sorted(types_by_layer[layer]), type_relations)),
+            key=lambda component: component[0] if component else "",
         )
         areas = []
         for component in components:

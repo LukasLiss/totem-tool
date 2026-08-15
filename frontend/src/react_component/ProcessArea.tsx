@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import TotemVisualizer, {
   PROCESS_AREA_ALGORITHM_LABELS,
+  PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
   type TotemVisualizerControls,
@@ -50,13 +51,12 @@ const PARAM_CONTROLS: Array<{
   key: keyof ProcessAreaParams;
   label: string;
   hint: string;
-  max: number;
 }> = [
-  { key: 'wTemporal', label: 'Temporal', hint: 'Resources outlive what they serve', max: 2 },
-  { key: 'wCardinality', label: 'Cardinality', hint: 'Resources serve varying numbers of objects', max: 2 },
-  { key: 'wDivergence', label: 'Divergence', hint: 'Resources are swapped out between executions', max: 2 },
-  { key: 'alpha', label: 'Separation (α)', hint: 'How strongly resources are pushed upwards', max: 25 },
-  { key: 'beta', label: 'Cohesion (β)', hint: 'How strongly related types are pulled together', max: 25 },
+  { key: 'wTemporal', label: 'Temporal', hint: 'Resources outlive what they serve' },
+  { key: 'wCardinality', label: 'Cardinality', hint: 'Resources serve varying numbers of objects' },
+  { key: 'wDivergence', label: 'Divergence', hint: 'Resources are swapped out between executions' },
+  { key: 'alpha', label: 'Separation (α)', hint: 'How strongly resources are pushed upwards' },
+  { key: 'beta', label: 'Cohesion (β)', hint: 'How strongly related types are pulled together' },
 ];
 
 export type ProcessAreaProps = {
@@ -172,7 +172,7 @@ export default function ProcessArea({
                         the hierarchy is pulled apart.
                       </p>
                     </div>
-                    {PARAM_CONTROLS.map(({ key, label, hint, max }) => (
+                    {PARAM_CONTROLS.map(({ key, label, hint }) => (
                       <div key={key} className="space-y-1">
                         <div className="flex items-center justify-between">
                           <Label className="text-xs">{label}</Label>
@@ -181,9 +181,7 @@ export default function ProcessArea({
                           </span>
                         </div>
                         <Slider
-                          min={0}
-                          max={max}
-                          step={max > 5 ? 0.5 : 0.05}
+                          {...PROCESS_AREA_PARAM_RANGES[key]}
                           value={[totemControls.params[key]]}
                           onValueChange={(values) =>
                             totemControls.onParamChange(key, values?.[0] ?? 0)

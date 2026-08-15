@@ -970,11 +970,14 @@ def _parse_process_area_params(params) -> dict:
             + ", ".join(f"w_{name}" for name in INDICATOR_NAMES)
             + " must be greater than zero"
         )
-    return {
-        "weights": weights,
-        "alpha": _positive_float(params, "alpha", PROCESS_AREA_DEFAULTS["alpha"]),
-        "beta": _positive_float(params, "beta", PROCESS_AREA_DEFAULTS["beta"]),
-    }
+    alpha = _positive_float(params, "alpha", PROCESS_AREA_DEFAULTS["alpha"])
+    beta = _positive_float(params, "beta", PROCESS_AREA_DEFAULTS["beta"])
+    if alpha == 0 and beta == 0:
+        # Both zero makes the ILP objective identically zero, so every layer
+        # assignment is equally optimal and the answer is whatever the solver
+        # happened to pick.
+        raise ValueError("at least one of alpha and beta must be greater than zero")
+    return {"weights": weights, "alpha": alpha, "beta": beta}
 
 
 def _process_area_cache_key(file_pk, params: dict) -> str:

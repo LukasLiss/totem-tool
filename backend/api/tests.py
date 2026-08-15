@@ -1155,6 +1155,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             "?alpha=inf",
             "?w_temporal=-2",
             "?w_temporal=0&w_cardinality=0&w_divergence=0",
+            "?alpha=0&beta=0",
         ]:
             with self.subTest(query=query):
                 response = self.client.get(

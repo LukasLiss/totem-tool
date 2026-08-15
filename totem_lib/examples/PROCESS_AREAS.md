@@ -10,7 +10,7 @@ objects they serve. `totem_lib` has two algorithms for finding that layering:
 | Input signal | TOTeM temporal relations only | three weighted resource indicators |
 | Ordering | hard constraint `level[b] - level[a] >= 1` | soft penalty on the resource force |
 | Tunable | no | indicator weights, `alpha`, `beta` |
-| Reference | Liss & van der Aalst, BPM 2025 | Schlegelmilch, BSc thesis 2026, chapter 4.1 |
+| Reference | Liss & van der Aalst, BPM 2026 | Schlegelmilch, BSc thesis 2026, chapter 4.1 |
 
 Both return the same structure, so they are interchangeable at the call site.
 
@@ -134,12 +134,21 @@ across domains.
 
 ## Parameters
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `weights` | `1.0` each | per-indicator weights; at least one must be `> 0` |
-| `alpha` | `1.0` | weight on the resource-force hinge (separation) |
-| `beta` | `1.0` | weight on the attractive-force distance (cohesion) |
-| `margin_scale` | `0.0` | widens the required gap to `1 + margin_scale * phi`; `0` is the thesis |
+| Parameter | Default | Range | Meaning |
+|---|---|---|---|
+| `weights` | `1.0` each | `w_i ∈ ℝ≥0`, at least one `> 0` | per-indicator weights; `0` drops an indicator |
+| `alpha` | `1.0` | `ℝ⁺` (Def. 4.1.12) | weight on the resource-force hinge (separation) |
+| `beta` | `1.0` | `ℝ⁺` (Def. 4.1.12) | weight on the attractive-force distance (cohesion) |
+| `margin_scale` | `0.0` | `≥ 0` | widens the required gap to `1 + margin_scale * phi`; `0` is the thesis |
+
+Note the asymmetry: the thesis allows a weight of zero (Def. 4.1.11 takes
+`w_i ∈ ℝ≥0`) but not an `alpha` or `beta` of zero. The degenerate cases show
+why — `alpha = 0` leaves nothing to separate the object types and collapses the
+whole log onto one layer, `beta = 0` leaves nothing holding peers together.
+`assign_layers` still accepts `0` for either, because it is well defined and
+useful for isolating one force while testing; the UI sliders start at `0.1`.
+Both zero at once is rejected outright: the objective would be identically zero
+and the "hierarchy" whatever the solver happened to pick.
 
 ## Deviations from the thesis text
 
@@ -150,12 +159,26 @@ output against the thesis without this table will look like a bug.
 
 | # | Deviation |
 |---|---|
-| D1 | **The cardinality indicator uses no entropy.** Thesis Def. 4.1.6/4.1.7 define a normalised Shannon entropy over cardinality distributions. The reference builds a *bilateral signature* per source object — its forward cardinality plus the sorted reverse cardinalities of the objects it points at — takes the most frequent signature as "constant", and derives both forces from that mode share. Same intent, different mathematics. |
+| D1 | **The cardinality indicator uses no entropy.** Thesis Def. 4.1.6/4.1.7 define a normalised Shannon entropy over cardinality distributions. The reference builds a *bilateral signature* per source object — its forward cardinality plus the sorted reverse cardinalities of the objects it points at — takes the most frequent signature as "constant", and derives both forces from that mode share. Same intent, different mathematics. This is the largest of the deviations. |
 | D2 | **`alpha` and `beta` are swapped** between the thesis and the reference implementation. In the reference, `alpha` multiplies the attractive-force term and `beta` the resource-force term. This library exposes the **thesis** convention and maps internally. |
-| D3 | The temporal indicator is computed from TOTeM's `D`/`I` relation counts rather than the thesis's containment/overlap sets. Semantically aligned. |
-| D4 | Divergence `phi` is computed from target-set variation per `(type pair, activity, source object)` rather than the thesis's existential swap-out. Directionally equivalent; the `psi` side matches the thesis exactly. |
-| D5 | `margin_scale` is a reference-implementation extension, not in the thesis. Defaults to `0`. |
+| D3 | **The temporal attractive force counts disjoint lifespans as handovers.** Thesis Def. 4.1.4 sets `psi_temp = |partial overlaps| / |O2O|`, where partial overlap requires the two lifespans to actually intersect. The reference uses TOTeM's *initiating* relation instead, which also counts pairs whose lifespans are completely disjoint. On `container_logistics` that is 650 of the 5032 pairs in the numerator (13%); on `order-management`, 5 of 12660 (0.04%). The `phi_temp` side matches the thesis exactly — TOTeM's *dependent* relation is precisely the lifespan containment of Def. 4.1.3. |
+| D4 | `margin_scale` is a reference-implementation extension, not in the thesis: the hinge margin becomes `1 + margin_scale * phi`. Defaults to `0`, which is the thesis's margin of exactly 1. |
+| D5 | **Objects that never appear in an event are excluded** from every population count, where the thesis's `O↓ot` is all objects of the type. Such an object has no lifespan, no activity and no O2O relation, so no indicator can score it; including it would only dilute the denominators. |
 | D6 | **Ours.** The thesis puts exactly one process area per layer (Def. 4.3.2). We split each layer into connected components over the co-occurring type pairs, which is what TOTeM-Tool has always rendered. |
+
+Two things that look like deviations but are not:
+
+- **Divergence matches the thesis exactly.** The reference buckets by
+  `(type pair, activity, source object)` and marks `union - intersection` of the
+  observed partner sets as divergent. That is Def. 4.1.8 restated: a partner in
+  the union but not the intersection is one that co-occurred in some event of
+  that activity and was absent from another — exactly the thesis's `o1 ∆ o2`.
+  The `psi` side (Def. 4.1.10, with the closeness `delta` of Def. 4.1.9) is a
+  literal transcription.
+- **Compacting layer numbers** is sanctioned by the thesis, not an addition:
+  Def. 4.1.13 notes that empty layers can be removed by renormalising the
+  solution. The activity assignment likewise follows Def. 4.1.14 literally — an
+  activity belongs to the lowest layer any of its events touches.
 
 Three defects in the reference implementation are fixed rather than ported:
 its prepared-data cache was keyed by `id(ocel)` (unsafe once ids are reused),

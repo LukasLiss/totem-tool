@@ -68,6 +68,12 @@ def assign_layers(
         pushed above the types they serve. **Thesis convention.**
     :param beta: weight on the attractive-force distance — how hard related
         types are pulled onto the same layer. **Thesis convention.**
+
+        Def. 4.1.12 takes both from ``ℝ⁺``, strictly positive. Zero is accepted
+        here because it is well defined — it drops that half of the objective —
+        and is useful for isolating one force while testing. It is not a
+        hierarchy though: ``alpha = 0`` collapses every object type onto one
+        layer, so the UI sliders start at ``0.1`` instead.
     :param margin_scale: extension of the reference implementation, not present
         in the thesis: the hinge margin becomes ``1 + margin_scale * phi``, so a
         stronger resource force demands a wider gap. ``0`` reproduces the
@@ -84,6 +90,11 @@ def assign_layers(
     """
     if alpha < 0 or beta < 0:
         raise ValueError("alpha and beta must be >= 0")
+    if alpha == 0 and beta == 0:
+        # The objective would be identically zero and every feasible assignment
+        # equally optimal, so the "hierarchy" returned would be an artefact of
+        # the solver rather than a property of the log.
+        raise ValueError("at least one of alpha and beta must be greater than zero")
     if margin_scale < 0:
         raise ValueError("margin_scale must be >= 0")
 
@@ -109,34 +120,39 @@ def assign_layers(
     }
 
     # Attractive force: |l_i - l_j|, one variable per unordered pair.
+    # A term weighted zero cannot change the optimum, so a zero alpha or beta
+    # skips building that half of the model rather than handing CBC variables it
+    # will price at nothing.
     distance: Dict[TypePair, LpVariable] = {}
-    for position, type_i in enumerate(types):
-        for type_j in types[position + 1 :]:
-            weight = attractive_forces.get((type_i, type_j), 0.0)
-            if weight <= 0:
-                continue
-            var = LpVariable(
-                name=f"distance_{index_of[type_i]}_{index_of[type_j]}", lowBound=0
-            )
-            distance[(type_i, type_j)] = var
-            problem += var >= layer[type_i] - layer[type_j]
-            problem += var >= layer[type_j] - layer[type_i]
+    if beta > 0:
+        for position, type_i in enumerate(types):
+            for type_j in types[position + 1 :]:
+                weight = attractive_forces.get((type_i, type_j), 0.0)
+                if weight <= 0:
+                    continue
+                var = LpVariable(
+                    name=f"distance_{index_of[type_i]}_{index_of[type_j]}", lowBound=0
+                )
+                distance[(type_i, type_j)] = var
+                problem += var >= layer[type_i] - layer[type_j]
+                problem += var >= layer[type_j] - layer[type_i]
 
     # Resource force: [m_ij - (l_i - l_j)]_+, one variable per ordered pair.
     hinge: Dict[TypePair, LpVariable] = {}
-    for type_i in types:
-        for type_j in types:
-            if type_i == type_j:
-                continue
-            force = max(0.0, resource_forces.get((type_i, type_j), 0.0))
-            if force <= 0:
-                continue
-            margin = 1.0 + margin_scale * force
-            var = LpVariable(
-                name=f"hinge_{index_of[type_i]}_{index_of[type_j]}", lowBound=0
-            )
-            hinge[(type_i, type_j)] = var
-            problem += var >= margin - layer[type_i] + layer[type_j]
+    if alpha > 0:
+        for type_i in types:
+            for type_j in types:
+                if type_i == type_j:
+                    continue
+                force = max(0.0, resource_forces.get((type_i, type_j), 0.0))
+                if force <= 0:
+                    continue
+                margin = 1.0 + margin_scale * force
+                var = LpVariable(
+                    name=f"hinge_{index_of[type_i]}_{index_of[type_j]}", lowBound=0
+                )
+                hinge[(type_i, type_j)] = var
+                problem += var >= margin - layer[type_i] + layer[type_j]
 
     problem += alpha * lpSum(
         max(0.0, resource_forces[pair]) * var for pair, var in hinge.items()

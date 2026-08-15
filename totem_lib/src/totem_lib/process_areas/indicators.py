@@ -92,11 +92,16 @@ class TemporalIndicator(ResourceIndicator):
     to each other (disjoint, or overlapping with one starting first). A handover
     is what peers on the same layer do.
 
-    **Deviation D3.** The thesis defines lifespan containment and partial
-    overlap as set relations directly. The reference implementation instead
-    reuses TOTeM's ``D`` (dependent) and ``I`` (initiating) relation counts,
-    which are semantically the same notions counted per object pair. We keep the
-    reference behaviour.
+    ``phi`` matches thesis Def. 4.1.4 exactly: TOTeM's *dependent* relation is
+    precisely the lifespan containment of Def. 4.1.3.
+
+    **Deviation D3 — ``psi`` is wider than the thesis's.** The thesis counts only
+    *partial* overlaps, where the two lifespans genuinely intersect. The
+    reference implementation uses TOTeM's *initiating* relation, which also
+    counts pairs whose lifespans are completely disjoint. On
+    ``container_logistics`` that is 13% of the numerator, on
+    ``order-management`` 0.04%. Kept as the reference has it, since that is what
+    the thesis evaluated.
     """
 
     name = "temporal"
@@ -125,7 +130,8 @@ class CardinalityIndicator(ResourceIndicator):
     is the overall share of objects on both sides that follow the dominant
     cardinality signature.
 
-    **Deviation D1 — this is not the thesis formula.** Thesis Def. 4.1.6/4.1.7
+    **Deviation D1 — this is not the thesis formula, and it is the largest of
+    the deviations.** Thesis Def. 4.1.6/4.1.7
     define a normalised Shannon entropy over the cardinality distribution. The
     reference implementation instead builds a *bilateral signature* per source
     object — its forward cardinality together with the sorted reverse
@@ -164,13 +170,11 @@ class DivergenceIndicator(ResourceIndicator):
     divergence in both directions with object-type closeness (thesis' delta):
     types that hardly ever swap and that almost always occur together are peers.
 
-    **Deviation D4.** The thesis defines divergence existentially — some other
-    event of the same activity contains one object but not the other. The
-    reference implementation buckets by ``(type pair, activity, source object)``,
-    collects the target-object sets seen across those events and treats
-    ``union - intersection`` as divergent whenever at least two distinct sets
-    occur. Directionally equivalent, not identical. The ``psi`` side matches the
-    thesis exactly.
+    This one matches the thesis (Def. 4.1.8 to 4.1.10) exactly. The bucketing by
+    ``(type pair, activity, source object)`` and the ``union - intersection`` of
+    the observed partner sets is the existential definition restated: a partner
+    in the union but not in the intersection co-occurred in some event of that
+    activity and was absent from another one, which is what ``o1 ∆ o2`` says.
     """
 
     name = "divergence"
