@@ -244,6 +244,7 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
                 errors.append(f"Validation Failed: Found duplicate Event ID '{row[0]}' in source database.")
         errors.extend(validate_ocel(conn))
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -533,6 +534,7 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True, stric
     if strict_mode:
         errors = json_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -700,6 +702,7 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True, strict
     if strict_mode:
         errors = xml_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -835,6 +838,7 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True, strict
     if strict_mode:
         errors = csv_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -890,6 +894,7 @@ def _import_sqlite(file_path: str, db_path: str, graceful: bool = True, strict_m
     if strict_mode:
         errors = sqlite_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -1229,6 +1234,7 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True, strict_mod
     if strict_mode:
         errors = json_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -1445,6 +1451,7 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True, strict_mode
     if strict_mode:
         errors = xml_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:
@@ -1581,6 +1588,7 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True, strict_mode
     if strict_mode:
         errors = csv_errors + validate_ocel(conn)
         if errors:
+            conn.close()
             raise OCELValidationException(errors)
 
     if graceful:

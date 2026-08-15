@@ -1,4 +1,5 @@
 import { useState, useRef, useContext } from "react";
+import axios from "axios";
 import { fileTypeFromBlob } from "file-type";
 import { uploadFile } from "../api/fileApi";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
@@ -88,10 +89,10 @@ export function FileUploadValidator() {
       setFile(null);
       // Reset status after a delay so user can upload again if needed
       setTimeout(() => setValidationStatus('idle'), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Upload failed:", err);
-      if (err.response?.data?.errors) {
-        const errorList = err.response.data.errors;
+      if (axios.isAxiosError(err) && err.response?.data?.errors) {
+        const errorList = err.response.data.errors as string[];
         toast.error("Validation Failed", {
           description: (
             <div className="max-h-40 overflow-y-auto mt-2">
