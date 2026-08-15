@@ -4,13 +4,13 @@ A **process area** groups object types that belong to the same perspective of a
 process, and stacks those groups into layers so that resources sit above the
 objects they serve. `totem_lib` has two algorithms for finding that layering:
 
-| | `mlpaDiscovery` | `discover_process_areas` |
-|---|---|---|
-| Module | `totem_lib.totem.totem` | `totem_lib.process_areas` |
-| Input signal | TOTeM temporal relations only | three weighted resource indicators |
-| Ordering | hard constraint `level[b] - level[a] >= 1` | soft penalty on the resource force |
-| Tunable | no | indicator weights, `alpha`, `beta` |
-| Reference | Liss & van der Aalst, BPM 2026 | Schlegelmilch, BSc thesis 2026, chapter 4.1 |
+|              | `mlpaDiscovery`                            | `discover_process_areas`                    |
+| ------------ | ------------------------------------------ | ------------------------------------------- |
+| Module       | `totem_lib.totem.totem`                    | `totem_lib.process_areas`                   |
+| Input signal | TOTeM temporal relations only              | three weighted resource indicators          |
+| Ordering     | hard constraint `level[b] - level[a] >= 1` | soft penalty on the resource force          |
+| Tunable      | no                                         | indicator weights, `alpha`, `beta`          |
+| Reference    | Liss & van der Aalst, BPM 2026             | Schlegelmilch, BSc thesis 2026, chapter 4.1 |
 
 Both return the same structure, so they are interchangeable at the call site.
 
@@ -77,21 +77,21 @@ steep = process_areas_from_aggregates(aggregates, alpha=8)
 
 Each indicator scores every ordered pair of object types `(a, b)` twice:
 
-| API | Thesis | Range | Meaning |
-|---|---|---|---|
-| `resource_force(a, b)` | `phi(a,b)` | `[-1, 1]`, antisymmetric | positive: `a` acts as a resource for `b`, so `a` belongs on a higher layer |
-| `attractive_force(a, b)` | `psi(a,b)` | `[0, 1]`, symmetric | high: `a` and `b` are peers and belong on the same layer |
+| API                      | Thesis     | Range                    | Meaning                                                                    |
+| ------------------------ | ---------- | ------------------------ | -------------------------------------------------------------------------- |
+| `resource_force(a, b)`   | `phi(a,b)` | `[-1, 1]`, antisymmetric | positive: `a` acts as a resource for `b`, so `a` belongs on a higher layer |
+| `attractive_force(a, b)` | `psi(a,b)` | `[0, 1]`, symmetric      | high: `a` and `b` are peers and belong on the same layer                   |
 
-**Temporal** (thesis 4.1.1) — *resources outlive the objects they serve.*
+**Temporal** (thesis 4.1.1) — _resources outlive the objects they serve._
 `phi` is the imbalance in lifespan containment; `psi` is the share of relations
 that merely hand over from one lifespan to the next.
 
-**Cardinality** (thesis 4.1.2) — *resources serve a varying number of objects.*
+**Cardinality** (thesis 4.1.2) — _resources serve a varying number of objects._
 A forklift touches thousands of handling units; an order has a stable number of
 items. `phi` is the difference in irregularity, `psi` the share of objects on
 both sides that follow the dominant cardinality pattern.
 
-**Divergence** (thesis 4.1.3) — *resources are interchangeable.* An object
+**Divergence** (thesis 4.1.3) — _resources are interchangeable._ An object
 diverges under another if it can be swapped out across executions of the same
 activity while the other stays fixed. `phi` is the imbalance of the two
 divergence ratios; `psi` combines low divergence in both directions with
@@ -122,7 +122,7 @@ s.t.      1 <= l_i <= K,  l_i integer,  K = |OT|
   the same layer. Turn it up for a flatter one.
 - `m_ij` is the required gap, `1` by default (see `margin_scale` below).
 
-Unlike `mlpaDiscovery`, ordering here is a *penalty*, not a constraint. A cycle
+Unlike `mlpaDiscovery`, ordering here is a _penalty_, not a constraint. A cycle
 of dependent relations makes MLPA's model infeasible; this one always has a
 solution, and noisy relations trade off against each other rather than dictating
 the outcome.
@@ -134,12 +134,12 @@ across domains.
 
 ## Parameters
 
-| Parameter | Default | Range | Meaning |
-|---|---|---|---|
-| `weights` | `1.0` each | `w_i ∈ ℝ≥0`, at least one `> 0` | per-indicator weights; `0` drops an indicator |
-| `alpha` | `1.0` | `ℝ⁺` (Def. 4.1.12) | weight on the resource-force hinge (separation) |
-| `beta` | `1.0` | `ℝ⁺` (Def. 4.1.12) | weight on the attractive-force distance (cohesion) |
-| `margin_scale` | `0.0` | `≥ 0` | widens the required gap to `1 + margin_scale * phi`; `0` is the thesis |
+| Parameter      | Default    | Range                           | Meaning                                                                |
+| -------------- | ---------- | ------------------------------- | ---------------------------------------------------------------------- |
+| `weights`      | `1.0` each | `w_i ∈ ℝ≥0`, at least one `> 0` | per-indicator weights; `0` drops an indicator                          |
+| `alpha`        | `1.0`      | `ℝ⁺` (Def. 4.1.12)              | weight on the resource-force hinge (separation)                        |
+| `beta`         | `1.0`      | `ℝ⁺` (Def. 4.1.12)              | weight on the attractive-force distance (cohesion)                     |
+| `margin_scale` | `0.0`      | `≥ 0`                           | widens the required gap to `1 + margin_scale * phi`; `0` is the thesis |
 
 Note the asymmetry: the thesis allows a weight of zero (Def. 4.1.11 takes
 `w_i ∈ ℝ≥0`) but not an `alpha` or `beta` of zero. The degenerate cases show
@@ -157,14 +157,14 @@ is what produced its evaluation numbers. Where that code and the thesis text
 disagree, the code wins — but the disagreements are real, and comparing our
 output against the thesis without this table will look like a bug.
 
-| # | Deviation |
-|---|---|
-| D1 | **The cardinality indicator uses no entropy.** Thesis Def. 4.1.6/4.1.7 define a normalised Shannon entropy over cardinality distributions. The reference builds a *bilateral signature* per source object — its forward cardinality plus the sorted reverse cardinalities of the objects it points at — takes the most frequent signature as "constant", and derives both forces from that mode share. Same intent, different mathematics. This is the largest of the deviations. |
-| D2 | **`alpha` and `beta` are swapped** between the thesis and the reference implementation. In the reference, `alpha` multiplies the attractive-force term and `beta` the resource-force term. This library exposes the **thesis** convention and maps internally. |
-| D3 | **The temporal attractive force counts disjoint lifespans as handovers.** Thesis Def. 4.1.4 sets `psi_temp = |partial overlaps| / |O2O|`, where partial overlap requires the two lifespans to actually intersect. The reference uses TOTeM's *initiating* relation instead, which also counts pairs whose lifespans are completely disjoint. On `container_logistics` that is 650 of the 5032 pairs in the numerator (13%); on `order-management`, 5 of 12660 (0.04%). The `phi_temp` side matches the thesis exactly — TOTeM's *dependent* relation is precisely the lifespan containment of Def. 4.1.3. |
-| D4 | `margin_scale` is a reference-implementation extension, not in the thesis: the hinge margin becomes `1 + margin_scale * phi`. Defaults to `0`, which is the thesis's margin of exactly 1. |
-| D5 | **Objects that never appear in an event are excluded** from every population count, where the thesis's `O↓ot` is all objects of the type. Such an object has no lifespan, no activity and no O2O relation, so no indicator can score it; including it would only dilute the denominators. |
-| D6 | **Ours.** The thesis puts exactly one process area per layer (Def. 4.3.2). We split each layer into connected components over the co-occurring type pairs, which is what TOTeM-Tool has always rendered. |
+| #   | Deviation                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | --- |
+| D1  | **The cardinality indicator uses no entropy.** Thesis Def. 4.1.6/4.1.7 define a normalised Shannon entropy over cardinality distributions. The reference builds a _bilateral signature_ per source object — its forward cardinality plus the sorted reverse cardinalities of the objects it points at — takes the most frequent signature as "constant", and derives both forces from that mode share. Same intent, different mathematics. This is the largest of the deviations. |
+| D2  | **`alpha` and `beta` are swapped** between the thesis and the reference implementation. In the reference, `alpha` multiplies the attractive-force term and `beta` the resource-force term. This library exposes the **thesis** convention and maps internally.                                                                                                                                                                                                                    |
+| D3  | **The temporal attractive force counts disjoint lifespans as handovers.** Thesis Def. 4.1.4 sets `psi_temp = \|partial overlaps\| / \|O2O\|`, where partial overlap requires the two lifespans to actually intersect. The reference uses TOTeM's _initiating_ relation instead, which also counts pairs whose lifespans are completely disjoint. On `container_logistics` that is 650 of the 5032 pairs in the numerator (13%); on `order-management`, 5 of 12660 (0.04%). The `phi_temp` side matches the thesis exactly — TOTeM's _dependent_ relation is precisely the lifespan containment of Def. 4.1.3. |
+| D4  | `margin_scale` is a reference-implementation extension, not in the thesis: the hinge margin becomes `1 + margin_scale * phi`. Defaults to `0`, which is the thesis's margin of exactly 1.                                                                                                                                                                                                                                                                                         |
+| D5  | **Objects that never appear in an event are excluded** from every population count, where the thesis's `O↓ot` is all objects of the type. Such an object has no lifespan, no activity and no O2O relation, so no indicator can score it; including it would only dilute the denominators.                                                                                                                                                                                         |
+| D6  | **Ours.** The thesis puts exactly one process area per layer (Def. 4.3.2). We split each layer into connected components over the co-occurring type pairs, which is what TOTeM-Tool has always rendered.                                                                                                                                                                                                                                                                          |
 
 Two things that look like deviations but are not:
 
@@ -186,15 +186,7 @@ object types were passed as an unordered set (making the ILP's chosen optimum
 vary between runs), and LP variables were named after object types (which PuLP
 rewrites, so `handling unit` and `handling_unit` would collide).
 
-## What is not implemented
-
-Only chapter 4.1 of the thesis. Chapters 4.2 (object-centric subprocesses) and
-4.3 (activity lifting, collapsed nets, quality metrics) are defined over
-Petri-net **places** — a subprocess boundary *is* a pair of places. TOTeM-Tool
-renders an OCDFG in the process-area detail view and OCCNs elsewhere, and
-neither has places. See [`../../docs/PROCESS_AREA_SUBPROCESSES.md`](../../docs/PROCESS_AREA_SUBPROCESSES.md).
-
 ## Reference
 
-Schlegelmilch, M. *Discovering Advanced Resource-Based Process Areas*. BSc thesis,
+Schlegelmilch, M. _Discovering Advanced Resource-Based Process Areas_. BSc thesis,
 PADS, RWTH Aachen, 2026.
