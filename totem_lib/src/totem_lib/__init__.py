@@ -12,6 +12,7 @@ from .totem import (
     totem_to_dict,
     validate_totem_dict,
 )
+from .process_areas import discover_process_areas, discover_process_areas_db
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import (
     OCCausalNet,
@@ -59,6 +60,8 @@ __all__ = [
     "create_ocpn_engine",
     "discover_occn",
     "discover_oc_petri_net_polars",
+    "discover_process_areas",
+    "discover_process_areas_db",
     "Edit",
     "EditCosts",
     "event_letter",

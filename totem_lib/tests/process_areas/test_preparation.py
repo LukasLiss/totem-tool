@@ -6,8 +6,6 @@ indicators rely on -- symmetry of the O2O relation, per-type object counts, no
 state leaking between logs -- have to hold at this level.
 """
 
-import pytest
-
 from totem_lib.ocel.importer import import_ocel
 from totem_lib.process_areas.preparation import prepare
 
