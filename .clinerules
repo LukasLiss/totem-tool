@@ -8,4 +8,4 @@ Before starting ANY backend task, you MUST read the following files to understan
 ## 2. Workflows & Skills
 When executing tasks, you must strictly follow our standardized runbooks:
 * **Adding an API Endpoint:** Read and follow `.claude/skills/create-api-endpoint.md`. Pay special attention to the bounded-search 200 OK semantic rules and the `docs/MODEL_ASSETS.md` checklist.
-* **Verifying Backend Changes:** Read and follow `.claude/skills/verify-backend.md`. You must run the appropriate migration checks, test suites, and DuckDB log-schema checks before completing a task.
+* **Verifying Backend Changes:** Read and follow `.claude/skills/verify-backend.md`. You must run the appropriate migration checks, test suites, and DuckDB log-schema checks before completing a task.

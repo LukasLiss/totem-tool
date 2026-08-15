@@ -38,7 +38,7 @@ Totem-Tool is a web-based process mining application for analyzing Object-Centri
 │         TOTEM_LIB (Python - Core Analysis)                  │
 │  Location: ./totem_lib/                                     │
 │  - ALL computation and analysis logic                       │
-│  - DuckDB SQLite connection and query backend               │
+│  - DuckDB-based storage, relational schema, and query engine│
 │  - Process mining algorithms (variants, TOTEM, OCDFG, OCCN) │
 │  - NO web/HTTP concerns                                     │
 └─────────────────────────────────────────────────────────────┘
@@ -50,7 +50,7 @@ Totem-Tool is a web-based process mining application for analyzing Object-Centri
 
 ## User Flow: Loading Data & Creating Dashboards
 
-1. **Upload Event Log** (OCEL file: .sqlite, .json, or .xml)
+1. **Upload Event Log** (OCEL file: .sqlite, .json, .xml, .csv, or .duckdb)
    - File stored in `backend/user_files/{projectName}/{filename}`
    - Creates a Project and EventLog record in Django DB
 
@@ -77,7 +77,7 @@ Totem-Tool is a web-based process mining application for analyzing Object-Centri
 ### Key Files
 - [backend/totem_backend/settings.py](backend/totem_backend/settings.py) - Django config, CORS, JWT settings
 - [backend/api/models.py](backend/api/models.py) - Data models (Project, EventLog, Dashboard, Components)
-- [backend/api/views.py](backend/api/views.py) - API endpoints (1507 lines - main business logic)
+- [backend/api/views.py](backend/api/views.py) - API endpoints (main business logic and viewsets)
 - [backend/api/urls.py](backend/api/urls.py) - URL routing
 - [backend/api/serializers.py](backend/api/serializers.py) - API serialization
 
@@ -105,7 +105,7 @@ DashboardComponent (base) - dashboard (FK), x, y, w, h, component_name, order
 
 **File & Asset Management**:
 - `GET /api/files/` - List user's event log files
-- `POST /api/files/` - Upload new OCEL file (.sqlite, .json, .xml)
+- `POST /api/files/` - Upload new OCEL file (.sqlite, .json, .xml, .csv, .duckdb)
 - `GET /api/assets/` - List project assets (TOTeM / OCCN JSON)
 - `POST /api/assets/` - Upload or create project asset
 
@@ -135,9 +135,9 @@ DashboardComponent (base) - dashboard (FK), x, y, w, h, component_name, order
 
 ### Important Backend Functions
 
-**`_with_ocel_db(file_id, request_user)` context manager in views.py**:
-- Verifies user ownership/permission for `file_id`.
-- Ensures thread-safe worker connection to DuckDB OCEL storage (`_ocel_dbs` connection pool guarded by `_ocel_db_lock`).
+**`_with_ocel_db(user_file)` context manager in views.py**:
+- Verifies user ownership/permission for `user_file`.
+- Manages thread-safe process-local DuckDB connections in `_OCEL_DB_REGISTRY` guarded by `_OCEL_DB_REGISTRY_LOCK` and per-file mutexes `_OCEL_DB_LOCKS[pk]`.
 - Grants exclusive DuckDB access during query execution to prevent race conditions.
 
 **`variants(request)` view**:
@@ -148,7 +148,7 @@ DashboardComponent (base) - dashboard (FK), x, y, w, h, component_name, order
 
 ### Caching Strategy
 
-- **DuckDB Worker Connections**: `_ocel_dbs` holds worker-bound DuckDB connections initialized from SQLite OCEL files. Double-checked locking via `_ocel_db_lock` ensures single connection setup per worker.
+- **DuckDB Process Registry**: `_OCEL_DB_REGISTRY` holds in-memory `OcelDuckDB` instances keyed by EventLog PK. Mutex locking ensures single active query per file connection.
 - **OCCN Base Net Cache**: `_occn_base_cache` (LRU OrderedDict, max 4 entries) caches raw threshold-0 base nets keyed by `(file_id, object_types_tuple)` to avoid costly discovery on slider changes. `apply_relative_occurrence_threshold()` filters network on demand.
 
 ---
