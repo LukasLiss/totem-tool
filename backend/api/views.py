@@ -18,7 +18,7 @@ from totem_lib.variants import find_variants
 from totem_lib.variants.ocvariants import calculate_layout
 from totem_lib.totem import totemDiscovery_db, mlpaDiscovery, Totem, totem_to_dict
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
-from totem_lib.ocel.validation import OCELValidationException
+from totem_lib.ocel.validation import OCELValidationException, validate_ocel
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from totem_lib.playout import (
     PlayoutEvent,
@@ -298,7 +298,6 @@ class EventLogViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        from totem_lib.ocel.validation import OCELValidationException
         try:
             self.perform_create(serializer)
             user_file = serializer.instance
@@ -849,7 +848,6 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
     if ext == ".duckdb":
         db = OcelDuckDB.load(path)
         if strict_mode:
-            from totem_lib.ocel.validation import validate_ocel, OCELValidationException
             errors = validate_ocel(db.conn)
             if errors:
                 db.close()
