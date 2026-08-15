@@ -110,24 +110,25 @@ export function NavDashboard({
 };
 
   const handleDeleteDashboard = async () => {
+    if (!dashboardToDelete) return;
 
-  try {
-    await deleteDashboard(dashboardToDelete.id);
-    await refreshDashboards();
-    setOpenDelete(false);
-    setDashboardToDelete(null); // reset
-  } catch (error: unknown) {
-              if (isUnauthorizedError(error)) {
-                navigate("/login", {
-                  replace: true,
-                  state: { from: location.pathname },
-                });
-              } else {
-      console.error("Delete failed:", error);
-      toast.error("Dashboard could not be deleted");
+    try {
+      await deleteDashboard(dashboardToDelete.id);
+      await refreshDashboards();
+      setOpenDelete(false);
+      setDashboardToDelete(null); // reset
+    } catch (error: unknown) {
+      if (isUnauthorizedError(error)) {
+        navigate("/login", {
+          replace: true,
+          state: { from: location.pathname },
+        });
+      } else {
+        console.error("Delete failed:", error);
+        toast.error("Dashboard could not be deleted");
+      }
     }
   };
-};
 
 
 
