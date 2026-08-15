@@ -31,6 +31,7 @@ from .discovery import (
     discover_process_areas,
     process_areas_from_aggregates,
 )
+from .discovery_db import discover_process_areas_db
 from .indicators import (
     INDICATOR_NAMES,
     CardinalityIndicator,
@@ -41,6 +42,7 @@ from .indicators import (
 )
 from .layer_assignment import assign_layers
 from .preparation import prepare
+from .preparation_db import prepare_db
 
 __all__ = [
     "CardinalityCounts",
@@ -56,6 +58,8 @@ __all__ = [
     "assign_layers",
     "build_process_view",
     "discover_process_areas",
+    "discover_process_areas_db",
     "process_areas_from_aggregates",
     "prepare",
+    "prepare_db",
 ]
