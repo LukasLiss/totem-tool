@@ -29,7 +29,13 @@ from typing import Callable, Iterable, Sequence
 # Run either as a script or imported as `evaluation.download_logs`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from evaluation.datasets import LOGS, EvaluationLog, downloadable_logs, get_log
+from evaluation.datasets import (
+    LOGS,
+    SIZE_METRICS,
+    EvaluationLog,
+    downloadable_logs,
+    get_log,
+)
 
 DEFAULT_CHUNK_BYTES = 1 << 20
 # Zenodo rejects the default Python-urllib user agent.
@@ -170,9 +176,12 @@ def print_manifest(logs: Sequence[EvaluationLog] = LOGS) -> None:
     """Show every log, where it belongs and whether it is present."""
     for log in logs:
         status = "present" if log.available else ("in git" if log.bundled else "MISSING")
-        events = "?" if log.event_count is None else f"{log.event_count:,}"
         print(f"\n{log.name}  [{status}]")
-        print(f"  events:   {events}")
+        if log.statistics is None:
+            print("  size:     not measured yet - run: python evaluation/log_stats.py")
+        else:
+            for field, label in SIZE_METRICS.items():
+                print(f"  {label + ':':38}{getattr(log.statistics, field):,}")
         print(f"  path:     {log.path}")
         print(f"  source:   {log.source_url}")
         if not log.bundled:
