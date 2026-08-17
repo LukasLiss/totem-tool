@@ -9,7 +9,10 @@ import type { OccnNode } from "./types";
 
 const nodeTypes = { occn: OccnNodeComponent };
 
-function renderNode(status: OccnNode["data"]["conformanceStatus"]) {
+function renderNode(
+  status: OccnNode["data"]["conformanceStatus"],
+  details?: string[]
+) {
   const nodes: OccnNode[] = [
     {
       id: "ship order",
@@ -19,6 +22,7 @@ function renderNode(status: OccnNode["data"]["conformanceStatus"]) {
         label: "ship order",
         kind: "activity",
         conformanceStatus: status,
+        conformanceDetails: details,
       },
     },
   ];
@@ -41,8 +45,15 @@ describe("OCCN conformance stopping-point callout", () => {
   });
 
   it("labels a bounded stopping point", () => {
-    renderNode("inconclusive");
+    renderNode("inconclusive", [
+      "State limit reached during object completion",
+      "Last replayed: ship package",
+    ]);
 
     expect(screen.getByLabelText("State limit reached here")).toBeTruthy();
+    expect(
+      screen.getByText("State limit reached during object completion")
+    ).toBeTruthy();
+    expect(screen.getByText("Last replayed: ship package")).toBeTruthy();
   });
 });

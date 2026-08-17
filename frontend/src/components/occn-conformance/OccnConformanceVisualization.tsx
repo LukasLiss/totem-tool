@@ -10,7 +10,7 @@ import type {
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 
 import {
-  buildConformanceHighlights,
+  buildConformanceAnnotations,
   canonicalOccnAssetToNet,
 } from "./conformanceVisualization";
 
@@ -41,12 +41,32 @@ export function OccnConformanceVisualization({
       };
     }
   }, [asset]);
-  const highlights = useMemo(
+  const annotations = useMemo(
     () =>
-      buildConformanceHighlights(
+      buildConformanceAnnotations(
         selectedUnit ? [selectedUnit] : result.unit_results
       ),
     [result.unit_results, selectedUnit]
+  );
+  const highlights = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(annotations).map(([activity, annotation]) => [
+          activity,
+          annotation.status,
+        ])
+      ),
+    [annotations]
+  );
+  const details = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(annotations).map(([activity, annotation]) => [
+          activity,
+          annotation.details,
+        ])
+      ),
+    [annotations]
   );
   const missingActivities = useMemo(
     () => {
@@ -110,6 +130,7 @@ export function OccnConformanceVisualization({
               data={displayedNet ?? undefined}
               showTitle={false}
               conformanceHighlights={highlights}
+              conformanceDetails={details}
               missingConformanceActivities={missingActivities}
             />
           </ReactFlowProvider>

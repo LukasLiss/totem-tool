@@ -4,6 +4,7 @@ import type { OCCNReplayUnitResult } from "@/api/occnConformanceApi";
 import canonicalOccn from "../../../../docs/examples/model-assets/occn-v1.json";
 
 import {
+  buildConformanceAnnotations,
   buildConformanceHighlights,
   canonicalOccnAssetToNet,
 } from "./conformanceVisualization";
@@ -66,5 +67,54 @@ describe("OCCN conformance visualization preparation", () => {
         unit("inconclusive", "ship order"),
       ])
     ).toEqual({ "ship order": "non_fitting" });
+  });
+
+  it("explains how a non-fitting replay stopped", () => {
+    const replayUnit = {
+      ...unit("non_fitting", "ship order"),
+      stopping_phase: "visible_event",
+      stopping_reason: "no_enabled_event_binding",
+      last_replayed_activity: "pick item",
+    };
+
+    expect(buildConformanceAnnotations([replayUnit])).toEqual({
+      "ship order": {
+        status: "non_fitting",
+        details: [
+          "No enabled binding matched the event",
+          "Last replayed: pick item",
+        ],
+      },
+    });
+  });
+
+  it("shows bounded replay progress and all final replay points", () => {
+    const first = {
+      ...unit("inconclusive", "END_items"),
+      explored_state_count: 1_000,
+      stopping_phase: "object_end",
+      stopping_reason: "max_states",
+      last_replayed_activity: "ship package",
+    };
+    const second = {
+      ...unit("inconclusive", "END_items"),
+      unit_id: "bounded-second",
+      explored_state_count: 1_500,
+      stopping_phase: "object_end",
+      stopping_reason: "max_states",
+      last_replayed_activity: "deliver package",
+    };
+
+    expect(buildConformanceAnnotations([first, second])).toEqual({
+      END_items: {
+        status: "inconclusive",
+        details: [
+          "State limit reached during object completion",
+          "Explored states: 1,000, 1,500",
+          "Last replayed: ship package, deliver package",
+          "Replay units: 2",
+        ],
+      },
+    });
   });
 });

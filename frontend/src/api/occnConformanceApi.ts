@@ -25,6 +25,9 @@ export interface OCCNReplayUnitResult {
   failure_event_id: string | null;
   limit_reason: string | null;
   stopping_activity?: string | null;
+  stopping_phase?: string | null;
+  stopping_reason?: string | null;
+  last_replayed_activity?: string | null;
 }
 
 export interface OCCNConformanceResponse {

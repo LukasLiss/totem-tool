@@ -41,15 +41,18 @@ vi.mock("@/react_component/OCCNVisualizer", () => ({
   default: ({
     conformanceHighlights,
     data,
+    conformanceDetails,
     missingConformanceActivities,
   }: {
     conformanceHighlights: Record<string, string>;
     data: { activities: Array<{ id: string }> };
+    conformanceDetails: Record<string, string[]>;
     missingConformanceActivities: string[];
   }) => (
     <div data-testid="occn-conformance-model">
       {JSON.stringify({
         highlights: conformanceHighlights,
+        details: conformanceDetails,
         missing: missingConformanceActivities,
         activities: data.activities.map(({ id }) => id),
       })}
@@ -138,6 +141,9 @@ const nonFittingResponse: OCCNConformanceResponse = {
       failure_event_index: 1,
       failure_event_id: "event-2",
       stopping_activity: "Ship Order",
+      stopping_phase: "visible_event",
+      stopping_reason: "no_enabled_event_binding",
+      last_replayed_activity: "Create Order",
     },
   ],
 };
@@ -322,6 +328,10 @@ describe("OCCN conformance workflow integration", () => {
     });
     expect(visualization.missing).toEqual(["Ship Order"]);
     expect(visualization.activities).toContain("Ship Order");
+    expect(visualization.details["Ship Order"]).toEqual([
+      "No enabled binding matched the event",
+      "Last replayed: Create Order",
+    ]);
     expect(
       screen
         .getByRole("button", { name: "connected_components:000001" })

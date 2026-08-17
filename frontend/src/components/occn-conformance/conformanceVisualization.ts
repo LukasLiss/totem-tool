@@ -5,6 +5,11 @@ import type { OccnNet } from "@/utils/occnTransform";
 
 export type OCCNConformanceHighlight = "non_fitting" | "inconclusive";
 
+export interface OCCNConformanceAnnotation {
+  status: OCCNConformanceHighlight;
+  details: string[];
+}
+
 export function canonicalOccnAssetToNet(
   content: Record<string, unknown>,
   name: string
@@ -65,6 +70,109 @@ export function buildConformanceHighlights(
     }
   }
   return highlights;
+}
+
+export function buildConformanceAnnotations(
+  units: OCCNReplayUnitResult[]
+): Record<string, OCCNConformanceAnnotation> {
+  const grouped = new Map<string, OCCNReplayUnitResult[]>();
+  for (const unit of units) {
+    if (!unit.stopping_activity || unit.status === "fitting") continue;
+    const group = grouped.get(unit.stopping_activity) ?? [];
+    group.push(unit);
+    grouped.set(unit.stopping_activity, group);
+  }
+
+  return Object.fromEntries(
+    [...grouped.entries()].map(([activity, activityUnits]) => {
+      const status = activityUnits.some((unit) => unit.status === "non_fitting")
+        ? "non_fitting"
+        : "inconclusive";
+      const details = unique(
+        activityUnits.map((unit) => stoppingExplanation(unit))
+      );
+      const inconclusiveUnits = activityUnits.filter(
+        (unit) => unit.status === "inconclusive"
+      );
+      if (inconclusiveUnits.length > 0) {
+        const exploredStates = unique(
+          inconclusiveUnits.map((unit) => unit.explored_state_count.toLocaleString())
+        );
+        details.push(`Explored states: ${summarize(exploredStates)}`);
+        const lastReplayed = unique(
+          inconclusiveUnits.map((unit) =>
+            unit.last_replayed_activity
+              ? formatActivity(unit.last_replayed_activity)
+              : "Initial state"
+          )
+        );
+        details.push(`Last replayed: ${summarize(lastReplayed)}`);
+      } else {
+        const lastReplayed = unique(
+          activityUnits
+            .map((unit) => unit.last_replayed_activity)
+            .filter((activity): activity is string => Boolean(activity))
+            .map(formatActivity)
+        );
+        if (lastReplayed.length > 0) {
+          details.push(`Last replayed: ${summarize(lastReplayed)}`);
+        }
+      }
+      if (activityUnits.length > 1) {
+        details.push(`Replay units: ${activityUnits.length.toLocaleString()}`);
+      }
+      return [activity, { status, details }];
+    })
+  );
+}
+
+function stoppingExplanation(unit: OCCNReplayUnitResult): string {
+  if (unit.stopping_reason === "no_enabled_object_start") {
+    return "Required object could not start";
+  }
+  if (unit.stopping_reason === "no_enabled_event_binding") {
+    return "No enabled binding matched the event";
+  }
+  if (unit.stopping_reason === "no_enabled_object_end") {
+    return "Object could not complete";
+  }
+  if (unit.stopping_reason === "remaining_obligations") {
+    return "Replay ended with unresolved obligations";
+  }
+  if (unit.stopping_reason === "max_states") {
+    if (unit.stopping_phase === "object_start") {
+      return "State limit reached while starting an object";
+    }
+    if (unit.stopping_phase === "object_end") {
+      return "State limit reached during object completion";
+    }
+    if (unit.stopping_phase === "visible_event") {
+      return "State limit reached while replaying the event";
+    }
+    return "State limit reached during replay";
+  }
+  return unit.status === "non_fitting"
+    ? "No valid continuation was available"
+    : "Replay stopped before a conclusion";
+}
+
+function formatActivity(activity: string): string {
+  if (activity.startsWith("START_")) {
+    return `Start ${activity.slice(6).replaceAll("_", " ")}`;
+  }
+  if (activity.startsWith("END_")) {
+    return `End ${activity.slice(4).replaceAll("_", " ")}`;
+  }
+  return activity;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function summarize(values: string[]): string {
+  if (values.length <= 3) return values.join(", ");
+  return `${values.slice(0, 3).join(", ")} +${values.length - 3}`;
 }
 
 function toVisualizerGroups(groups: OccnMarkerGroup[]) {
