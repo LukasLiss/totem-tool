@@ -13,6 +13,8 @@ export type OccnNodeData = {
   objectType?: string;
   /** Occurrence count shown under the label (discovery visualizer only). */
   count?: number;
+  /** Replay stopping-point emphasis used by OCCN conformance. */
+  conformanceStatus?: 'non_fitting' | 'inconclusive';
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;

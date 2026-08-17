@@ -33,6 +33,7 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnAssetSelector } from "./OccnAssetSelector";
+import { OccnConformanceVisualization } from "./OccnConformanceVisualization";
 import { OccnConformanceSummary } from "./OccnConformanceSummary";
 import { OccnReplayUnitDetail } from "./OccnReplayUnitDetail";
 import { OccnReplayUnitExplorer } from "./OccnReplayUnitExplorer";
@@ -304,6 +305,13 @@ export function OccnConformanceView({
           ) : workflow.result ? (
             <div className="grid gap-4">
               <OccnConformanceSummary result={workflow.result} />
+              {assetSelection.selectedAsset ? (
+                <OccnConformanceVisualization
+                  asset={assetSelection.selectedAsset}
+                  result={workflow.result}
+                  selectedUnit={selectedReplayUnit}
+                />
+              ) : null}
               <OccnReplayUnitExplorer
                 units={workflow.result.unit_results}
                 selectedUnitId={selectedReplayUnit?.unit_id ?? null}

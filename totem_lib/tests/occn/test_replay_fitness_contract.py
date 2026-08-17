@@ -37,6 +37,7 @@ def test_unit_result_exposes_binary_and_inconclusive_outcomes():
     assert non_fitting.replayable is False
     assert inconclusive.replayable is None
     assert inconclusive.to_dict()["status"] == "inconclusive"
+    assert inconclusive.to_dict()["stopping_activity"] is None
     assert inconclusive.object_types == ("item", "order")
     assert inconclusive.to_dict()["object_types"] == ["item", "order"]
 
@@ -51,6 +52,17 @@ def test_unit_result_rejects_invalid_object_type_summaries():
                 explored_state_count=1,
                 object_types=object_types,
             )
+
+
+def test_unit_result_rejects_invalid_stopping_activity():
+    with pytest.raises(ValueError, match="stopping_activity"):
+        OCCNReplayUnitResult(
+            unit_id="invalid-stopping-activity",
+            status=OCCNReplayStatus.NON_FITTING,
+            event_count=1,
+            explored_state_count=1,
+            stopping_activity="",
+        )
 
 
 def test_object_types_do_not_change_existing_positional_arguments():

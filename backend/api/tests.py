@@ -1387,6 +1387,7 @@ class OCCNConformanceApiTests(TestCase):
                     object_types=("Order", "Item"),
                     failure_event_index=0,
                     failure_event_id="e3",
+                    stopping_activity="Ship Order",
                 ),
                 OCCNReplayUnitResult(
                     unit_id="connected_components:000003",
@@ -1395,6 +1396,7 @@ class OCCNConformanceApiTests(TestCase):
                     explored_state_count=1000,
                     object_types=("Delivery", "Order"),
                     limit_reason="max_states",
+                    stopping_activity="END_Order",
                 ),
             )
         )
@@ -1446,6 +1448,14 @@ class OCCNConformanceApiTests(TestCase):
         self.assertEqual(response.data["fitness"], 0.5)
         self.assertAlmostEqual(response.data["coverage"], 2 / 3)
         self.assertEqual(response.data["inconclusive_units"], 1)
+        self.assertEqual(
+            response.data["unit_results"][1]["stopping_activity"],
+            "Ship Order",
+        )
+        self.assertEqual(
+            response.data["unit_results"][2]["stopping_activity"],
+            "END_Order",
+        )
 
     def test_empty_replay_result_preserves_complete_aggregate_contract(self):
         result = OCCNReplayFitnessResult(unit_results=())

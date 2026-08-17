@@ -204,6 +204,7 @@ def test_reports_the_first_visible_event_that_cannot_be_replayed():
     assert unit_result.object_types == ("order",)
     assert unit_result.failure_event_index == 0
     assert unit_result.failure_event_id == "unknown-e1"
+    assert unit_result.stopping_activity == "unknown"
 
 
 def test_reports_an_object_type_missing_from_the_model_as_non_fitting():
@@ -231,6 +232,7 @@ def test_reports_completion_failure_after_visible_events_replay():
     assert unit_result.status is OCCNReplayStatus.NON_FITTING
     assert unit_result.failure_event_index is None
     assert unit_result.failure_event_id is None
+    assert unit_result.stopping_activity == "END_order"
 
 
 def test_aggregates_fitting_and_non_fitting_units():
@@ -261,6 +263,7 @@ def test_state_limit_returns_inconclusive_without_false_deviation():
     assert unit_result.replayable is None
     assert unit_result.explored_state_count == 1
     assert unit_result.object_types == ("order",)
+    assert unit_result.stopping_activity == "START_order"
     assert result.fitness is None
     assert result.coverage == pytest.approx(0.0)
 
@@ -280,3 +283,4 @@ def test_state_limit_is_deterministic_for_a_branching_replay():
     assert first.to_dict() == second.to_dict()
     assert first.unit_results[0].status is OCCNReplayStatus.INCONCLUSIVE
     assert first.unit_results[0].explored_state_count == 2
+    assert first.unit_results[0].stopping_activity == "route"

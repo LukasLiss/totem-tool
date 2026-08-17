@@ -62,7 +62,14 @@ interface OCCNVisualizerProps {
   objectTypes?: string[];
   /** Hide the in-canvas title when the surrounding page already renders one. */
   showTitle?: boolean;
+  /** Activity ids to emphasize as OCCN replay stopping points. */
+  conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
 }
+
+const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
+  string,
+  'non_fitting' | 'inconclusive'
+> = {};
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -80,6 +87,7 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
+  conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -196,6 +204,10 @@ function OCCNVisualizer({
         setNodes(
           nextGraph.nodes.map((node) => ({
             ...node,
+            data: {
+              ...node.data,
+              conformanceStatus: conformanceHighlights[node.id],
+            },
             position: positions[node.id] ?? { x: 0, y: 0 },
           })),
         );
@@ -205,7 +217,14 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [net, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
+  }, [
+    net,
+    fitView,
+    maxMarkerGroupsPerSide,
+    layoutDirection,
+    layoutTick,
+    conformanceHighlights,
+  ]);
 
   // Track the container size via a ResizeObserver. In a dashboard the gridstack
   // cell is sized asynchronously, so the initial layout's fitView often runs

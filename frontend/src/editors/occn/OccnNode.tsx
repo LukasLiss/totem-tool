@@ -1,5 +1,6 @@
 import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { CircleX, TriangleAlert } from "lucide-react";
 
 import { lightenHex } from "@/editors/shared/colors";
 
@@ -17,6 +18,30 @@ const HANDLE_CLASS =
 const selectedShadow =
   "0 0 0 3px rgba(37, 99, 235, 0.35), 0 12px 28px rgba(15, 23, 42, 0.18)";
 const restShadow = "0 6px 18px rgba(15, 23, 42, 0.12)";
+
+function conformanceAppearance(
+  status: OccnNode["data"]["conformanceStatus"],
+) {
+  if (status === "non_fitting") {
+    return {
+      border: "3px solid #DC2626",
+      shadow: "0 0 0 4px rgba(220, 38, 38, 0.2), 0 8px 22px rgba(127, 29, 29, 0.22)",
+      color: "#DC2626",
+      label: "Non-fitting stopping point",
+      icon: CircleX,
+    };
+  }
+  if (status === "inconclusive") {
+    return {
+      border: "3px solid #D97706",
+      shadow: "0 0 0 4px rgba(217, 119, 6, 0.2), 0 8px 22px rgba(120, 53, 15, 0.2)",
+      color: "#D97706",
+      label: "State limit reached here",
+      icon: TriangleAlert,
+    };
+  }
+  return null;
+}
 
 /** Horizontal-stripe fill, one stripe per incident object type (paper style). */
 function stripeBackground(
@@ -43,6 +68,8 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
   selected,
 }: NodeProps<OccnNode>) {
   const { typeColors, incidentTypes } = useContext(OccnRenderContext);
+  const conformance = conformanceAppearance(data.conformanceStatus);
+  const ConformanceIcon = conformance?.icon;
 
   // Long single-token activity names (e.g. "DelegatePurchaseRequisitionApproval")
   // can't wrap and would spill past the fixed-width box. Detect the overflow so
@@ -74,19 +101,34 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
           isConnectable={data.kind === "end"}
         />
         <div
+          data-conformance-status={data.conformanceStatus}
           style={{
             width: squareSize,
             height: squareSize,
             borderRadius: 12,
             background: color,
-            border: selected
-              ? "1.5px solid rgba(37, 99, 235, 0.8)"
-              : "1.5px solid rgba(15, 23, 42, 0.55)",
-            boxShadow: selected ? selectedShadow : restShadow,
+            border:
+              conformance?.border ??
+              (selected
+                ? "1.5px solid rgba(37, 99, 235, 0.8)"
+                : "1.5px solid rgba(15, 23, 42, 0.55)"),
+            boxShadow:
+              conformance?.shadow ?? (selected ? selectedShadow : restShadow),
             display: "grid",
             placeItems: "center",
+            position: "relative",
           }}
         >
+          {ConformanceIcon ? (
+            <ConformanceIcon
+              aria-label={conformance.label}
+              title={conformance.label}
+              size={18}
+              color={conformance.color}
+              fill="#FFFFFF"
+              style={{ position: "absolute", right: -9, top: -9 }}
+            />
+          ) : null}
           {data.kind === "start" ? (
             <svg width={16} height={16} viewBox="0 0 16 16">
               <polygon points="3,1.5 14,8 3,14.5" fill="#FFFFFF" />
@@ -118,25 +160,40 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
   const types = incidentTypes[id] ?? [];
   return (
     <div
+      data-conformance-status={data.conformanceStatus}
       style={{
         width: ACTIVITY_WIDTH,
         maxWidth: ACTIVITY_WIDTH,
         minHeight: ACTIVITY_HEIGHT,
         borderRadius: 12,
         background: stripeBackground(types, typeColors),
-        border: selected
-          ? "1.5px solid rgba(37, 99, 235, 0.8)"
-          : types.length === 0
-            ? "1.5px solid #94A3B8"
-            : "1.5px solid rgba(15, 23, 42, 0.45)",
-        boxShadow: selected ? selectedShadow : restShadow,
+        border:
+          conformance?.border ??
+          (selected
+            ? "1.5px solid rgba(37, 99, 235, 0.8)"
+            : types.length === 0
+              ? "1.5px solid #94A3B8"
+              : "1.5px solid rgba(15, 23, 42, 0.45)"),
+        boxShadow:
+          conformance?.shadow ?? (selected ? selectedShadow : restShadow),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         padding: "8px 14px",
         overflow: "hidden",
+        position: "relative",
       }}
     >
+      {ConformanceIcon ? (
+        <ConformanceIcon
+          aria-label={conformance.label}
+          title={conformance.label}
+          size={20}
+          color={conformance.color}
+          fill="#FFFFFF"
+          style={{ position: "absolute", right: 5, top: 4 }}
+        />
+      ) : null}
       <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
       <div className="text-center" style={{ width: "100%", minWidth: 0 }}>
         <div

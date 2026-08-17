@@ -13,6 +13,7 @@ import {
 } from "@/api/occnConformanceApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import canonicalOccn from "../../../../docs/examples/model-assets/occn-v1.json";
 
 import { OccnConformanceView } from "./OccnConformanceView";
 
@@ -35,6 +36,18 @@ vi.mock("@/api/occnConformanceApi", async () => {
 });
 
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
+
+vi.mock("@/react_component/OCCNVisualizer", () => ({
+  default: ({
+    conformanceHighlights,
+  }: {
+    conformanceHighlights: Record<string, string>;
+  }) => (
+    <div data-testid="occn-conformance-model">
+      {JSON.stringify(conformanceHighlights)}
+    </div>
+  ),
+}));
 
 vi.mock("./OccnAssetSelector", () => ({
   OccnAssetSelector: ({
@@ -70,7 +83,7 @@ const asset: ProjectAsset = {
   project: 7,
   name: "Reference OCCN",
   asset_type: "OCCN",
-  content_json: {},
+  content_json: canonicalOccn,
   metadata: {},
   created_by: 1,
   created_at: "2026-07-22T10:00:00Z",
@@ -116,6 +129,7 @@ const nonFittingResponse: OCCNConformanceResponse = {
       replayable: false,
       failure_event_index: 1,
       failure_event_id: "event-2",
+      stopping_activity: "a",
     },
   ],
 };
@@ -292,6 +306,9 @@ describe("OCCN conformance workflow integration", () => {
     );
 
     expect(runOCCNConformanceMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("occn-conformance-model").textContent).toBe(
+      '{"a":"non_fitting"}'
+    );
     expect(
       screen
         .getByRole("button", { name: "connected_components:000001" })
