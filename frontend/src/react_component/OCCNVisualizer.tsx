@@ -5,6 +5,7 @@ import {
   useReactFlow,
   applyNodeChanges,
   applyEdgeChanges,
+  useNodesInitialized,
   type NodeChange,
   type EdgeChange,
 } from '@xyflow/react';
@@ -65,12 +66,15 @@ interface OCCNVisualizerProps {
   showTitle?: boolean;
   /** Activity ids to emphasize as OCCN replay stopping points. */
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
+  /** Log activities shown only to explain why replay stopped. */
+  missingConformanceActivities?: string[];
 }
 
 const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
   string,
   'non_fitting' | 'inconclusive'
 > = {};
+const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -89,9 +93,11 @@ function OCCNVisualizer({
   objectTypes,
   showTitle = true,
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
+  missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
+  const nodesInitialized = useNodesInitialized();
 
   // Track the container's real size so we can re-fit once the dashboard/gridstack
   // cell is actually sized (see the reactive re-fit effect below).
@@ -110,6 +116,7 @@ function OCCNVisualizer({
   const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
   // Bumped by the "re-layout" button to rerun ELK after manual dragging.
   const [layoutTick, setLayoutTick] = useState(0);
+  const [layoutReadyTick, setLayoutReadyTick] = useState(0);
   const [nextConformanceFocus, setNextConformanceFocus] = useState(0);
 
   const nodeTypes = useMemo(() => ({ occn: OccnNodeComponent }), []);
@@ -209,12 +216,14 @@ function OCCNVisualizer({
             data: {
               ...node.data,
               conformanceStatus: conformanceHighlights[node.id],
+              conformanceMissingFromModel:
+                missingConformanceActivities.includes(node.id),
             },
             position: positions[node.id] ?? { x: 0, y: 0 },
           })),
         );
         setEdges(nextGraph.edges);
-        window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+        setLayoutReadyTick((tick) => tick + 1);
       });
     return () => {
       cancelled = true;
@@ -226,6 +235,7 @@ function OCCNVisualizer({
     layoutDirection,
     layoutTick,
     conformanceHighlights,
+    missingConformanceActivities,
   ]);
 
   // Track the container size via a ResizeObserver. In a dashboard the gridstack
@@ -255,10 +265,19 @@ function OCCNVisualizer({
   // placeholders before ELK layout has resolved.
   useEffect(() => {
     if (containerSize.width <= 0 || containerSize.height <= 0) return;
-    if (nodes.length === 0) return;
-    const frame = window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+    if (nodes.length === 0 || !nodesInitialized || layoutReadyTick === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      void fitView({ padding: 0.25, minZoom: 0.005, duration: 300 });
+    });
     return () => cancelAnimationFrame(frame);
-  }, [containerSize.width, containerSize.height, nodes.length, fitView]);
+  }, [
+    containerSize.width,
+    containerSize.height,
+    nodes.length,
+    nodesInitialized,
+    layoutReadyTick,
+    fitView,
+  ]);
 
   const renderContext = useMemo(
     () => ({
@@ -356,7 +375,7 @@ function OCCNVisualizer({
           proOptions={{ hideAttribution: true }}
           // Dense logs at threshold 0 lay out tens of thousands of px tall;
           // fitView cannot go below minZoom, so keep it low enough to fit.
-          minZoom={0.02}
+          minZoom={0.005}
           maxZoom={2.5}
           nodesDraggable={!interactionsDisabled}
           nodesConnectable={false}

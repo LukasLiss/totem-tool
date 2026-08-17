@@ -40,11 +40,19 @@ vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("@/react_component/OCCNVisualizer", () => ({
   default: ({
     conformanceHighlights,
+    data,
+    missingConformanceActivities,
   }: {
     conformanceHighlights: Record<string, string>;
+    data: { activities: Array<{ id: string }> };
+    missingConformanceActivities: string[];
   }) => (
     <div data-testid="occn-conformance-model">
-      {JSON.stringify(conformanceHighlights)}
+      {JSON.stringify({
+        highlights: conformanceHighlights,
+        missing: missingConformanceActivities,
+        activities: data.activities.map(({ id }) => id),
+      })}
     </div>
   ),
 }));
@@ -129,7 +137,7 @@ const nonFittingResponse: OCCNConformanceResponse = {
       replayable: false,
       failure_event_index: 1,
       failure_event_id: "event-2",
-      stopping_activity: "a",
+      stopping_activity: "Ship Order",
     },
   ],
 };
@@ -306,9 +314,14 @@ describe("OCCN conformance workflow integration", () => {
     );
 
     expect(runOCCNConformanceMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("occn-conformance-model").textContent).toBe(
-      '{"a":"non_fitting"}'
+    const visualization = JSON.parse(
+      screen.getByTestId("occn-conformance-model").textContent ?? "{}"
     );
+    expect(visualization.highlights).toEqual({
+      "Ship Order": "non_fitting",
+    });
+    expect(visualization.missing).toEqual(["Ship Order"]);
+    expect(visualization.activities).toContain("Ship Order");
     expect(
       screen
         .getByRole("button", { name: "connected_components:000001" })

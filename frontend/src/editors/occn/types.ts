@@ -15,6 +15,8 @@ export type OccnNodeData = {
   count?: number;
   /** Replay stopping-point emphasis used by OCCN conformance. */
   conformanceStatus?: 'non_fitting' | 'inconclusive';
+  /** The stopping activity came from the log but is absent from the OCCN. */
+  conformanceMissingFromModel?: boolean;
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;

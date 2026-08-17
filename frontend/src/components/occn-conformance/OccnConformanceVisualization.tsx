@@ -48,12 +48,35 @@ export function OccnConformanceVisualization({
       ),
     [result.unit_results, selectedUnit]
   );
-  const knownActivities = new Set(
-    model.net?.activities.map(({ id }) => id) ?? []
+  const missingActivities = useMemo(
+    () => {
+      const knownActivities = new Set(
+        model.net?.activities.map(({ id }) => id) ?? []
+      );
+      return Object.keys(highlights).filter(
+        (activity) => !knownActivities.has(activity)
+      );
+    },
+    [highlights, model.net]
   );
-  const unresolvedCount = Object.keys(highlights).filter(
-    (activity) => !knownActivities.has(activity)
-  ).length;
+  const displayedNet = useMemo(() => {
+    if (!model.net || missingActivities.length === 0) return model.net;
+    return {
+      ...model.net,
+      activities: [
+        ...model.net.activities,
+        ...missingActivities.map((id) => ({ id, count: 0 })),
+      ],
+      input_marker_groups: {
+        ...model.net.input_marker_groups,
+        ...Object.fromEntries(missingActivities.map((id) => [id, []])),
+      },
+      output_marker_groups: {
+        ...model.net.output_marker_groups,
+        ...Object.fromEntries(missingActivities.map((id) => [id, []])),
+      },
+    };
+  }, [missingActivities, model.net]);
 
   return (
     <section
@@ -84,18 +107,20 @@ export function OccnConformanceVisualization({
           <ReactFlowProvider>
             <OCCNVisualizer
               height="100%"
-              data={model.net ?? undefined}
+              data={displayedNet ?? undefined}
               showTitle={false}
               conformanceHighlights={highlights}
+              missingConformanceActivities={missingActivities}
             />
           </ReactFlowProvider>
         </div>
       )}
 
-      {unresolvedCount > 0 ? (
+      {missingActivities.length > 0 ? (
         <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-          {unresolvedCount} stopping point{unresolvedCount === 1 ? " is" : "s are"}{" "}
-          absent from the selected model and cannot be marked on the graph.
+          {missingActivities.length} stopping point
+          {missingActivities.length === 1 ? " is" : "s are"} absent from the
+          selected model and shown as a separate deviation node.
         </p>
       ) : null}
     </section>

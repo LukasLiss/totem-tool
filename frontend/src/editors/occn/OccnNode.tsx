@@ -246,11 +246,22 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
         >
           {data.label}
         </div>
-        {data.count != null && (
+        {data.conformanceMissingFromModel ? (
+          <div
+            style={{
+              color: conformance?.color ?? "#DC2626",
+              fontSize: 10,
+              fontWeight: 700,
+              marginTop: 2,
+            }}
+          >
+            Not in model
+          </div>
+        ) : data.count != null ? (
           <div style={{ color: "#0F172A", fontSize: 10, opacity: 0.75 }}>
             ×{data.count}
           </div>
-        )}
+        ) : null}
       </div>
       <Handle
         type="source"
