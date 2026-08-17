@@ -3,14 +3,7 @@ import axios from "axios";
 export const CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components" as const;
 export const LEADING_OBJECT_REPLAY_STRATEGY = "leading_object" as const;
 export const DEFAULT_OCCN_MAX_STATES = 1_000;
-export const OCCN_MAX_STATE_OPTIONS = [
-  1_000,
-  2_500,
-  5_000,
-  10_000,
-  25_000,
-  50_000,
-] as const;
+export const MAX_OCCN_MAX_STATES = 15_000;
 
 export type OCCNReplayUnitStrategy =
   | typeof CONNECTED_COMPONENTS_REPLAY_STRATEGY

@@ -13,7 +13,7 @@ import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_MAX_STATES,
   LEADING_OBJECT_REPLAY_STRATEGY,
-  OCCN_MAX_STATE_OPTIONS,
+  MAX_OCCN_MAX_STATES,
   type OCCNConformanceResponse,
   type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
@@ -72,12 +72,6 @@ export function OccnConformanceView({
     positiveId(initialAssetId)
   );
   const { assetSelection } = workflow;
-  const stateLimitIndex = Math.max(
-    0,
-    OCCN_MAX_STATE_OPTIONS.indexOf(
-      workflow.maxStates as (typeof OCCN_MAX_STATE_OPTIONS)[number]
-    )
-  );
   const [replayUnitSelection, setReplayUnitSelection] =
     useState<ReplayUnitSelection | null>(null);
   const replayUnitContextKey =
@@ -262,15 +256,13 @@ export function OccnConformanceView({
               <Slider
                 id="occn-state-limit"
                 thumbAriaLabel="State limit per replay unit"
-                min={0}
-                max={OCCN_MAX_STATE_OPTIONS.length - 1}
-                step={1}
-                value={[stateLimitIndex]}
+                min={DEFAULT_OCCN_MAX_STATES}
+                max={MAX_OCCN_MAX_STATES}
+                step={100}
+                value={[workflow.maxStates]}
                 disabled={workflow.running}
-                onValueChange={([index]) =>
-                  workflow.setMaxStates(
-                    OCCN_MAX_STATE_OPTIONS[index] ?? DEFAULT_OCCN_MAX_STATES
-                  )
+                onValueChange={([maxStates]) =>
+                  workflow.setMaxStates(maxStates)
                 }
               />
               {workflow.maxStates > DEFAULT_OCCN_MAX_STATES ? (

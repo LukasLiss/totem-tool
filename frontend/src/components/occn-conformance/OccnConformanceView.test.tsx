@@ -168,7 +168,26 @@ describe("OccnConformanceView", () => {
     expect(
       screen.getByRole("slider", { name: "State limit per replay unit" })
     ).toBeTruthy();
+    const stateLimit = screen.getByRole("slider", {
+      name: "State limit per replay unit",
+    });
+    expect(stateLimit.getAttribute("aria-valuemin")).toBe("1000");
+    expect(stateLimit.getAttribute("aria-valuemax")).toBe("15000");
+    expect(stateLimit.getAttribute("aria-valuenow")).toBe("1000");
     expect(screen.queryByText(/significantly increase/)).toBeNull();
+  });
+
+  it("adjusts the state limit in intermediate 100-state steps", () => {
+    const setMaxStates = vi.fn();
+    useWorkflowMock.mockReturnValue(workflowState({ setMaxStates }));
+    renderView();
+
+    fireEvent.keyDown(
+      screen.getByRole("slider", { name: "State limit per replay unit" }),
+      { key: "ArrowRight" }
+    );
+
+    expect(setMaxStates).toHaveBeenCalledWith(1_100);
   });
 
   it("warns when the state limit is raised", () => {

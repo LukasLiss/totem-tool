@@ -958,7 +958,7 @@ class OCCNConformanceApiTests(TestCase):
                 self.assertIn("asset_id", response.data)
 
     def test_state_limit_is_bounded(self):
-        for max_states in (99, 50_001, "not-a-number"):
+        for max_states in (999, 15_001, "not-a-number"):
             with self.subTest(max_states=max_states):
                 response = self.client.post(
                     self.url,
