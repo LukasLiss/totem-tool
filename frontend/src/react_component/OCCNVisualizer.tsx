@@ -20,6 +20,7 @@ import {
   NetworkIcon,
   ArrowDownIcon,
   ArrowRightIcon,
+  LocateFixedIcon,
 } from 'lucide-react';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
@@ -109,6 +110,7 @@ function OCCNVisualizer({
   const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
   // Bumped by the "re-layout" button to rerun ELK after manual dragging.
   const [layoutTick, setLayoutTick] = useState(0);
+  const [nextConformanceFocus, setNextConformanceFocus] = useState(0);
 
   const nodeTypes = useMemo(() => ({ occn: OccnNodeComponent }), []);
   const edgeTypes = useMemo(() => ({ occnArc: OccnEdgeComponent }), []);
@@ -285,6 +287,47 @@ function OCCNVisualizer({
   );
 
   const interactionsDisabled = interactionLocked;
+  const highlightedNodeIds = useMemo(
+    () =>
+      Object.entries(conformanceHighlights)
+        .sort(
+          ([leftId, leftStatus], [rightId, rightStatus]) =>
+            Number(rightStatus === 'non_fitting') - Number(leftStatus === 'non_fitting') ||
+            leftId.localeCompare(rightId),
+        )
+        .map(([activity]) => activity),
+    [conformanceHighlights],
+  );
+  const focusableNodes = useMemo(
+    () =>
+      highlightedNodeIds
+        .map((activity) => nodes.find((node) => node.id === activity))
+        .filter((node): node is EditorOccnNode => node != null),
+    [highlightedNodeIds, nodes],
+  );
+  const highlightedNodeKey = highlightedNodeIds.join('\u0000');
+  const focusTarget =
+    focusableNodes.length > 0
+      ? focusableNodes[nextConformanceFocus % focusableNodes.length]
+      : null;
+
+  useEffect(() => {
+    setNextConformanceFocus(0);
+  }, [highlightedNodeKey]);
+
+  const focusStoppingPoint = useCallback(() => {
+    if (!focusTarget) return;
+    void fitView({
+      nodes: [focusTarget],
+      padding: 1.2,
+      minZoom: 0.8,
+      maxZoom: 1.4,
+      duration: 600,
+    });
+    setNextConformanceFocus((current) =>
+      focusableNodes.length > 1 ? (current + 1) % focusableNodes.length : current,
+    );
+  }, [fitView, focusTarget, focusableNodes.length]);
 
   return (
     <div
@@ -345,6 +388,30 @@ function OCCNVisualizer({
           )}
         </ReactFlow>
       </OccnRenderContext.Provider>
+
+      {focusTarget ? (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={focusStoppingPoint}
+          className={`absolute right-4 top-4 z-20 bg-background shadow-md ${
+            conformanceHighlights[focusTarget.id] === 'non_fitting'
+              ? 'border-red-500 text-red-700 hover:text-red-800 dark:text-red-400'
+              : 'border-amber-500 text-amber-700 hover:text-amber-800 dark:text-amber-400'
+          }`}
+          title={`Focus ${focusTarget.id}`}
+          aria-label={`Focus stopping point ${focusTarget.id}`}
+        >
+          <LocateFixedIcon className="size-4" />
+          Focus stopping point
+          {focusableNodes.length > 1 ? (
+            <span className="tabular-nums">
+              {(nextConformanceFocus % focusableNodes.length) + 1}/
+              {focusableNodes.length}
+            </span>
+          ) : null}
+        </Button>
+      ) : null}
 
       {(loading || error) && (
         <div
