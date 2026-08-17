@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -116,6 +117,8 @@ function OCCNVisualizer({
     [],
   );
 
+  const filterVersion = useFilterVersion();
+
   // Normalized to a string so the fetch effect doesn't re-run on array identity.
   const objectTypesParam = (objectTypes ?? []).map((t) => t.trim()).filter(Boolean).join(',');
 
@@ -155,7 +158,7 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data, fileId, threshold, objectTypesParam]);
+  }, [data, fileId, threshold, objectTypesParam, filterVersion]);
 
   const typeColors = useMemo(
     () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),

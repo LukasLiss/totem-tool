@@ -379,6 +379,7 @@ export function FilterConfigDialog({
     axios
       .get<{ earliest_timestamp: number; newest_timestamp: number }>(
         `/api/files/${fileId}/statistics/`,
+        { _skipGlobalFilter: true },
       )
       .then(({ data }) => {
         setLogMin(data.earliest_timestamp);
@@ -390,7 +391,7 @@ export function FilterConfigDialog({
       })
       .catch(() => {});
     axios
-      .get<Distribution>(`/api/files/${fileId}/event_distribution/`)
+      .get<Distribution>(`/api/files/${fileId}/event_distribution/`, { _skipGlobalFilter: true })
       .then(({ data }) => setDistribution(data))
       .catch(() => {});
   }, [open, filterType, fileId, existingRule]);

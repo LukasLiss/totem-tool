@@ -234,8 +234,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                processed = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                processed, _ = _filtered_event_counts(fp, db)
         except Exception as e:
             return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -355,19 +356,24 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            fp = _parse_filter_params(request)
+            is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
             cache_key = f"mlpa_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            if not is_filtered:
+                cached_result = cache.get(cache_key)
+                if cached_result:
+                    return Response(cached_result, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                totem = totemDiscovery_db(db)
+                with _filter_shadow(db.conn, fp):
+                    totem = totemDiscovery_db(db)
             # mlpaDiscovery operates on the Totem object (no DB access),
             # so it can run outside the per-file lock.
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            if not is_filtered:
+                cache.set(cache_key, serialized, timeout=3600)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -381,21 +387,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                # Single round-trip per scalar. All counts are O(table scan)
-                # in DuckDB which dominates over the round-trip cost.
-                num_events            = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                num_unique_activities = db.conn.execute(
-                    "SELECT COUNT(DISTINCT activity) FROM events"
-                ).fetchone()[0]
-                num_objects           = db.conn.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
-                num_object_types      = db.conn.execute(
-                    "SELECT COUNT(DISTINCT obj_type) FROM objects"
-                ).fetchone()[0]
-                ts_row = db.conn.execute(
-                    "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
-                ).fetchone()
-            earliest_timestamp, newest_timestamp = ts_row if ts_row else (None, None)
+                num_events, num_unique_activities = _filtered_event_counts(fp, db)
+                num_objects, num_object_types = _filtered_object_counts(fp, db)
+                earliest_timestamp, newest_timestamp = _filtered_timestamp_range(fp, db)
 
             return Response({
                 "num_events": num_events,
@@ -427,23 +423,33 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        fp = _parse_filter_params(request)
+        local_t_min = _optional_int(request.query_params.get("t_min"))
+        local_t_max = _optional_int(request.query_params.get("t_max"))
+        global_after  = fp.get("after")
+        global_before = fp.get("before")
+        effective_t_min = max(v for v in [local_t_min, global_after]  if v is not None) if any(v is not None for v in [local_t_min, global_after])  else None
+        effective_t_max = min(v for v in [local_t_max, global_before] if v is not None) if any(v is not None for v in [local_t_max, global_before]) else None
+        fp_non_time = {k: v for k, v in fp.items() if k not in ("after", "before")}
+
         try:
             with _with_ocel_db(user_file) as db:
-                result = get_oc_dotted_chart_data(
-                    db,
-                    t_min=request.query_params.get("t_min"),
-                    t_max=request.query_params.get("t_max"),
-                    row_min=row_min,
-                    row_max=row_max,
-                    x_axis=request.query_params.get("x_axis", "time"),
-                    y_axis=request.query_params.get("y_axis"),
-                    color_by=request.query_params.get("color_by", "activity"),
-                    shape_by=request.query_params.get("shape_by", "none"),
-                    sort_by=request.query_params.get("sort_by", "time"),
-                    row_order=request.query_params.get("row_order", "first_occurrence"),
-                    max_points=max_points,
-                    sample_seed=sample_seed,
-                )
+                with _filter_shadow(db.conn, fp_non_time):
+                    result = get_oc_dotted_chart_data(
+                        db,
+                        t_min=effective_t_min,
+                        t_max=effective_t_max,
+                        row_min=row_min,
+                        row_max=row_max,
+                        x_axis=request.query_params.get("x_axis", "time"),
+                        y_axis=request.query_params.get("y_axis"),
+                        color_by=request.query_params.get("color_by", "activity"),
+                        shape_by=request.query_params.get("shape_by", "none"),
+                        sort_by=request.query_params.get("sort_by", "time"),
+                        row_order=request.query_params.get("row_order", "first_occurrence"),
+                        max_points=max_points,
+                        sample_seed=sample_seed,
+                    )
         except Exception as e:
             return Response(
                 {"error": f"Failed to load OC dotted chart data: {e}"},
@@ -875,6 +881,74 @@ def _with_ocel_db(user_file):
         yield db
 
 
+@contextmanager
+def _filter_shadow(conn, fp):
+    """Context manager: temporarily shadow events/event_object/objects with
+    filtered subsets so library functions work on filtered data without
+    modification.  DuckDB searches the temp schema before main, so any
+    unqualified SELECT against those tables uses the temp versions.
+
+    The shadow is always torn down on exit — even if an exception occurs —
+    because the DuckDB connection is persistent and shared across requests.
+    """
+    has_filter = any(k in fp for k in ("after", "before", "activities", "object_types"))
+    if not has_filter:
+        yield
+        return
+
+    conditions, params = [], []
+    if "after" in fp:
+        conditions.append("e.timestamp_unix >= ?")
+        params.append(fp["after"])
+    if "before" in fp:
+        conditions.append("e.timestamp_unix <= ?")
+        params.append(fp["before"])
+    if "activities" in fp:
+        placeholders = ",".join("?" for _ in fp["activities"])
+        conditions.append(f"e.activity IN ({placeholders})")
+        params.extend(fp["activities"])
+
+    if "object_types" in fp:
+        placeholders = ",".join("?" for _ in fp["object_types"])
+        conditions.append(f"o.obj_type IN ({placeholders})")
+        params.extend(fp["object_types"])
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE events AS
+            SELECT DISTINCT e.*
+            FROM main.events e
+            JOIN main.event_object eo USING (event_id)
+            JOIN main.objects o ON o.obj_id = eo.obj_id
+            {where}
+        """, params)
+    else:
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE events AS
+            SELECT * FROM main.events e {where}
+        """, params)
+
+    conn.execute("""
+        CREATE OR REPLACE TEMP TABLE event_object AS
+        SELECT eo.* FROM main.event_object eo
+        WHERE eo.event_id IN (SELECT event_id FROM events)
+    """)
+    conn.execute("""
+        CREATE OR REPLACE TEMP TABLE objects AS
+        SELECT o.* FROM main.objects o
+        WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+    """)
+
+    try:
+        yield
+    finally:
+        for tbl in ("objects", "event_object", "events"):
+            try:
+                conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+            except Exception:
+                pass
+
+
 def _object_types(db: OcelDuckDB) -> list[str]:
     """Distinct object types in the log (sorted, frontend-friendly)."""
     return sorted(
@@ -906,6 +980,145 @@ def _optional_int(value):
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _parse_filter_params(request):
+    result = {}
+    raw_ot = request.query_params.get("object_types", "")
+    if raw_ot:
+        result["object_types"] = [t.strip() for t in raw_ot.split(",") if t.strip()]
+    raw_act = request.query_params.get("activities", "")
+    if raw_act:
+        result["activities"] = [a.strip() for a in raw_act.split(",") if a.strip()]
+    raw_after = request.query_params.get("after")
+    if raw_after:
+        try:
+            result["after"] = int(raw_after)
+        except (ValueError, TypeError):
+            pass
+    raw_before = request.query_params.get("before")
+    if raw_before:
+        try:
+            result["before"] = int(raw_before)
+        except (ValueError, TypeError):
+            pass
+    return result
+
+
+def _event_filter_base(fp):
+    """Build the FROM + WHERE clause for event queries with full filter support.
+
+    When object_types is present, returns a JOIN-based clause (with e. aliases).
+    Otherwise returns a plain events WHERE clause (no aliases).
+    Returns (from_where_sql, params, uses_aliases) where uses_aliases indicates
+    whether column references need the "e." prefix.
+    """
+    uses_join = "object_types" in fp
+    conditions, params = [], []
+
+    if uses_join:
+        if "after" in fp:
+            conditions.append("e.timestamp_unix >= ?")
+            params.append(fp["after"])
+        if "before" in fp:
+            conditions.append("e.timestamp_unix <= ?")
+            params.append(fp["before"])
+        if "activities" in fp:
+            placeholders = ",".join("?" for _ in fp["activities"])
+            conditions.append(f"e.activity IN ({placeholders})")
+            params.extend(fp["activities"])
+        placeholders = ",".join("?" for _ in fp["object_types"])
+        conditions.append(f"o.obj_type IN ({placeholders})")
+        params.extend(fp["object_types"])
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        from_where = (
+            f"FROM events e "
+            f"JOIN event_object eo USING (event_id) "
+            f"JOIN objects o ON o.obj_id = eo.obj_id "
+            f"{where}"
+        )
+    else:
+        if "after" in fp:
+            conditions.append("timestamp_unix >= ?")
+            params.append(fp["after"])
+        if "before" in fp:
+            conditions.append("timestamp_unix <= ?")
+            params.append(fp["before"])
+        if "activities" in fp:
+            placeholders = ",".join("?" for _ in fp["activities"])
+            conditions.append(f"activity IN ({placeholders})")
+            params.extend(fp["activities"])
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        from_where = f"FROM events {where}"
+
+    return from_where, params, uses_join
+
+
+def _filtered_event_counts(fp, db):
+    """Return (num_events, num_unique_activities) respecting all active filters."""
+    from_where, params, uses_join = _event_filter_base(fp)
+    if uses_join:
+        n_events = db.conn.execute(f"SELECT COUNT(DISTINCT e.event_id) {from_where}", params).fetchone()[0]
+        n_acts   = db.conn.execute(f"SELECT COUNT(DISTINCT e.activity) {from_where}", params).fetchone()[0]
+    else:
+        n_events = db.conn.execute(f"SELECT COUNT(*) {from_where}", params).fetchone()[0]
+        n_acts   = db.conn.execute(f"SELECT COUNT(DISTINCT activity) {from_where}", params).fetchone()[0]
+    return n_events, n_acts
+
+
+def _filtered_timestamp_range(fp, db):
+    """Return (earliest_timestamp, newest_timestamp) respecting all active filters."""
+    from_where, params, uses_join = _event_filter_base(fp)
+    if uses_join:
+        ts_sql = f"SELECT MIN(e.timestamp_unix), MAX(e.timestamp_unix) {from_where}"
+    else:
+        ts_sql = f"SELECT MIN(timestamp_unix), MAX(timestamp_unix) {from_where}"
+    row = db.conn.execute(ts_sql, params).fetchone()
+    return row if row else (None, None)
+
+
+def _filtered_object_counts(fp, db):
+    """Return (num_objects, num_object_types) respecting all active filters.
+
+    When event-level filters (time range, activity) are present, counts only
+    objects that participated in at least one matching event via the
+    event_object join table.  Object-type filters narrow by obj_type in both
+    cases.
+    """
+    has_event_filter = "after" in fp or "before" in fp or "activities" in fp
+    has_type_filter = "object_types" in fp
+
+    if not has_event_filter and not has_type_filter:
+        n_obj = db.conn.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
+        n_types = db.conn.execute("SELECT COUNT(DISTINCT obj_type) FROM objects").fetchone()[0]
+        return n_obj, n_types
+
+    conditions, params = [], []
+    if "after" in fp:
+        conditions.append("e.timestamp_unix >= ?")
+        params.append(fp["after"])
+    if "before" in fp:
+        conditions.append("e.timestamp_unix <= ?")
+        params.append(fp["before"])
+    if "activities" in fp:
+        placeholders = ",".join("?" for _ in fp["activities"])
+        conditions.append(f"e.activity IN ({placeholders})")
+        params.extend(fp["activities"])
+    if "object_types" in fp:
+        placeholders = ",".join("?" for _ in fp["object_types"])
+        conditions.append(f"o.obj_type IN ({placeholders})")
+        params.extend(fp["object_types"])
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    base = (
+        f"FROM event_object eo "
+        f"JOIN events e USING (event_id) "
+        f"JOIN objects o ON o.obj_id = eo.obj_id "
+        f"{where}"
+    )
+    n_obj = db.conn.execute(f"SELECT COUNT(DISTINCT eo.obj_id) {base}", params).fetchone()[0]
+    n_types = db.conn.execute(f"SELECT COUNT(DISTINCT o.obj_type) {base}", params).fetchone()[0]
+    return n_obj, n_types
 
 
 def _layout_shim(db: OcelDuckDB):
@@ -1028,6 +1241,8 @@ def variants(request):
     except (TypeError, ValueError):
         timeout_s = 10.0
 
+    fp = _parse_filter_params(request)
+
     try:
         with _with_ocel_db(user_file) as db:
             obj_types = _object_types(db)
@@ -1047,22 +1262,23 @@ def variants(request):
             else:
                 leading_object_type = None
 
-            # The default iso strategy ("wl+vf2") is sound and exact.
-            # `find_variants` creates connection-scoped TEMP TABLEs — the
-            # per-file lock from `_with_ocel_db` makes that safe under
-            # concurrent requests. `timeout_s` arms a watchdog that
-            # interrupts long SQL and raises TimeoutError.
-            mined = find_variants(
-                db,
-                extraction=extraction,
-                leading_type=leading_object_type,
-                iso=iso,
-                timeout_s=timeout_s,
-                verbose=False,
-            )
-            # `calculate_layout` only reads `ocel.obj_type_map` — give it a
-            # tiny shim backed by a SELECT against the DuckDB.
-            layout_ocel = _layout_shim(db)
+            with _filter_shadow(db.conn, fp):
+                # The default iso strategy ("wl+vf2") is sound and exact.
+                # `find_variants` creates connection-scoped TEMP TABLEs — the
+                # per-file lock from `_with_ocel_db` makes that safe under
+                # concurrent requests. `timeout_s` arms a watchdog that
+                # interrupts long SQL and raises TimeoutError.
+                mined = find_variants(
+                    db,
+                    extraction=extraction,
+                    leading_type=leading_object_type,
+                    iso=iso,
+                    timeout_s=timeout_s,
+                    verbose=False,
+                )
+                # `calculate_layout` only reads `ocel.obj_type_map` — give it a
+                # tiny shim backed by a SELECT against the DuckDB.
+                layout_ocel = _layout_shim(db)
     except TimeoutError as e:
         return Response(
             {
@@ -2335,13 +2551,18 @@ def NewOCDFGViewSet(request):
     except (EventLog.DoesNotExist, ValueError):
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
+    fp = _parse_filter_params(request)
+    # object_types is already handled by the library param; shadow only time/activity.
+    fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
+
     try:
         with _with_ocel_db(user_file) as db:
-            # Delegate all process-mining logic to totem-lib.
-            # Returns the annotated graph and per-type variant counts for sliders.
-            ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
-                db, object_types=object_type_filter
-            )
+            with _filter_shadow(db.conn, fp_non_types):
+                # Delegate all process-mining logic to totem-lib.
+                # Returns the annotated graph and per-type variant counts for sliders.
+                ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
+                    db, object_types=object_type_filter
+                )
 
             if len(ocdfg.nodes) == 0:
                 dfg_json = {
@@ -2436,22 +2657,30 @@ def OCCNViewSet(request):
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     try:
+        fp = _parse_filter_params(request)
+        has_event_filter = any(k in fp for k in ("after", "before", "activities"))
+
         parameters = {"object_types": object_type_filter} if object_type_filter else None
         cache_key = (user_file.id, tuple(object_type_filter) if object_type_filter else None)
 
-        with _occn_cache_lock:
-            base_occn = _occn_base_cache.get(cache_key)
-            if base_occn is not None:
-                _occn_base_cache.move_to_end(cache_key)
+        base_occn = None
+        if not has_event_filter:
+            with _occn_cache_lock:
+                base_occn = _occn_base_cache.get(cache_key)
+                if base_occn is not None:
+                    _occn_base_cache.move_to_end(cache_key)
 
         if base_occn is None:
+            fp_no_types = {k: v for k, v in fp.items() if k != "object_types"}
             with _with_ocel_db(user_file) as db:
-                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
-            with _occn_cache_lock:
-                _occn_base_cache[cache_key] = base_occn
-                _occn_base_cache.move_to_end(cache_key)
-                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
-                    _occn_base_cache.popitem(last=False)
+                with _filter_shadow(db.conn, fp_no_types):
+                    base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            if not has_event_filter:
+                with _occn_cache_lock:
+                    _occn_base_cache[cache_key] = base_occn
+                    _occn_base_cache.move_to_end(cache_key)
+                    while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                        _occn_base_cache.popitem(last=False)
 
         occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -230,6 +231,8 @@ function NewOCDFGVariantsVisualizer({
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
+
+  const filterVersion = useFilterVersion();
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -550,7 +553,7 @@ function NewOCDFGVariantsVisualizer({
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, fileId]);
+  }, [data, fileId, filterVersion]);
 
   // Slider change: pure client-side — just update traceLimit state.
   // The layout effect has traceLimit in its dependency array so it will

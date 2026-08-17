@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
+import { useFilterVersion } from "@/store/filterStore";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut,
   MinusCircle, PlusCircle, Settings,
@@ -165,6 +166,8 @@ export default function VariantsExplorer({
   defaultTimeoutS = 10,
   onAdvancedChange,
 }: VariantsExplorerProps) {
+  const filterVersion = useFilterVersion();
+
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
@@ -237,7 +240,8 @@ export default function VariantsExplorer({
         }
 
         const { data: objectTypesRaw }: { data: { name: string; count: number }[] } = await axios.get(
-          `/api/files/${currentFileId}/object_types/`
+          `/api/files/${currentFileId}/object_types/`,
+          { _skipGlobalFilter: true },
         );
 
         // Check again after async operation
@@ -359,7 +363,7 @@ export default function VariantsExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad]);
+  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad, filterVersion]);
 
   const filtered = useMemo(() => {
     return [...variants].sort((a, b) => b.support - a.support);

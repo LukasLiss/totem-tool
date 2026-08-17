@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -240,6 +241,8 @@ function NewOCDFGVisualizer({
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
+
+  const filterVersion = useFilterVersion();
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -539,7 +542,7 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
-  }, [data, fileId]);
+  }, [data, fileId, filterVersion]);
 
   const handleWeightLimitChange = useCallback(
     (otype: string, value: number) => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -4878,6 +4879,7 @@ function TotemVisualizer({
   embedded = false,
   onControlsReady,
 }: TotemVisualizerProps) {
+  const filterVersion = useFilterVersion();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -5258,7 +5260,7 @@ function TotemVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId]);
+  }, [backendBaseUrl, eventLogId, filterVersion]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {

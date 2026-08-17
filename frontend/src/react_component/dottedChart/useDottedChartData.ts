@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { useFilterVersion } from "@/store/filterStore";
 
 import {
   axisOptionToParam,
@@ -38,6 +39,8 @@ export function useDottedChartData({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const filterVersion = useFilterVersion();
+
   const queryKey = useMemo(
     () =>
       JSON.stringify({
@@ -50,8 +53,9 @@ export function useDottedChartData({
         maxPoints,
         viewport,
         sampleSeed,
+        filterVersion,
       }),
-    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed]
+    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed, filterVersion]
   );
 
   useEffect(() => {

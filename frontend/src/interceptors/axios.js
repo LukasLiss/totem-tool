@@ -1,4 +1,5 @@
 import axios from "axios";
+import { useFilterStore, buildFilterParams } from "@/store/filterStore";
 
 /**
  * Token refresh strategy
@@ -80,6 +81,22 @@ async function guestReAuth() {
   if (newRefresh) localStorage.setItem("refresh_token", newRefresh);
   return access;
 }
+
+axios.interceptors.request.use((config) => {
+  if (config._skipGlobalFilter) return config;
+  const { appliedRules, isApplied } = useFilterStore.getState();
+  const url = config.url ?? "";
+  const isDataEndpoint =
+    url.includes("/api/files/") ||
+    url.includes("/api/new-ocdfg/") ||
+    url.includes("/api/variants/") ||
+    url.includes("/api/occn/");
+  if (isApplied && isDataEndpoint) {
+    const filterParams = buildFilterParams(appliedRules);
+    config.params = { ...config.params, ...filterParams };
+  }
+  return config;
+});
 
 axios.interceptors.response.use(
   (resp) => resp,

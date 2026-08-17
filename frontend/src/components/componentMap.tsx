@@ -314,7 +314,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     const fetchTypes = async () => {
       setLoadingTypes(true);
       try {
-        const { data } = await axios.get<{ name: string; count: number }[]>(`/api/files/${selectedFile.id}/object_types/`);
+        const { data } = await axios.get<{ name: string; count: number }[]>(`/api/files/${selectedFile.id}/object_types/`, { _skipGlobalFilter: true });
         setAvailableTypes(data.map(o => o.name).sort());
       } catch (err) {
         console.error('Failed to fetch object types:', err);
