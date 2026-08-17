@@ -1,6 +1,6 @@
 import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { CircleX, TriangleAlert } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 
 import { lightenHex } from "@/editors/shared/colors";
 
@@ -27,8 +27,7 @@ function conformanceAppearance(
       border: "3px solid #DC2626",
       shadow: "0 0 0 4px rgba(220, 38, 38, 0.2), 0 8px 22px rgba(127, 29, 29, 0.22)",
       color: "#DC2626",
-      label: "Non-fitting stopping point",
-      icon: CircleX,
+      label: "Replay fails here",
     };
   }
   if (status === "inconclusive") {
@@ -37,10 +36,56 @@ function conformanceAppearance(
       shadow: "0 0 0 4px rgba(217, 119, 6, 0.2), 0 8px 22px rgba(120, 53, 15, 0.2)",
       color: "#D97706",
       label: "State limit reached here",
-      icon: TriangleAlert,
     };
   }
   return null;
+}
+
+function ConformanceCallout({
+  appearance,
+}: {
+  appearance: NonNullable<ReturnType<typeof conformanceAppearance>> | null;
+}) {
+  if (!appearance) return null;
+  return (
+    <div
+      aria-label={appearance.label}
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: -48,
+        zIndex: 10,
+        display: "flex",
+        transform: "translateX(-50%)",
+        flexDirection: "column",
+        alignItems: "center",
+        pointerEvents: "none",
+      }}
+    >
+      <span
+        style={{
+          borderRadius: 4,
+          background: appearance.color,
+          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.2)",
+          color: "#FFFFFF",
+          fontSize: 11,
+          fontWeight: 700,
+          lineHeight: "18px",
+          padding: "1px 7px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {appearance.label}
+      </span>
+      <ArrowDown
+        aria-hidden="true"
+        color={appearance.color}
+        size={24}
+        strokeWidth={3}
+        style={{ marginTop: -1 }}
+      />
+    </div>
+  );
 }
 
 /** Horizontal-stripe fill, one stripe per incident object type (paper style). */
@@ -69,7 +114,6 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
 }: NodeProps<OccnNode>) {
   const { typeColors, incidentTypes } = useContext(OccnRenderContext);
   const conformance = conformanceAppearance(data.conformanceStatus);
-  const ConformanceIcon = conformance?.icon;
 
   // Long single-token activity names (e.g. "DelegatePurchaseRequisitionApproval")
   // can't wrap and would spill past the fixed-width box. Detect the overflow so
@@ -119,16 +163,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
             position: "relative",
           }}
         >
-          {ConformanceIcon ? (
-            <ConformanceIcon
-              aria-label={conformance.label}
-              title={conformance.label}
-              size={18}
-              color={conformance.color}
-              fill="#FFFFFF"
-              style={{ position: "absolute", right: -9, top: -9 }}
-            />
-          ) : null}
+          <ConformanceCallout appearance={conformance} />
           {data.kind === "start" ? (
             <svg width={16} height={16} viewBox="0 0 16 16">
               <polygon points="3,1.5 14,8 3,14.5" fill="#FFFFFF" />
@@ -180,20 +215,11 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
         alignItems: "center",
         justifyContent: "center",
         padding: "8px 14px",
-        overflow: "hidden",
+        overflow: "visible",
         position: "relative",
       }}
     >
-      {ConformanceIcon ? (
-        <ConformanceIcon
-          aria-label={conformance.label}
-          title={conformance.label}
-          size={20}
-          color={conformance.color}
-          fill="#FFFFFF"
-          style={{ position: "absolute", right: 5, top: 4 }}
-        />
-      ) : null}
+      <ConformanceCallout appearance={conformance} />
       <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
       <div className="text-center" style={{ width: "100%", minWidth: 0 }}>
         <div
