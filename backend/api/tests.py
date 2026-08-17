@@ -478,6 +478,36 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class EventLogObjectTypesApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="object-types-user")
+        self.project = Project.objects.create(name="Object Types Project")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="object-types.xml",
+        )
+        self.url = f"/api/files/{self.event_log.pk}/object_types/"
+        self.client.force_authenticate(user=self.user)
+
+    def test_returns_cached_metadata_without_taking_algorithm_lock(self):
+        with (
+            patch(
+                "api.views._get_ocel_object_types",
+                return_value=["Item", "Order"],
+            ) as get_types,
+            patch("api.views._with_ocel_db") as algorithm_lock,
+        ):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, ["Item", "Order"])
+        get_types.assert_called_once()
+        self.assertEqual(get_types.call_args.args[0].pk, self.event_log.pk)
+        algorithm_lock.assert_not_called()
+
+
 class TotemConformanceApiValidationTests(TestCase):
     def setUp(self):
         self.client = APIClient()
