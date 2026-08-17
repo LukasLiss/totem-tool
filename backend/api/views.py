@@ -428,6 +428,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         leading_object_type = request_serializer.validated_data.get(
             "leading_object_type"
         )
+        max_states = request_serializer.validated_data["max_states"]
         try:
             with _with_ocel_db(user_file) as db:
                 if (
@@ -454,7 +455,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            result = occn_replay_fitness(occn, replay_units)
+            result = occn_replay_fitness(
+                occn,
+                replay_units,
+                max_states=max_states,
+            )
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate OCCN conformance: {exc}"},
@@ -467,6 +472,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "max_states": max_states,
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,

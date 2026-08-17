@@ -1,6 +1,7 @@
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   FileText,
   Info,
   LoaderCircle,
@@ -10,7 +11,9 @@ import {
 
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  DEFAULT_OCCN_MAX_STATES,
   LEADING_OBJECT_REPLAY_STRATEGY,
+  OCCN_MAX_STATE_OPTIONS,
   type OCCNConformanceResponse,
   type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
@@ -25,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Slider } from "@/components/ui/slider";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
@@ -68,6 +72,12 @@ export function OccnConformanceView({
     positiveId(initialAssetId)
   );
   const { assetSelection } = workflow;
+  const stateLimitIndex = Math.max(
+    0,
+    OCCN_MAX_STATE_OPTIONS.indexOf(
+      workflow.maxStates as (typeof OCCN_MAX_STATE_OPTIONS)[number]
+    )
+  );
   const [replayUnitSelection, setReplayUnitSelection] =
     useState<ReplayUnitSelection | null>(null);
   const replayUnitContextKey =
@@ -241,6 +251,41 @@ export function OccnConformanceView({
               )}
               {workflow.running ? "Running" : "Run conformance"}
             </Button>
+
+            <div className="space-y-3 border-t pt-4 md:col-span-2 xl:col-span-full">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="occn-state-limit">State limit per replay unit</Label>
+                <span className="text-sm font-medium tabular-nums">
+                  {workflow.maxStates.toLocaleString()}
+                </span>
+              </div>
+              <Slider
+                id="occn-state-limit"
+                thumbAriaLabel="State limit per replay unit"
+                min={0}
+                max={OCCN_MAX_STATE_OPTIONS.length - 1}
+                step={1}
+                value={[stateLimitIndex]}
+                disabled={workflow.running}
+                onValueChange={([index]) =>
+                  workflow.setMaxStates(
+                    OCCN_MAX_STATE_OPTIONS[index] ?? DEFAULT_OCCN_MAX_STATES
+                  )
+                }
+              />
+              {workflow.maxStates > DEFAULT_OCCN_MAX_STATES ? (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    Higher state limits can significantly increase computation
+                    time.
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </section>
 
           {!eventLogId || !projectId ? (

@@ -957,6 +957,24 @@ class OCCNConformanceApiTests(TestCase):
                 )
                 self.assertIn("asset_id", response.data)
 
+    def test_state_limit_is_bounded(self):
+        for max_states in (99, 50_001, "not-a-number"):
+            with self.subTest(max_states=max_states):
+                response = self.client.post(
+                    self.url,
+                    {
+                        "asset_id": self.occn_asset.pk,
+                        "max_states": max_states,
+                    },
+                    format="json",
+                )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn("max_states", response.data)
+
     def test_unsupported_replay_unit_strategy_is_rejected(self):
         with (
             patch("api.views._with_ocel_db") as load_ocel,
@@ -1397,7 +1415,7 @@ class OCCNConformanceApiTests(TestCase):
         ):
             response = self.client.post(
                 self.url,
-                {"asset_id": self.occn_asset.pk},
+                {"asset_id": self.occn_asset.pk, "max_states": 5_000},
                 format="json",
             )
 
@@ -1409,6 +1427,7 @@ class OCCNConformanceApiTests(TestCase):
                 "asset_id": self.occn_asset.pk,
                 "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                 "leading_object_type": None,
+                "max_states": 5_000,
                 **result.to_dict(),
             },
         )
@@ -1423,6 +1442,7 @@ class OCCNConformanceApiTests(TestCase):
         deserialized_occn, called_units = fitness.call_args.args
         self.assertIsInstance(deserialized_occn, OCCausalNet)
         self.assertIs(called_units, replay_units)
+        self.assertEqual(fitness.call_args.kwargs, {"max_states": 5_000})
         self.assertEqual(response.data["fitness"], 0.5)
         self.assertAlmostEqual(response.data["coverage"], 2 / 3)
         self.assertEqual(response.data["inconclusive_units"], 1)

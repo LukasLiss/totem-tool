@@ -59,6 +59,11 @@ class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
 
 class OCCNConformanceRequestSerializer(OCCNReplayStrategyRequestSerializer):
     asset_id = serializers.IntegerField(min_value=1)
+    max_states = serializers.IntegerField(
+        min_value=100,
+        max_value=50_000,
+        default=1_000,
+    )
 
 
 class OCCNReplayUnitDetailRequestSerializer(

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { extractAssetApiError } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  DEFAULT_OCCN_MAX_STATES,
   LEADING_OBJECT_REPLAY_STRATEGY,
   getEventLogObjectTypes,
   runOCCNConformance,
@@ -26,6 +27,8 @@ export interface OccnConformanceWorkflowState {
   objectTypesLoading: boolean;
   objectTypesError: string | null;
   retryObjectTypes: () => void;
+  maxStates: number;
+  setMaxStates: (maxStates: number) => void;
   canRun: boolean;
   running: boolean;
   result: OCCNConformanceResponse | null;
@@ -51,6 +54,7 @@ export function useOccnConformanceWorkflow(
   const [objectTypesError, setObjectTypesError] = useState<string | null>(null);
   const [objectTypesRetryGeneration, setObjectTypesRetryGeneration] =
     useState(0);
+  const [maxStates, setMaxStates] = useState(DEFAULT_OCCN_MAX_STATES);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<OCCNConformanceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +143,7 @@ export function useOccnConformanceWorkflow(
     assetSelection.selectedAssetId,
     replayUnitStrategy,
     leadingObjectType,
+    maxStates,
   ]);
 
   const run = useCallback(async () => {
@@ -166,12 +171,15 @@ export function useOccnConformanceWorkflow(
               eventLogId,
               assetId,
               replayUnitStrategy,
-              leadingObjectType
+              leadingObjectType,
+              maxStates
             )
           : await runOCCNConformance(
               eventLogId,
               assetId,
-              replayUnitStrategy
+              replayUnitStrategy,
+              null,
+              maxStates
             );
       if (requestGeneration.current !== generation) return null;
       setResult(nextResult);
@@ -191,6 +199,7 @@ export function useOccnConformanceWorkflow(
     canRun,
     eventLogId,
     leadingObjectType,
+    maxStates,
     replayUnitStrategy,
   ]);
 
@@ -204,6 +213,8 @@ export function useOccnConformanceWorkflow(
     objectTypesLoading,
     objectTypesError,
     retryObjectTypes,
+    maxStates,
+    setMaxStates,
     canRun,
     running,
     result,

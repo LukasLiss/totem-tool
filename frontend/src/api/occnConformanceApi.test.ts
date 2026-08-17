@@ -27,6 +27,7 @@ const response: OCCNConformanceResponse = {
   asset_id: 34,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
+  max_states: 1_000,
   fitness: 0.5,
   coverage: 2 / 3,
   total_units: 3,
@@ -115,6 +116,7 @@ describe("OCCN conformance API", () => {
       "http://localhost:8000/api/files/12/occn_conformance/",
       {
         asset_id: 34,
+        max_states: 1_000,
         replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
       }
     );
@@ -133,6 +135,7 @@ describe("OCCN conformance API", () => {
       "http://localhost:8000/api/files/12/occn_conformance/",
       {
         asset_id: 34,
+        max_states: 1_000,
         replay_unit_strategy: "connected_components",
       }
     );
@@ -145,7 +148,8 @@ describe("OCCN conformance API", () => {
       12,
       34,
       LEADING_OBJECT_REPLAY_STRATEGY,
-      "Order"
+      "Order",
+      10_000
     );
 
     expect(post).toHaveBeenCalledWith(
@@ -154,6 +158,7 @@ describe("OCCN conformance API", () => {
         asset_id: 34,
         replay_unit_strategy: "leading_object",
         leading_object_type: "Order",
+        max_states: 10_000,
       }
     );
   });

@@ -54,6 +54,7 @@ const response: OCCNConformanceResponse = {
   asset_id: asset.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
+  max_states: 1_000,
   fitness: 1,
   coverage: 1,
   total_units: 1,
@@ -94,6 +95,8 @@ function workflowState(overrides: Record<string, unknown> = {}) {
     objectTypesLoading: false,
     objectTypesError: null,
     retryObjectTypes: vi.fn(),
+    maxStates: 1_000,
+    setMaxStates: vi.fn(),
     canRun: true,
     running: false,
     result: null,
@@ -162,6 +165,21 @@ describe("OccnConformanceView", () => {
     expect(screen.getByText("event-log.xml")).toBeTruthy();
     expect(screen.getByText("Standard")).toBeTruthy();
     expect(screen.getByText("Ready to calculate")).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "State limit per replay unit" })
+    ).toBeTruthy();
+    expect(screen.queryByText(/significantly increase/)).toBeNull();
+  });
+
+  it("warns when the state limit is raised", () => {
+    useWorkflowMock.mockReturnValue(workflowState({ maxStates: 10_000 }));
+
+    renderView();
+
+    expect(screen.getByText("10,000")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "significantly increase computation time"
+    );
   });
 
   it("passes a Model Assets row selection into the workflow", () => {

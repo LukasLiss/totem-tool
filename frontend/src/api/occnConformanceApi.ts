@@ -2,6 +2,15 @@ import axios from "axios";
 
 export const CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components" as const;
 export const LEADING_OBJECT_REPLAY_STRATEGY = "leading_object" as const;
+export const DEFAULT_OCCN_MAX_STATES = 1_000;
+export const OCCN_MAX_STATE_OPTIONS = [
+  1_000,
+  2_500,
+  5_000,
+  10_000,
+  25_000,
+  50_000,
+] as const;
 
 export type OCCNReplayUnitStrategy =
   | typeof CONNECTED_COMPONENTS_REPLAY_STRATEGY
@@ -29,6 +38,7 @@ export interface OCCNConformanceResponse {
   asset_id: number;
   replay_unit_strategy: OCCNReplayUnitStrategy;
   leading_object_type: string | null;
+  max_states: number;
   fitness: number | null;
   coverage: number;
   total_units: number;
@@ -84,11 +94,13 @@ export async function runOCCNConformance(
   assetId: number,
   replayUnitStrategy: OCCNReplayUnitStrategy =
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-  leadingObjectType: string | null = null
+  leadingObjectType: string | null = null,
+  maxStates: number = DEFAULT_OCCN_MAX_STATES
 ): Promise<OCCNConformanceResponse> {
   const request: Record<string, number | string> = {
     asset_id: assetId,
     replay_unit_strategy: replayUnitStrategy,
+    max_states: maxStates,
   };
   if (replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY) {
     request.leading_object_type = leadingObjectType ?? "";

@@ -82,6 +82,7 @@ const response: OCCNConformanceResponse = {
   asset_id: asset.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
+  max_states: 1_000,
   fitness: 1,
   coverage: 1,
   total_units: 1,
@@ -232,7 +233,9 @@ describe("OCCN conformance workflow integration", () => {
     expect(runOCCNConformanceMock).toHaveBeenCalledWith(
       12,
       asset.id,
-      CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+      null,
+      1_000
     );
 
     fireEvent.click(
@@ -309,7 +312,9 @@ describe("OCCN conformance workflow integration", () => {
       expect(runOCCNConformanceMock).toHaveBeenCalledWith(
         12,
         asset.id,
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null,
+        1_000
       )
     );
   });

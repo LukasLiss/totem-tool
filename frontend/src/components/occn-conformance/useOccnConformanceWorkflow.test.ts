@@ -60,6 +60,7 @@ const response: OCCNConformanceResponse = {
   asset_id: model.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
+  max_states: 1_000,
   fitness: 0.5,
   coverage: 1,
   total_units: 2,
@@ -163,7 +164,9 @@ describe("useOccnConformanceWorkflow", () => {
     expect(runOCCNConformanceMock).toHaveBeenCalledWith(
       12,
       model.id,
-      CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+      null,
+      1_000
     );
     expect(result.current.running).toBe(false);
     expect(result.current.result).toEqual(response);
@@ -189,6 +192,32 @@ describe("useOccnConformanceWorkflow", () => {
       request.resolve(response);
       await firstRun;
     });
+  });
+
+  it("clears the result and submits a raised state limit", async () => {
+    runOCCNConformanceMock.mockResolvedValue(response);
+    const { result } = renderHook(() => useOccnConformanceWorkflow(12, 7));
+
+    await act(async () => {
+      await result.current.run();
+    });
+    expect(result.current.result).toEqual(response);
+
+    act(() => {
+      result.current.setMaxStates(10_000);
+    });
+    expect(result.current.result).toBeNull();
+
+    await act(async () => {
+      await result.current.run();
+    });
+    expect(runOCCNConformanceMock).toHaveBeenLastCalledWith(
+      12,
+      model.id,
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+      null,
+      10_000
+    );
   });
 
   it("requires and submits a selected type for leading-object replay", async () => {
@@ -220,7 +249,8 @@ describe("useOccnConformanceWorkflow", () => {
       12,
       model.id,
       LEADING_OBJECT_REPLAY_STRATEGY,
-      "Order"
+      "Order",
+      1_000
     );
   });
 
@@ -315,8 +345,14 @@ describe("useOccnConformanceWorkflow", () => {
       expect(await result.current.run()).toEqual(alternativeResponse);
     });
     expect(runOCCNConformanceMock.mock.calls).toEqual([
-      [12, model.id, CONNECTED_COMPONENTS_REPLAY_STRATEGY],
-      [12, alternativeModel.id, CONNECTED_COMPONENTS_REPLAY_STRATEGY],
+      [12, model.id, CONNECTED_COMPONENTS_REPLAY_STRATEGY, null, 1_000],
+      [
+        12,
+        alternativeModel.id,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null,
+        1_000,
+      ],
     ]);
   });
 
