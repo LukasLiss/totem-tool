@@ -43,10 +43,8 @@ function conformanceAppearance(
 
 function ConformanceCallout({
   appearance,
-  details,
 }: {
   appearance: NonNullable<ReturnType<typeof conformanceAppearance>> | null;
-  details?: string[];
 }) {
   if (!appearance) return null;
   return (
@@ -55,7 +53,7 @@ function ConformanceCallout({
       style={{
         position: "absolute",
         left: "50%",
-        bottom: "calc(100% + 2px)",
+        bottom: "calc(100% + 1px)",
         zIndex: 10,
         display: "flex",
         transform: "translateX(-50%)",
@@ -64,48 +62,14 @@ function ConformanceCallout({
         pointerEvents: "none",
       }}
     >
-      <div
-        style={{
-          borderRadius: 4,
-          background: appearance.color,
-          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.2)",
-          color: "#FFFFFF",
-          fontSize: 11,
-          fontWeight: 700,
-          lineHeight: "18px",
-          maxWidth: 280,
-          minWidth: 150,
-          padding: "4px 8px",
-          textAlign: "left",
-          whiteSpace: "nowrap",
-        }}
-      >
-        <div>{appearance.label}</div>
-        {details?.map((detail) => (
-          <div
-            key={detail}
-            style={{
-              borderTop: "1px solid rgba(255, 255, 255, 0.3)",
-              fontSize: 10,
-              fontWeight: 500,
-              lineHeight: "15px",
-              marginTop: 3,
-              overflow: "hidden",
-              paddingTop: 2,
-              textOverflow: "ellipsis",
-            }}
-            title={detail}
-          >
-            {detail}
-          </div>
-        ))}
-      </div>
       <ArrowDown
         aria-hidden="true"
         color={appearance.color}
-        size={24}
-        strokeWidth={3}
-        style={{ marginTop: -1 }}
+        size={30}
+        strokeWidth={3.5}
+        style={{
+          filter: "drop-shadow(0 1px 1px #FFFFFF) drop-shadow(0 2px 3px rgba(15, 23, 42, 0.35))",
+        }}
       />
     </div>
   );
@@ -186,10 +150,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
             position: "relative",
           }}
         >
-          <ConformanceCallout
-            appearance={conformance}
-            details={data.conformanceDetails}
-          />
+          <ConformanceCallout appearance={conformance} />
           {data.kind === "start" ? (
             <svg width={16} height={16} viewBox="0 0 16 16">
               <polygon points="3,1.5 14,8 3,14.5" fill="#FFFFFF" />
@@ -245,10 +206,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
         position: "relative",
       }}
     >
-      <ConformanceCallout
-        appearance={conformance}
-        details={data.conformanceDetails}
-      />
+      <ConformanceCallout appearance={conformance} />
       <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
       <div className="text-center" style={{ width: "100%", minWidth: 0 }}>
         <div

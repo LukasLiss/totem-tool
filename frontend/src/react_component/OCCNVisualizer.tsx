@@ -66,8 +66,6 @@ interface OCCNVisualizerProps {
   showTitle?: boolean;
   /** Activity ids to emphasize as OCCN replay stopping points. */
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
-  /** Diagnostic lines shown inside each stopping-point callout. */
-  conformanceDetails?: Record<string, string[]>;
   /** Log activities shown only to explain why replay stopped. */
   missingConformanceActivities?: string[];
 }
@@ -77,7 +75,6 @@ const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
   'non_fitting' | 'inconclusive'
 > = {};
 const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
-const EMPTY_CONFORMANCE_DETAILS: Record<string, string[]> = {};
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -96,7 +93,6 @@ function OCCNVisualizer({
   objectTypes,
   showTitle = true,
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
-  conformanceDetails = EMPTY_CONFORMANCE_DETAILS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
@@ -222,7 +218,6 @@ function OCCNVisualizer({
               conformanceStatus: conformanceHighlights[node.id],
               conformanceMissingFromModel:
                 missingConformanceActivities.includes(node.id),
-              conformanceDetails: conformanceDetails[node.id],
             },
             position: positions[node.id] ?? { x: 0, y: 0 },
           })),
@@ -240,7 +235,6 @@ function OCCNVisualizer({
     layoutDirection,
     layoutTick,
     conformanceHighlights,
-    conformanceDetails,
     missingConformanceActivities,
   ]);
 

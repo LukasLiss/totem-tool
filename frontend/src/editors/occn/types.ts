@@ -17,8 +17,6 @@ export type OccnNodeData = {
   conformanceStatus?: 'non_fitting' | 'inconclusive';
   /** The stopping activity came from the log but is absent from the OCCN. */
   conformanceMissingFromModel?: boolean;
-  /** Short replay diagnostics rendered in the stopping-point callout. */
-  conformanceDetails?: string[];
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;

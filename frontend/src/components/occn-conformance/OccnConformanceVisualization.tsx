@@ -58,16 +58,6 @@ export function OccnConformanceVisualization({
       ),
     [annotations]
   );
-  const details = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(annotations).map(([activity, annotation]) => [
-          activity,
-          annotation.details,
-        ])
-      ),
-    [annotations]
-  );
   const missingActivities = useMemo(
     () => {
       const knownActivities = new Set(
@@ -120,6 +110,42 @@ export function OccnConformanceVisualization({
         </div>
       </header>
 
+      {Object.keys(annotations).length > 0 ? (
+        <div
+          aria-label="Replay stopping-point details"
+          className="divide-y border-b bg-muted/20"
+        >
+          {Object.entries(annotations).map(([activity, annotation]) => {
+            const nonFitting = annotation.status === "non_fitting";
+            const StatusIcon = nonFitting ? CircleX : TriangleAlert;
+            return (
+              <div
+                key={activity}
+                className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(180px,0.35fr)_1fr]"
+              >
+                <div
+                  className={`flex min-w-0 items-center gap-2 font-medium ${
+                    nonFitting
+                      ? "text-red-700 dark:text-red-400"
+                      : "text-amber-700 dark:text-amber-400"
+                  }`}
+                >
+                  <StatusIcon className="size-4 shrink-0" />
+                  <span className="truncate" title={activity}>
+                    {activity}
+                  </span>
+                </div>
+                <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-foreground">
+                  {annotation.details.map((detail) => (
+                    <span key={detail}>{detail}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       {model.error ? (
         <div className="p-4 text-sm text-destructive">{model.error}</div>
       ) : (
@@ -130,7 +156,6 @@ export function OccnConformanceVisualization({
               data={displayedNet ?? undefined}
               showTitle={false}
               conformanceHighlights={highlights}
-              conformanceDetails={details}
               missingConformanceActivities={missingActivities}
             />
           </ReactFlowProvider>
