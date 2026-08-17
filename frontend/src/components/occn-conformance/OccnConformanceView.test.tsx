@@ -53,6 +53,7 @@ const response: OCCNConformanceResponse = {
   file_id: 12,
   asset_id: asset.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   fitness: 1,
   coverage: 1,
   total_units: 1,
@@ -86,6 +87,13 @@ function workflowState(overrides: Record<string, unknown> = {}) {
       retry: vi.fn(),
     },
     replayUnitStrategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    setReplayUnitStrategy: vi.fn(),
+    leadingObjectType: null,
+    setLeadingObjectType: vi.fn(),
+    availableObjectTypes: [],
+    objectTypesLoading: false,
+    objectTypesError: null,
+    retryObjectTypes: vi.fn(),
     canRun: true,
     running: false,
     result: null,
@@ -152,7 +160,7 @@ describe("OccnConformanceView", () => {
 
     expect(screen.getByText("OCCN Conformance")).toBeTruthy();
     expect(screen.getByText("event-log.xml")).toBeTruthy();
-    expect(screen.getByText("Connected components")).toBeTruthy();
+    expect(screen.getByText("Standard")).toBeTruthy();
     expect(screen.getByText("Ready to calculate")).toBeTruthy();
   });
 
@@ -195,7 +203,8 @@ describe("OccnConformanceView", () => {
     expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
       12,
       null,
-      CONNECTED_COMPONENTS_REPLAY_STRATEGY
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+      null
     );
 
     fireEvent.click(
@@ -208,7 +217,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         response.unit_results[0],
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
     expect(
@@ -230,7 +240,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         response.unit_results[0],
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
 
@@ -245,7 +256,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         null,
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
     expect(
@@ -263,7 +275,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         nextResult.unit_results[0],
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
 
@@ -278,7 +291,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         13,
         null,
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
   });
@@ -295,7 +309,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         response.unit_results[0],
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
 
@@ -321,7 +336,8 @@ describe("OccnConformanceView", () => {
       expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
         12,
         null,
-        CONNECTED_COMPONENTS_REPLAY_STRATEGY
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
       )
     );
     expect(

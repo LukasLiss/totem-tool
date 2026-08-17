@@ -426,11 +426,27 @@ class EventLogViewSet(viewsets.ModelViewSet):
         replay_unit_strategy = request_serializer.validated_data[
             "replay_unit_strategy"
         ]
+        leading_object_type = request_serializer.validated_data.get(
+            "leading_object_type"
+        )
         try:
             with _with_ocel_db(user_file) as db:
+                if (
+                    leading_object_type is not None
+                    and leading_object_type not in _object_types(db)
+                ):
+                    return Response(
+                        {
+                            "leading_object_type": (
+                                "Object type does not exist in the event log."
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 replay_units = extract_occn_replay_units(
                     db,
                     strategy=replay_unit_strategy,
+                    leading_object_type=leading_object_type,
                 )
         except Exception as exc:
             return Response(
@@ -451,6 +467,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
+                "leading_object_type": leading_object_type,
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,
@@ -479,11 +496,27 @@ class EventLogViewSet(viewsets.ModelViewSet):
         replay_unit_strategy = request_serializer.validated_data[
             "replay_unit_strategy"
         ]
+        leading_object_type = request_serializer.validated_data.get(
+            "leading_object_type"
+        )
         try:
             with _with_ocel_db(user_file) as db:
+                if (
+                    leading_object_type is not None
+                    and leading_object_type not in _object_types(db)
+                ):
+                    return Response(
+                        {
+                            "leading_object_type": (
+                                "Object type does not exist in the event log."
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 replay_units = extract_occn_replay_units(
                     db,
                     strategy=replay_unit_strategy,
+                    leading_object_type=leading_object_type,
                 )
         except Exception as exc:
             return Response(
@@ -518,6 +551,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "file_id": user_file.pk,
                 "unit_id": replay_unit.unit_id,
                 "replay_unit_strategy": replay_unit_strategy,
+                "leading_object_type": leading_object_type,
                 "event_count": total_count,
                 "object_types": list(replay_unit.object_types),
                 "pagination": {

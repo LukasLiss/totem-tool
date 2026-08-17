@@ -58,7 +58,8 @@ export function useOccnReplayUnitDetail(
   eventLogId: number | null | undefined,
   unit: OCCNReplayUnitResult | null | undefined,
   replayUnitStrategy: OCCNReplayUnitStrategy =
-    CONNECTED_COMPONENTS_REPLAY_STRATEGY
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leadingObjectType: string | null = null
 ): OccnReplayUnitDetailState {
   const [state, setState] = useState<ReplayUnitDetailState>(EMPTY_STATE);
   const requestGeneration = useRef(0);
@@ -73,9 +74,9 @@ export function useOccnReplayUnitDetail(
   const contextKey = useMemo(
     () =>
       validEventLogId !== null && unitId
-        ? `${validEventLogId}:${unitId}:${replayUnitStrategy}`
+        ? `${validEventLogId}:${unitId}:${replayUnitStrategy}:${leadingObjectType ?? ""}`
         : null,
-    [replayUnitStrategy, unitId, validEventLogId]
+    [leadingObjectType, replayUnitStrategy, unitId, validEventLogId]
   );
 
   const loadPage = useCallback(
@@ -97,11 +98,17 @@ export function useOccnReplayUnitDetail(
       });
 
       try {
-        const detail = await getOCCNReplayUnitDetail(validEventLogId, unitId, {
+        const options = {
           replayUnitStrategy,
           offset: requestedOffset,
           limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
-        });
+          ...(leadingObjectType === null ? {} : { leadingObjectType }),
+        };
+        const detail = await getOCCNReplayUnitDetail(
+          validEventLogId,
+          unitId,
+          options
+        );
         if (generation !== requestGeneration.current) return null;
 
         setState({
@@ -124,7 +131,13 @@ export function useOccnReplayUnitDetail(
         });
         return null;
       }
-    }, [contextKey, replayUnitStrategy, unitId, validEventLogId]
+    }, [
+      contextKey,
+      leadingObjectType,
+      replayUnitStrategy,
+      unitId,
+      validEventLogId,
+    ]
   );
 
   useEffect(() => {

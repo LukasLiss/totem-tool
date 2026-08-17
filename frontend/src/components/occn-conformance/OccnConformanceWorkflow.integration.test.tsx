@@ -81,6 +81,7 @@ const response: OCCNConformanceResponse = {
   file_id: 12,
   asset_id: asset.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   fitness: 1,
   coverage: 1,
   total_units: 1,
@@ -122,6 +123,7 @@ const replayUnitDetail: OCCNReplayUnitDetailResponse = {
   file_id: 12,
   unit_id: response.unit_results[0].unit_id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   event_count: 3,
   object_types: ["Order"],
   pagination: {

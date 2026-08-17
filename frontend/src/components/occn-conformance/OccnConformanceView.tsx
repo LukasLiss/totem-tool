@@ -4,18 +4,26 @@ import {
   FileText,
   Info,
   LoaderCircle,
-  Network,
   Play,
+  RefreshCw,
 } from "lucide-react";
 
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  LEADING_OBJECT_REPLAY_STRATEGY,
   type OCCNConformanceResponse,
   type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -34,7 +42,8 @@ type SelectedEventLog = {
 };
 
 const REPLAY_UNIT_STRATEGY_LABELS: Record<OCCNReplayUnitStrategy, string> = {
-  [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Connected components",
+  [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Standard",
+  [LEADING_OBJECT_REPLAY_STRATEGY]: "Leading object type",
 };
 
 interface ReplayUnitSelection {
@@ -63,7 +72,7 @@ export function OccnConformanceView({
     useState<ReplayUnitSelection | null>(null);
   const replayUnitContextKey =
     eventLogId && projectId && assetSelection.selectedAssetId
-      ? `${eventLogId}:${projectId}:${assetSelection.selectedAssetId}:${workflow.replayUnitStrategy}`
+      ? `${eventLogId}:${projectId}:${assetSelection.selectedAssetId}:${workflow.replayUnitStrategy}:${workflow.leadingObjectType ?? ""}`
       : null;
   const selectedReplayUnit = resolveSelectedReplayUnit(
     replayUnitSelection,
@@ -78,7 +87,8 @@ export function OccnConformanceView({
   const replayUnitDetail = useOccnReplayUnitDetail(
     eventLogId,
     selectedReplayUnit,
-    workflow.replayUnitStrategy
+    workflow.replayUnitStrategy,
+    workflow.leadingObjectType
   );
 
   function selectReplayUnit(unit: OCCNReplayUnitResult) {
@@ -101,7 +111,13 @@ export function OccnConformanceView({
             </h1>
           </header>
 
-          <section className="grid items-end gap-4 border-b pb-6 md:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_minmax(280px,1.3fr)_minmax(200px,1fr)_auto]">
+          <section
+            className={`grid items-end gap-4 border-b pb-6 md:grid-cols-2 ${
+              workflow.replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY
+                ? "xl:grid-cols-5"
+                : "xl:grid-cols-4"
+            }`}
+          >
             <div className="space-y-2">
               <Label>Event log</Label>
               <div className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-background px-3 text-sm">
@@ -133,20 +149,88 @@ export function OccnConformanceView({
 
             <div className="space-y-2">
               <Label>Replay unit strategy</Label>
-              <div
-                aria-label="Replay unit strategy"
-                className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm"
+              <Select
+                value={workflow.replayUnitStrategy}
+                onValueChange={(value) =>
+                  workflow.setReplayUnitStrategy(
+                    value as OCCNReplayUnitStrategy
+                  )
+                }
+                disabled={workflow.running}
               >
-                <Network className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">
-                  {REPLAY_UNIT_STRATEGY_LABELS[workflow.replayUnitStrategy]}
-                </span>
-              </div>
+                <SelectTrigger aria-label="Replay unit strategy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(REPLAY_UNIT_STRATEGY_LABELS).map(
+                    ([strategy, label]) => (
+                      <SelectItem key={strategy} value={strategy}>
+                        {label}
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
             </div>
+
+            {workflow.replayUnitStrategy ===
+            LEADING_OBJECT_REPLAY_STRATEGY ? (
+              <div className="space-y-2">
+                <Label>Leading object type</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={workflow.leadingObjectType ?? undefined}
+                    onValueChange={workflow.setLeadingObjectType}
+                    disabled={
+                      workflow.running ||
+                      workflow.objectTypesLoading ||
+                      workflow.objectTypesError !== null ||
+                      workflow.availableObjectTypes.length === 0
+                    }
+                  >
+                    <SelectTrigger aria-label="Leading object type">
+                      <SelectValue
+                        placeholder={
+                          workflow.objectTypesLoading
+                            ? "Loading object types"
+                            : workflow.availableObjectTypes.length === 0
+                              ? "No object types available"
+                              : "Select object type"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {workflow.availableObjectTypes.map((objectType) => (
+                        <SelectItem key={objectType} value={objectType}>
+                          {objectType}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {workflow.objectTypesError ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="Retry loading object types"
+                      aria-label="Retry loading object types"
+                      onClick={workflow.retryObjectTypes}
+                    >
+                      <RefreshCw />
+                    </Button>
+                  ) : null}
+                </div>
+                {workflow.objectTypesError ? (
+                  <p className="text-xs text-destructive">
+                    {workflow.objectTypesError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <Button
               type="button"
-              className="w-full xl:w-auto"
+              className="w-full"
               disabled={!workflow.canRun}
               onClick={() => void workflow.run()}
             >

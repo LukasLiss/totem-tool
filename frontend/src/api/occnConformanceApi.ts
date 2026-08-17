@@ -1,9 +1,11 @@
 import axios from "axios";
 
 export const CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components" as const;
+export const LEADING_OBJECT_REPLAY_STRATEGY = "leading_object" as const;
 
 export type OCCNReplayUnitStrategy =
-  typeof CONNECTED_COMPONENTS_REPLAY_STRATEGY;
+  | typeof CONNECTED_COMPONENTS_REPLAY_STRATEGY
+  | typeof LEADING_OBJECT_REPLAY_STRATEGY;
 
 export type OCCNReplayStatus =
   | "fitting"
@@ -26,6 +28,7 @@ export interface OCCNConformanceResponse {
   file_id: number;
   asset_id: number;
   replay_unit_strategy: OCCNReplayUnitStrategy;
+  leading_object_type: string | null;
   fitness: number | null;
   coverage: number;
   total_units: number;
@@ -58,6 +61,7 @@ export interface OCCNReplayUnitDetailResponse {
   file_id: number;
   unit_id: string;
   replay_unit_strategy: OCCNReplayUnitStrategy;
+  leading_object_type: string | null;
   event_count: number;
   object_types: string[];
   pagination: OCCNReplayUnitDetailPagination;
@@ -66,6 +70,7 @@ export interface OCCNReplayUnitDetailResponse {
 
 export interface OCCNReplayUnitDetailRequestOptions {
   replayUnitStrategy?: OCCNReplayUnitStrategy;
+  leadingObjectType?: string | null;
   offset?: number;
   limit?: number;
 }
@@ -78,14 +83,28 @@ export async function runOCCNConformance(
   eventLogId: number,
   assetId: number,
   replayUnitStrategy: OCCNReplayUnitStrategy =
-    CONNECTED_COMPONENTS_REPLAY_STRATEGY
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leadingObjectType: string | null = null
 ): Promise<OCCNConformanceResponse> {
+  const request: Record<string, number | string> = {
+    asset_id: assetId,
+    replay_unit_strategy: replayUnitStrategy,
+  };
+  if (replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY) {
+    request.leading_object_type = leadingObjectType ?? "";
+  }
   const { data } = await axios.post<OCCNConformanceResponse>(
     `${FILES_URL}${eventLogId}/occn_conformance/`,
-    {
-      asset_id: assetId,
-      replay_unit_strategy: replayUnitStrategy,
-    }
+    request
+  );
+  return data;
+}
+
+export async function getEventLogObjectTypes(
+  eventLogId: number
+): Promise<string[]> {
+  const { data } = await axios.get<string[]>(
+    `${FILES_URL}${eventLogId}/object_types/`
   );
   return data;
 }
@@ -95,17 +114,20 @@ export async function getOCCNReplayUnitDetail(
   unitId: string,
   options: OCCNReplayUnitDetailRequestOptions = {}
 ): Promise<OCCNReplayUnitDetailResponse> {
+  const replayUnitStrategy =
+    options.replayUnitStrategy ?? CONNECTED_COMPONENTS_REPLAY_STRATEGY;
+  const params: Record<string, number | string> = {
+    unit_id: unitId,
+    replay_unit_strategy: replayUnitStrategy,
+    offset: options.offset ?? 0,
+    limit: options.limit ?? DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+  };
+  if (replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY) {
+    params.leading_object_type = options.leadingObjectType ?? "";
+  }
   const { data } = await axios.get<OCCNReplayUnitDetailResponse>(
     `${FILES_URL}${eventLogId}/occn_replay_unit_detail/`,
-    {
-      params: {
-        unit_id: unitId,
-        replay_unit_strategy:
-          options.replayUnitStrategy ?? CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        offset: options.offset ?? 0,
-        limit: options.limit ?? DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
-      },
-    }
+    { params }
   );
   return data;
 }

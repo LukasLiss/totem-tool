@@ -14,6 +14,7 @@ from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
     OCCausalNet,
     OCCNReplayEvent,
     OCCNReplayFitnessResult,
@@ -947,6 +948,59 @@ class OCCNConformanceApiTests(TestCase):
         extract.assert_not_called()
         fitness.assert_not_called()
 
+    def test_leading_object_strategy_requires_an_object_type(self):
+        response = self.client.post(
+            self.url,
+            {
+                "asset_id": self.occn_asset.pk,
+                "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+
+    def test_standard_strategy_rejects_a_leading_object_type(self):
+        response = self.client.post(
+            self.url,
+            {
+                "asset_id": self.occn_asset.pk,
+                "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                "leading_object_type": "Order",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+
+    def test_leading_object_type_must_exist_in_event_log(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch("api.views._object_types", return_value=["Item", "Order"]),
+            patch("api.views.extract_occn_replay_units") as extract,
+            patch("api.views.occn_replay_fitness") as fitness,
+        ):
+            response = self.client.post(
+                self.url,
+                {
+                    "asset_id": self.occn_asset.pk,
+                    "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                    "leading_object_type": "Package",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+        extract.assert_not_called()
+        fitness.assert_not_called()
+
     def test_event_log_is_scoped_to_authenticated_user(self):
         foreign_project = Project.objects.create(name="Foreign Project")
         foreign_project.users.add(self.other_user)
@@ -1113,6 +1167,7 @@ class OCCNConformanceApiTests(TestCase):
         extract.assert_called_once_with(
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            leading_object_type=None,
         )
         fitness.assert_not_called()
 
@@ -1205,6 +1260,66 @@ class OCCNConformanceApiTests(TestCase):
             ["Order"],
         )
 
+    def test_valid_leading_object_request_projects_by_selected_type(self):
+        ProjectAsset.objects.filter(pk=self.occn_asset.pk).update(
+            content_json=replayable_occn_content_json()
+        )
+        source = ObjectCentricEventLog(
+            events=pl.DataFrame(
+                [
+                    {
+                        "_eventId": "e1",
+                        "_activity": "Create Order",
+                        "_timestampUnix": 1,
+                        "_objects": ["o1"],
+                        "_qualifiers": [None],
+                        "_attributes": "",
+                    }
+                ],
+                schema=EVENTS_SCHEMA,
+            ),
+            objects=pl.DataFrame(
+                [
+                    {
+                        "_objId": "o1",
+                        "_objType": "Order",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    }
+                ],
+                schema=OBJECTS_SCHEMA,
+            ),
+        )
+        database = OcelDuckDB(source)
+        try:
+            with patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(database),
+            ):
+                response = self.client.post(
+                    self.url,
+                    {
+                        "asset_id": self.occn_asset.pk,
+                        "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                        "leading_object_type": "Order",
+                    },
+                    format="json",
+                )
+        finally:
+            database.conn.close()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["replay_unit_strategy"],
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        )
+        self.assertEqual(response.data["leading_object_type"], "Order")
+        self.assertEqual(response.data["total_units"], 1)
+        self.assertEqual(
+            response.data["unit_results"][0]["unit_id"],
+            "leading_object:o1",
+        )
+
     def test_valid_request_executes_conformance_and_returns_result(self):
         replay_units = (object(), object(), object())
         result = OCCNReplayFitnessResult(
@@ -1263,6 +1378,7 @@ class OCCNConformanceApiTests(TestCase):
                 "file_id": self.event_log.pk,
                 "asset_id": self.occn_asset.pk,
                 "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                "leading_object_type": None,
                 **result.to_dict(),
             },
         )
@@ -1271,6 +1387,7 @@ class OCCNConformanceApiTests(TestCase):
         extract.assert_called_once_with(
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            leading_object_type=None,
         )
         fitness.assert_called_once()
         deserialized_occn, called_units = fitness.call_args.args
@@ -1422,6 +1539,46 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             {"unit_id": "Replay unit not found."},
         )
 
+    def test_leading_object_detail_uses_the_selected_type(self):
+        connected_unit = self._unit(event_count=2)
+        replay_unit = OCCNReplayUnit(
+            unit_id="leading_object:order-1",
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+            events=connected_unit.events,
+        )
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch("api.views._object_types", return_value=["Order"]),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(replay_unit,),
+            ) as extract,
+        ):
+            response = self.client.get(
+                self.url,
+                {
+                    "unit_id": replay_unit.unit_id,
+                    "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                    "leading_object_type": "Order",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["replay_unit_strategy"],
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        )
+        self.assertEqual(response.data["leading_object_type"], "Order")
+        extract.assert_called_once_with(
+            db,
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+            leading_object_type="Order",
+        )
+
     def test_extraction_failure_returns_server_error(self):
         with patch(
             "api.views._with_ocel_db",
@@ -1510,7 +1667,10 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         for call in extract.call_args_list:
             self.assertEqual(
                 call.kwargs,
-                {"strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY},
+                {
+                    "strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                    "leading_object_type": None,
+                },
             )
 
     def test_real_ocel_preserves_event_order_and_object_information(self):

@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectAsset } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  LEADING_OBJECT_REPLAY_STRATEGY,
+  getEventLogObjectTypes,
   runOCCNConformance,
   type OCCNConformanceResponse,
 } from "@/api/occnConformanceApi";
@@ -22,6 +24,7 @@ vi.mock("@/api/occnConformanceApi", async () => {
   >("@/api/occnConformanceApi");
   return {
     ...actual,
+    getEventLogObjectTypes: vi.fn(),
     runOCCNConformance: vi.fn(),
   };
 });
@@ -31,6 +34,7 @@ vi.mock("./useOccnAssetSelection", () => ({
 }));
 
 const runOCCNConformanceMock = vi.mocked(runOCCNConformance);
+const getEventLogObjectTypesMock = vi.mocked(getEventLogObjectTypes);
 const useOccnAssetSelectionMock = vi.mocked(useOccnAssetSelection);
 
 const model: ProjectAsset = {
@@ -55,6 +59,7 @@ const response: OCCNConformanceResponse = {
   file_id: 12,
   asset_id: model.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   fitness: 0.5,
   coverage: 1,
   total_units: 2,
@@ -122,6 +127,8 @@ describe("useOccnConformanceWorkflow", () => {
     selection = selectedModelState();
     useOccnAssetSelectionMock.mockImplementation(() => selection);
     runOCCNConformanceMock.mockReset();
+    getEventLogObjectTypesMock.mockReset();
+    getEventLogObjectTypesMock.mockResolvedValue(["Order", "Item"]);
   });
 
   afterEach(() => {
@@ -182,6 +189,39 @@ describe("useOccnConformanceWorkflow", () => {
       request.resolve(response);
       await firstRun;
     });
+  });
+
+  it("requires and submits a selected type for leading-object replay", async () => {
+    runOCCNConformanceMock.mockResolvedValue({
+      ...response,
+      replay_unit_strategy: LEADING_OBJECT_REPLAY_STRATEGY,
+      leading_object_type: "Order",
+    });
+    const { result } = renderHook(() => useOccnConformanceWorkflow(12, 7));
+
+    act(() => {
+      result.current.setReplayUnitStrategy(LEADING_OBJECT_REPLAY_STRATEGY);
+    });
+    await waitFor(() => expect(result.current.objectTypesLoading).toBe(false));
+
+    expect(getEventLogObjectTypesMock).toHaveBeenCalledWith(12);
+    expect(result.current.availableObjectTypes).toEqual(["Item", "Order"]);
+    expect(result.current.canRun).toBe(false);
+
+    act(() => {
+      result.current.setLeadingObjectType("Order");
+    });
+    expect(result.current.canRun).toBe(true);
+
+    await act(async () => {
+      await result.current.run();
+    });
+    expect(runOCCNConformanceMock).toHaveBeenCalledWith(
+      12,
+      model.id,
+      LEADING_OBJECT_REPLAY_STRATEGY,
+      "Order"
+    );
   });
 
   it("exposes request failures and leaves the workflow runnable", async () => {

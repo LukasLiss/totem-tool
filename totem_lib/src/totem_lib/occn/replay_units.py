@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components"
+LEADING_OBJECT_REPLAY_STRATEGY = "leading_object"
 
 ObjectGroup = Tuple[str, Tuple[str, ...]]
 ObjectsByType = Tuple[ObjectGroup, ...]
@@ -489,13 +490,63 @@ def build_connected_component_replay_units(
     )
 
 
+def build_leading_object_replay_units(
+    events: Iterable[OCCNReplayEvent],
+    leading_object_type: str,
+) -> Tuple[OCCNReplayUnit, ...]:
+    """Build one replay unit per object of the selected leading type.
+
+    A unit contains every event that directly references its leading object.
+    Events shared by multiple leading objects therefore occur in multiple units.
+    """
+    _require_non_empty_string(leading_object_type, "leading_object_type")
+    try:
+        replay_events = tuple(events)
+    except TypeError as exc:
+        raise ValueError("events must be an iterable") from exc
+
+    if not all(isinstance(event, OCCNReplayEvent) for event in replay_events):
+        raise ValueError("events must contain OCCNReplayEvent values")
+
+    event_ids = [event.event_id for event in replay_events]
+    if len(event_ids) != len(set(event_ids)):
+        raise ValueError("event ids must be unique across replay units")
+
+    events_by_leading_object: Dict[str, list[OCCNReplayEvent]] = defaultdict(list)
+    for event in replay_events:
+        objects_by_type = dict(event.objects_by_type)
+        for object_id in objects_by_type.get(leading_object_type, ()):
+            events_by_leading_object[object_id].append(event)
+
+    return tuple(
+        OCCNReplayUnit(
+            unit_id=f"{LEADING_OBJECT_REPLAY_STRATEGY}:{object_id}",
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+            events=tuple(events_by_leading_object[object_id]),
+        )
+        for object_id in sorted(events_by_leading_object)
+    )
+
+
 def extract_occn_replay_units(
     source: Union["ObjectCentricEventLog", "OcelDuckDB"],
     strategy: str = CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    leading_object_type: str | None = None,
 ) -> Tuple[OCCNReplayUnit, ...]:
     """Extract deterministic replay units using the selected strategy."""
-    if strategy != CONNECTED_COMPONENTS_REPLAY_STRATEGY:
-        raise ValueError(f"unsupported OCCN replay unit strategy: {strategy!r}")
-
     events = extract_occn_replay_events(source)
-    return build_connected_component_replay_units(events)
+    if strategy == CONNECTED_COMPONENTS_REPLAY_STRATEGY:
+        if leading_object_type is not None:
+            raise ValueError(
+                "leading_object_type is only supported by the leading-object "
+                "replay strategy"
+            )
+        return build_connected_component_replay_units(events)
+    if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
+        if leading_object_type is None:
+            raise ValueError(
+                "leading_object_type is required by the leading-object "
+                "replay strategy"
+            )
+        return build_leading_object_replay_units(events, leading_object_type)
+    raise ValueError(f"unsupported OCCN replay unit strategy: {strategy!r}")

@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+  LEADING_OBJECT_REPLAY_STRATEGY,
+  getEventLogObjectTypes,
   getOCCNReplayUnitDetail,
   runOCCNConformance,
   type OCCNConformanceResponse,
@@ -24,6 +26,7 @@ const response: OCCNConformanceResponse = {
   file_id: 12,
   asset_id: 34,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   fitness: 0.5,
   coverage: 2 / 3,
   total_units: 3,
@@ -71,6 +74,7 @@ const detailResponse: OCCNReplayUnitDetailResponse = {
   file_id: 12,
   unit_id: "connected_components:000002",
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
   event_count: 75,
   object_types: ["Item", "Order"],
   pagination: {
@@ -134,6 +138,38 @@ describe("OCCN conformance API", () => {
     );
   });
 
+  it("posts the selected type for leading-object replay", async () => {
+    post.mockResolvedValue({ data: response });
+
+    await runOCCNConformance(
+      12,
+      34,
+      LEADING_OBJECT_REPLAY_STRATEGY,
+      "Order"
+    );
+
+    expect(post).toHaveBeenCalledWith(
+      "http://localhost:8000/api/files/12/occn_conformance/",
+      {
+        asset_id: 34,
+        replay_unit_strategy: "leading_object",
+        leading_object_type: "Order",
+      }
+    );
+  });
+
+  it("loads the object types of the selected event log", async () => {
+    get.mockResolvedValue({ data: ["Order", "Item"] });
+
+    await expect(getEventLogObjectTypes(12)).resolves.toEqual([
+      "Order",
+      "Item",
+    ]);
+    expect(get).toHaveBeenCalledWith(
+      "http://localhost:8000/api/files/12/object_types/"
+    );
+  });
+
   it("propagates request failures to the workflow controller", async () => {
     post.mockRejectedValue(new Error("Request failed"));
 
@@ -176,6 +212,28 @@ describe("OCCN conformance API", () => {
           replay_unit_strategy: "connected_components",
           offset: 50,
           limit: 25,
+        },
+      }
+    );
+  });
+
+  it("retains the leading object type when loading replay detail", async () => {
+    get.mockResolvedValue({ data: detailResponse });
+
+    await getOCCNReplayUnitDetail(12, "leading_object:order-1", {
+      replayUnitStrategy: LEADING_OBJECT_REPLAY_STRATEGY,
+      leadingObjectType: "Order",
+    });
+
+    expect(get).toHaveBeenCalledWith(
+      "http://localhost:8000/api/files/12/occn_replay_unit_detail/",
+      {
+        params: {
+          unit_id: "leading_object:order-1",
+          replay_unit_strategy: "leading_object",
+          leading_object_type: "Order",
+          offset: 0,
+          limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
         },
       }
     );

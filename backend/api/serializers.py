@@ -4,6 +4,7 @@ from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
     validate_occn_dict,
     validate_totem_dict,
 )
@@ -17,20 +18,53 @@ class TotemConformanceRequestSerializer(serializers.Serializer):
     asset_id = serializers.IntegerField(min_value=1)
 
 
-class OCCNConformanceRequestSerializer(serializers.Serializer):
+class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
+    replay_unit_strategy = serializers.ChoiceField(
+        choices=(
+            CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        ),
+        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    )
+    leading_object_type = serializers.CharField(
+        allow_blank=False,
+        required=False,
+        trim_whitespace=True,
+    )
+
+    def validate(self, attrs):
+        strategy = attrs["replay_unit_strategy"]
+        leading_object_type = attrs.get("leading_object_type")
+        if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
+            if leading_object_type is None:
+                raise serializers.ValidationError(
+                    {
+                        "leading_object_type": (
+                            "This field is required for the leading-object "
+                            "replay strategy."
+                        )
+                    }
+                )
+        elif leading_object_type is not None:
+            raise serializers.ValidationError(
+                {
+                    "leading_object_type": (
+                        "This field is only supported for the leading-object "
+                        "replay strategy."
+                    )
+                }
+            )
+        return attrs
+
+
+class OCCNConformanceRequestSerializer(OCCNReplayStrategyRequestSerializer):
     asset_id = serializers.IntegerField(min_value=1)
-    replay_unit_strategy = serializers.ChoiceField(
-        choices=(CONNECTED_COMPONENTS_REPLAY_STRATEGY,),
-        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-    )
 
 
-class OCCNReplayUnitDetailRequestSerializer(serializers.Serializer):
+class OCCNReplayUnitDetailRequestSerializer(
+    OCCNReplayStrategyRequestSerializer
+):
     unit_id = serializers.CharField(allow_blank=False, trim_whitespace=True)
-    replay_unit_strategy = serializers.ChoiceField(
-        choices=(CONNECTED_COMPONENTS_REPLAY_STRATEGY,),
-        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-    )
     offset = serializers.IntegerField(min_value=0, default=0)
     limit = serializers.IntegerField(min_value=1, max_value=250, default=50)
 
