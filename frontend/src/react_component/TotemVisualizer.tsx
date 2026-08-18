@@ -4207,6 +4207,63 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
     }
   });
 
+  // Areas of one layer are siblings in a single CSS grid, each spanning
+  // `[min column .. max column]` of the object types it holds. Nothing above
+  // keeps a layer's areas apart — the crossing search orders individual nodes —
+  // so two areas can interleave, their spans overlap, and grid auto-placement
+  // drops the second one onto an implicit second row. It then reads as an
+  // object type that belongs to no layer at all: on container-logistics,
+  // `Truck` lands between `CustomerOrder` and `TransportDocument` and its area
+  // is pushed into the gap below level 2.
+  //
+  // Re-seat each layer's types so every area occupies a contiguous block. The
+  // columns already in use at the layer are kept and only redistributed, so the
+  // layer's horizontal footprint — and its alignment against the layers above
+  // and below — does not move, and neither does the crossing search's ordering
+  // of the areas themselves.
+  levelNodeMap.forEach((descriptors) => {
+    if (descriptors.length === 0) return;
+
+    const byArea = new Map<string, LevelNodeDescriptor[]>();
+    descriptors.forEach((descriptor) => {
+      const group = byArea.get(descriptor.areaId);
+      if (group) group.push(descriptor);
+      else byArea.set(descriptor.areaId, [descriptor]);
+    });
+    if (byArea.size < 2) return;
+
+    const columnOf = (descriptor: LevelNodeDescriptor) =>
+      nodeColumns[descriptor.id] ?? 0;
+    const slots = descriptors.map(columnOf).sort((a, b) => a - b);
+    // Areas keep the left-to-right order their nodes' mean column earned.
+    const areas = Array.from(byArea.values()).sort((a, b) => {
+      const meanA = a.reduce((sum, d) => sum + columnOf(d), 0) / a.length;
+      const meanB = b.reduce((sum, d) => sum + columnOf(d), 0) / b.length;
+      if (meanA === meanB) return a[0].orderHint - b[0].orderHint;
+      return meanA - meanB;
+    });
+
+    const reseated = new Map<string, number>();
+    let slot = 0;
+    areas.forEach((group) => {
+      group
+        .slice()
+        .sort((a, b) => {
+          const diff = columnOf(a) - columnOf(b);
+          return diff !== 0 ? diff : a.orderHint - b.orderHint;
+        })
+        .forEach((descriptor) => {
+          reseated.set(descriptor.id, slots[slot]);
+          slot += 1;
+        });
+    });
+
+    reseated.forEach((column, nodeId) => {
+      nodeColumns[nodeId] = column;
+      positions.set(nodeId, column);
+    });
+  });
+
   const areaPlacements: Record<string, { startColumn: number; span: number }> = {};
   const levelAreaCursor = new Map<number, number>();
 
@@ -5953,6 +6010,14 @@ function TotemVisualizer({
                               key={area.id}
                               style={{
                                 gridColumn: `${startColumn + 1} / span ${spanColumns}`,
+                                // Every area of a layer belongs on the layer's
+                                // single row. Without this, grid auto-placement
+                                // moves an area whose columns start left of the
+                                // previously placed one onto an implicit second
+                                // row, and it reads as a type with no layer.
+                                // `prepareGridLayout` keeps the spans disjoint,
+                                // so pinning the row cannot overlap them.
+                                gridRow: 1,
                                 padding: `${processAreaPaddingY}px ${gridColumnGap / 2}px`,
                                 display: 'grid',
                                 gridTemplateColumns: templateColumns,
