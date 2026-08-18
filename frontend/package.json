@@ -9,7 +9,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "build-no-typecheck": "vite build"
+    "build-no-typecheck": "vite build",
+    "test": "vitest run"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.10",
