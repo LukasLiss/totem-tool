@@ -502,7 +502,7 @@ export default function FilterChipStack() {
         event_percentage:   number;
         event_count_before: number;
         event_count_after:  number;
-      }>(`/api/files/${fileId}/apply_filters/`, { filters });
+      }>(`/api/files/${fileId}/apply_filters/`, { filters: activeFilters });
       setStats({
         objectPct:    data.object_percentage,
         eventPct:     data.event_percentage,

@@ -310,7 +310,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             with _with_ocel_db(user_file) as db:
                 filter_stack = FilterStack.from_dict({"filters": filters_data})
-                _, stats = apply_filter_stack(db, filter_stack)
+                _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
         except Exception as e:
             return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
