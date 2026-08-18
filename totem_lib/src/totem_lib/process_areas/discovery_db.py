@@ -4,7 +4,7 @@ DuckDB-backed discovery entry point.
 Thin counterpart to :func:`~.discovery.discover_process_areas`: it swaps the
 preparation stage for the SQL one and then runs exactly the same scoring, ILP
 and grouping. Keeping only preparation backend-specific is what makes the parity
-test in ``tests/process_areas/test_parity_db.py`` meaningful -- any difference
+test in ``tests/process_areas/test_preparation_db.py`` meaningful -- any difference
 between the two paths has to come from how the log was read.
 """
 

@@ -5321,7 +5321,7 @@ function TotemVisualizer({
   // OCDFG details cached against them stay valid; throwing them away on each
   // parameter change would make the panel unusable to tune with.
   const totemNodeSignature = useMemo(
-    () => [...(rawTotem?.tempgraph?.nodes ?? [])].sort().join(' '),
+    () => JSON.stringify([...(rawTotem?.tempgraph?.nodes ?? [])].sort()),
     [rawTotem?.tempgraph],
   );
 
