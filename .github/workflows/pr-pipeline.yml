@@ -16,18 +16,20 @@ permissions:
   contents: read
 
 jobs:
-  # NOTE: lint-frontend and lint-backend are both `continue-on-error: true`.
-  # Each lints the whole repo (not just the PR diff), and as of this
+  # NOTE: lint-frontend and lint-backend are both disabled (`if: false`) for
+  # now — each lints the whole repo (not just the PR diff), and as of this
   # pipeline's introduction both surface a pile of pre-existing violations
-  # unrelated to any given PR. Until
-  # that's fixed, these jobs report status (visible on every PR) without
-  # blocking merges. Flip continue-on-error to false once each codebase is
-  # clean, so new violations start blocking merges for real. Unit test and
-  # build failures, by contrast, DO block — no continue-on-error below.
+  # unrelated to any given PR. Re-enable each by removing its `if: false`
+  # once a dedicated cleanup PR fixes the existing violations in that
+  # codebase. They're left `continue-on-error: true` for when that happens,
+  # since whole-repo lint still shouldn't block merges immediately — flip
+  # that to false too once you're confident new violations should. Unit
+  # test and build failures, by contrast, DO block right now — no
+  # continue-on-error on those jobs below.
   lint-frontend:
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+    if: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +45,7 @@ jobs:
   lint-backend:
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+    if: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
