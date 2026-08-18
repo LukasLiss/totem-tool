@@ -2,23 +2,28 @@ name: PR Pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed] 
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Workflow inherits the repo-default GITHUB_TOKEN scope otherwise; pin it
+# down explicitly. Nothing here needs write access — pull_request (not
+# pull_request_target) means fork PRs never see repo secrets regardless.
+permissions:
+  contents: read
+
 jobs:
   # NOTE: lint-frontend and lint-backend are both `continue-on-error: true`.
   # Each lints the whole repo (not just the PR diff), and as of this
-  # pipeline's introduction there are ~276 pre-existing ESLint errors and
-  # ~154 pre-existing ruff errors (24 backend/ + 130 totem_lib/)
-  # Until cleanup passes fix those, these jobs report
-  # status (visible on every PR) without blocking merges. Flip
-  # continue-on-error to false once each codebase is clean, so new
-  # violations start blocking merges for real. Unit test and build
-  # failures, by contrast, DO block
+  # pipeline's introduction both surface a pile of pre-existing violations
+  # unrelated to any given PR. Until
+  # that's fixed, these jobs report status (visible on every PR) without
+  # blocking merges. Flip continue-on-error to false once each codebase is
+  # clean, so new violations start blocking merges for real. Unit test and
+  # build failures, by contrast, DO block — no continue-on-error below.
   lint-frontend:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -27,11 +32,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - working-directory: ./frontend
-        run: npm install
+        run: npm ci
       - working-directory: ./frontend
         run: npm run lint
 
@@ -41,15 +46,17 @@ jobs:
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements-dev.txt
       - name: Install ruff
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements-dev.txt
       - name: Lint with ruff
-        run: ruff check backend/ totem_lib/
+        run: ruff check --output-format=github backend/ totem_lib/
 
   build-frontend:
     runs-on: ubuntu-latest
@@ -58,11 +65,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - working-directory: ./frontend
-        run: npm install
+        run: npm ci
       - working-directory: ./frontend
         run: npm run build
 
@@ -71,16 +78,23 @@ jobs:
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: totem_lib/pyproject.toml
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e totem_lib[test]
       - name: Test with coverage (line + branch)
         working-directory: ./totem_lib
-        run: pytest --cov=totem_lib --cov-branch --cov-report=xml:../coverage-totem-lib.xml
+        run: pytest --cov=totem_lib --cov-branch --cov-report=xml:../coverage-totem-lib.xml --cov-report=term-missing
+      - name: Add coverage to job summary
+        if: always()
+        working-directory: ./totem_lib
+        run: |
+          { echo '### totem_lib coverage'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-totem-lib
@@ -91,9 +105,14 @@ jobs:
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+            totem_lib/pyproject.toml
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -104,6 +123,10 @@ jobs:
         run: |
           coverage run --branch --source=backend/api,backend/authentification backend/manage.py test
           coverage xml -o coverage-backend.xml
+      - name: Add coverage to job summary
+        if: always()
+        run: |
+          { echo '### backend coverage'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-backend
@@ -116,11 +139,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - working-directory: ./frontend
-        run: npm install
+        run: npm ci
       - name: Test with coverage (line + branch)
         working-directory: ./frontend
         run: npm run test:coverage
