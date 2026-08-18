@@ -22,13 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  RefreshCcw,
-  ScanIcon,
-  SlidersHorizontal,
-  ZoomOut,
-  ZoomIn,
-} from 'lucide-react';
+import { RefreshCcw, SlidersHorizontal } from 'lucide-react';
 import TotemVisualizer, {
   PROCESS_AREA_ALGORITHM_LABELS,
   PROCESS_AREA_PARAM_RANGES,
@@ -202,31 +196,6 @@ export default function ProcessArea({
                   </PopoverContent>
                 </Popover>
               )}
-              <div className="w-px h-6 bg-border" />
-              <div className="flex items-center gap-2">
-                <ZoomOut className="h-4 w-4 text-muted-foreground" />
-                <Slider
-                  min={totemControls.minScale}
-                  max={totemControls.maxScale}
-                  step={totemControls.scaleStep}
-                  value={[totemControls.processAreaScale]}
-                  onValueChange={(values) =>
-                    totemControls.onProcessAreaScaleChange(values?.[0] ?? totemControls.minScale)
-                  }
-                  className="w-[120px]"
-                />
-                <ZoomIn className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <Button
-                type="button"
-                variant={totemControls.autoZoomEnabled ? 'secondary' : 'outline'}
-                size="icon"
-                onClick={totemControls.onAutoZoomToggle}
-                className="rounded-full h-8 w-8"
-                title={totemControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
-              >
-                <ScanIcon className="h-4 w-4" />
-              </Button>
               <div className="w-px h-6 bg-border" />
             </>
           )}
