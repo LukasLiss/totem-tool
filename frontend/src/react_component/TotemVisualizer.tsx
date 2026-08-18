@@ -5390,7 +5390,12 @@ function TotemVisualizer({
     const gridW = levelMinimumWidthRef.current;
 
     // Calculate unscaled bounding box of actual diagram contents (nodes + gap + legend + details)
-    const leftLimit = bounds ? Math.min(padL, bounds.left) : 0;
+    //
+    // Start at the leftmost thing actually drawn. Widening the box out to the
+    // content padding instead folds the empty gutter left of the first column
+    // into it, and centring that box leaves the diagram sitting right of
+    // centre with a large dead margin on the left.
+    const leftLimit = bounds ? bounds.left : 0;
     const rightLimit = bounds ? Math.max(padL + gridW + 40 + 120, bounds.right) : contentEl.offsetWidth;
 
     const unscaledW = rightLimit - leftLimit;
