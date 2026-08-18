@@ -467,10 +467,10 @@ export function FilterConfigDialog({
       filterType === "time_range"
         ? {
             after: afterDate
-              ? Math.floor(new Date(afterDate + "T00:00:00").getTime() / 1000)
+              ? Math.floor(new Date(afterDate + "T00:00:00Z").getTime() / 1000)
               : undefined,
             before: beforeDate
-              ? Math.floor(new Date(beforeDate + "T23:59:59").getTime() / 1000)
+              ? Math.floor(new Date(beforeDate + "T23:59:59Z").getTime() / 1000)
               : undefined,
           }
         : { include: [...selected] };

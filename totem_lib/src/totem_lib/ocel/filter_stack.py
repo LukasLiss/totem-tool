@@ -101,48 +101,19 @@ class FilterStack:
         )
 
 
-def apply_filter_stack(
-    ocel: OcelDuckDB,
-    filter_stack: FilterStack | dict,
-) -> tuple[OcelDuckDB, dict]:
+def _build_filter_conditions(active_rules: list[FilterRule]) -> tuple[list[str], list, bool]:
     """
-    Apply *filter_stack* to *ocel* and return a new filtered OcelDuckDB with statistics about how much of the log survived.
+    Building SQL WHERE conditions from the active filter rules.
 
-    Args:
-        ocel:         An OcelDuckDB instance to filter.
-        filter_stack: A FilterStack or a plain dict matching the JSON schema described.
-
-    Returns:
-        A tuple ``(filtered_ocel, stats)`` where:
-
-        filtered_ocel
-            A fresh in-memory OcelDuckDB containing only the surviving events,
-            objects, event-object links, object attribute history, and
-            object-to-object relations.
-
-        stats
-            A dict with keys:
-              event_count_before  -- int
-              event_count_after   -- int
-              event_percentage    -- float in [0.0, 1.0] (fraction of events kept)
-              object_count_before -- int
-              object_count_after  -- int
-              object_percentage   -- float in [0.0, 1.0] (fraction of objects kept)
+    Returns (conditions, params, empty) where empty=True means the filter
+    guarantees zero results (e.g. include=[]).
+    All conditions use e./o. aliases from the JOIN:
+        events e JOIN event_object eo ... JOIN objects o ...
     """
-    if isinstance(filter_stack, dict):
-        filter_stack = FilterStack.from_dict(filter_stack)
-
-    active = [r for r in filter_stack.filters if r.enabled]
-
-    # ------------------------------------------------------------------
-    # One flat WHERE clause across all filter types.
-    # Event conditions use the "e." prefix, object conditions use "o.".
-    # ------------------------------------------------------------------
     conditions: list[str] = []
     params: list = []
-    empty = False
 
-    for rule in active:
+    for rule in active_rules:
         if rule.type == "time_range":
             after = rule.params.get("after")
             before = rule.params.get("before")
@@ -156,37 +127,100 @@ def apply_filter_stack(
             include = rule.params.get("include")
             if include is not None:
                 if len(include) == 0:
-                    empty = True
-                    break
+                    return [], [], True
                 conditions.append("e.activity = ANY(?)")
                 params.append(list(include))
         elif rule.type == "object_types":
             include = rule.params.get("include")
             if include is not None:
                 if len(include) == 0:
-                    empty = True
-                    break
+                    return [], [], True
                 conditions.append("o.obj_type = ANY(?)")
                 params.append(list(include))
 
-    # ------------------------------------------------------------------
-    # Get before-counts, then materialise surviving IDs into a temp table
-    # so downstream copies reference it without re-binding large lists.
-    # ------------------------------------------------------------------
+    return conditions, params, False
+
+
+def apply_filter_stack(
+    ocel: OcelDuckDB,
+    filter_stack: FilterStack | dict,
+    stats_only: bool = False,
+) -> tuple[OcelDuckDB | None, dict]:
+    """
+    Apply *filter_stack* to *ocel* and return a filtered OcelDuckDB together
+    with statistics about how much of the log survived.
+
+    Args:
+        ocel:         An OcelDuckDB instance to filter.
+        filter_stack: A FilterStack or a plain dict matching the JSON schema.
+        stats_only:   When True, skip building the filtered OcelDuckDB and only
+                      compute the six count/percentage statistics. The first
+                      element of the returned tuple is None. Use this when the
+                      caller only needs the counts (e.g. the apply_filters
+                      endpoint) to avoid a full-table copy.
+
+    Returns:
+        A tuple ``(filtered_ocel, stats)`` where:
+
+        filtered_ocel
+            A fresh in-memory OcelDuckDB containing only the surviving rows,
+            or None when stats_only=True.
+
+        stats
+            A dict with keys:
+              event_count_before  -- int
+              event_count_after   -- int
+              event_percentage    -- float in [0.0, 1.0]
+              object_count_before -- int
+              object_count_after  -- int
+              object_percentage   -- float in [0.0, 1.0]
+    """
+    if isinstance(filter_stack, dict):
+        filter_stack = FilterStack.from_dict(filter_stack)
+
+    active = [r for r in filter_stack.filters if r.enabled]
+    conditions, params, empty = _build_filter_conditions(active)
+
     n_events, n_objects = ocel.conn.execute(
         "SELECT (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM objects)"
     ).fetchone()
 
-    new_conn = duckdb.connect(":memory:")
-    create_ocel_schema(new_conn, ocel._event_attr_cols, ocel._obj_attr_cols)
-
     if empty:
         n_after_events = 0
         n_after_objects = 0
-    else:
+        filtered_ocel = None
+        if not stats_only:
+            new_conn = duckdb.connect(":memory:")
+            create_ocel_schema(new_conn, ocel._event_attr_cols, ocel._obj_attr_cols)
+            filtered_ocel = OcelDuckDB._from_prepared_connection(
+                new_conn, ocel._event_attr_cols, ocel._obj_attr_cols
+            )
+    elif stats_only:
         where = " AND ".join(conditions) if conditions else "TRUE"
+        cur = ocel.conn.cursor()
         try:
-            ocel.conn.execute(
+            n_after_events, n_after_objects = cur.execute(
+                f"""
+                SELECT COUNT(DISTINCT e.event_id), COUNT(DISTINCT o.obj_id)
+                FROM   events       e
+                JOIN   event_object eo ON e.event_id = eo.event_id
+                JOIN   objects      o  ON eo.obj_id  = o.obj_id
+                WHERE  {where}
+                """,
+                params,
+            ).fetchone()
+        finally:
+            cur.close()
+        filtered_ocel = None
+    else:
+        # Use a cursor for the temp table so its temp schema is private to
+        # this call and never collides with concurrent requests on the same
+        # shared connection. The cursor's temp schema is cleaned up
+        # automatically when the cursor is closed.
+        where = " AND ".join(conditions) if conditions else "TRUE"
+        cur = ocel.conn.cursor()
+        try:
+            cur.execute(
                 f"""
                 CREATE TEMP TABLE surviving AS
                 SELECT DISTINCT e.event_id, o.obj_id
@@ -198,9 +232,12 @@ def apply_filter_stack(
                 params,
             )
 
-            n_after_events, n_after_objects = ocel.conn.execute(
+            n_after_events, n_after_objects = cur.execute(
                 "SELECT COUNT(DISTINCT event_id), COUNT(DISTINCT obj_id) FROM surviving"
             ).fetchone()
+
+            new_conn = duckdb.connect(":memory:")
+            create_ocel_schema(new_conn, ocel._event_attr_cols, ocel._obj_attr_cols)
 
             for sql, table in [
                 (
@@ -231,16 +268,16 @@ def apply_filter_stack(
                     "object_relations",
                 ),
             ]:
-                df = ocel.conn.execute(sql).pl()
+                df = cur.execute(sql).pl()
                 new_conn.register("temp", df)
                 new_conn.execute(f"INSERT INTO {table} SELECT * FROM temp")
                 new_conn.unregister("temp")
         finally:
-            ocel.conn.execute("DROP TABLE IF EXISTS surviving")
+            cur.close()
 
-    filtered_ocel = OcelDuckDB._from_prepared_connection(
-        new_conn, ocel._event_attr_cols, ocel._obj_attr_cols
-    )
+        filtered_ocel = OcelDuckDB._from_prepared_connection(
+            new_conn, ocel._event_attr_cols, ocel._obj_attr_cols
+        )
 
     stats = {
         "event_count_before":  n_events,

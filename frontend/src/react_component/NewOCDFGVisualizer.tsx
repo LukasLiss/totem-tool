@@ -424,6 +424,11 @@ function NewOCDFGVisualizer({
     [hideChrome, typeColors],
   );
 
+  const onSizeChangeRef = useRef(onSizeChange);
+  useEffect(() => {
+    onSizeChangeRef.current = onSizeChange;
+  }, [onSizeChange]);
+
   const reportGraphSize = useCallback(
     (renderNodes?: Node[], renderEdges?: Edge[]) => {
       // Use the passed args first; fall back to refs (not state) so this
@@ -439,20 +444,21 @@ function NewOCDFGVisualizer({
         fallbackNodeHeight,
       );
       if (!measured) return;
+
       const previous = lastReportedSizeRef.current;
       if (previous && previous.width === measured.width && previous.height === measured.height) {
         return;
       }
       lastReportedSizeRef.current = measured;
       setMeasuredGraphSize(measured);
-      if (onSizeChange) {
-        onSizeChange(measured);
+      if (onSizeChangeRef.current) {
+        onSizeChangeRef.current(measured);
       }
     },
-    // nodes and edges intentionally omitted — we use refs to avoid an
-    // infinite loop: setNodes → nodes changes → reportGraphSize recreated
-    // → effect re-runs → setNodes again.
-    [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
+    // nodes and edges intentionally omitted - we use refs to avoid an
+    // infinite loop: setNodes -> nodes changes -> reportGraphSize recreated
+    // -> effect re-runs -> setNodes again.
+    [fallbackNodeHeight, fallbackNodeWidth, paddingForSize],
   );
 
   const updateAutoInteractionLock = useCallback(() => {
@@ -773,6 +779,7 @@ function NewOCDFGVisualizer({
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
           weight: link.weight ?? 1,
+          reactFlowId, // Scopes getNode() lookups to this specific graph instance
         },
       } as Edge;
     });
@@ -783,7 +790,7 @@ function NewOCDFGVisualizer({
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0 || rawEdges.length === 0) return;
+    if (rawNodes.length === 0) return;
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
@@ -959,6 +966,7 @@ function NewOCDFGVisualizer({
   };
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
+  const hasActivities = dfgData === null || nodes.some(n => n.data?.nodeVariant === 'center');
 
   return (
     <div
@@ -990,6 +998,27 @@ function NewOCDFGVisualizer({
         zoomOnDoubleClick={!interactionsDisabled}
         preventScrolling={!interactionsDisabled}
       />
+
+      {!hasActivities && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(255, 255, 255, 0.96)',
+          color: '#64748B',
+          fontFamily: 'var(--font-primary, Inter, sans-serif)',
+          fontSize: 12,
+          fontWeight: 500,
+          textAlign: 'center',
+          padding: 24,
+          zIndex: 10,
+          pointerEvents: 'none',
+        }}>
+          All activities are displayed in lower levels.
+        </div>
+      )}
 
       {!hideChrome && (
         <div
