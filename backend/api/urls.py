@@ -20,4 +20,5 @@ urlpatterns = [
     path("playout/", playout, name="playout"),
     path("playout/export-ocel/", playout_export_ocel, name="playout-export-ocel"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
+    path("assistant/", include("assistant.urls")),
 ]

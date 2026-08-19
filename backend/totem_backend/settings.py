@@ -52,6 +52,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'api',
     'authentification',
+    'assistant',
+    'mcp_server',
 ]
 
 MIDDLEWARE = [
@@ -178,3 +180,7 @@ if LOCAL_MODE:
 # Credentials used for the auto-seeded Guest account in local mode
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
+
+# AI Assistant configuration
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.6-flash')
