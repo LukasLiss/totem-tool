@@ -13,6 +13,7 @@ import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { ChatWidget } from "./components/chat/ChatWidget";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -112,6 +113,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
               }
             />
           </Routes>
+          <ChatWidget />
         </div>
       </DashboardProvider>
     </SelectedFileContext.Provider>
