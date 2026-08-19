@@ -8,9 +8,16 @@ in later.
 
 A failing algorithm is reported and the run carries on. Ctrl+C stops the whole run.
 
-The algorithms differ hugely in cost. discover_occn is the slow one - about 20 seconds on
-the smallest log, and it grows fast. Try a new algorithm on the smallest log with
---repeats 1 before running the whole grid.
+Costs vary enormously, and not with the number of events. Measured once, at one repeat:
+
+    algorithm       ocel2-p2p (14.7k)  order-management (21k)  container_logistics (35.4k)
+    discover_occn              20 s               610 s                    61 s
+    find_variants             1.6 s        did not finish                 0.8 s
+    OCDFG.from_ocel           0.2 s               0.1 s                    0.1 s
+
+order-management is the smaller log of the last two, yet it is where both slow algorithms
+blow up. It has the most event-to-object relations by far (147k, against 74k), which is
+what those two actually scale with. Start anything new on ocel2-p2p with --repeats 1.
 
 Run from the totem_lib/ directory:
     python evaluation/run_benchmarks.py
