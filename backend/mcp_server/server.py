@@ -727,15 +727,48 @@ def _rename_dashboard(arguments, user=None, context=None):
 
 
 def _navigate(arguments, user=None, context=None):
-    return {"status": "pending_ws", "action": "navigate", "arguments": arguments}
+    return _dispatch_frontend("navigate", arguments, user)
 
 
 def _set_view_mode(arguments, user=None, context=None):
-    return {"status": "pending_ws", "action": "set_view_mode", "arguments": arguments}
+    return _dispatch_frontend("set_view_mode", arguments, user)
 
 
 def _highlight_element(arguments, user=None, context=None):
-    return {"status": "pending_ws", "action": "highlight_element", "arguments": arguments}
+    return _dispatch_frontend("highlight_element", arguments, user)
+
+
+def _dispatch_frontend(command: str, arguments: dict, user) -> dict:
+    """Try to push a command to the user's WebSocket session.
+
+    If the user has an active WS connection the command is sent immediately
+    and the result is returned.  If no connection exists, a pending_ws
+    status is returned so the HTTP layer can surface it as a pending action.
+    """
+    try:
+        from agent.registry import session_registry
+    except ImportError:
+        return {"status": "pending_ws", "action": command, "arguments": arguments}
+
+    if user is None or not session_registry.is_online(user.pk):
+        return {"status": "pending_ws", "action": command, "arguments": arguments}
+
+    consumer = session_registry.get_consumer(user.pk)
+    if consumer is None:
+        return {"status": "pending_ws", "action": command, "arguments": arguments}
+
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        asyncio.ensure_future(consumer.push_command(command, arguments))
+        return {"status": "dispatched", "action": command, "arguments": arguments}
+
+    return {"status": "pending_ws", "action": command, "arguments": arguments}
 
 
 # ---------------------------------------------------------------------------
