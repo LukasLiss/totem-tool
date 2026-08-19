@@ -1,3 +1,11 @@
+from .algorithms import (
+    ALGORITHM_NAMES,
+    ALGORITHMS,
+    Algorithm,
+    LogContext,
+    MissingInput,
+    get_algorithm,
+)
 from .datasets import (
     LOGS,
     SIZE_METRICS,
@@ -20,18 +28,24 @@ from .harness import (
 # Should be kept alphabetically sorted.
 # The runnable scripts (download_logs, log_stats) are not re-exported.
 __all__ = [
+    "Algorithm",
+    "ALGORITHM_NAMES",
+    "ALGORITHMS",
     "available_logs",
     "benchmark",
     "BenchmarkResult",
     "DEFAULT_REPEATS",
     "downloadable_logs",
     "EvaluationLog",
+    "get_algorithm",
     "get_log",
     "import_args",
+    "LogContext",
     "LOGS",
     "LogStatistics",
     "measure_once",
     "Measurement",
+    "MissingInput",
     "SIZE_METRICS",
     "STATISTIC_FIELDS",
 ]
