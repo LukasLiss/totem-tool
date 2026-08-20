@@ -140,16 +140,28 @@ export async function sendChat(
   return data;
 }
 
-/**
- * Confirm or reject a pending action.
- */
 export async function confirmAction(
   pendingActionId: string,
-  approved: boolean
-): Promise<{ status: string }> {
-  const { data } = await axios.post<{ status: string }>(
+  approved: boolean,
+  name?: string,
+  args?: Record<string, unknown>,
+  context?: AssistantContext
+): Promise<{ status: string; action?: string; result?: unknown; error?: string }> {
+  const { data } = await axios.post<{
+    status: string;
+    action?: string;
+    result?: unknown;
+    error?: string;
+  }>(
     `${ASSISTANT_URL}/confirm/`,
-    { pending_action_id: pendingActionId, approved }
+    {
+      pending_action_id: pendingActionId,
+      approved,
+      name,
+      arguments: args,
+      context,
+    }
   );
   return data;
 }
+

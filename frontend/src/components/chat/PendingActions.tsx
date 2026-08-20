@@ -30,7 +30,7 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
   const handleDecision = async (id: string, approved: boolean, name: string, actionArgs: Record<string, unknown>) => {
     setDeciding((prev) => ({ ...prev, [id]: true }));
     try {
-      await confirmAction(id, approved);
+      await confirmAction(id, approved, name, actionArgs);
       // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh
       if (approved && DASHBOARD_MUTATING_TOOLS.has(name)) {
         window.dispatchEvent(
