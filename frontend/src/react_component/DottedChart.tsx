@@ -14,8 +14,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { Map as MapIcon } from "lucide-react";
+import { useFilterVersion } from "@/store/filterStore";
 import {
   colorGroupKey,
   formatAxisTick,
@@ -110,6 +112,10 @@ export default function DottedChart({
   const chartWrapperRef = useRef<HTMLDivElement | null>(null);
   const chartInteractionRef = useRef<HTMLDivElement | null>(null);
 
+  const filterVersion = useFilterVersion();
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+
   const resetZoomFrame = useCallback(() => {
     setRequestedViewport(viewport);
     setFramePoints([]);
@@ -143,6 +149,8 @@ export default function DottedChart({
     maxPoints: effectiveConfig.maxPoints,
     viewport: requestedViewport,
     sampleSeed,
+    filterEnabled,
+    effectiveFilterVersion,
   });
 
   const events = data?.events ?? EMPTY_EVENTS;
@@ -532,7 +540,15 @@ export default function DottedChart({
             Resample
           </Button>
         </div>
-        <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+        <div className="flex items-center gap-2">
+          <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+          <Switch
+            checked={filterEnabled}
+            onCheckedChange={setFilterEnabled}
+            aria-label="Apply global filter"
+            title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
+          />
+        </div>
       </div>
 
       {showControls && (
