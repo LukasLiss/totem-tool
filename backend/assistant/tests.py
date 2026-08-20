@@ -136,6 +136,67 @@ class ChatViewTests(TestCase):
         self.assertEqual(len(data["tool_calls"]), 0)
 
 
+    def test_chat_rejects_non_dict_payload(self):
+        for payload in [[], [1, 2], [{"message": "hello"}], "string_payload", 123, True]:
+            response = self.client.post(self.url, payload, format="json")
+            self.assertEqual(
+                response.status_code, status.HTTP_400_BAD_REQUEST,
+                f"Expected 400 for payload {payload!r}",
+            )
+            self.assertIn("error", response.json())
+
+    @override_settings(GEMINI_API_KEY="")
+    def test_chat_handles_non_dict_context(self):
+        for invalid_ctx in ["string_context", 123, [1, 2], True]:
+            response = self.client.post(
+                self.url,
+                {"message": "hello", "context": invalid_ctx},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @patch("assistant.llm.complete")
+    @override_settings(GEMINI_API_KEY="test-key")
+    def test_chat_handles_unknown_tool_non_streaming(self, mock_complete):
+        llm_response = {
+            "text": "Attempted tool call",
+            "tool_calls": [
+                {"id": "tc-hallucinated", "name": "hallucinated_unknown_tool", "arguments": {}}
+            ],
+            "usage": {},
+        }
+        mock_complete.return_value = llm_response
+
+        response = self.client.post(
+            self.url, {"message": "run unknown tool"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(len(data["tool_calls"]), 1)
+        self.assertIn("error", data["tool_calls"][0]["result"])
+        self.assertIn("Unknown tool", data["tool_calls"][0]["result"]["error"])
+
+    @patch("assistant.views.stream_chat")
+    @override_settings(GEMINI_API_KEY="test-key")
+    def test_chat_handles_unknown_tool_streaming(self, mock_stream):
+        mock_stream.return_value = [
+            {"type": "tool_call", "id": "tc-hallucinated", "name": "hallucinated_stream_tool", "arguments": {}},
+            {"type": "text", "content": "streaming text"},
+            {"type": "done", "usage": {}},
+        ]
+
+        response = self.client.post(
+            self.url,
+            {"message": "run unknown tool streaming"},
+            format="json",
+            HTTP_ACCEPT="text/event-stream",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        content = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("Unknown tool: hallucinated_stream_tool", content)
+        self.assertIn("streaming text", content)
+
+
 # ---------------------------------------------------------------------------
 # confirm_action endpoint tests
 # ---------------------------------------------------------------------------
@@ -147,9 +208,26 @@ class ConfirmActionTests(TestCase):
         self.client.force_authenticate(user=self.user)
         self.url = "/api/assistant/confirm/"
 
+    def test_confirm_rejects_non_dict_payload(self):
+        for payload in [[], [1, 2], "invalid", 123, True]:
+            response = self.client.post(self.url, payload, format="json")
+            self.assertEqual(
+                response.status_code, status.HTTP_400_BAD_REQUEST,
+                f"Expected 400 for payload {payload!r}",
+            )
+
     def test_confirm_rejects_missing_pending_action_id(self):
         response = self.client.post(self.url, {"approved": True}, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_confirm_supports_action_id_alias(self):
+        response = self.client.post(
+            self.url,
+            {"action_id": "abc-123", "approved": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["status"], "executed")
 
     def test_confirm_cancel_returns_cancelled(self):
         response = self.client.post(
@@ -168,6 +246,23 @@ class ConfirmActionTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["status"], "executed")
+
+
+# ---------------------------------------------------------------------------
+# Prompt builder tests
+# ---------------------------------------------------------------------------
+
+class PromptBuilderTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="prompt-user", password="pass")
+
+    def test_build_system_prompt_handles_non_dict_context(self):
+        from assistant.prompts import build_system_prompt
+        for invalid_ctx in [None, "string", 123, [1, 2, 3], True]:
+            prompt = build_system_prompt(self.user, context=invalid_ctx)
+            self.assertIsInstance(prompt, str)
+            self.assertIn("TOTeM Process Mining Assistant", prompt)
+            self.assertIn("Active View: overview", prompt)
 
 
 # ---------------------------------------------------------------------------

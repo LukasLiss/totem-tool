@@ -40,7 +40,7 @@ TOOL_CATEGORIES = {
 
 def get_category(tool_name: str) -> ToolCategory:
     """Retrieve security category for a given tool."""
-    if tool_name not in TOOL_CATEGORIES:
+    if not isinstance(tool_name, str) or tool_name not in TOOL_CATEGORIES:
         raise ValueError(f"Unknown tool: {tool_name}")
     return TOOL_CATEGORIES[tool_name]
 

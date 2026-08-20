@@ -48,6 +48,12 @@ class ChatView(APIView):
     renderer_classes = [JSONRenderer, ServerSentEventRenderer, BrowsableAPIRenderer]
 
     def post(self, request):
+        if not isinstance(request.data, dict):
+            return Response(
+                {"error": "Request body must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         message = request.data.get("message")
         if not message or not isinstance(message, str):
             return Response(
@@ -56,6 +62,8 @@ class ChatView(APIView):
             )
 
         context = request.data.get("context", {})
+        if not isinstance(context, dict):
+            context = {}
         user = request.user
 
         accept = request.META.get("HTTP_ACCEPT", "")
@@ -89,11 +97,21 @@ class ChatView(APIView):
 
                 elif event["type"] == "tool_call":
                     tool_calls.append(event)
-                    category = get_category(event["name"])
+                    try:
+                        category = get_category(event["name"])
+                    except ValueError:
+                        yield _sse_frame({
+                            "type": "tool_result",
+                            "id": event.get("id", ""),
+                            "name": event.get("name", ""),
+                            "result": {"error": f"Unknown tool: {event.get('name', '')}"},
+                        })
+                        continue
+
                     if category == ToolCategory.READ_ONLY:
                         try:
                             result = call_tool(
-                                event["name"], event["arguments"],
+                                event["name"], event.get("arguments", {}),
                                 user=user, context=context,
                             )
                             yield _sse_frame({
@@ -113,8 +131,8 @@ class ChatView(APIView):
                         pa = {
                             "id": str(uuid.uuid4()),
                             "name": event["name"],
-                            "description": _describe_action(event["name"], event["arguments"]),
-                            "arguments": event["arguments"],
+                            "description": _describe_action(event["name"], event.get("arguments", {})),
+                            "arguments": event.get("arguments", {}),
                         }
                         pending_actions.append(pa)
                         yield _sse_frame({
@@ -129,10 +147,13 @@ class ChatView(APIView):
             # Stream finished — if the LLM asked for read-only tool results
             # and we executed them inline, re-prompt for a final answer.
             if tool_calls:
-                read_only_results = [
-                    tc for tc in tool_calls
-                    if get_category(tc["name"]) == ToolCategory.READ_ONLY
-                ]
+                read_only_results = []
+                for tc in tool_calls:
+                    try:
+                        if get_category(tc["name"]) == ToolCategory.READ_ONLY:
+                            read_only_results.append(tc)
+                    except ValueError:
+                        pass
                 if read_only_results:
                     tool_result_msg = "\n\n".join(
                         f"[Tool result: {tc['name']}]"
@@ -183,9 +204,18 @@ class ChatView(APIView):
 
         results = []
         for tc in tool_calls:
-            category = get_category(tc["name"])
+            try:
+                category = get_category(tc["name"])
+            except ValueError:
+                results.append({
+                    "id": tc.get("id", ""),
+                    "name": tc.get("name", ""),
+                    "result": {"error": f"Unknown tool: {tc.get('name', '')}"},
+                })
+                continue
+
             if category == ToolCategory.READ_ONLY:
-                result = call_tool(tc["name"], tc["arguments"], user=user, context=context)
+                result = call_tool(tc["name"], tc.get("arguments", {}), user=user, context=context)
                 results.append({
                     "id": tc["id"],
                     "name": tc["name"],
@@ -195,8 +225,8 @@ class ChatView(APIView):
                 pending_actions.append({
                     "id": str(uuid.uuid4()),
                     "name": tc["name"],
-                    "description": _describe_action(tc["name"], tc["arguments"]),
-                    "arguments": tc["arguments"],
+                    "description": _describe_action(tc["name"], tc.get("arguments", {})),
+                    "arguments": tc.get("arguments", {}),
                 })
 
         if results:
@@ -221,6 +251,8 @@ class ChatView(APIView):
 
 def _describe_action(name, arguments):
     """Generate a human-readable description for a pending action."""
+    if not isinstance(arguments, dict):
+        arguments = {}
     descriptions = {
         "create_dashboard": f"Create a new dashboard named \"{arguments.get('name', 'Untitled')}\"",
         "add_component": f"Add {arguments.get('component_name', 'component')} to dashboard",
@@ -250,7 +282,13 @@ def confirm_action(request):
 
     Execute or cancel a pending action after user confirmation.
     """
-    pending_action_id = request.data.get("pending_action_id")
+    if not isinstance(request.data, dict):
+        return Response(
+            {"error": "Request body must be a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pending_action_id = request.data.get("pending_action_id") or request.data.get("action_id")
     approved = request.data.get("approved", False)
 
     if not pending_action_id:

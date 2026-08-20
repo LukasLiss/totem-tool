@@ -7,7 +7,8 @@ from .retriever import retrieve_knowledge
 
 def build_system_prompt(user, context: dict = None) -> str:
     """Build the base system prompt with context and knowledge."""
-    context = context or {}
+    if not isinstance(context, dict):
+        context = {}
     view_mode = context.get("current_view", "overview")
     file_id = context.get("selected_file_id", "None")
 

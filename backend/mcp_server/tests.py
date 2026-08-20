@@ -36,6 +36,14 @@ class McpServerTests(TestCase):
     def test_unknown_tool_raises_error(self):
         with self.assertRaises(ValueError):
             get_category("invalid_tool_name")
+        with self.assertRaises(ValueError):
+            get_category(["unhashable_list"])
+        with self.assertRaises(ValueError):
+            get_category({"unhashable": "dict"})
+        with self.assertRaises(ValueError):
+            get_category(123)
+        with self.assertRaises(ValueError):
+            get_category(None)
 
     def test_call_tool_scaffolding(self):
         result = call_tool("get_statistics", {})
