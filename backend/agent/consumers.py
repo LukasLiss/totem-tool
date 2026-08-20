@@ -9,12 +9,12 @@ Protocol:
 
 import json
 
-from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from .registry import session_registry
 
 
-class AgentConsumer(AsyncWebsocketConsumer):
+class AgentConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.user = self.scope.get("user")
         if self.user is None or self.user.is_anonymous:
