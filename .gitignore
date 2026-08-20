@@ -7,8 +7,10 @@ totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
-!docs/MODEL_ASSETS.md
+!docs/**/*.md
+!backend/assistant/knowledge/*.md
 !.claude/**/*.md
+
 *.txt
 
 # Reinclude totem_lib tests
@@ -200,6 +202,7 @@ $RECYCLE.BIN/
 # Temporary folders
 tmp/
 temp/
+.mimosa/
 
 # Log files
 *.log

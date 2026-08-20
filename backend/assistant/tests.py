@@ -60,6 +60,17 @@ class ChatViewTests(TestCase):
         self.assertIn("pending_actions", data)
         self.assertIn("tour_path", data)
 
+    @override_settings(GEMINI_API_KEY="")
+    def test_chat_accepts_sse_header(self):
+        response = self.client.post(
+            self.url,
+            {"message": "hello"},
+            format="json",
+            HTTP_ACCEPT="text/event-stream",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "text/event-stream")
+
     @patch("assistant.llm.complete")
     @override_settings(GEMINI_API_KEY="test-key")
     def test_chat_passes_context_to_prompt_builder(self, mock_complete):
@@ -251,3 +262,108 @@ class PolicyTests(TestCase):
     def test_unknown_tool_raises_value_error(self):
         with self.assertRaises(ValueError):
             get_category("nonexistent_tool")
+
+
+# ---------------------------------------------------------------------------
+# Retriever & Prompt builder tests
+# ---------------------------------------------------------------------------
+
+class RetrieverTests(TestCase):
+    def test_retrieve_knowledge_returns_chunks_for_relevant_query(self):
+        from assistant.retriever import retrieve_knowledge
+        chunks = retrieve_knowledge("variants table filtering")
+        self.assertIsInstance(chunks, list)
+        self.assertGreater(len(chunks), 0)
+        self.assertTrue(any("variant" in c.lower() for c in chunks))
+
+    def test_retrieve_knowledge_returns_empty_or_top_k_for_unmatched_query(self):
+        from assistant.retriever import retrieve_knowledge
+        chunks = retrieve_knowledge("xyzabc123nonexistentterm999")
+        self.assertIsInstance(chunks, list)
+
+    def test_build_system_prompt_with_query_injects_knowledge(self):
+        from assistant.prompts import build_system_prompt_with_query
+        user = User.objects.create_user(username="prompt-user")
+        prompt = build_system_prompt_with_query(
+            user, {"current_view": "overview"}, query="How do I filter variants?"
+        )
+        self.assertIn("Relevant Documentation", prompt)
+        self.assertIn("Available Tour Target IDs", prompt)
+        self.assertIn("variants-table", prompt)
+
+
+# ---------------------------------------------------------------------------
+# LLM schema converter tests
+# ---------------------------------------------------------------------------
+
+class LLMHelperTests(TestCase):
+    def test_json_schema_to_proto_schema(self):
+        from assistant.llm import _json_schema_to_proto_schema, _build_gemini_tools
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Dashboard name"},
+                "count": {"type": "integer"},
+                "items": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["name"],
+        }
+        proto_schema = _json_schema_to_proto_schema(schema)
+        self.assertIsNotNone(proto_schema)
+
+        tools = [
+            {"name": "test_tool", "description": "A test tool", "parameters": schema}
+        ]
+        gemini_tools = _build_gemini_tools(tools)
+        self.assertIsNotNone(gemini_tools)
+        self.assertEqual(len(gemini_tools.function_declarations), 1)
+        self.assertEqual(gemini_tools.function_declarations[0].name, "test_tool")
+
+
+# ---------------------------------------------------------------------------
+# Confirm action execution tests
+# ---------------------------------------------------------------------------
+
+class ConfirmActionExecutionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="exec-user", password="pass")
+        self.client.force_authenticate(user=self.user)
+        self.url = "/api/assistant/confirm/"
+
+    @patch("assistant.views.call_tool", return_value={"dashboard_id": 99, "name": "Created Dashboard"})
+    def test_confirm_action_executes_tool_when_name_provided(self, mock_call):
+        response = self.client.post(
+            self.url,
+            {
+                "pending_action_id": "act-1",
+                "approved": True,
+                "name": "create_dashboard",
+                "arguments": {"name": "Created Dashboard"},
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["status"], "executed")
+        self.assertEqual(data["action"], "create_dashboard")
+        self.assertEqual(data["result"]["dashboard_id"], 99)
+        mock_call.assert_called_once()
+
+    @patch("assistant.views.call_tool", side_effect=RuntimeError("Database error"))
+    def test_confirm_action_returns_error_on_tool_failure(self, mock_call):
+        response = self.client.post(
+            self.url,
+            {
+                "pending_action_id": "act-2",
+                "approved": True,
+                "name": "create_dashboard",
+                "arguments": {"name": "Failed"},
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        data = response.json()
+        self.assertEqual(data["status"], "error")
+        self.assertIn("Database error", data["error"])
+

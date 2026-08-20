@@ -8,10 +8,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from rest_framework.parsers import JSONParser
 
+from rest_framework.renderers import BaseRenderer, JSONRenderer, BrowsableAPIRenderer
+
 from .llm import stream_chat
-from .prompts import build_system_prompt
+from .prompts import build_system_prompt_with_query
 from mcp_server.server import call_tool, get_tool_specs
 from mcp_server.policy import ToolCategory, get_category
+
+
+class ServerSentEventRenderer(BaseRenderer):
+    """Renderer to allow 'Accept: text/event-stream' without 406 Not Acceptable."""
+    media_type = "text/event-stream"
+    format = "txt"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 
 class ChatView(APIView):
@@ -34,6 +45,7 @@ class ChatView(APIView):
 
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser]
+    renderer_classes = [JSONRenderer, ServerSentEventRenderer, BrowsableAPIRenderer]
 
     def post(self, request):
         message = request.data.get("message")
@@ -58,7 +70,7 @@ class ChatView(APIView):
 
     def _run_streaming(self, user, message, context):
         """Run the agentic loop and yield SSE frames."""
-        system_prompt = build_system_prompt(user, context)
+        system_prompt = build_system_prompt_with_query(user, context, query=message)
         tool_specs = get_tool_specs()
 
         def event_stream():
@@ -156,7 +168,7 @@ class ChatView(APIView):
         """Run the agentic loop without streaming. Returns JSON."""
         from .llm import complete
 
-        system_prompt = build_system_prompt(user, context)
+        system_prompt = build_system_prompt_with_query(user, context, query=message)
         tool_specs = get_tool_specs()
 
         response = complete(
@@ -240,6 +252,10 @@ def confirm_action(request):
     """
     pending_action_id = request.data.get("pending_action_id")
     approved = request.data.get("approved", False)
+    action_name = request.data.get("name")
+    arguments = request.data.get("arguments", {})
+    context = request.data.get("context", {})
+    user = request.user
 
     if not pending_action_id:
         return Response(
@@ -250,9 +266,21 @@ def confirm_action(request):
     if not approved:
         return Response({"status": "cancelled"}, status=status.HTTP_200_OK)
 
-    # In the full implementation, the pending action payload is stored
-    # server-side (or replayed). For now, return a placeholder.
+    if action_name:
+        try:
+            result = call_tool(action_name, arguments, user=user, context=context)
+            return Response(
+                {"status": "executed", "action": action_name, "result": result},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as exc:
+            return Response(
+                {"status": "error", "error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     return Response(
         {"status": "executed", "result": {}},
         status=status.HTTP_200_OK,
     )
+

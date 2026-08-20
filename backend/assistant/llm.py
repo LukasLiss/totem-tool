@@ -12,12 +12,51 @@ import uuid
 import google.generativeai as genai
 
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-ASSISTANT_MODEL = os.environ.get("ASSISTANT_MODEL", "gemini-3.6-flash")
+def _get_api_key():
+    try:
+        from django.conf import settings
+        if hasattr(settings, "GEMINI_API_KEY"):
+            return settings.GEMINI_API_KEY or ""
+        return os.environ.get("GEMINI_API_KEY", "")
+    except Exception:
+        return os.environ.get("GEMINI_API_KEY", "")
 
-# Configure the Gemini client at module load time.
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+
+def _get_model():
+    try:
+        from django.conf import settings
+        return getattr(settings, "ASSISTANT_MODEL", "") or os.environ.get("ASSISTANT_MODEL", "gemini-3.6-flash")
+    except Exception:
+        return os.environ.get("ASSISTANT_MODEL", "gemini-3.6-flash")
+
+
+_TYPE_MAP = {
+    "object": genai.protos.Type.OBJECT,
+    "string": genai.protos.Type.STRING,
+    "integer": genai.protos.Type.INTEGER,
+    "number": genai.protos.Type.NUMBER,
+    "boolean": genai.protos.Type.BOOLEAN,
+    "array": genai.protos.Type.ARRAY,
+}
+
+
+def _json_schema_to_proto_schema(d):
+    """Convert a JSON schema dict into a genai.protos.Schema object."""
+    if not isinstance(d, dict):
+        return genai.protos.Schema(type_=_TYPE_MAP["object"])
+    t = _TYPE_MAP.get(d.get("type", "object"), genai.protos.Type.OBJECT)
+    kwargs = {"type_": t}
+    if "description" in d:
+        kwargs["description"] = d["description"]
+    if "properties" in d and isinstance(d["properties"], dict):
+        kwargs["properties"] = {
+            k: _json_schema_to_proto_schema(v) for k, v in d["properties"].items()
+        }
+    if "required" in d and d["required"]:
+        kwargs["required"] = d["required"]
+    if "items" in d and isinstance(d["items"], dict):
+        kwargs["items"] = _json_schema_to_proto_schema(d["items"])
+    return genai.protos.Schema(**kwargs)
 
 
 def _build_gemini_tools(tools):
@@ -27,12 +66,14 @@ def _build_gemini_tools(tools):
 
     function_declarations = []
     for tool in tools:
-        func_decl = {
-            "name": tool["name"],
-            "description": tool.get("description", ""),
-            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-        }
-        function_declarations.append(func_decl)
+        fd = genai.protos.FunctionDeclaration(
+            name=tool["name"],
+            description=tool.get("description", ""),
+            parameters=_json_schema_to_proto_schema(
+                tool.get("parameters", {"type": "object", "properties": {}})
+            ),
+        )
+        function_declarations.append(fd)
 
     return genai.protos.Tool(function_declarations=function_declarations)
 
@@ -47,15 +88,17 @@ def complete(system_prompt, user_message, tools=None):
             - tool_calls: list[dict] — any tool calls the LLM requested
             - usage: dict — token counts
     """
-    if not GEMINI_API_KEY:
+    api_key = _get_api_key()
+    if not api_key:
         return {
             "text": "[Assistant is not configured. Set GEMINI_API_KEY to enable.]",
             "tool_calls": [],
             "usage": {},
         }
 
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name=ASSISTANT_MODEL,
+        model_name=_get_model(),
         system_instruction=system_prompt,
     )
 
@@ -104,12 +147,14 @@ def stream_chat(system_prompt, user_message, tools=None):
         {"type": "done", "usage": {...}}
         {"type": "error", "error": "..."}
     """
-    if not GEMINI_API_KEY:
+    api_key = _get_api_key()
+    if not api_key:
         yield {"type": "error", "error": "Assistant is not configured. Set GEMINI_API_KEY."}
         return
 
+    genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name=ASSISTANT_MODEL,
+        model_name=_get_model(),
         system_instruction=system_prompt,
     )
 

@@ -72,4 +72,6 @@ def retrieve_knowledge(query, top_k=3):
         scored.append((score, chunk))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [chunk for _, chunk in scored[:top_k] if scored[0][0] > 0]
+    return [chunk for score, chunk in scored[:top_k] if score > 0]
+
+
