@@ -243,6 +243,8 @@ function NewOCDFGVisualizer({
   const reactFlowId = instanceId ?? generatedInstanceId;
 
   const filterVersion = useFilterVersion();
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -533,7 +535,7 @@ function NewOCDFGVisualizer({
     let cancelled = false;
     const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url)
+    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -548,7 +550,7 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
-  }, [data, fileId, filterVersion]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   const handleWeightLimitChange = useCallback(
     (otype: string, value: number) => {
@@ -1246,6 +1248,12 @@ function NewOCDFGVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
+            <Switch
+              checked={filterEnabled}
+              onCheckedChange={setFilterEnabled}
+              aria-label="Apply global filter"
+              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
+            />
           </div>
         </div>
       )}

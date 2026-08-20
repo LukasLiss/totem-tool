@@ -167,6 +167,8 @@ export default function VariantsExplorer({
   onAdvancedChange,
 }: VariantsExplorerProps) {
   const filterVersion = useFilterVersion();
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
@@ -325,7 +327,7 @@ export default function VariantsExplorer({
       setErrorMsg("");
 
       try {
-        const { data: rawData } = await axios.get(`/api/variants/${qs}`);
+        const { data: rawData } = await axios.get(`/api/variants/${qs}`, { _skipGlobalFilter: !filterEnabled });
         const arr: Variant[] = Array.isArray(rawData) ? rawData : rawData.variants;
 
         // Check again after async operation
@@ -363,7 +365,7 @@ export default function VariantsExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad, filterVersion]);
+  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad, filterEnabled, effectiveFilterVersion]);
 
   const filtered = useMemo(() => {
     return [...variants].sort((a, b) => b.support - a.support);
@@ -552,6 +554,19 @@ export default function VariantsExplorer({
                 id="label-mode"
                 checked={labelMode === "compact"}
                 onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label htmlFor="variants-filter" className="text-sm font-medium">
+                Filter
+              </Label>
+              <Switch
+                id="variants-filter"
+                checked={filterEnabled}
+                onCheckedChange={setFilterEnabled}
+                aria-label="Apply global filter"
+                title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
               />
             </div>
           </div>

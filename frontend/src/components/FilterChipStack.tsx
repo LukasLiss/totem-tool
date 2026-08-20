@@ -479,11 +479,9 @@ export default function FilterChipStack() {
     addFilter({ type: activeType, enabled: true, params });
   }
 
-  async function handleApply() {
-    if (!fileId || applying || !dirty) return;
-
+  async function applyFilters() {
+    if (!fileId) return;
     const activeFilters = filters.filter(f => f.enabled);
-
     if (activeFilters.length === 0) {
       useFilterStore.getState().clear();
       setStats(prev => ({
@@ -495,7 +493,6 @@ export default function FilterChipStack() {
       setAppliedKey(currentKey);
       return;
     }
-
     setApplying(true);
     try {
       const { data } = await axios.post<{
@@ -521,6 +518,11 @@ export default function FilterChipStack() {
     } finally {
       setApplying(false);
     }
+  }
+
+  async function handleApply() {
+    if (applying || !dirty) return;
+    await applyFilters();
   }
 
   return (

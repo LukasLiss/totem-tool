@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useFilterVersion } from '@/store/filterStore';
+import { Switch } from '@/components/ui/switch';
 import {
   ReactFlow,
   useReactFlow,
@@ -118,6 +119,8 @@ function OCCNVisualizer({
   );
 
   const filterVersion = useFilterVersion();
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Normalized to a string so the fetch effect doesn't re-run on array identity.
   const objectTypesParam = (objectTypes ?? []).map((t) => t.trim()).filter(Boolean).join(',');
@@ -141,6 +144,7 @@ function OCCNVisualizer({
         `http://127.0.0.1:8000/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
           objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
         }`,
+        { _skipGlobalFilter: !filterEnabled },
       )
       .then(({ data: payload }) => {
         if (cancelled) return;
@@ -158,7 +162,7 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data, fileId, threshold, objectTypesParam, filterVersion]);
+  }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion]);
 
   const typeColors = useMemo(
     () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),
@@ -520,6 +524,12 @@ function OCCNVisualizer({
             >
               {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
             </Button>
+            <Switch
+              checked={filterEnabled}
+              onCheckedChange={setFilterEnabled}
+              aria-label="Apply global filter"
+              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
+            />
           </div>
         </>
       )}

@@ -233,6 +233,8 @@ function NewOCDFGVariantsVisualizer({
   const reactFlowId = instanceId ?? generatedInstanceId;
 
   const filterVersion = useFilterVersion();
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -516,7 +518,7 @@ function NewOCDFGVariantsVisualizer({
     let cancelled = false;
     const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url)
+    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -553,7 +555,7 @@ function NewOCDFGVariantsVisualizer({
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, fileId, filterVersion]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   // Slider change: pure client-side — just update traceLimit state.
   // The layout effect has traceLimit in its dependency array so it will
@@ -1219,6 +1221,12 @@ function NewOCDFGVariantsVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
+            <Switch
+              checked={filterEnabled}
+              onCheckedChange={setFilterEnabled}
+              aria-label="Apply global filter"
+              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
+            />
           </div>
         </div>
       )}
