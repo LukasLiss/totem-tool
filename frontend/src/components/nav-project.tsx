@@ -31,7 +31,7 @@ export function NavProject() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Project Assets" data-active={isProjectActive}>
+              <SidebarMenuButton tooltip="Project Assets" data-active={isProjectActive} data-tour-id="sidebar-project">
                 <FolderKanban />
                 <span>Project Assets</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />

@@ -21,6 +21,7 @@ export function NavPlayout() {
             tooltip="Object-Centric Playout"
             onClick={() => setViewMode({ type: 'playout' })}
             data-active={viewMode.type === 'playout'}
+            data-tour-id="sidebar-playout"
           >
             <Play />
             <span>Playout</span>

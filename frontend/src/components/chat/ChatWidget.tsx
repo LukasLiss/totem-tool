@@ -3,8 +3,9 @@ import { MessageSquare, X, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { streamChat } from "@/api/assistantApi";
-import type { PendingAction } from "@/api/assistantApi";
+import type { PendingAction, TourStep } from "@/api/assistantApi";
 import { useAssistantContext } from "@/hooks/useAssistantContext";
+import { useTourController } from "@/tour/TourController";
 import { MessageList, type Message } from "./MessageList";
 import { MessageInput } from "./MessageInput";
 import { PendingActions } from "./PendingActions";
@@ -17,6 +18,7 @@ export function ChatWidget() {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const context = useAssistantContext();
+  const { startTour } = useTourController();
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -64,6 +66,12 @@ export function ChatWidget() {
                 arguments: event.arguments,
               });
               setPendingActions([...actions]);
+              break;
+
+            case "tour_path":
+              if (event.steps && event.steps.length > 0) {
+                startTour(event.steps as TourStep[]);
+              }
               break;
 
             case "error":

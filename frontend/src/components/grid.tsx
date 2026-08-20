@@ -133,7 +133,7 @@ const GridContent: React.FC = () => {
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
         
-        <div className="flex-grow overflow-auto">
+        <div className="flex-grow overflow-auto" data-tour-id="dashboard-grid">
           <GridContainer>
             <DashboardGrid />
           </GridContainer>

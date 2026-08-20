@@ -43,6 +43,7 @@ export function NavConformance() {
               <SidebarMenuButton
                 tooltip="Conformance"
                 data-active={viewMode.type === "conformance"}
+                data-tour-id="sidebar-conformance"
               >
                 <GitCompareArrows />
                 <span>Conformance</span>

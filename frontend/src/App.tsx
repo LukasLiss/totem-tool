@@ -15,6 +15,7 @@ import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 import { ChatWidget } from "./components/chat/ChatWidget";
 import { AgentBridge } from "./agent/AgentBridge";
+import { TourController } from "./tour/TourController";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
@@ -88,7 +89,8 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
       <DashboardProvider>
         <AgentBridge>
-          <div className="website-background">
+          <TourController>
+            <div className="website-background">
           <Toaster position="top-center" richColors />
           {!splashDone && (
             <SplashAnimation onComplete={handleSplashComplete} />
@@ -117,6 +119,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           </Routes>
           <ChatWidget />
           </div>
+          </TourController>
         </AgentBridge>
       </DashboardProvider>
     </SelectedFileContext.Provider>

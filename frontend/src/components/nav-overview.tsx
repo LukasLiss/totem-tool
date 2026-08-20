@@ -20,6 +20,7 @@ export function NavOverview() {
             tooltip="Overview - See all components"
             onClick={() => setViewMode({ type: 'overview' })}
             data-active={isActive}
+            data-tour-id="sidebar-overview"
           >
             <LayoutDashboard />
             <span>Overview</span>

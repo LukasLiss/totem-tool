@@ -143,6 +143,7 @@ export function NavDashboard({
                 <SidebarMenuButton
                   tooltip="Dashboards"
                   data-active={viewMode.type === 'dashboard'}
+                  data-tour-id="sidebar-dashboard"
                 >
                   <FileStack />
                   <span>Dashboards</span>
@@ -199,7 +200,7 @@ export function NavDashboard({
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
                     <Dialog open={open} onOpenChange={setOpen}>
-                      <SidebarMenuSubButton asChild className="cursor-pointer">
+                      <SidebarMenuSubButton asChild className="cursor-pointer" data-tour-id="dashboard-add-component">
                         <DialogTrigger>
                           <Plus className="w-4 h-4 shrink-0" />
                           <span className="truncate">Add Dashboard</span>

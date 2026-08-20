@@ -15,6 +15,11 @@ export interface PendingAction {
   arguments: Record<string, unknown>;
 }
 
+export interface TourStep {
+  tour_id: string;
+  label: string;
+}
+
 export interface ChatResponse {
   text: string;
   tool_calls: Array<{
@@ -23,7 +28,7 @@ export interface ChatResponse {
     result: unknown;
   }>;
   pending_actions: PendingAction[];
-  tour_path: string | null;
+  tour_path: TourStep[] | null;
 }
 
 export type SSEEvent =
@@ -31,6 +36,7 @@ export type SSEEvent =
   | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool_result"; id: string; name: string; result: unknown }
   | { type: "pending_action"; id: string; name: string; description: string; arguments: Record<string, unknown> }
+  | { type: "tour_path"; steps: TourStep[] }
   | { type: "done"; usage: Record<string, unknown> }
   | { type: "error"; error: string };
 
@@ -111,6 +117,9 @@ export async function* streamChat(
       description: pa.description,
       arguments: pa.arguments,
     };
+  }
+  if (data.tour_path && data.tour_path.length > 0) {
+    yield { type: "tour_path", steps: data.tour_path };
   }
   yield { type: "done", usage: {} };
 }

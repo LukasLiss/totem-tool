@@ -36,7 +36,7 @@ export function NavEditor() {
         <Collapsible asChild defaultOpen className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Model Editors" data-active={isEditorActive}>
+              <SidebarMenuButton tooltip="Model Editors" data-active={isEditorActive} data-tour-id="sidebar-editor">
                 <PenLine />
                 <span>Editor</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />

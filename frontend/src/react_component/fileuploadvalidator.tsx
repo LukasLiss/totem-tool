@@ -109,7 +109,7 @@ export function FileUploadValidator() {
         <CardContent>
           <form className="flex flex-col" onSubmit={handleSubmit}>
             <div {...getRootProps({ className:
-              "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })}>
+              "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })} data-tour-id="upload-area">
               <input
                 type="file"
                 name="my-file"

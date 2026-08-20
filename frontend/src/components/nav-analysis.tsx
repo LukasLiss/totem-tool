@@ -36,7 +36,7 @@ export function NavAnalysis() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Analysis Tools" data-active={isAnalysisActive}>
+              <SidebarMenuButton tooltip="Analysis Tools" data-active={isAnalysisActive} data-tour-id="sidebar-analysis">
                 <BarChart3 />
                 <span>Analysis</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
