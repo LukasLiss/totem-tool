@@ -35,6 +35,12 @@ export function useTourController(): TourControllerContextValue {
   return ctx;
 }
 
+export function useOptionalTourController(): TourControllerContextValue | null {
+  return useContext(TourControllerContext);
+}
+
+export const useTour = useTourController;
+
 const EMPTY_STATE: TourState = {
   active: false,
   steps: [],
