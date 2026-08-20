@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from rest_framework.parsers import JSONParser
 
-from .llm import stream_chat, complete
+from .llm import stream_chat
 from .prompts import build_system_prompt
 from mcp_server.server import call_tool, get_tool_specs
 from mcp_server.policy import ToolCategory, get_category
@@ -154,6 +154,8 @@ class ChatView(APIView):
 
     def _run_non_streaming(self, user, message, context):
         """Run the agentic loop without streaming. Returns JSON."""
+        from .llm import complete
+
         system_prompt = build_system_prompt(user, context)
         tool_specs = get_tool_specs()
 
