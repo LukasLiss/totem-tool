@@ -143,7 +143,12 @@ class BM25Retriever:
         Returns:
             List of (chunk_dict, score) tuples.
         """
-        if not self.chunks or not query or not query.strip():
+        if (
+            top_k <= 0
+            or not self.chunks
+            or not isinstance(query, str)
+            or not query.strip()
+        ):
             return []
 
         query_tokens = tokenize(query)

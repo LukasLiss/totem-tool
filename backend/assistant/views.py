@@ -406,14 +406,22 @@ def confirm_action(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    pending_action_id = request.data.get("pending_action_id") or request.data.get("action_id")
-    approved = request.data.get("approved", False)
+    raw_action_id = request.data.get("pending_action_id")
+    if raw_action_id is None:
+        raw_action_id = request.data.get("action_id")
 
-    if not pending_action_id:
+    if not isinstance(raw_action_id, str) or not raw_action_id.strip():
         return Response(
-            {"error": "\"pending_action_id\" is required."},
+            {"error": "Invalid or missing pending_action_id"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    pending_action_id = raw_action_id.strip()
+
+    approved_raw = request.data.get("approved", False)
+    if isinstance(approved_raw, str):
+        approved = approved_raw.strip().lower() in ("true", "1", "yes", "t", "y")
+    else:
+        approved = bool(approved_raw)
 
     action_record = get_action(pending_action_id)
 

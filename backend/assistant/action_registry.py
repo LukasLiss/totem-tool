@@ -54,7 +54,7 @@ def register_action(
 
 def get_action(action_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve an action record by ID."""
-    if not action_id:
+    if not action_id or not isinstance(action_id, str):
         return None
 
     # Check cache first
@@ -70,6 +70,9 @@ def get_action(action_id: str) -> Optional[Dict[str, Any]]:
 
 def update_action_status(action_id: str, status: str) -> bool:
     """Update status of an action ('pending', 'executed', 'cancelled')."""
+    if not action_id or not isinstance(action_id, str):
+        return False
+
     record = get_action(action_id)
     if not record:
         return False
@@ -87,6 +90,9 @@ def update_action_status(action_id: str, status: str) -> bool:
 
 def cancel_action(action_id: str, user_id: Optional[int] = None) -> bool:
     """Cancel a pending action, verifying user ownership if user_id is provided."""
+    if not action_id or not isinstance(action_id, str):
+        return False
+
     record = get_action(action_id)
     if not record:
         return False

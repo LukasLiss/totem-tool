@@ -167,17 +167,19 @@ class GeminiProvider(BaseLLMProvider):
             tool_calls = []
 
             if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
+                content_obj = candidates[0].get("content") or {}
+                parts = content_obj.get("parts", []) if isinstance(content_obj, dict) else []
                 for part in parts:
-                    if "text" in part:
-                        text_parts.append(part["text"])
-                    if "functionCall" in part:
-                        fc = part["functionCall"]
-                        tool_calls.append({
-                            "id": str(uuid.uuid4()),
-                            "name": fc.get("name", ""),
-                            "arguments": fc.get("args", {}),
-                        })
+                    if isinstance(part, dict):
+                        if "text" in part:
+                            text_parts.append(part["text"])
+                        if "functionCall" in part:
+                            fc = part["functionCall"]
+                            tool_calls.append({
+                                "id": str(uuid.uuid4()),
+                                "name": fc.get("name", ""),
+                                "arguments": fc.get("args", {}),
+                            })
 
             usage = data.get("usageMetadata", {})
             return {
@@ -251,18 +253,20 @@ class GeminiProvider(BaseLLMProvider):
                     if not candidates:
                         continue
 
-                    parts = candidates[0].get("content", {}).get("parts", [])
+                    content_obj = candidates[0].get("content") or {}
+                    parts = content_obj.get("parts", []) if isinstance(content_obj, dict) else []
                     for part in parts:
-                        if "text" in part and part["text"]:
-                            yield {"type": "text", "content": part["text"]}
-                        if "functionCall" in part:
-                            fc = part["functionCall"]
-                            yield {
-                                "type": "tool_call",
-                                "id": str(uuid.uuid4()),
-                                "name": fc.get("name", ""),
-                                "arguments": fc.get("args", {}),
-                            }
+                        if isinstance(part, dict):
+                            if "text" in part and part["text"]:
+                                yield {"type": "text", "content": part["text"]}
+                            if "functionCall" in part:
+                                fc = part["functionCall"]
+                                yield {
+                                    "type": "tool_call",
+                                    "id": str(uuid.uuid4()),
+                                    "name": fc.get("name", ""),
+                                    "arguments": fc.get("args", {}),
+                                }
 
             yield {"type": "done", "usage": last_usage}
 

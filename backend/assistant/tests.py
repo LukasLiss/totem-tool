@@ -811,3 +811,175 @@ class ToolSpecAndPolicyTests(TestCase):
         for name in frontend_tools:
             self.assertEqual(get_category(name), ToolCategory.REQUIRES_FRONTEND)
             self.assertTrue(is_mutable(name))
+
+
+# ===========================================================================
+# 8. M3 Challenger Resilience & Regression Tests
+# ===========================================================================
+
+class M3ResilienceRegressionTests(TestCase):
+    """
+    Regression tests for edge cases identified during Milestone 3 Challenger review:
+      1. Action registry resilience with non-string keys (avoid unhashable type TypeError).
+      2. confirm_action endpoint validation for non-string / empty action IDs and boolean string parsing.
+      3. Dynamic prompt builder and ChatView safety on non-string mode values.
+      4. BM25Retriever safety on negative/zero top_k and non-string/empty queries.
+      5. GeminiProvider safety when candidates contain null content (finishReason: SAFETY).
+    """
+
+    def setUp(self):
+        clear_actions()
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="resilience-user", password="pass")
+        self.client.force_authenticate(user=self.user)
+
+    # 1. Action registry resilience
+    def test_action_registry_non_string_keys(self):
+        for invalid_key in [[1, 2], {"id": "123"}, 123, None, True, ("tuple", "key")]:
+            self.assertIsNone(get_action(invalid_key))
+            self.assertFalse(update_action_status(invalid_key, "executed"))
+            self.assertFalse(cancel_action(invalid_key, user_id=self.user.id))
+
+    # 2. confirm_action validation and boolean string coercion
+    def test_confirm_action_malformed_pending_action_id(self):
+        for invalid_id in [[1, 2], {"a": "b"}, 123, "", "   "]:
+            response = self.client.post(
+                "/api/assistant/confirm/",
+                {"pending_action_id": invalid_id, "approved": True},
+                format="json",
+            )
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+                f"Expected 400 for invalid pending_action_id: {invalid_id!r}",
+            )
+            self.assertIn("Invalid or missing pending_action_id", response.json().get("error", ""))
+
+    def test_confirm_action_string_boolean_parsing(self):
+        # Test string "false", "0", "no" -> cancels action
+        for falsey_str in ["false", "FALSE", "0", "no"]:
+            aid = register_action(
+                user_id=self.user.id,
+                tool_name="create_dashboard",
+                arguments={"name": "Cancel Test"},
+            )
+            response = self.client.post(
+                "/api/assistant/confirm/",
+                {"pending_action_id": aid, "approved": falsey_str},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.json()["status"], "cancelled")
+            record = get_action(aid)
+            self.assertEqual(record["status"], "cancelled")
+
+        # Test string "true", "1", "yes" -> executes action
+        for truthy_str in ["true", "TRUE", "1", "yes"]:
+            aid = register_action(
+                user_id=self.user.id,
+                tool_name="create_dashboard",
+                arguments={"name": "Approve Test"},
+            )
+            response = self.client.post(
+                "/api/assistant/confirm/",
+                {"pending_action_id": aid, "approved": truthy_str},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.json()["status"], "executed")
+            record = get_action(aid)
+            self.assertEqual(record["status"], "executed")
+
+    # 3. Dynamic prompt builder & ChatView non-string mode
+    def test_prompt_builder_non_string_mode(self):
+        for invalid_mode in [123, True, False, 45.6, ["teach"]]:
+            prompt = build_system_prompt(self.user, mode=invalid_mode)
+            self.assertIsInstance(prompt, str)
+            self.assertIn("TOTeM Process Mining Assistant", prompt)
+
+        prompt_ctx = build_system_prompt(self.user, context={"mode": 123})
+        self.assertIsInstance(prompt_ctx, str)
+
+        norm = normalize_context({"mode": 999})
+        self.assertEqual(norm["mode"], "999")
+
+    def test_chat_view_handles_non_string_mode(self):
+        for mode_val in [123, True, 45.6]:
+            response = self.client.post(
+                "/api/assistant/chat/",
+                {"message": "help me with overview", "mode": mode_val},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+            response_ctx = self.client.post(
+                "/api/assistant/chat/",
+                {"message": "help me with overview", "context": {"mode": mode_val}},
+                format="json",
+            )
+            self.assertEqual(response_ctx.status_code, status.HTTP_200_OK)
+
+    # 4. BM25Retriever negative top_k and invalid queries
+    def test_bm25_retriever_negative_top_k_and_invalid_queries(self):
+        retriever = BM25Retriever()
+        retriever.index_markdown("# Sample\nProcess mining content for retrieval testing.")
+
+        # Negative and zero top_k
+        self.assertEqual(retriever.search("process", top_k=-10), [])
+        self.assertEqual(retriever.search("process", top_k=-1), [])
+        self.assertEqual(retriever.search("process", top_k=0), [])
+
+        # Non-string queries
+        for invalid_query in [None, 123, True, [1, 2], {"a": "b"}, "   ", "\t\n"]:
+            self.assertEqual(retriever.search(invalid_query, top_k=3), [])
+
+    # 5. GeminiProvider SAFETY block with null content
+    @patch("requests.post")
+    def test_gemini_provider_safety_block_content_null_complete(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "candidates": [
+                {
+                    "finishReason": "SAFETY",
+                    "content": None,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 0,
+                "totalTokenCount": 10,
+            },
+        }
+        mock_post.return_value = mock_resp
+
+        provider = GeminiProvider(api_key="fake-gemini-key")
+        result = provider.complete("system", "unsafe prompt")
+        self.assertEqual(result["text"], "")
+        self.assertEqual(result["tool_calls"], [])
+        self.assertEqual(result["usage"]["total_tokens"], 10)
+
+    @patch("requests.post")
+    def test_gemini_provider_safety_block_content_null_stream(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        sse_chunk = json.dumps({
+            "candidates": [
+                {
+                    "finishReason": "SAFETY",
+                    "content": None,
+                }
+            ],
+            "usageMetadata": {"totalTokenCount": 12},
+        })
+        mock_resp.iter_lines.return_value = [
+            f"data: {sse_chunk}".encode("utf-8"),
+        ]
+        mock_post.return_value = mock_resp
+
+        provider = GeminiProvider(api_key="fake-gemini-key")
+        events = list(provider.stream_chat("system", "unsafe prompt"))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "done")
+        self.assertEqual(events[0]["usage"]["total_tokens"], 12)
+

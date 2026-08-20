@@ -56,7 +56,7 @@ def normalize_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "pathname": str(pathname),
         "session_id": str(context.get("session_id", "")),
         "current_dashboard_id": context.get("current_dashboard_id"),
-        "mode": context.get("mode", "teach"),
+        "mode": str(context.get("mode", "teach")),
     }
 
 
@@ -71,7 +71,7 @@ def build_system_prompt(
     valid tour identifiers, and RAG knowledge snippets.
     """
     ctx = normalize_context(context)
-    active_mode = (mode or ctx.get("mode") or "teach").lower()
+    active_mode = str(mode or ctx.get("mode") or "teach").lower()
     username = getattr(user, "username", "anonymous") or "anonymous"
 
     # Base persona and active environment
