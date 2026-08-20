@@ -964,6 +964,7 @@ function NewOCDFGVariantsVisualizer({
 
   return (
     <div
+      data-tour-id="ocdfg-canvas"
       ref={containerRef}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >

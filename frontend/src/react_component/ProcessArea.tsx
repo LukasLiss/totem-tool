@@ -64,6 +64,7 @@ export default function ProcessArea({
 
   return (
     <Card
+      data-tour-id="process-area-canvas"
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">

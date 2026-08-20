@@ -269,6 +269,7 @@ function OCCNVisualizer({
 
   return (
     <div
+      data-tour-id="occn-canvas"
       ref={containerRef}
       data-occn-readonly
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}

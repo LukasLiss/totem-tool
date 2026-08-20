@@ -142,7 +142,7 @@ export function EditorShell({
       {/* Block wrapper on purpose: if the wrapping flex row were itself the
           column-flex item, the browser would size it pre-wrap and a wrapped
           second row would paint over (and block clicks into) the canvas. */}
-      <div className="shrink-0 border-b px-3 py-2.5 sm:px-4">
+      <div className="shrink-0 border-b px-3 py-2.5 sm:px-4" data-tour-id="editor-toolbar">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="min-w-0 max-w-full">
             <div className="truncate font-semibold leading-tight">{title}</div>
@@ -199,7 +199,7 @@ export function EditorShell({
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <div className="relative flex-1 min-w-0">
+        <div className="relative flex-1 min-w-0" data-tour-id="editor-canvas">
           {toolbar && (
             <div className="absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-lg border bg-background/95 p-1 shadow-sm backdrop-blur">
               {toolbar}

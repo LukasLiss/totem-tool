@@ -96,10 +96,34 @@ export function TourController({ children }: TourControllerProps) {
     []
   );
 
+  useEffect(() => {
+    const handleHighlight = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        tourId?: TourId;
+        label?: string;
+      }>;
+      const detail = customEvent.detail;
+      if (detail && detail.tourId) {
+        startTour([
+          {
+            tour_id: detail.tourId,
+            label: detail.label || "",
+          },
+        ]);
+      }
+    };
+
+    window.addEventListener("agent:highlight", handleHighlight);
+    return () => {
+      window.removeEventListener("agent:highlight", handleHighlight);
+    };
+  }, [startTour]);
+
   const value = useMemo<TourControllerContextValue>(
     () => ({ state, startTour, nextStep, skipTour }),
     [state, startTour, nextStep, skipTour]
   );
+
 
   return (
     <TourControllerContext.Provider value={value}>

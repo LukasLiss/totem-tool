@@ -514,7 +514,7 @@ export default function DottedChart({
   }
 
   return (
-    <div className={cn("relative flex min-h-[500px] flex-col gap-3", className)}>
+    <div data-tour-id="dotted-chart-canvas" className={cn("relative flex min-h-[500px] flex-col gap-3", className)}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <div className="flex flex-wrap items-center gap-2">
           <span>

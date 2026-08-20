@@ -298,7 +298,7 @@ export function PlayoutView() {
       </Card>
 
       {source && (
-        <Card>
+        <Card data-tour-id="playout-controls">
           <CardHeader>
             <CardTitle className="text-base">Limits per process execution</CardTitle>
             <CardDescription>

@@ -422,6 +422,7 @@ export default function VariantsExplorer({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
+                  data-tour-id="settings-extraction"
                   variant="outline"
                   className="min-w-[180px] justify-between font-normal"
                   title="Process-execution extraction strategy"
@@ -462,6 +463,7 @@ export default function VariantsExplorer({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
+                  data-tour-id="settings-iso"
                   variant="outline"
                   className="min-w-[150px] justify-between font-normal"
                   title="Graph-isomorphism strategy"
@@ -498,7 +500,7 @@ export default function VariantsExplorer({
             </DropdownMenu>
 
             {/* Timeout (seconds) */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1" data-tour-id="settings-timeout">
               <Label
                 htmlFor="adv-timeout"
                 className="text-xs text-muted-foreground"
@@ -538,16 +540,16 @@ export default function VariantsExplorer({
               <ZoomIn size={16} className="text-muted-foreground" />
             </div>
 
-            {/* Label mode toggle - Switch */}
-            <div className="flex items-center gap-2">
-              <Label htmlFor="label-mode" className="text-sm font-medium">
-                Compact Labels
-              </Label>
+            {/* Label format: compact vs full */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="text-xs text-muted-foreground">Compact</span>
               <Switch
-                id="label-mode"
-                checked={labelMode === "compact"}
-                onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
+                checked={labelMode === "full"}
+                onCheckedChange={(checked) =>
+                  setLabelMode(checked ? "full" : "compact")
+                }
               />
+              <span className="text-xs text-muted-foreground">Full</span>
             </div>
           </div>
         </div>
@@ -584,9 +586,8 @@ export default function VariantsExplorer({
       {/* Loading state */}
       {status === "loading" && (
         <CardContent className="pt-2">
-          <div className="flex items-center gap-2">
-            <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-            <span className="text-sm">Loading variants...</span>
+          <div className="flex items-center justify-center p-8 text-sm text-muted-foreground">
+            Mining variants...
           </div>
         </CardContent>
       )}
@@ -594,8 +595,8 @@ export default function VariantsExplorer({
       {/* Error state */}
       {status === "error" && (
         <CardContent className="pt-2">
-          <div className="flex flex-col gap-2">
-            <div className="text-sm text-red-600 font-semibold">
+          <div className="flex flex-col gap-2 p-4">
+            <div className="text-sm font-medium text-red-600">
               Failed to load variants
             </div>
             {errorMsg && (
@@ -624,7 +625,7 @@ export default function VariantsExplorer({
 
       {/* Ready state - show variants */}
       {status === "ready" && (
-        <CardContent className="pt-2">
+        <CardContent className="pt-2" data-tour-id="variants-table">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {/* Variant count summary — left-aligned, muted, above the list. */}
             <div
