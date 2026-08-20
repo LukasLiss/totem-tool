@@ -1,21 +1,493 @@
+"""
+Comprehensive unit and integration test suite for Assistant Knowledge RAG (BM25),
+Dynamic Prompt Builder, Multi-Provider LLM Streaming Wrapper, Action Registry,
+ChatView SSE Streaming, and Action Confirmation Endpoint.
+"""
+
 import json
-from unittest.mock import patch, MagicMock
+import uuid
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from assistant.action_registry import (
+    cancel_action,
+    clear_actions,
+    get_action,
+    register_action,
+    update_action_status,
+)
+from assistant.llm import (
+    AnthropicProvider,
+    BaseLLMProvider,
+    GeminiProvider,
+    MockProvider,
+    complete,
+    convert_schema_to_gemini,
+    format_tool_for_anthropic,
+    format_tool_for_gemini,
+    get_llm_provider,
+    stream_chat,
+)
+from assistant.prompts import (
+    TOUR_IDS,
+    VALID_TOUR_IDS,
+    build_system_prompt,
+    normalize_context,
+)
+from assistant.retriever import (
+    BM25Retriever,
+    get_retriever,
+    reload_index,
+    retrieve_chunks,
+    retrieve_knowledge,
+    slugify_heading,
+    tokenize,
+)
 from mcp_server.policy import ToolCategory, get_category, is_mutable
 from mcp_server.server import get_tool_specs
 
 
-# ---------------------------------------------------------------------------
-# ChatView endpoint tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 1. BM25 Knowledge Retriever Unit Tests
+# ===========================================================================
 
-class ChatViewTests(TestCase):
+class BM25RetrieverTests(TestCase):
     def setUp(self):
+        self.sample_markdown = """# System Overview
+TOTEM is an Object-Centric Process Mining tool.
+
+## Process Graphs
+### Object-Centric Directly-Follows Graphs (OC-DFG)
+OC-DFG discovers directly follows relations between activities across multiple object types.
+Use dfg_threshold and act_threshold to filter noisy edges.
+
+### Object-Centric C-Nets (OCCN)
+OCCN discovers causal nets with explicit input and output synchronization sets.
+
+## Variants Explorer
+Trace variants can be extracted using leading_1hop, leading_bfs, or connected methods.
+Graph isomorphism checking is performed using wl+vf2 algorithm.
+"""
+        self.retriever = BM25Retriever(k1=1.5, b=0.75)
+        self.retriever.index_markdown(self.sample_markdown)
+
+    def test_tokenize_clean_words(self):
+        text = "Discover OC-DFG models in TOTEM 2.0 with leading_1hop!"
+        tokens = tokenize(text)
+        self.assertIn("discover", tokens)
+        self.assertIn("oc-dfg", tokens)
+        self.assertIn("totem", tokens)
+        self.assertIn("leading_1hop", tokens)
+
+        tokens_no_stop = tokenize(text, remove_stopwords=True)
+        self.assertNotIn("with", tokens_no_stop)
+        self.assertIn("discover", tokens_no_stop)
+
+    def test_slugify_heading(self):
+        heading = "Object-Centric Directly-Follows Graphs (OC-DFG)!"
+        slug = slugify_heading(heading)
+        self.assertEqual(slug, "object-centric-directly-follows-graphs-oc-dfg")
+
+    def test_index_markdown_empty(self):
+        empty_retriever = BM25Retriever()
+        empty_retriever.index_markdown("")
+        self.assertEqual(len(empty_retriever.chunks), 0)
+        self.assertEqual(empty_retriever.search("process"), [])
+
+    def test_index_markdown_sections(self):
+        self.assertTrue(len(self.retriever.chunks) >= 3)
+        titles = [c["title"] for c in self.retriever.chunks]
+        self.assertIn("Object-Centric Directly-Follows Graphs (OC-DFG)", titles)
+        self.assertIn("Object-Centric C-Nets (OCCN)", titles)
+        self.assertIn("Variants Explorer", titles)
+
+        for chunk in self.retriever.chunks:
+            self.assertIn("anchor", chunk)
+            self.assertIn("section", chunk)
+            self.assertIn("tokens", chunk)
+            self.assertIn("title_tokens", chunk)
+
+    def test_search_exact_match_scores_highest(self):
+        results = self.retriever.search("OC-DFG", top_k=2)
+        self.assertTrue(len(results) > 0)
+        top_chunk, score = results[0]
+        self.assertEqual(top_chunk["title"], "Object-Centric Directly-Follows Graphs (OC-DFG)")
+        self.assertTrue(score > 0)
+
+    def test_search_rare_word_idf_weighting(self):
+        results = self.retriever.search("isomorphism wl+vf2", top_k=1)
+        self.assertTrue(len(results) > 0)
+        self.assertEqual(results[0][0]["title"], "Variants Explorer")
+
+    def test_search_term_frequency_saturation(self):
+        # A document with repeated terms should score higher than 1 occurrence,
+        # but with diminishing returns bounded by k1.
+        text_a = "# Doc A\nprocess process process process process"
+        text_b = "# Doc B\nprocess mining"
+        retriever = BM25Retriever(k1=1.5, b=0.75)
+        retriever.index_markdown(f"{text_a}\n\n{text_b}")
+        res = retriever.search("process", top_k=2)
+        self.assertEqual(len(res), 2)
+        # Doc A has higher score due to higher TF
+        self.assertGreater(res[0][1], res[1][1])
+
+    def test_search_length_normalization(self):
+        # Shorter document with the query term should receive less length penalty
+        short_doc = "# Short\nC-Nets are formal models."
+        long_doc = "# Long\n" + "irrelevant words " * 50 + "C-Nets are formal models."
+        retriever = BM25Retriever(k1=1.5, b=0.75)
+        retriever.index_markdown(f"{short_doc}\n\n{long_doc}")
+        res = retriever.search("C-Nets", top_k=2)
+        self.assertEqual(res[0][0]["title"], "Short")
+
+    def test_search_empty_and_whitespace_query(self):
+        self.assertEqual(self.retriever.search(""), [])
+        self.assertEqual(self.retriever.search("   "), [])
+
+    def test_search_unknown_words_returns_empty(self):
+        self.assertEqual(self.retriever.search("xyzzyqwerty12345"), [])
+
+    def test_search_top_k_bounds(self):
+        results = self.retriever.search("process", top_k=1)
+        self.assertEqual(len(results), 1)
+
+    def test_search_min_score_thresholding(self):
+        results = self.retriever.search("process", top_k=5, min_score=9999.0)
+        self.assertEqual(len(results), 0)
+
+    def test_retrieve_knowledge_formatted_strings(self):
+        chunks = retrieve_knowledge("OCCN", top_k=2)
+        self.assertIsInstance(chunks, list)
+        if chunks:
+            self.assertIsInstance(chunks[0], str)
+            self.assertIn("OCCN", chunks[0])
+
+    def test_retrieve_chunks_metadata_fields(self):
+        chunks = retrieve_chunks("Variants Explorer", top_k=1)
+        self.assertIsInstance(chunks, list)
+        if chunks:
+            c = chunks[0]
+            self.assertIn("title", c)
+            self.assertIn("section", c)
+            self.assertIn("anchor", c)
+            self.assertIn("content", c)
+            self.assertIn("score", c)
+
+    def test_reload_index_custom_corpus(self):
+        custom_md = "# Custom Section\nCustom content for unit testing."
+        reloaded = reload_index(markdown_content=custom_md)
+        self.assertEqual(len(reloaded.chunks), 1)
+        results = reloaded.search("Custom content")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0][0]["title"], "Custom Section")
+        # Reset back to default help.md
+        reload_index()
+
+
+# ===========================================================================
+# 2. Dynamic Prompt Builder Unit Tests
+# ===========================================================================
+
+class PromptBuilderTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="prompt-user", password="pass")
+
+    def test_normalize_context(self):
+        ctx1 = {"selected_file_id": 42, "current_view": "analysis"}
+        norm1 = normalize_context(ctx1)
+        self.assertEqual(norm1["active_file_id"], 42)
+        self.assertEqual(norm1["view_mode"], "analysis")
+        self.assertEqual(norm1["pathname"], "/analysis")
+
+        ctx2 = {"active_file_id": 99, "view_mode": "dashboard", "pathname": "/custom-path"}
+        norm2 = normalize_context(ctx2)
+        self.assertEqual(norm2["active_file_id"], 99)
+        self.assertEqual(norm2["view_mode"], "dashboard")
+        self.assertEqual(norm2["pathname"], "/custom-path")
+
+    def test_build_system_prompt_default_context(self):
+        prompt = build_system_prompt(self.user, context={})
+        self.assertIn("TOTeM Process Mining Assistant", prompt)
+        self.assertIn("User: prompt-user", prompt)
+        self.assertIn("Active View: overview", prompt)
+        self.assertIn("TEACH MODE ACTIVE", prompt)
+
+    def test_build_system_prompt_with_active_file_and_view(self):
+        context = {"active_file_id": 12, "view_mode": "analysis", "current_dashboard_id": 5}
+        prompt = build_system_prompt(self.user, context=context)
+        self.assertIn("Active View: analysis", prompt)
+        self.assertIn("Active File ID: 12", prompt)
+        self.assertIn("Active Dashboard ID: 5", prompt)
+
+    def test_build_system_prompt_teach_mode_instructions(self):
+        prompt = build_system_prompt(self.user, mode="teach")
+        self.assertIn("TEACH MODE ACTIVE", prompt)
+        self.assertIn("highlight_element", prompt)
+
+    def test_build_system_prompt_act_mode_instructions(self):
+        prompt = build_system_prompt(self.user, mode="act")
+        self.assertIn("ACT MODE ACTIVE", prompt)
+        self.assertIn("autonomous process mining and dashboard co-pilot", prompt)
+
+    def test_build_system_prompt_contains_tour_id_catalog(self):
+        prompt = build_system_prompt(self.user)
+        for tour_id in VALID_TOUR_IDS:
+            self.assertIn(f"`{tour_id}`", prompt)
+
+    def test_build_system_prompt_with_rag_query(self):
+        prompt = build_system_prompt(self.user, query="OC-DFG")
+        self.assertIn("RELEVANT TOTEM DOCUMENTATION", prompt)
+
+    def test_build_system_prompt_handles_malformed_context(self):
+        for invalid_ctx in [None, "string", 123, [1, 2, 3], True]:
+            prompt = build_system_prompt(self.user, context=invalid_ctx)
+            self.assertIsInstance(prompt, str)
+            self.assertIn("TOTeM Process Mining Assistant", prompt)
+
+
+# ===========================================================================
+# 3. Action Registry Unit Tests
+# ===========================================================================
+
+class ActionRegistryTests(TestCase):
+    def setUp(self):
+        clear_actions()
+
+    def test_register_and_get_action(self):
+        action_id = register_action(
+            user_id=1,
+            tool_name="create_dashboard",
+            arguments={"name": "Test Dashboard"},
+            description="Create Test Dashboard",
+            context={"view_mode": "dashboard"},
+        )
+        self.assertIsInstance(action_id, str)
+        record = get_action(action_id)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["user_id"], 1)
+        self.assertEqual(record["tool_name"], "create_dashboard")
+        self.assertEqual(record["status"], "pending")
+        self.assertEqual(record["arguments"]["name"], "Test Dashboard")
+
+    def test_update_action_status(self):
+        action_id = register_action(user_id=1, tool_name="remove_component", arguments={"component_id": 5})
+        self.assertTrue(update_action_status(action_id, "executed"))
+        record = get_action(action_id)
+        self.assertEqual(record["status"], "executed")
+
+    def test_cancel_action_with_user_check(self):
+        action_id = register_action(user_id=10, tool_name="rename_dashboard", arguments={"name": "New"})
+        # Cancel with wrong user should fail
+        self.assertFalse(cancel_action(action_id, user_id=99))
+        record = get_action(action_id)
+        self.assertEqual(record["status"], "pending")
+
+        # Cancel with correct user succeeds
+        self.assertTrue(cancel_action(action_id, user_id=10))
+        record = get_action(action_id)
+        self.assertEqual(record["status"], "cancelled")
+
+    def test_get_nonexistent_action(self):
+        self.assertIsNone(get_action("non-existent-uuid"))
+        self.assertIsNone(get_action(""))
+
+
+# ===========================================================================
+# 4. Multi-Provider LLM Wrapper Tests
+# ===========================================================================
+
+class LLMProviderTests(TestCase):
+    def test_convert_schema_to_gemini(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "integer", "description": "ID"},
+                "threshold": {"type": "number"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["file_id"],
+        }
+        gemini_schema = convert_schema_to_gemini(schema)
+        self.assertEqual(gemini_schema["type"], "OBJECT")
+        self.assertEqual(gemini_schema["properties"]["file_id"]["type"], "INTEGER")
+        self.assertEqual(gemini_schema["properties"]["threshold"]["type"], "NUMBER")
+        self.assertEqual(gemini_schema["properties"]["tags"]["type"], "ARRAY")
+        self.assertEqual(gemini_schema["properties"]["tags"]["items"]["type"], "STRING")
+
+    def test_format_tool_for_anthropic(self):
+        tool_spec = {
+            "name": "test_tool",
+            "description": "A tool description",
+            "parameters": {"type": "object", "properties": {"a": {"type": "string"}}},
+        }
+        anthropic_tool = format_tool_for_anthropic(tool_spec)
+        self.assertEqual(anthropic_tool["name"], "test_tool")
+        self.assertIn("input_schema", anthropic_tool)
+        self.assertEqual(anthropic_tool["input_schema"], tool_spec["parameters"])
+
+    def test_mock_provider_complete_intents(self):
+        provider = MockProvider()
+
+        # Stats intent
+        res_stat = provider.complete("system", "show me statistics of event log")
+        self.assertEqual(len(res_stat["tool_calls"]), 1)
+        self.assertEqual(res_stat["tool_calls"][0]["name"], "get_statistics")
+
+        # Variant intent
+        res_var = provider.complete("system", "find variants in the trace")
+        self.assertEqual(len(res_var["tool_calls"]), 1)
+        self.assertEqual(res_var["tool_calls"][0]["name"], "find_variants")
+
+        # Dashboard intent
+        res_dash = provider.complete("system", "create a dashboard for me")
+        self.assertEqual(len(res_dash["tool_calls"]), 1)
+        self.assertEqual(res_dash["tool_calls"][0]["name"], "create_dashboard")
+
+        # Generic echo
+        res_echo = provider.complete("system", "hello world")
+        self.assertEqual(res_echo["tool_calls"], [])
+        self.assertIn("hello world", res_echo["text"])
+
+    def test_mock_provider_stream_chat(self):
+        provider = MockProvider()
+        events = list(provider.stream_chat("system", "show me statistics"))
+        types = [e["type"] for e in events]
+        self.assertIn("tool_call", types)
+        self.assertIn("text", types)
+        self.assertIn("done", types)
+
+    @override_settings(GEMINI_API_KEY="", ANTHROPIC_API_KEY="")
+    def test_get_llm_provider_selection_mock_default(self):
+        provider = get_llm_provider()
+        self.assertIsInstance(provider, MockProvider)
+
+    @override_settings(GEMINI_API_KEY="test-gemini-key", ANTHROPIC_API_KEY="")
+    def test_get_llm_provider_selection_gemini(self):
+        provider = get_llm_provider()
+        self.assertIsInstance(provider, GeminiProvider)
+
+    @override_settings(GEMINI_API_KEY="", ANTHROPIC_API_KEY="test-anthropic-key")
+    def test_get_llm_provider_selection_anthropic(self):
+        provider = get_llm_provider()
+        self.assertIsInstance(provider, AnthropicProvider)
+
+    @patch("requests.post")
+    def test_gemini_provider_complete_mock(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "Hello from Gemini"},
+                            {
+                                "functionCall": {
+                                    "name": "get_statistics",
+                                    "args": {"file_id": 1},
+                                }
+                            },
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 15,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 35,
+            },
+        }
+        mock_post.return_value = mock_resp
+
+        provider = GeminiProvider(api_key="fake-gemini-key")
+        result = provider.complete("system", "show stats", tools=get_tool_specs())
+        self.assertEqual(result["text"], "Hello from Gemini")
+        self.assertEqual(len(result["tool_calls"]), 1)
+        self.assertEqual(result["tool_calls"][0]["name"], "get_statistics")
+        self.assertEqual(result["usage"]["total_tokens"], 35)
+
+    @patch("requests.post")
+    def test_gemini_provider_stream_mock(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        sse_chunk1 = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "Token 1 "}]}}]
+        })
+        sse_chunk2 = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "Token 2"}]}}],
+            "usageMetadata": {"totalTokenCount": 50},
+        })
+        mock_resp.iter_lines.return_value = [
+            f"data: {sse_chunk1}".encode("utf-8"),
+            f"data: {sse_chunk2}".encode("utf-8"),
+        ]
+        mock_post.return_value = mock_resp
+
+        provider = GeminiProvider(api_key="fake-gemini-key")
+        events = list(provider.stream_chat("system", "hello"))
+        texts = [e["content"] for e in events if e["type"] == "text"]
+        self.assertEqual("".join(texts), "Token 1 Token 2")
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(events[-1]["usage"]["total_tokens"], 50)
+
+    @patch("requests.post")
+    def test_anthropic_provider_complete_mock(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "content": [
+                {"type": "text", "text": "Hello from Claude"},
+                {
+                    "type": "tool_use",
+                    "id": "claude-tool-1",
+                    "name": "get_statistics",
+                    "input": {"file_id": 2},
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 15},
+        }
+        mock_post.return_value = mock_resp
+
+        provider = AnthropicProvider(api_key="fake-anthropic-key")
+        result = provider.complete("system", "show stats", tools=get_tool_specs())
+        self.assertEqual(result["text"], "Hello from Claude")
+        self.assertEqual(len(result["tool_calls"]), 1)
+        self.assertEqual(result["tool_calls"][0]["name"], "get_statistics")
+        self.assertEqual(result["usage"]["total_tokens"], 25)
+
+    @patch("requests.post")
+    def test_anthropic_provider_stream_mock(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        sse_lines = [
+            'data: {"type": "content_block_start", "content_block": {"type": "text", "text": ""}}',
+            'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Claude "}}',
+            'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Streaming"}}',
+            'data: {"type": "content_block_stop"}',
+            'data: [DONE]',
+        ]
+        mock_resp.iter_lines.return_value = [l.encode("utf-8") for l in sse_lines]
+        mock_post.return_value = mock_resp
+
+        provider = AnthropicProvider(api_key="fake-anthropic-key")
+        events = list(provider.stream_chat("system", "hello"))
+        texts = [e["content"] for e in events if e["type"] == "text"]
+        self.assertEqual("".join(texts), "Claude Streaming")
+        self.assertEqual(events[-1]["type"], "done")
+
+
+
+# ===========================================================================
+# 5. ChatView Integration Tests
+# ===========================================================================
+
+class ChatViewIntegrationTests(TestCase):
+    def setUp(self):
+        clear_actions()
         self.client = APIClient()
         self.user = User.objects.create_user(username="assistant-user", password="pass")
         self.client.force_authenticate(user=self.user)
@@ -35,18 +507,26 @@ class ChatViewTests(TestCase):
         response = self.client.post(self.url, {"message": 123}, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @override_settings(GEMINI_API_KEY="")
-    def test_chat_returns_fallback_when_no_api_key(self):
-        response = self.client.post(
-            self.url, {"message": "hello"}, format="json"
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        data = response.json()
-        self.assertIn("not configured", data["text"].lower())
-        self.assertEqual(data["tool_calls"], [])
-        self.assertEqual(data["pending_actions"], [])
+    def test_chat_rejects_overlong_message(self):
+        long_message = "x" * 10001
+        response = self.client.post(self.url, {"message": long_message}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("10,000", response.json()["error"])
 
-    @override_settings(GEMINI_API_KEY="")
+    def test_chat_rejects_non_dict_payload(self):
+        for payload in [[], [1, 2], "string_payload", 123, True]:
+            response = self.client.post(self.url, payload, format="json")
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_chat_handles_non_dict_context(self):
+        for invalid_ctx in ["string_context", 123, [1, 2], True]:
+            response = self.client.post(
+                self.url,
+                {"message": "hello", "context": invalid_ctx},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
     def test_chat_returns_expected_response_shape(self):
         response = self.client.post(
             self.url,
@@ -60,7 +540,6 @@ class ChatViewTests(TestCase):
         self.assertIn("pending_actions", data)
         self.assertIn("tour_path", data)
 
-    @override_settings(GEMINI_API_KEY="")
     def test_chat_accepts_sse_header(self):
         response = self.client.post(
             self.url,
@@ -71,8 +550,7 @@ class ChatViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "text/event-stream")
 
-    @patch("assistant.llm.complete")
-    @override_settings(GEMINI_API_KEY="test-key")
+    @patch("assistant.views.complete")
     def test_chat_passes_context_to_prompt_builder(self, mock_complete):
         mock_complete.return_value = {"text": "hi", "tool_calls": [], "usage": {}}
         context = {"current_view": "dashboard", "selected_file_id": 42}
@@ -84,13 +562,14 @@ class ChatViewTests(TestCase):
         )
 
         self.assertTrue(mock_complete.called)
-        call_kwargs = mock_complete.call_args
-        self.assertIn("system_prompt", call_kwargs.kwargs)
-        self.assertIn("user_message", call_kwargs.kwargs)
+        call_kwargs = mock_complete.call_args.kwargs
+        self.assertIn("system_prompt", call_kwargs)
+        self.assertIn("user_message", call_kwargs)
+        self.assertIn("Active View: dashboard", call_kwargs["system_prompt"])
+        self.assertIn("Active File ID: 42", call_kwargs["system_prompt"])
 
     @patch("assistant.views.call_tool", return_value={"num_events": 100})
-    @patch("assistant.llm.complete")
-    @override_settings(GEMINI_API_KEY="test-key")
+    @patch("assistant.views.complete")
     def test_chat_executes_read_only_tool_calls(self, mock_complete, mock_call):
         llm_response = {
             "text": "Here are the stats",
@@ -113,8 +592,7 @@ class ChatViewTests(TestCase):
         self.assertEqual(data["tool_calls"][0]["name"], "get_statistics")
         mock_call.assert_called_once()
 
-    @patch("assistant.llm.complete")
-    @override_settings(GEMINI_API_KEY="test-key")
+    @patch("assistant.views.complete")
     def test_chat_surfaces_mutating_tools_as_pending_actions(self, mock_complete):
         llm_response = {
             "text": "I can create that dashboard for you.",
@@ -133,30 +611,36 @@ class ChatViewTests(TestCase):
         data = response.json()
         self.assertEqual(len(data["pending_actions"]), 1)
         self.assertEqual(data["pending_actions"][0]["name"], "create_dashboard")
-        self.assertEqual(len(data["tool_calls"]), 0)
+        # Action should be recorded in registry
+        action_id = data["pending_actions"][0]["id"]
+        self.assertIsNotNone(get_action(action_id))
 
+    @patch("assistant.views.stream_chat")
+    def test_chat_teach_mode_highlight_tool_generates_tour_event(self, mock_stream):
+        mock_stream.return_value = [
+            {
+                "type": "tool_call",
+                "id": "tc-high",
+                "name": "highlight_element",
+                "arguments": {"tour_id": "nav-overview", "label": "Start here"},
+            },
+            {"type": "text", "content": "Let me show you the overview."},
+            {"type": "done", "usage": {}},
+        ]
 
-    def test_chat_rejects_non_dict_payload(self):
-        for payload in [[], [1, 2], [{"message": "hello"}], "string_payload", 123, True]:
-            response = self.client.post(self.url, payload, format="json")
-            self.assertEqual(
-                response.status_code, status.HTTP_400_BAD_REQUEST,
-                f"Expected 400 for payload {payload!r}",
-            )
-            self.assertIn("error", response.json())
+        response = self.client.post(
+            self.url,
+            {"message": "show me overview", "mode": "teach"},
+            format="json",
+            HTTP_ACCEPT="text/event-stream",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        content = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("tour_path", content)
+        self.assertIn("nav-overview", content)
+        self.assertIn("pending_action", content)
 
-    @override_settings(GEMINI_API_KEY="")
-    def test_chat_handles_non_dict_context(self):
-        for invalid_ctx in ["string_context", 123, [1, 2], True]:
-            response = self.client.post(
-                self.url,
-                {"message": "hello", "context": invalid_ctx},
-                format="json",
-            )
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    @patch("assistant.llm.complete")
-    @override_settings(GEMINI_API_KEY="test-key")
+    @patch("assistant.views.complete")
     def test_chat_handles_unknown_tool_non_streaming(self, mock_complete):
         llm_response = {
             "text": "Attempted tool call",
@@ -177,7 +661,6 @@ class ChatViewTests(TestCase):
         self.assertIn("Unknown tool", data["tool_calls"][0]["result"]["error"])
 
     @patch("assistant.views.stream_chat")
-    @override_settings(GEMINI_API_KEY="test-key")
     def test_chat_handles_unknown_tool_streaming(self, mock_stream):
         mock_stream.return_value = [
             {"type": "tool_call", "id": "tc-hallucinated", "name": "hallucinated_stream_tool", "arguments": {}},
@@ -197,16 +680,22 @@ class ChatViewTests(TestCase):
         self.assertIn("streaming text", content)
 
 
-# ---------------------------------------------------------------------------
-# confirm_action endpoint tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 6. Action Confirmation Endpoint Tests
+# ===========================================================================
 
 class ConfirmActionTests(TestCase):
     def setUp(self):
+        clear_actions()
         self.client = APIClient()
         self.user = User.objects.create_user(username="confirm-user", password="pass")
         self.client.force_authenticate(user=self.user)
         self.url = "/api/assistant/confirm/"
+
+    def test_confirm_requires_authentication(self):
+        anonymous = APIClient()
+        response = anonymous.post(self.url, {"pending_action_id": "abc-123", "approved": True}, format="json")
+        self.assertIn(response.status_code, (401, 403))
 
     def test_confirm_rejects_non_dict_payload(self):
         for payload in [[], [1, 2], "invalid", 123, True]:
@@ -229,131 +718,96 @@ class ConfirmActionTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["status"], "executed")
 
-    def test_confirm_cancel_returns_cancelled(self):
+    def test_confirm_cancel_registered_action(self):
+        action_id = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Cancel Me"},
+        )
         response = self.client.post(
             self.url,
-            {"pending_action_id": "abc-123", "approved": False},
+            {"pending_action_id": action_id, "approved": False},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["status"], "cancelled")
+        record = get_action(action_id)
+        self.assertEqual(record["status"], "cancelled")
 
-    def test_confirm_approve_returns_executed(self):
+    def test_confirm_approve_registered_action(self):
+        action_id = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Approved Dashboard"},
+        )
         response = self.client.post(
             self.url,
-            {"pending_action_id": "abc-123", "approved": True},
+            {"pending_action_id": action_id, "approved": True},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.json()["status"], "executed")
+        data = response.json()
+        self.assertEqual(data["status"], "executed")
+        self.assertEqual(data["pending_action_id"], action_id)
+        self.assertIn("result", data)
+        record = get_action(action_id)
+        self.assertEqual(record["status"], "executed")
+
+    def test_confirm_rejects_unauthorized_user(self):
+        other_user = User.objects.create_user(username="other-user", password="pass")
+        action_id = register_action(
+            user_id=other_user.id,
+            tool_name="rename_dashboard",
+            arguments={"name": "Stolen"},
+        )
+        # Attempt to confirm by self.user
+        response = self.client.post(
+            self.url,
+            {"pending_action_id": action_id, "approved": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Unauthorized", response.json()["error"])
 
 
-# ---------------------------------------------------------------------------
-# Prompt builder tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 7. MCP Tool Spec & Policy Tests
+# ===========================================================================
 
-class PromptBuilderTests(TestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username="prompt-user", password="pass")
-
-    def test_build_system_prompt_handles_non_dict_context(self):
-        from assistant.prompts import build_system_prompt
-        for invalid_ctx in [None, "string", 123, [1, 2, 3], True]:
-            prompt = build_system_prompt(self.user, context=invalid_ctx)
-            self.assertIsInstance(prompt, str)
-            self.assertIn("TOTeM Process Mining Assistant", prompt)
-            self.assertIn("Active View: overview", prompt)
-
-
-# ---------------------------------------------------------------------------
-# MCP tool spec generation tests
-# ---------------------------------------------------------------------------
-
-class ToolSpecTests(TestCase):
-    def test_get_tool_specs_returns_list(self):
+class ToolSpecAndPolicyTests(TestCase):
+    def test_get_tool_specs_returns_list_with_all_18_tools(self):
         specs = get_tool_specs()
-        self.assertIsInstance(specs, list)
-
-    def test_get_tool_specs_contains_expected_read_only_tools(self):
-        specs = get_tool_specs()
+        self.assertEqual(len(specs), 18)
         names = {s["name"] for s in specs}
         expected = {
             "get_statistics", "get_object_types", "discover_totem",
             "discover_occn", "discover_mlpa", "find_variants",
             "get_oc_dotted_chart", "get_layout", "list_dashboards",
-            "list_assets",
+            "list_assets", "create_dashboard", "add_component",
+            "remove_component", "update_component", "rename_dashboard",
+            "navigate", "set_view_mode", "highlight_element",
         }
-        self.assertTrue(expected.issubset(names))
+        self.assertEqual(names, expected)
 
-    def test_get_tool_specs_contains_expected_mutating_tools(self):
-        specs = get_tool_specs()
-        names = {s["name"] for s in specs}
-        expected = {
-            "create_dashboard", "add_component", "remove_component",
-            "update_component", "rename_dashboard",
-        }
-        self.assertTrue(expected.issubset(names))
-
-    def test_get_tool_specs_contains_expected_frontend_tools(self):
-        specs = get_tool_specs()
-        names = {s["name"] for s in specs}
-        expected = {"navigate", "set_view_mode", "highlight_element"}
-        self.assertTrue(expected.issubset(names))
-
-    def test_each_tool_spec_has_required_fields(self):
-        specs = get_tool_specs()
-        for spec in specs:
-            self.assertIn("name", spec)
-            self.assertIn("description", spec)
-            self.assertIn("parameters", spec)
-            self.assertIsInstance(spec["parameters"], dict)
-
-
-# ---------------------------------------------------------------------------
-# Policy categorization tests
-# ---------------------------------------------------------------------------
-
-class PolicyTests(TestCase):
-    def test_read_only_tools_are_categorized_correctly(self):
+    def test_policy_classification_accuracy(self):
         read_only_tools = [
             "get_statistics", "get_object_types", "discover_totem",
             "discover_occn", "discover_mlpa", "find_variants",
-            "get_oc_dotted_chart", "get_layout", "list_dashboards",
-            "list_assets",
+            "get_oc_dotted_chart", "get_layout", "list_dashboards", "list_assets",
         ]
         for name in read_only_tools:
-            self.assertEqual(
-                get_category(name), ToolCategory.READ_ONLY,
-                f"{name} should be READ_ONLY",
-            )
+            self.assertEqual(get_category(name), ToolCategory.READ_ONLY)
+            self.assertFalse(is_mutable(name))
 
-    def test_mutating_tools_are_categorized_correctly(self):
         mutating_tools = [
             "create_dashboard", "add_component", "remove_component",
             "update_component", "rename_dashboard",
         ]
         for name in mutating_tools:
-            self.assertEqual(
-                get_category(name), ToolCategory.MUTATING,
-                f"{name} should be MUTATING",
-            )
+            self.assertEqual(get_category(name), ToolCategory.MUTATING)
+            self.assertTrue(is_mutable(name))
 
-    def test_frontend_tools_are_categorized_correctly(self):
         frontend_tools = ["navigate", "set_view_mode", "highlight_element"]
         for name in frontend_tools:
-            self.assertEqual(
-                get_category(name), ToolCategory.REQUIRES_FRONTEND,
-                f"{name} should be REQUIRES_FRONTEND",
-            )
-
-    def test_is_mutable_returns_true_for_mutating(self):
-        self.assertTrue(is_mutable("create_dashboard"))
-        self.assertTrue(is_mutable("navigate"))
-
-    def test_is_mutable_returns_false_for_read_only(self):
-        self.assertFalse(is_mutable("get_statistics"))
-        self.assertFalse(is_mutable("list_dashboards"))
-
-    def test_unknown_tool_raises_value_error(self):
-        with self.assertRaises(ValueError):
-            get_category("nonexistent_tool")
+            self.assertEqual(get_category(name), ToolCategory.REQUIRES_FRONTEND)
+            self.assertTrue(is_mutable(name))

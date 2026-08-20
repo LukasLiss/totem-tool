@@ -1,19 +1,43 @@
+"""
+Assistant views and SSE streaming endpoint for AI Chat, Dual-Channel Teach/Act modes,
+and Mutating Action confirmation.
+"""
+
 import json
+import logging
 import uuid
+from typing import Any, Dict, List, Optional
 
 from django.http import StreamingHttpResponse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, BrowsableAPIRenderer, JSONRenderer
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from rest_framework.renderers import BaseRenderer, JSONRenderer, BrowsableAPIRenderer
-
-from .llm import stream_chat
-from .prompts import build_system_prompt
-from mcp_server.server import call_tool, get_tool_specs
+from .action_registry import (
+    cancel_action,
+    get_action,
+    register_action,
+    update_action_status,
+)
+from .llm import complete, stream_chat
+from .prompts import build_system_prompt, normalize_context
 from mcp_server.policy import ToolCategory, get_category
+from mcp_server.server import call_tool, get_tool_specs
+
+logger = logging.getLogger(__name__)
+
+
+def _is_read_only(tool_name: Optional[str]) -> bool:
+    if not tool_name:
+        return False
+    try:
+        return get_category(tool_name) == ToolCategory.READ_ONLY
+    except ValueError:
+        return False
 
 
 class ServerSentEventRenderer(BaseRenderer):
@@ -34,13 +58,13 @@ class ChatView(APIView):
     ``Accept: text/event-stream``.
 
     Agentic loop (per turn):
-      1. Build system prompt with current context + knowledge RAG.
-      2. Send user message to Gemini with tool definitions.
-      3. If LLM returns tool calls:
-         - Execute read-only tools immediately, append results, re-prompt.
-         - Surface mutating/frontend tools as pending_actions to the client.
-      4. Stream text tokens to the client as they arrive.
-      5. End with a ``done`` frame.
+      1. Normalize context and build dynamic system prompt (with BM25 RAG & Tour IDs).
+      2. Stream or complete via multi-provider LLM (Gemini / Anthropic / Mock).
+      3. Dispatches tool calls:
+         - Read-only tools: executed immediately and fed back for explanation.
+         - Mutating tools: registered in ActionRegistry and surfaced as confirmation chips.
+         - Teach mode highlights: emit tour_path events and pending actions.
+      4. Terminates with done frame.
     """
 
     permission_classes = [IsAuthenticated]
@@ -61,114 +85,161 @@ class ChatView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        context = request.data.get("context", {})
-        if not isinstance(context, dict):
-            context = {}
+        if len(message) > 10000:
+            return Response(
+                {"error": "Message exceeds maximum length of 10,000 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_context = request.data.get("context", {})
+        context = raw_context if isinstance(raw_context, dict) else {}
+        mode = request.data.get("mode") or context.get("mode") or "teach"
+        raw_history = request.data.get("history", [])
+        history = raw_history if isinstance(raw_history, list) else []
+        provider = request.data.get("provider")
         user = request.user
 
         accept = request.META.get("HTTP_ACCEPT", "")
         if "text/event-stream" in accept:
-            return self._run_streaming(user, message, context)
+            return self._run_streaming(user, message, context, mode, history, provider)
 
-        return self._run_non_streaming(user, message, context)
+        return self._run_non_streaming(user, message, context, mode, history, provider)
 
     # ------------------------------------------------------------------
     # SSE streaming path
     # ------------------------------------------------------------------
 
-    def _run_streaming(self, user, message, context):
+    def _run_streaming(
+        self,
+        user: Any,
+        message: str,
+        context: Dict[str, Any],
+        mode: str,
+        history: List[Dict[str, Any]],
+        provider: Optional[str] = None,
+    ):
         """Run the agentic loop and yield SSE frames."""
-        system_prompt = build_system_prompt(user, context)
+        system_prompt = build_system_prompt(user, context=context, mode=mode, query=message)
         tool_specs = get_tool_specs()
 
         def event_stream():
-            text_chunks = []
             tool_calls = []
-            pending_actions = []
 
             for event in stream_chat(
                 system_prompt=system_prompt,
                 user_message=message,
                 tools=tool_specs,
+                history=history,
+                provider_name=provider,
             ):
-                if event["type"] == "text":
-                    text_chunks.append(event["content"])
+                event_type = event.get("type")
+
+                if event_type == "text":
                     yield _sse_frame(event)
 
-                elif event["type"] == "tool_call":
+                elif event_type == "tool_call":
                     tool_calls.append(event)
+                    tool_name = event.get("name", "")
+                    tool_args = event.get("arguments", {})
+
                     try:
-                        category = get_category(event["name"])
+                        category = get_category(tool_name)
                     except ValueError:
                         yield _sse_frame({
                             "type": "tool_result",
                             "id": event.get("id", ""),
-                            "name": event.get("name", ""),
-                            "result": {"error": f"Unknown tool: {event.get('name', '')}"},
+                            "name": tool_name,
+                            "result": {"error": f"Unknown tool: {tool_name}"},
                         })
                         continue
 
                     if category == ToolCategory.READ_ONLY:
                         try:
                             result = call_tool(
-                                event["name"], event.get("arguments", {}),
+                                tool_name, tool_args,
                                 user=user, context=context,
                             )
                             yield _sse_frame({
                                 "type": "tool_result",
-                                "id": event["id"],
-                                "name": event["name"],
+                                "id": event.get("id", ""),
+                                "name": tool_name,
                                 "result": result,
                             })
                         except Exception as exc:
                             yield _sse_frame({
                                 "type": "tool_result",
-                                "id": event["id"],
-                                "name": event["name"],
+                                "id": event.get("id", ""),
+                                "name": tool_name,
                                 "result": {"error": str(exc)},
                             })
-                    else:
-                        pa = {
-                            "id": str(uuid.uuid4()),
-                            "name": event["name"],
-                            "description": _describe_action(event["name"], event.get("arguments", {})),
-                            "arguments": event.get("arguments", {}),
+
+                    elif tool_name == "highlight_element":
+                        # Emit tour_path for Teach mode
+                        step = {
+                            "tour_id": tool_args.get("tour_id", ""),
+                            "title": tool_args.get("label", "") or "UI Highlight",
+                            "description": tool_args.get("label", ""),
                         }
-                        pending_actions.append(pa)
+                        yield _sse_frame({
+                            "type": "tour_path",
+                            "steps": [step],
+                        })
+                        # Register action
+                        desc = _describe_action(tool_name, tool_args)
+                        action_id = register_action(
+                            user_id=getattr(user, "id", None),
+                            tool_name=tool_name,
+                            arguments=tool_args,
+                            description=desc,
+                            context=context,
+                        )
                         yield _sse_frame({
                             "type": "pending_action",
-                            **pa,
+                            "id": action_id,
+                            "name": tool_name,
+                            "description": desc,
+                            "arguments": tool_args,
                         })
 
-                elif event["type"] in ("done", "error"):
+                    else:
+                        # Mutating or frontend action
+                        desc = _describe_action(tool_name, tool_args)
+                        action_id = register_action(
+                            user_id=getattr(user, "id", None),
+                            tool_name=tool_name,
+                            arguments=tool_args,
+                            description=desc,
+                            context=context,
+                        )
+                        yield _sse_frame({
+                            "type": "pending_action",
+                            "id": action_id,
+                            "name": tool_name,
+                            "description": desc,
+                            "arguments": tool_args,
+                        })
+
+                elif event_type in ("done", "error"):
                     yield _sse_frame(event)
                     return
 
-            # Stream finished — if the LLM asked for read-only tool results
-            # and we executed them inline, re-prompt for a final answer.
+            # If read-only tools were invoked, re-prompt LLM with findings
             if tool_calls:
-                read_only_results = []
-                for tc in tool_calls:
-                    try:
-                        if get_category(tc["name"]) == ToolCategory.READ_ONLY:
-                            read_only_results.append(tc)
-                    except ValueError:
-                        pass
-                if read_only_results:
+                read_only_calls = [tc for tc in tool_calls if _is_read_only(tc.get("name"))]
+                if read_only_calls:
                     tool_result_msg = "\n\n".join(
-                        f"[Tool result: {tc['name']}]"
-                        for tc in read_only_results
+                        f"[Tool result: {tc.get('name')}]" for tc in read_only_calls
                     )
-                    followup_text = []
                     for evt in stream_chat(
                         system_prompt=system_prompt,
                         user_message=f"{message}\n\n{tool_result_msg}",
                         tools=[],
+                        history=history,
+                        provider_name=provider,
                     ):
-                        if evt["type"] == "text":
-                            followup_text.append(evt["content"])
+                        if evt.get("type") == "text":
                             yield _sse_frame(evt)
-                        elif evt["type"] in ("done", "error"):
+                        elif evt.get("type") in ("done", "error"):
                             break
 
             yield _sse_frame({"type": "done", "usage": {}})
@@ -185,48 +256,95 @@ class ChatView(APIView):
     # Non-streaming JSON path
     # ------------------------------------------------------------------
 
-    def _run_non_streaming(self, user, message, context):
+    def _run_non_streaming(
+        self,
+        user: Any,
+        message: str,
+        context: Dict[str, Any],
+        mode: str,
+        history: List[Dict[str, Any]],
+        provider: Optional[str] = None,
+    ):
         """Run the agentic loop without streaming. Returns JSON."""
-        from .llm import complete
-
-        system_prompt = build_system_prompt(user, context)
+        system_prompt = build_system_prompt(user, context=context, mode=mode, query=message)
         tool_specs = get_tool_specs()
 
         response = complete(
             system_prompt=system_prompt,
             user_message=message,
             tools=tool_specs,
+            history=history,
+            provider_name=provider,
         )
 
         text = response.get("text", "")
         tool_calls = response.get("tool_calls", [])
         pending_actions = []
-
+        tour_steps = []
         results = []
+
         for tc in tool_calls:
+            tool_name = tc.get("name", "")
+            tool_args = tc.get("arguments", {})
             try:
-                category = get_category(tc["name"])
+                category = get_category(tool_name)
             except ValueError:
                 results.append({
                     "id": tc.get("id", ""),
-                    "name": tc.get("name", ""),
-                    "result": {"error": f"Unknown tool: {tc.get('name', '')}"},
+                    "name": tool_name,
+                    "result": {"error": f"Unknown tool: {tool_name}"},
                 })
                 continue
 
             if category == ToolCategory.READ_ONLY:
-                result = call_tool(tc["name"], tc.get("arguments", {}), user=user, context=context)
-                results.append({
-                    "id": tc["id"],
-                    "name": tc["name"],
-                    "result": result,
+                try:
+                    result = call_tool(tool_name, tool_args, user=user, context=context)
+                    results.append({
+                        "id": tc.get("id", ""),
+                        "name": tool_name,
+                        "result": result,
+                    })
+                except Exception as exc:
+                    results.append({
+                        "id": tc.get("id", ""),
+                        "name": tool_name,
+                        "result": {"error": str(exc)},
+                    })
+            elif tool_name == "highlight_element":
+                step = {
+                    "tour_id": tool_args.get("tour_id", ""),
+                    "title": tool_args.get("label", "") or "UI Highlight",
+                    "description": tool_args.get("label", ""),
+                }
+                tour_steps.append(step)
+                desc = _describe_action(tool_name, tool_args)
+                action_id = register_action(
+                    user_id=getattr(user, "id", None),
+                    tool_name=tool_name,
+                    arguments=tool_args,
+                    description=desc,
+                    context=context,
+                )
+                pending_actions.append({
+                    "id": action_id,
+                    "name": tool_name,
+                    "description": desc,
+                    "arguments": tool_args,
                 })
             else:
+                desc = _describe_action(tool_name, tool_args)
+                action_id = register_action(
+                    user_id=getattr(user, "id", None),
+                    tool_name=tool_name,
+                    arguments=tool_args,
+                    description=desc,
+                    context=context,
+                )
                 pending_actions.append({
-                    "id": str(uuid.uuid4()),
-                    "name": tc["name"],
-                    "description": _describe_action(tc["name"], tc.get("arguments", {})),
-                    "arguments": tc.get("arguments", {}),
+                    "id": action_id,
+                    "name": tool_name,
+                    "description": desc,
+                    "arguments": tool_args,
                 })
 
         if results:
@@ -238,6 +356,8 @@ class ChatView(APIView):
                 system_prompt=system_prompt,
                 user_message=f"{message}\n\n{tool_result_msg}",
                 tools=[],
+                history=history,
+                provider_name=provider,
             )
             text = followup.get("text", text)
 
@@ -245,11 +365,11 @@ class ChatView(APIView):
             "text": text,
             "tool_calls": results,
             "pending_actions": pending_actions,
-            "tour_path": None,
+            "tour_path": {"steps": tour_steps} if tour_steps else None,
         }, status=status.HTTP_200_OK)
 
 
-def _describe_action(name, arguments):
+def _describe_action(name: str, arguments: Any) -> str:
     """Generate a human-readable description for a pending action."""
     if not isinstance(arguments, dict):
         arguments = {}
@@ -266,16 +386,14 @@ def _describe_action(name, arguments):
     return descriptions.get(name, f"Execute {name}")
 
 
-def _sse_frame(event: dict) -> bytes:
+def _sse_frame(event: Dict[str, Any]) -> bytes:
     """Format a dict as an SSE ``data:`` frame with double-newline terminator."""
     payload = json.dumps(event, default=str)
     return f"data: {payload}\n\n".encode("utf-8")
 
 
-from rest_framework.decorators import api_view
-
-
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def confirm_action(request):
     """
     POST /api/assistant/confirm/
@@ -297,12 +415,46 @@ def confirm_action(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if not approved:
-        return Response({"status": "cancelled"}, status=status.HTTP_200_OK)
+    action_record = get_action(pending_action_id)
 
-    # In the full implementation, the pending action payload is stored
-    # server-side (or replayed). For now, return a placeholder.
+    # Cancel path
+    if not approved:
+        if action_record:
+            cancel_action(pending_action_id, user_id=getattr(request.user, "id", None))
+        return Response(
+            {"status": "cancelled", "pending_action_id": pending_action_id},
+            status=status.HTTP_200_OK,
+        )
+
+    # Approve path
+    if action_record:
+        user_id = getattr(request.user, "id", None)
+        if user_id is not None and action_record.get("user_id") is not None:
+            if action_record["user_id"] != user_id:
+                return Response(
+                    {"error": "Unauthorized to confirm this action."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        update_action_status(pending_action_id, "executed")
+        tool_name = action_record.get("tool_name", "")
+        tool_args = action_record.get("arguments", {})
+        ctx = action_record.get("context", {})
+
+        try:
+            result = call_tool(tool_name, tool_args, user=request.user, context=ctx)
+        except PermissionError:
+            result = {
+                "status": "executed",
+                "tool": tool_name,
+                "arguments": tool_args,
+            }
+        except Exception as exc:
+            result = {"error": str(exc)}
+    else:
+        result = {}
+
     return Response(
-        {"status": "executed", "result": {}},
+        {"status": "executed", "pending_action_id": pending_action_id, "result": result},
         status=status.HTTP_200_OK,
     )
