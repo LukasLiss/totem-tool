@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import DOMPurify from "dompurify";
 import { cn } from "@/lib/utils";
 
 export interface Message {
@@ -100,7 +101,7 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
               <div
                 className="prose prose-sm dark:prose-invert max-w-none"
                 dangerouslySetInnerHTML={{
-                  __html: `<p class="my-1">${renderMarkdown(msg.content)}</p>`,
+                  __html: DOMPurify.sanitize(`<p class="my-1">${renderMarkdown(msg.content)}</p>`),
                 }}
               />
             ) : (

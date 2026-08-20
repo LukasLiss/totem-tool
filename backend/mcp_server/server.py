@@ -384,9 +384,10 @@ def call_tool(name, arguments, user=None, context=None):
 # ---------------------------------------------------------------------------
 
 def _get_statistics(arguments, user=None, context=None):
-    """Get event log statistics via the existing API layer."""
+    """Get event log statistics via totem_lib (computation stays in-lib)."""
     from api.models import EventLog
     from api.views import _with_ocel_db
+    from totem_lib.ocel.statistics import get_event_log_statistics
 
     file_id = arguments.get("file_id") or (context or {}).get("selected_file_id")
     if not file_id:
@@ -398,26 +399,7 @@ def _get_statistics(arguments, user=None, context=None):
         return {"error": f"Event log {file_id} not found."}
 
     with _with_ocel_db(user_file) as db:
-        num_events = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        num_unique_activities = db.conn.execute(
-            "SELECT COUNT(DISTINCT activity) FROM events"
-        ).fetchone()[0]
-        num_objects = db.conn.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
-        num_object_types = db.conn.execute(
-            "SELECT COUNT(DISTINCT obj_type) FROM objects"
-        ).fetchone()[0]
-        ts_row = db.conn.execute(
-            "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
-        ).fetchone()
-
-    return {
-        "num_events": num_events,
-        "num_unique_activities": num_unique_activities,
-        "num_objects": num_objects,
-        "num_object_types": num_object_types,
-        "earliest_timestamp": ts_row[0] if ts_row else None,
-        "newest_timestamp": ts_row[1] if ts_row else None,
-    }
+        return get_event_log_statistics(db)
 
 
 def _get_object_types(arguments, user=None, context=None):
@@ -697,15 +679,48 @@ def _create_dashboard(arguments, user=None, context=None):
 
 
 def _add_component(arguments, user=None, context=None):
-    return {"status": "stub", "message": "Full implementation in Task 3"}
+    from totem_lib.dashboard import add_component
+
+    dashboard_id = arguments.get("dashboard_id") or (context or {}).get("current_dashboard_id")
+    if not dashboard_id:
+        return {"error": "No dashboard_id provided and no active dashboard in context."}
+
+    component_name = arguments.get("component_name")
+    if not component_name:
+        return {"error": "component_name is required."}
+
+    return add_component(
+        dashboard_id=dashboard_id,
+        component_name=component_name,
+        x=arguments.get("x", 0),
+        y=arguments.get("y", 0),
+        w=arguments.get("w", 4),
+        h=arguments.get("h", 3),
+        config=arguments.get("config"),
+    )
 
 
 def _remove_component(arguments, user=None, context=None):
-    return {"status": "stub", "message": "Full implementation in Task 3"}
+    from totem_lib.dashboard import remove_component
+
+    dashboard_id = arguments.get("dashboard_id") or (context or {}).get("current_dashboard_id")
+    component_id = arguments.get("component_id")
+    if not dashboard_id or not component_id:
+        return {"error": "dashboard_id and component_id are required."}
+
+    return remove_component(dashboard_id=dashboard_id, component_id=component_id)
 
 
 def _update_component(arguments, user=None, context=None):
-    return {"status": "stub", "message": "Full implementation in Task 3"}
+    from totem_lib.dashboard import update_component
+
+    dashboard_id = arguments.get("dashboard_id") or (context or {}).get("current_dashboard_id")
+    component_id = arguments.get("component_id")
+    config = arguments.get("config", {})
+    if not dashboard_id or not component_id:
+        return {"error": "dashboard_id and component_id are required."}
+
+    return update_component(dashboard_id=dashboard_id, component_id=component_id, config=config)
 
 
 def _rename_dashboard(arguments, user=None, context=None):
@@ -758,6 +773,14 @@ def _dispatch_frontend(command: str, arguments: dict, user) -> dict:
         return {"status": "pending_ws", "action": command, "arguments": arguments}
 
     import asyncio
+    import threading
+
+    def _send_in_new_loop(coro):
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     try:
         loop = asyncio.get_running_loop()
@@ -765,7 +788,13 @@ def _dispatch_frontend(command: str, arguments: dict, user) -> dict:
         loop = None
 
     if loop and loop.is_running():
-        asyncio.ensure_future(consumer.push_command(command, arguments))
+        # Called from a sync Django view — schedule on a dedicated thread
+        # to avoid "cannot call running loop" errors.
+        threading.Thread(
+            target=_send_in_new_loop,
+            args=(consumer.push_command(command, arguments),),
+            daemon=True,
+        ).start()
         return {"status": "dispatched", "action": command, "arguments": arguments}
 
     return {"status": "pending_ws", "action": command, "arguments": arguments}

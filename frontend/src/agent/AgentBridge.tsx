@@ -9,7 +9,7 @@ import React, {
 import type { ConnectionState, IncomingMessage } from "./types";
 import { dispatchCommand, registerBuiltinHandlers } from "./handlers";
 
-const WS_BASE = "ws://localhost:8000/ws/agent";
+const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/agent`;
 
 interface AgentBridgeContextValue {
   connectionState: ConnectionState;

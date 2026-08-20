@@ -1,13 +1,14 @@
 import json
 import uuid
 
+from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from rest_framework.parsers import JSONParser
 
-from .llm import stream_chat
+from .llm import stream_chat, complete
 from .prompts import build_system_prompt
 from mcp_server.server import call_tool, get_tool_specs
 from mcp_server.policy import ToolCategory, get_category
@@ -18,7 +19,8 @@ class ChatView(APIView):
     POST /api/assistant/chat/
 
     Accepts a user message + UI context, runs the agentic loop, and streams
-    the LLM response back as Server-Sent Events.
+    the LLM response back as Server-Sent Events when the client requests
+    ``Accept: text/event-stream``.
 
     Agentic loop (per turn):
       1. Build system prompt with current context + knowledge RAG.
@@ -27,7 +29,7 @@ class ChatView(APIView):
          - Execute read-only tools immediately, append results, re-prompt.
          - Surface mutating/frontend tools as pending_actions to the client.
       4. Stream text tokens to the client as they arrive.
-      5. End with a `done` frame.
+      5. End with a ``done`` frame.
     """
 
     permission_classes = [IsAuthenticated]
@@ -44,25 +46,116 @@ class ChatView(APIView):
         context = request.data.get("context", {})
         user = request.user
 
-        # For non-streaming clients (Accept: application/json), run the
-        # full agentic loop and return a single JSON response.
         accept = request.META.get("HTTP_ACCEPT", "")
-        if "text/event-stream" not in accept:
-            return self._run_non_streaming(user, message, context)
+        if "text/event-stream" in accept:
+            return self._run_streaming(user, message, context)
 
-        # Streaming response — SSE via GeneratorResponse would go here.
-        # For the architecture spike, we return the non-streaming path.
-        # Full streaming implementation comes in Task 2.
         return self._run_non_streaming(user, message, context)
+
+    # ------------------------------------------------------------------
+    # SSE streaming path
+    # ------------------------------------------------------------------
+
+    def _run_streaming(self, user, message, context):
+        """Run the agentic loop and yield SSE frames."""
+        system_prompt = build_system_prompt(user, context)
+        tool_specs = get_tool_specs()
+
+        def event_stream():
+            text_chunks = []
+            tool_calls = []
+            pending_actions = []
+
+            for event in stream_chat(
+                system_prompt=system_prompt,
+                user_message=message,
+                tools=tool_specs,
+            ):
+                if event["type"] == "text":
+                    text_chunks.append(event["content"])
+                    yield _sse_frame(event)
+
+                elif event["type"] == "tool_call":
+                    tool_calls.append(event)
+                    category = get_category(event["name"])
+                    if category == ToolCategory.READ_ONLY:
+                        try:
+                            result = call_tool(
+                                event["name"], event["arguments"],
+                                user=user, context=context,
+                            )
+                            yield _sse_frame({
+                                "type": "tool_result",
+                                "id": event["id"],
+                                "name": event["name"],
+                                "result": result,
+                            })
+                        except Exception as exc:
+                            yield _sse_frame({
+                                "type": "tool_result",
+                                "id": event["id"],
+                                "name": event["name"],
+                                "result": {"error": str(exc)},
+                            })
+                    else:
+                        pa = {
+                            "id": str(uuid.uuid4()),
+                            "name": event["name"],
+                            "description": _describe_action(event["name"], event["arguments"]),
+                            "arguments": event["arguments"],
+                        }
+                        pending_actions.append(pa)
+                        yield _sse_frame({
+                            "type": "pending_action",
+                            **pa,
+                        })
+
+                elif event["type"] in ("done", "error"):
+                    yield _sse_frame(event)
+                    return
+
+            # Stream finished — if the LLM asked for read-only tool results
+            # and we executed them inline, re-prompt for a final answer.
+            if tool_calls:
+                read_only_results = [
+                    tc for tc in tool_calls
+                    if get_category(tc["name"]) == ToolCategory.READ_ONLY
+                ]
+                if read_only_results:
+                    tool_result_msg = "\n\n".join(
+                        f"[Tool result: {tc['name']}]"
+                        for tc in read_only_results
+                    )
+                    followup_text = []
+                    for evt in stream_chat(
+                        system_prompt=system_prompt,
+                        user_message=f"{message}\n\n{tool_result_msg}",
+                        tools=[],
+                    ):
+                        if evt["type"] == "text":
+                            followup_text.append(evt["content"])
+                            yield _sse_frame(evt)
+                        elif evt["type"] in ("done", "error"):
+                            break
+
+            yield _sse_frame({"type": "done", "usage": {}})
+
+        response = StreamingHttpResponse(
+            event_stream(),
+            content_type="text/event-stream",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+    # ------------------------------------------------------------------
+    # Non-streaming JSON path
+    # ------------------------------------------------------------------
 
     def _run_non_streaming(self, user, message, context):
         """Run the agentic loop without streaming. Returns JSON."""
         system_prompt = build_system_prompt(user, context)
         tool_specs = get_tool_specs()
-
-        # Single-turn: send to LLM, collect tool calls, execute read-only
-        # tools, and return the final text + pending actions.
-        from .llm import complete
 
         response = complete(
             system_prompt=system_prompt,
@@ -74,7 +167,6 @@ class ChatView(APIView):
         tool_calls = response.get("tool_calls", [])
         pending_actions = []
 
-        # Execute read-only tool calls inline
         results = []
         for tc in tool_calls:
             category = get_category(tc["name"])
@@ -93,8 +185,6 @@ class ChatView(APIView):
                     "arguments": tc["arguments"],
                 })
 
-        # If we executed read-only tools, re-prompt with results for a
-        # more informed answer. (Single iteration for non-streaming.)
         if results:
             tool_result_msg = "\n\n".join(
                 f"[Tool result: {r['name']}]\n{json.dumps(r['result'], default=str)}"
@@ -128,6 +218,12 @@ def _describe_action(name, arguments):
         "highlight_element": f"Highlight element: {arguments.get('tour_id', '')}",
     }
     return descriptions.get(name, f"Execute {name}")
+
+
+def _sse_frame(event: dict) -> bytes:
+    """Format a dict as an SSE ``data:`` frame with double-newline terminator."""
+    payload = json.dumps(event, default=str)
+    return f"data: {payload}\n\n".encode("utf-8")
 
 
 from rest_framework.decorators import api_view

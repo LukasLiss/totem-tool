@@ -22,6 +22,12 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // forward WebSocket connections for the agent bridge
+      "/ws/agent": {
+        target: "ws://localhost:8000",
+        ws: true,
+        secure: false,
+      },
     },
   },
 });

@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const ASSISTANT_URL = "http://localhost:8000/api/assistant";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const ASSISTANT_URL = `${API_BASE}/api/assistant`;
 
 export interface AssistantContext {
   selected_file_id?: number;
