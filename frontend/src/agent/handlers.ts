@@ -63,4 +63,12 @@ export function registerBuiltinHandlers(): void {
       );
     }
   });
+
+  registerHandler("refresh_dashboard", (args) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("totem:refresh-dashboard", { detail: args })
+      );
+    }
+  });
 }

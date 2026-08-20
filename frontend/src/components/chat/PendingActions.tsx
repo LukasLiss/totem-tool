@@ -15,13 +15,30 @@ interface PendingActionsProps {
   onResolved: (id: string) => void;
 }
 
+const DASHBOARD_MUTATING_TOOLS = new Set([
+  "create_dashboard",
+  "add_component",
+  "remove_component",
+  "update_component",
+  "rename_dashboard",
+  "delete_dashboard",
+]);
+
 export function PendingActions({ actions, onResolved }: PendingActionsProps) {
   const [deciding, setDeciding] = useState<Record<string, boolean>>({});
 
-  const handleDecision = async (id: string, approved: boolean) => {
+  const handleDecision = async (id: string, approved: boolean, name: string, actionArgs: Record<string, unknown>) => {
     setDeciding((prev) => ({ ...prev, [id]: true }));
     try {
       await confirmAction(id, approved);
+      // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh
+      if (approved && DASHBOARD_MUTATING_TOOLS.has(name)) {
+        window.dispatchEvent(
+          new CustomEvent("totem:refresh-dashboard", {
+            detail: { dashboard_id: actionArgs.dashboard_id },
+          })
+        );
+      }
     } catch {
       // Best-effort — server may not implement storage yet
     }
@@ -44,7 +61,7 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
               variant="ghost"
               className="size-5 text-green-600 hover:text-green-700 hover:bg-green-100"
               disabled={!!deciding[action.id]}
-              onClick={() => handleDecision(action.id, true)}
+              onClick={() => handleDecision(action.id, true, action.name, action.arguments)}
             >
               <Check className="size-3" />
             </Button>
@@ -53,7 +70,7 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
               variant="ghost"
               className="size-5 text-red-600 hover:text-red-700 hover:bg-red-100"
               disabled={!!deciding[action.id]}
-              onClick={() => handleDecision(action.id, false)}
+              onClick={() => handleDecision(action.id, false, action.name, action.arguments)}
             >
               <X className="size-3" />
             </Button>

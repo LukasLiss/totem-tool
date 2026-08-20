@@ -63,6 +63,35 @@ const GridContent: React.FC = () => {
     loadSelectedDashboard();
   }, [selectedDashboard, resetGrid]);
 
+  // Auto-refresh when the assistant creates or modifies a dashboard
+  useEffect(() => {
+    const handleRefresh = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const dashboardId = detail?.dashboard_id;
+      // Only refresh if the event targets the currently active dashboard
+      if (dashboardId && dashboardId !== selectedDashboard) return;
+      if (!selectedDashboard) return;
+
+      console.log("Refreshing dashboard layout after assistant action");
+      const reload = async () => {
+        resetGrid();
+        try {
+          const response = await getLayout(selectedDashboard);
+          if (Array.isArray(response) && response.length > 0) {
+            setTimeout(() => loadLayout(response), 50);
+          }
+        } catch (error) {
+          console.error("Failed to reload layout:", error);
+        }
+      };
+      reload();
+    };
+
+    window.addEventListener("totem:refresh-dashboard", handleRefresh);
+    return () =>
+      window.removeEventListener("totem:refresh-dashboard", handleRefresh);
+  }, [selectedDashboard, resetGrid]);
+
   const handleSave = async () => {
     if (!selectedDashboard) {
       toast.error("No dashboard selected!");
