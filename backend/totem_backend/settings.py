@@ -40,6 +40,7 @@ CORS_ALLOWED_ORIGINS = [
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -47,11 +48,15 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # 'django_extensions',  # seems not to be needed anymore
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'api',
     'authentification',
+    'assistant',
+    'agent',
+    'mcp_server',
 ]
 
 MIDDLEWARE = [
@@ -84,6 +89,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'totem_backend.wsgi.application'
+ASGI_APPLICATION = 'totem_backend.asgi.application'
 
 
 # Database
@@ -178,3 +184,12 @@ if LOCAL_MODE:
 # Credentials used for the auto-seeded Guest account in local mode
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')

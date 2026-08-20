@@ -9,6 +9,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 *.md
 !docs/MODEL_ASSETS.md
 !.claude/**/*.md
+!backend/assistant/knowledge/*.md
 *.txt
 
 # Reinclude totem_lib tests
@@ -200,6 +201,7 @@ $RECYCLE.BIN/
 # Temporary folders
 tmp/
 temp/
+.mimosa/
 
 # Log files
 *.log
