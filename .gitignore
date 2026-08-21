@@ -8,6 +8,8 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
 !.claude/**/*.md
+!totem_lib/evaluation/results/*.md
+totem_lib/evaluation/results/*.json
 *.txt
 
 # Reinclude totem_lib tests
