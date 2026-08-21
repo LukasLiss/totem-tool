@@ -6,6 +6,15 @@ from .algorithms import (
     MissingInput,
     get_algorithm,
 )
+from .export import (
+    CSV_FIELDS,
+    DEFAULT_OUT_DIR,
+    FORMATS,
+    export,
+    write_csv,
+    write_json,
+    write_markdown,
+)
 from .datasets import (
     LOGS,
     SIZE_METRICS,
@@ -34,9 +43,13 @@ __all__ = [
     "available_logs",
     "benchmark",
     "BenchmarkResult",
+    "CSV_FIELDS",
+    "DEFAULT_OUT_DIR",
     "DEFAULT_REPEATS",
     "downloadable_logs",
     "EvaluationLog",
+    "export",
+    "FORMATS",
     "get_algorithm",
     "get_log",
     "import_args",
@@ -48,4 +61,7 @@ __all__ = [
     "MissingInput",
     "SIZE_METRICS",
     "STATISTIC_FIELDS",
+    "write_csv",
+    "write_json",
+    "write_markdown",
 ]

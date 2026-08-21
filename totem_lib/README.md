@@ -100,6 +100,18 @@ Results print as each measurement finishes, so an interrupted run still shows ev
 measured so far, and `--logs` / `--algorithms` fill in the rest later. A failing algorithm
 is reported and the run continues.
 
+Every run saves its results to `evaluation/results/`:
+
+| File | For |
+|---|---|
+| `benchmark_results.md` | reading - two tables, one for the logs and one for the measurements |
+| `benchmark_results.csv` | plots and other tools |
+| `benchmark_results.json` | the same data plus a note of when the run happened |
+
+Use `--out-dir` to save somewhere else and `--formats` to write only some of them, for
+example `--formats md`. Each run overwrites the previous files. The generated JSON is
+gitignored; the Markdown and CSV are not, so an example run can be committed.
+
 The algorithms differ enormously in cost — from `CCDFG.from_ocel` at ~0.01 s to
 `discover_occn` at ~20 s on the smallest log — so try anything new on `ocel2-p2p` with
 `--repeats 1` first. `evaluation/algorithms.py` lists what runs and how each one is
