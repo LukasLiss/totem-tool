@@ -55,6 +55,7 @@ from evaluation.datasets import (
     get_log,
 )
 from evaluation.export import DEFAULT_OUT_DIR, FORMATS, export
+from evaluation.plots import FIGURES_DIR, plot_all
 from evaluation.harness import DEFAULT_REPEATS, BenchmarkResult, benchmark
 
 
@@ -241,6 +242,10 @@ def main() -> None:
                         help=f"where to save results (default: {DEFAULT_OUT_DIR})")
     parser.add_argument("--formats", type=_csv, default=list(FORMATS),
                         help=f"result formats to write (default: {','.join(FORMATS)})")
+    parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR,
+                        help=f"where to save the plots (default: {FIGURES_DIR})")
+    parser.add_argument("--no-figures", action="store_true",
+                        help="skip plotting (a filtered run would overwrite the figures)")
     parser.add_argument("--list", action="store_true",
                         help="show the logs and algorithms, then exit")
     args = parser.parse_args()
@@ -275,6 +280,8 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(str(exc))
     print("\nSaved:")
+    if not args.no_figures:
+        written += plot_all(rows, args.figures_dir)
     for path in written:
         print(f"  {path}")
 
