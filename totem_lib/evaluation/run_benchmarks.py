@@ -54,6 +54,7 @@ from evaluation.datasets import (
     available_logs,
     get_log,
 )
+from evaluation.export import DEFAULT_OUT_DIR, FORMATS, export
 from evaluation.harness import DEFAULT_REPEATS, BenchmarkResult, benchmark
 
 
@@ -236,6 +237,10 @@ def main() -> None:
                         help="comma-separated algorithm names (default: all)")
     parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS,
                         help=f"runs per algorithm (default: {DEFAULT_REPEATS})")
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
+                        help=f"where to save results (default: {DEFAULT_OUT_DIR})")
+    parser.add_argument("--formats", type=_csv, default=list(FORMATS),
+                        help=f"result formats to write (default: {','.join(FORMATS)})")
     parser.add_argument("--list", action="store_true",
                         help="show the logs and algorithms, then exit")
     args = parser.parse_args()
@@ -264,6 +269,14 @@ def main() -> None:
 
     rows = run(logs, algorithms, args.repeats)
     print_summary(rows)
+
+    try:
+        written = export(rows, args.out_dir, args.formats, repeats=args.repeats)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    print("\nSaved:")
+    for path in written:
+        print(f"  {path}")
 
 
 if __name__ == "__main__":
