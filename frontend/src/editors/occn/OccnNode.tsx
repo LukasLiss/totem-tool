@@ -101,6 +101,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
 }: NodeProps<OccnNode>) {
   const { typeColors, incidentTypes } = useContext(OccnRenderContext);
   const conformance = conformanceAppearance(data.conformanceStatus);
+  const unvisited = data.conformanceUnvisited === true && conformance === null;
 
   // Long single-token activity names (e.g. "DelegatePurchaseRequisitionApproval")
   // can't wrap and would spill past the fixed-width box. Detect the overflow so
@@ -114,7 +115,9 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
   }, [data.label]);
 
   if (data.kind !== "activity") {
-    const color = typeColors[data.objectType ?? ""] ?? "#64748B";
+    const color = unvisited
+      ? "#9CA3AF"
+      : typeColors[data.objectType ?? ""] ?? "#64748B";
     const squareSize = 48;
     return (
       <div
@@ -133,18 +136,22 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
         />
         <div
           data-conformance-status={data.conformanceStatus}
+          data-conformance-unvisited={unvisited || undefined}
           style={{
             width: squareSize,
             height: squareSize,
             borderRadius: 12,
-            background: color,
+            background: unvisited ? "#D1D5DB" : color,
             border:
               conformance?.border ??
               (selected
                 ? "1.5px solid rgba(37, 99, 235, 0.8)"
-                : "1.5px solid rgba(15, 23, 42, 0.55)"),
+                : unvisited
+                  ? "1.5px solid #9CA3AF"
+                  : "1.5px solid rgba(15, 23, 42, 0.55)"),
             boxShadow:
-              conformance?.shadow ?? (selected ? selectedShadow : restShadow),
+              conformance?.shadow ??
+              (unvisited ? "none" : selected ? selectedShadow : restShadow),
             display: "grid",
             placeItems: "center",
             position: "relative",
@@ -183,21 +190,27 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
   return (
     <div
       data-conformance-status={data.conformanceStatus}
+      data-conformance-unvisited={unvisited || undefined}
       style={{
         width: ACTIVITY_WIDTH,
         maxWidth: ACTIVITY_WIDTH,
         minHeight: ACTIVITY_HEIGHT,
         borderRadius: 12,
-        background: stripeBackground(types, typeColors),
+        background: unvisited
+          ? "#E5E7EB"
+          : stripeBackground(types, typeColors),
         border:
           conformance?.border ??
           (selected
             ? "1.5px solid rgba(37, 99, 235, 0.8)"
             : types.length === 0
               ? "1.5px solid #94A3B8"
+              : unvisited
+                ? "1.5px solid #9CA3AF"
               : "1.5px solid rgba(15, 23, 42, 0.45)"),
         boxShadow:
-          conformance?.shadow ?? (selected ? selectedShadow : restShadow),
+          conformance?.shadow ??
+          (unvisited ? "none" : selected ? selectedShadow : restShadow),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -214,7 +227,7 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
           className="font-semibold"
           title={data.label}
           style={{
-            color: "#0F172A",
+            color: unvisited ? "#6B7280" : "#0F172A",
             fontSize: 14,
             lineHeight: 1.2,
             width: "100%",
@@ -245,7 +258,13 @@ const OccnNodeComponent = memo(function OccnNodeComponent({
             Not in model
           </div>
         ) : data.count != null ? (
-          <div style={{ color: "#0F172A", fontSize: 10, opacity: 0.75 }}>
+          <div
+            style={{
+              color: unvisited ? "#6B7280" : "#0F172A",
+              fontSize: 10,
+              opacity: 0.75,
+            }}
+          >
             ×{data.count}
           </div>
         ) : null}

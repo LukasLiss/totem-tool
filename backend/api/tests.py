@@ -1391,6 +1391,8 @@ class OCCNConformanceApiTests(TestCase):
                     stopping_phase="visible_event",
                     stopping_reason="no_enabled_event_binding",
                     last_replayed_activity="Create Order",
+                    replayed_activities=("START_Order", "Create Order"),
+                    stopping_object_types=("Item", "Order"),
                 ),
                 OCCNReplayUnitResult(
                     unit_id="connected_components:000003",
@@ -1469,6 +1471,14 @@ class OCCNConformanceApiTests(TestCase):
         self.assertEqual(
             response.data["unit_results"][2]["last_replayed_activity"],
             "Ship Order",
+        )
+        self.assertEqual(
+            response.data["unit_results"][1]["replayed_activities"],
+            ["START_Order", "Create Order"],
+        )
+        self.assertEqual(
+            response.data["unit_results"][1]["stopping_object_types"],
+            ["Item", "Order"],
         )
 
     def test_empty_replay_result_preserves_complete_aggregate_contract(self):

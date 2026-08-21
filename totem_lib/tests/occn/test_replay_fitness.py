@@ -127,6 +127,11 @@ def test_replays_a_complete_sequence_to_the_empty_state():
     assert result.unit_results[0].status is OCCNReplayStatus.FITTING
     assert result.unit_results[0].replayable is True
     assert result.unit_results[0].object_types == ("order",)
+    assert result.unit_results[0].replayed_activities == (
+        "START_order",
+        "a",
+        "END_order",
+    )
 
 
 def test_replays_one_event_that_synchronizes_multiple_object_types():
@@ -208,6 +213,8 @@ def test_reports_the_first_visible_event_that_cannot_be_replayed():
     assert unit_result.stopping_phase == "visible_event"
     assert unit_result.stopping_reason == "no_enabled_event_binding"
     assert unit_result.last_replayed_activity == "START_order"
+    assert unit_result.replayed_activities == ("START_order",)
+    assert unit_result.stopping_object_types == ("order",)
 
 
 def test_reports_an_object_type_missing_from_the_model_as_non_fitting():
@@ -222,6 +229,8 @@ def test_reports_an_object_type_missing_from_the_model_as_non_fitting():
     assert unit_result.object_types == ("item",)
     assert unit_result.failure_event_index == 0
     assert unit_result.failure_event_id == "missing-type-e1"
+    assert unit_result.replayed_activities == ()
+    assert unit_result.stopping_object_types == ("item",)
 
 
 def test_reports_completion_failure_after_visible_events_replay():
@@ -273,6 +282,8 @@ def test_state_limit_returns_inconclusive_without_false_deviation():
     assert unit_result.stopping_phase == "object_start"
     assert unit_result.stopping_reason == "max_states"
     assert unit_result.last_replayed_activity is None
+    assert unit_result.replayed_activities == ()
+    assert unit_result.stopping_object_types == ("order",)
     assert result.fitness is None
     assert result.coverage == pytest.approx(0.0)
 

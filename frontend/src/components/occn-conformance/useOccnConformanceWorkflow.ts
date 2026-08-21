@@ -34,6 +34,7 @@ export interface OccnConformanceWorkflowState {
   result: OCCNConformanceResponse | null;
   error: string | null;
   run: () => Promise<OCCNConformanceResponse | null>;
+  runLeadingObjectType: (objectType: string) => void;
 }
 
 export function useOccnConformanceWorkflow(
@@ -42,7 +43,7 @@ export function useOccnConformanceWorkflow(
   initialAssetId?: number | null
 ): OccnConformanceWorkflowState {
   const assetSelection = useOccnAssetSelection(projectId, initialAssetId);
-  const [replayUnitStrategy, setReplayUnitStrategy] =
+  const [replayUnitStrategy, setReplayUnitStrategyState] =
     useState<OCCNReplayUnitStrategy>(CONNECTED_COMPONENTS_REPLAY_STRATEGY);
   const [leadingObjectType, setLeadingObjectType] = useState<string | null>(
     null
@@ -58,13 +59,31 @@ export function useOccnConformanceWorkflow(
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<OCCNConformanceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingLeadingObjectType, setPendingLeadingObjectType] = useState<
+    string | null
+  >(null);
   const requestGeneration = useRef(0);
   const objectTypesRequestGeneration = useRef(0);
   const runningRequest = useRef(false);
 
+  const setReplayUnitStrategy = useCallback(
+    (strategy: OCCNReplayUnitStrategy) => {
+      setPendingLeadingObjectType(null);
+      setReplayUnitStrategyState(strategy);
+      if (strategy !== LEADING_OBJECT_REPLAY_STRATEGY) {
+        setLeadingObjectType(null);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    setPendingLeadingObjectType(null);
+    setLeadingObjectType(null);
+  }, [eventLogId]);
+
   useEffect(() => {
     const generation = ++objectTypesRequestGeneration.current;
-    setLeadingObjectType(null);
     setAvailableObjectTypes([]);
     setObjectTypesError(null);
 
@@ -203,6 +222,33 @@ export function useOccnConformanceWorkflow(
     replayUnitStrategy,
   ]);
 
+  const runLeadingObjectType = useCallback((objectType: string) => {
+    setReplayUnitStrategyState(LEADING_OBJECT_REPLAY_STRATEGY);
+    setLeadingObjectType(objectType);
+    setPendingLeadingObjectType(objectType);
+  }, []);
+
+  useEffect(() => {
+    if (
+      pendingLeadingObjectType === null ||
+      replayUnitStrategy !== LEADING_OBJECT_REPLAY_STRATEGY ||
+      leadingObjectType !== pendingLeadingObjectType ||
+      !canRun ||
+      running
+    ) {
+      return;
+    }
+    setPendingLeadingObjectType(null);
+    void run();
+  }, [
+    canRun,
+    leadingObjectType,
+    pendingLeadingObjectType,
+    replayUnitStrategy,
+    run,
+    running,
+  ]);
+
   return {
     assetSelection,
     replayUnitStrategy,
@@ -220,5 +266,6 @@ export function useOccnConformanceWorkflow(
     result,
     error,
     run,
+    runLeadingObjectType,
   };
 }

@@ -40,6 +40,8 @@ class OCCNReplayUnitResult:
     stopping_phase: Optional[str] = None
     stopping_reason: Optional[str] = None
     last_replayed_activity: Optional[str] = None
+    replayed_activities: Tuple[str, ...] = ()
+    stopping_object_types: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.unit_id, str) or not self.unit_id:
@@ -64,6 +66,21 @@ class OCCNReplayUnitResult:
         if len(object_types) != len(set(object_types)):
             raise ValueError("object_types must not contain duplicates")
         object.__setattr__(self, "object_types", tuple(sorted(object_types)))
+        for field_name in ("replayed_activities", "stopping_object_types"):
+            values = getattr(self, field_name)
+            if isinstance(values, (str, bytes)):
+                raise ValueError(f"{field_name} must be an iterable of strings")
+            try:
+                normalized = tuple(values)
+            except TypeError as exc:
+                raise ValueError(
+                    f"{field_name} must be an iterable of strings"
+                ) from exc
+            if any(not isinstance(value, str) or not value for value in normalized):
+                raise ValueError(f"{field_name} must contain non-empty strings")
+            if len(normalized) != len(set(normalized)):
+                raise ValueError(f"{field_name} must not contain duplicates")
+            object.__setattr__(self, field_name, normalized)
         for field_name in (
             "stopping_activity",
             "stopping_phase",
@@ -101,6 +118,8 @@ class OCCNReplayUnitResult:
             "stopping_phase": self.stopping_phase,
             "stopping_reason": self.stopping_reason,
             "last_replayed_activity": self.last_replayed_activity,
+            "replayed_activities": list(self.replayed_activities),
+            "stopping_object_types": list(self.stopping_object_types),
         }
 
 
@@ -248,6 +267,14 @@ def _replay_unit(
     stopping_activity: Optional[str] = None
     stopping_phase: Optional[str] = None
     last_replayed_activity: Optional[str] = None
+    replayed_activities: List[str] = []
+    stopping_object_types: Tuple[str, ...] = ()
+
+    def record_replayed(activity: str) -> None:
+        nonlocal last_replayed_activity
+        last_replayed_activity = activity
+        if activity not in replayed_activities:
+            replayed_activities.append(activity)
 
     try:
         for event_index, event in enumerate(unit.events):
@@ -259,6 +286,7 @@ def _replay_unit(
                 object_type = object_types[object_id]
                 stopping_activity = f"START_{object_type}"
                 stopping_phase = "object_start"
+                stopping_object_types = (object_type,)
                 frontier, _ = _advance_frontier(
                     frontier,
                     lambda state, object_id=object_id, object_type=object_type: (
@@ -280,12 +308,15 @@ def _replay_unit(
                         stopping_phase,
                         "no_enabled_object_start",
                         last_replayed_activity,
+                        tuple(replayed_activities),
+                        stopping_object_types,
                     )
                 started_objects.add(object_id)
-                last_replayed_activity = stopping_activity
+                record_replayed(stopping_activity)
 
             stopping_activity = event.activity
             stopping_phase = "visible_event"
+            stopping_object_types = event.object_types
             frontier, _ = _advance_frontier(
                 frontier,
                 lambda state, event=event: visible_event_successors(
@@ -304,8 +335,10 @@ def _replay_unit(
                     stopping_phase,
                     "no_enabled_event_binding",
                     last_replayed_activity,
+                    tuple(replayed_activities),
+                    stopping_object_types,
                 )
-            last_replayed_activity = stopping_activity
+            record_replayed(stopping_activity)
 
         ordered_objects = sorted(
             object_types,
@@ -315,6 +348,7 @@ def _replay_unit(
             object_type = object_types[object_id]
             stopping_activity = f"END_{object_type}"
             stopping_phase = "object_end"
+            stopping_object_types = (object_type,)
             is_final_end = object_index == len(ordered_objects) - 1
             frontier, found_empty = _advance_frontier(
                 frontier,
@@ -330,12 +364,14 @@ def _replay_unit(
                 stop_on_empty=is_final_end,
             )
             if found_empty:
+                record_replayed(stopping_activity)
                 return OCCNReplayUnitResult(
                     unit_id=unit.unit_id,
                     status=OCCNReplayStatus.FITTING,
                     event_count=len(unit.events),
                     explored_state_count=budget.explored_state_count,
                     object_types=unit.object_types,
+                    replayed_activities=tuple(replayed_activities),
                 )
             if not frontier:
                 return _non_fitting_result(
@@ -345,8 +381,10 @@ def _replay_unit(
                     stopping_phase=stopping_phase,
                     stopping_reason="no_enabled_object_end",
                     last_replayed_activity=last_replayed_activity,
+                    replayed_activities=tuple(replayed_activities),
+                    stopping_object_types=stopping_object_types,
                 )
-            last_replayed_activity = stopping_activity
+            record_replayed(stopping_activity)
 
         status = (
             OCCNReplayStatus.FITTING
@@ -377,6 +415,12 @@ def _replay_unit(
                 if status is OCCNReplayStatus.NON_FITTING
                 else None
             ),
+            replayed_activities=tuple(replayed_activities),
+            stopping_object_types=(
+                stopping_object_types
+                if status is OCCNReplayStatus.NON_FITTING
+                else ()
+            ),
         )
     except _ReplayStateLimitReached:
         return OCCNReplayUnitResult(
@@ -390,6 +434,8 @@ def _replay_unit(
             stopping_phase=stopping_phase,
             stopping_reason="max_states",
             last_replayed_activity=last_replayed_activity,
+            replayed_activities=tuple(replayed_activities),
+            stopping_object_types=stopping_object_types,
         )
 
 
@@ -434,6 +480,8 @@ def _non_fitting_result(
     stopping_phase: Optional[str] = None,
     stopping_reason: Optional[str] = None,
     last_replayed_activity: Optional[str] = None,
+    replayed_activities: Tuple[str, ...] = (),
+    stopping_object_types: Tuple[str, ...] = (),
 ) -> OCCNReplayUnitResult:
     failure_event_id = (
         unit.events[failure_event_index].event_id
@@ -452,4 +500,6 @@ def _non_fitting_result(
         stopping_phase=stopping_phase,
         stopping_reason=stopping_reason,
         last_replayed_activity=last_replayed_activity,
+        replayed_activities=replayed_activities,
+        stopping_object_types=stopping_object_types,
     )

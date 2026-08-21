@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  LEADING_OBJECT_REPLAY_STRATEGY,
+  getEventLogObjectTypes,
   getOCCNReplayUnitDetail,
   runOCCNConformance,
   type OCCNConformanceResponse,
@@ -31,6 +33,7 @@ vi.mock("@/api/occnConformanceApi", async () => {
   return {
     ...actual,
     getOCCNReplayUnitDetail: vi.fn(),
+    getEventLogObjectTypes: vi.fn(),
     runOCCNConformance: vi.fn(),
   };
 });
@@ -42,15 +45,18 @@ vi.mock("@/react_component/OCCNVisualizer", () => ({
     conformanceHighlights,
     data,
     missingConformanceActivities,
+    unvisitedActivities,
   }: {
     conformanceHighlights: Record<string, string>;
     data: { activities: Array<{ id: string }> };
     missingConformanceActivities: string[];
+    unvisitedActivities: string[];
   }) => (
     <div data-testid="occn-conformance-model">
       {JSON.stringify({
         highlights: conformanceHighlights,
         missing: missingConformanceActivities,
+        unvisited: unvisitedActivities,
         activities: data.activities.map(({ id }) => id),
       })}
     </div>
@@ -84,6 +90,7 @@ vi.mock("./OccnAssetSelector", () => ({
 
 const listAssetsMock = vi.mocked(listAssets);
 const getReplayUnitDetailMock = vi.mocked(getOCCNReplayUnitDetail);
+const getEventLogObjectTypesMock = vi.mocked(getEventLogObjectTypes);
 const runOCCNConformanceMock = vi.mocked(runOCCNConformance);
 
 const asset: ProjectAsset = {
@@ -141,6 +148,8 @@ const nonFittingResponse: OCCNConformanceResponse = {
       stopping_phase: "visible_event",
       stopping_reason: "no_enabled_event_binding",
       last_replayed_activity: "Create Order",
+      replayed_activities: ["START_Order", "Create Order"],
+      stopping_object_types: ["Item", "Order"],
     },
   ],
 };
@@ -218,9 +227,11 @@ describe("OCCN conformance workflow integration", () => {
   beforeEach(() => {
     listAssetsMock.mockReset();
     getReplayUnitDetailMock.mockReset();
+    getEventLogObjectTypesMock.mockReset();
     runOCCNConformanceMock.mockReset();
     listAssetsMock.mockResolvedValue([asset]);
     getReplayUnitDetailMock.mockResolvedValue(replayUnitDetail);
+    getEventLogObjectTypesMock.mockResolvedValue(["Item", "Order"]);
     runOCCNConformanceMock.mockResolvedValue(response);
   });
 
@@ -325,6 +336,7 @@ describe("OCCN conformance workflow integration", () => {
     });
     expect(visualization.missing).toEqual(["Ship Order"]);
     expect(visualization.activities).toContain("Ship Order");
+    expect(visualization.unvisited).toContain("a");
     const stoppingDetails = screen.getByLabelText(
       "Replay stopping-point details"
     ).textContent;
@@ -337,6 +349,35 @@ describe("OCCN conformance workflow integration", () => {
         .getAttribute("aria-pressed")
     ).toBe("false");
     expect(screen.queryByText("Conformance completed")).toBeNull();
+  });
+
+  it("reruns a deviation immediately for a selected leading object type", async () => {
+    runOCCNConformanceMock
+      .mockResolvedValueOnce(nonFittingResponse)
+      .mockResolvedValueOnce({
+        ...response,
+        replay_unit_strategy: LEADING_OBJECT_REPLAY_STRATEGY,
+        leading_object_type: "Order",
+      });
+    renderWorkflow(asset.id);
+
+    await waitFor(() => expect(screen.getByText("Ready to calculate")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Run conformance" }));
+    await waitFor(() => expect(screen.getByText("Deviations found")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Order" }));
+
+    await waitFor(() =>
+      expect(runOCCNConformanceMock).toHaveBeenLastCalledWith(
+        12,
+        asset.id,
+        LEADING_OBJECT_REPLAY_STRATEGY,
+        "Order",
+        1_000
+      )
+    );
+    expect(screen.getByRole("combobox", { name: "Replay unit strategy" }).textContent)
+      .toContain("Leading object type");
   });
 
   it("runs directly with an asset preselected by Model Assets", async () => {

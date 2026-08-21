@@ -1,16 +1,18 @@
 import { useMemo } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { CircleX, TriangleAlert } from "lucide-react";
+import { CircleX, ScanSearch, TriangleAlert } from "lucide-react";
 
 import type { ProjectAsset } from "@/api/assetsApi";
 import type {
   OCCNConformanceResponse,
   OCCNReplayUnitResult,
 } from "@/api/occnConformanceApi";
+import { Button } from "@/components/ui/button";
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 
 import {
   buildConformanceAnnotations,
+  buildUnvisitedActivities,
   canonicalOccnAssetToNet,
 } from "./conformanceVisualization";
 
@@ -18,12 +20,16 @@ interface OccnConformanceVisualizationProps {
   asset: ProjectAsset;
   result: OCCNConformanceResponse;
   selectedUnit: OCCNReplayUnitResult | null;
+  running: boolean;
+  onRunLeadingObjectType: (objectType: string) => void;
 }
 
 export function OccnConformanceVisualization({
   asset,
   result,
   selectedUnit,
+  running,
+  onRunLeadingObjectType,
 }: OccnConformanceVisualizationProps) {
   const model = useMemo(() => {
     try {
@@ -47,6 +53,18 @@ export function OccnConformanceVisualization({
         selectedUnit ? [selectedUnit] : result.unit_results
       ),
     [result.unit_results, selectedUnit]
+  );
+  const displayedUnits = useMemo(
+    () => (selectedUnit ? [selectedUnit] : result.unit_results),
+    [result.unit_results, selectedUnit]
+  );
+  const unvisitedActivities = useMemo(
+    () =>
+      buildUnvisitedActivities(
+        displayedUnits,
+        model.net?.activities.map(({ id }) => id) ?? []
+      ),
+    [displayedUnits, model.net]
   );
   const highlights = useMemo(
     () =>
@@ -135,10 +153,33 @@ export function OccnConformanceVisualization({
                     {activity}
                   </span>
                 </div>
-                <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-foreground">
-                  {annotation.details.map((detail) => (
-                    <span key={detail}>{detail}</span>
-                  ))}
+                <div className="min-w-0 space-y-2">
+                  <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-foreground">
+                    {annotation.details.map((detail) => (
+                      <span key={detail}>{detail}</span>
+                    ))}
+                  </div>
+                  {nonFitting && annotation.objectTypes.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        Inspect by leading object type:
+                      </span>
+                      {annotation.objectTypes.map((objectType) => (
+                        <Button
+                          key={objectType}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7"
+                          disabled={running}
+                          onClick={() => onRunLeadingObjectType(objectType)}
+                        >
+                          <ScanSearch className="size-3.5" />
+                          {objectType}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );
@@ -157,6 +198,7 @@ export function OccnConformanceVisualization({
               showTitle={false}
               conformanceHighlights={highlights}
               missingConformanceActivities={missingActivities}
+              unvisitedActivities={unvisitedActivities}
             />
           </ReactFlowProvider>
         </div>

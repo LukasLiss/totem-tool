@@ -9,7 +9,10 @@ import type { OccnNode } from "./types";
 
 const nodeTypes = { occn: OccnNodeComponent };
 
-function renderNode(status: OccnNode["data"]["conformanceStatus"]) {
+function renderNode(
+  status: OccnNode["data"]["conformanceStatus"],
+  unvisited = false
+) {
   const nodes: OccnNode[] = [
     {
       id: "ship order",
@@ -19,6 +22,7 @@ function renderNode(status: OccnNode["data"]["conformanceStatus"]) {
         label: "ship order",
         kind: "activity",
         conformanceStatus: status,
+        conformanceUnvisited: unvisited,
       },
     },
   ];
@@ -44,5 +48,15 @@ describe("OCCN conformance stopping-point callout", () => {
     renderNode("inconclusive");
 
     expect(screen.getByLabelText("State limit reached here")).toBeTruthy();
+  });
+
+  it("mutes an activity that replay did not visit", () => {
+    renderNode(undefined, true);
+
+    const node = screen.getByText("ship order").closest(
+      '[data-conformance-unvisited="true"]'
+    );
+    expect(node).toBeTruthy();
+    expect((node as HTMLElement).style.background).toBe("#E5E7EB");
   });
 });

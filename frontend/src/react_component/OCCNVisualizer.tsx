@@ -68,6 +68,8 @@ interface OCCNVisualizerProps {
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
   /** Log activities shown only to explain why replay stopped. */
   missingConformanceActivities?: string[];
+  /** Model activities not reached by the displayed non-fitting replay. */
+  unvisitedActivities?: string[];
 }
 
 const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
@@ -75,6 +77,7 @@ const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
   'non_fitting' | 'inconclusive'
 > = {};
 const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
+const EMPTY_UNVISITED_ACTIVITIES: string[] = [];
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -94,6 +97,7 @@ function OCCNVisualizer({
   showTitle = true,
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
+  unvisitedActivities = EMPTY_UNVISITED_ACTIVITIES,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -218,11 +222,24 @@ function OCCNVisualizer({
               conformanceStatus: conformanceHighlights[node.id],
               conformanceMissingFromModel:
                 missingConformanceActivities.includes(node.id),
+              conformanceUnvisited:
+                unvisitedActivities.includes(node.id) &&
+                conformanceHighlights[node.id] == null,
             },
             position: positions[node.id] ?? { x: 0, y: 0 },
           })),
         );
-        setEdges(nextGraph.edges);
+        setEdges(
+          nextGraph.edges.map((edge) => ({
+            ...edge,
+            data: {
+              ...edge.data,
+              conformanceUnvisited:
+                unvisitedActivities.includes(edge.source) ||
+                unvisitedActivities.includes(edge.target),
+            },
+          }))
+        );
         setLayoutReadyTick((tick) => tick + 1);
       });
     return () => {
@@ -236,6 +253,7 @@ function OCCNVisualizer({
     layoutTick,
     conformanceHighlights,
     missingConformanceActivities,
+    unvisitedActivities,
   ]);
 
   // Track the container size via a ResizeObserver. In a dashboard the gridstack
@@ -396,6 +414,7 @@ function OCCNVisualizer({
               focusedGroup={null}
               interactive={false}
               markerTitle={markerTitle}
+              mutedActivities={unvisitedActivities}
             />
           )}
           {graph && (

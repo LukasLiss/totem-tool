@@ -8,6 +8,19 @@ export type OCCNConformanceHighlight = "non_fitting" | "inconclusive";
 export interface OCCNConformanceAnnotation {
   status: OCCNConformanceHighlight;
   details: string[];
+  objectTypes: string[];
+}
+
+export function buildUnvisitedActivities(
+  units: OCCNReplayUnitResult[],
+  modelActivities: string[]
+): string[] {
+  if (!units.some((unit) => unit.status === "non_fitting")) return [];
+
+  const visited = new Set(
+    units.flatMap((unit) => unit.replayed_activities ?? [])
+  );
+  return modelActivities.filter((activity) => !visited.has(activity));
 }
 
 export function canonicalOccnAssetToNet(
@@ -121,7 +134,12 @@ export function buildConformanceAnnotations(
       if (activityUnits.length > 1) {
         details.push(`Replay units: ${activityUnits.length.toLocaleString()}`);
       }
-      return [activity, { status, details }];
+      const objectTypes = unique(
+        activityUnits
+          .filter((unit) => unit.status === "non_fitting")
+          .flatMap((unit) => unit.stopping_object_types ?? [])
+      ).sort((left, right) => left.localeCompare(right));
+      return [activity, { status, details, objectTypes }];
     })
   );
 }

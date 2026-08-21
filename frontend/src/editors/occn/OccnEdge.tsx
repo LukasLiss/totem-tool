@@ -46,7 +46,10 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
     parallelOffset[id] ?? 0,
   );
   const path = cubicPath(cubic);
-  const color = typeColors[data?.objectType ?? ''] ?? '#64748B';
+  const unvisited = data?.conformanceUnvisited === true;
+  const color = unvisited
+    ? '#CBD5E1'
+    : typeColors[data?.objectType ?? ''] ?? '#64748B';
 
   // Solid arrowhead at the target end, oriented along the curve tangent.
   const tip = cubic.p3;
@@ -71,7 +74,7 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
   return (
     <g>
       {tooltip && <title>{tooltip}</title>}
-      {selected && (
+      {selected && !unvisited && (
         <path
           d={path}
           fill="none"
@@ -80,8 +83,16 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
           strokeLinecap="round"
         />
       )}
-      <BaseEdge id={id} path={path} style={{ stroke: color, strokeWidth: 2 }} />
-      <polygon points={arrowPoints} fill={color} style={{ pointerEvents: 'none' }} />
+      <BaseEdge
+        id={id}
+        path={path}
+        style={{ stroke: color, strokeWidth: 2, opacity: unvisited ? 0.55 : 1 }}
+      />
+      <polygon
+        points={arrowPoints}
+        fill={color}
+        style={{ pointerEvents: 'none', opacity: unvisited ? 0.55 : 1 }}
+      />
     </g>
   );
 });

@@ -310,6 +310,8 @@ export function OccnConformanceView({
                   asset={assetSelection.selectedAsset}
                   result={workflow.result}
                   selectedUnit={selectedReplayUnit}
+                  running={workflow.running}
+                  onRunLeadingObjectType={workflow.runLeadingObjectType}
                 />
               ) : null}
               <OccnReplayUnitExplorer

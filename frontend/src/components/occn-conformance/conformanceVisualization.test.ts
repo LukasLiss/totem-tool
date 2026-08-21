@@ -6,6 +6,7 @@ import canonicalOccn from "../../../../docs/examples/model-assets/occn-v1.json";
 import {
   buildConformanceAnnotations,
   buildConformanceHighlights,
+  buildUnvisitedActivities,
   canonicalOccnAssetToNet,
 } from "./conformanceVisualization";
 
@@ -75,6 +76,7 @@ describe("OCCN conformance visualization preparation", () => {
       stopping_phase: "visible_event",
       stopping_reason: "no_enabled_event_binding",
       last_replayed_activity: "pick item",
+      stopping_object_types: ["Order", "Item"],
     };
 
     expect(buildConformanceAnnotations([replayUnit])).toEqual({
@@ -84,6 +86,7 @@ describe("OCCN conformance visualization preparation", () => {
           "No enabled binding matched the event",
           "Last replayed: pick item",
         ],
+        objectTypes: ["Item", "Order"],
       },
     });
   });
@@ -114,7 +117,28 @@ describe("OCCN conformance visualization preparation", () => {
           "Last replayed: ship package, deliver package",
           "Replay units: 2",
         ],
+        objectTypes: [],
       },
     });
+  });
+
+  it("greys only activities not reached by a displayed non-fitting replay", () => {
+    const nonFitting = {
+      ...unit("non_fitting", "ship order"),
+      replayed_activities: ["START_order", "create order"],
+    };
+
+    expect(
+      buildUnvisitedActivities(
+        [nonFitting],
+        ["START_order", "create order", "ship order", "END_order"]
+      )
+    ).toEqual(["ship order", "END_order"]);
+    expect(
+      buildUnvisitedActivities(
+        [unit("inconclusive", "ship order")],
+        ["START_order", "ship order"]
+      )
+    ).toEqual([]);
   });
 });

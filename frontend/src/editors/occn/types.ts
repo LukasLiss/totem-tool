@@ -17,6 +17,8 @@ export type OccnNodeData = {
   conformanceStatus?: 'non_fitting' | 'inconclusive';
   /** The stopping activity came from the log but is absent from the OCCN. */
   conformanceMissingFromModel?: boolean;
+  /** Activity was not reached by the replay shown in the conformance view. */
+  conformanceUnvisited?: boolean;
 };
 
 export type OccnNode = Node<OccnNodeData, 'occn'>;
@@ -25,6 +27,8 @@ export type OccnEdgeData = {
   objectType: string;
   /** Tooltip value from discovery (visualizer only; editor leaves it unset). */
   dependenceMeasure?: number | null;
+  /** Arc touches an activity that was not reached by the displayed replay. */
+  conformanceUnvisited?: boolean;
 };
 
 export type OccnEdge = Edge<OccnEdgeData, 'occnArc'>;

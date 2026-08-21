@@ -28,6 +28,8 @@ export interface OCCNReplayUnitResult {
   stopping_phase?: string | null;
   stopping_reason?: string | null;
   last_replayed_activity?: string | null;
+  replayed_activities?: string[];
+  stopping_object_types?: string[];
 }
 
 export interface OCCNConformanceResponse {
