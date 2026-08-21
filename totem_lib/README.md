@@ -85,6 +85,26 @@ The module docstring also records why the largest available OCEL log (Age of Emp
 2.4M events) cannot be used yet: it has 831 activity types, and `import_ocel`'s SQLite
 path exceeds SQLite's compound-`SELECT` limit on logs that wide.
 
+## Running the benchmarks
+
+One command runs every main algorithm on every log and reports time and peak memory:
+
+```bash
+python evaluation/run_benchmarks.py
+python evaluation/run_benchmarks.py --list
+python evaluation/run_benchmarks.py --logs ocel2-p2p --repeats 1
+python evaluation/run_benchmarks.py --algorithms totemDiscovery,OCDFG.from_ocel
+```
+
+Results print as each measurement finishes, so an interrupted run still shows everything
+measured so far, and `--logs` / `--algorithms` fill in the rest later. A failing algorithm
+is reported and the run continues.
+
+The algorithms differ enormously in cost — from `CCDFG.from_ocel` at ~0.01 s to
+`discover_occn` at ~20 s on the smallest log — so try anything new on `ocel2-p2p` with
+`--repeats 1` first. `evaluation/algorithms.py` lists what runs and how each one is
+called; it is also where a new algorithm gets added.
+
 ## Acknowledgements
 The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
 The TOTeM visualization function is adapted from [this repository](https://github.com/loeseke/object-centric-streaming-discovery/).
