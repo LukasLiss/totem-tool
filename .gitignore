@@ -253,3 +253,6 @@ totem_lib/test_data/large/*
 !totem_lib/test_data/large/.gitkeep
 
 backend/cache/*
+
+# DuckDB scratch directories, created next to a .duckdb file while it is open
+*.duckdb.tmp/

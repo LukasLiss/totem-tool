@@ -2,8 +2,8 @@
 Manifest of the real OCEL logs used for runtime evaluation.
 
 Every log here is a published dataset from https://www.ocel-standard.org/event-logs/overview/ ,
-used as-is: no sampling, no synthetic logs, no cutting down to size. A log's "size"
-throughout the evaluation is its **number of events**.
+used as-is: no sampling, no synthetic logs, no cutting down to size. How big a log is
+gets measured several ways - see `LogStatistics` below.
 
 Logs
 ----
@@ -174,6 +174,10 @@ class EvaluationLog:
 
     `download_url` is None for logs bundled in git; the download fields are only
     populated for logs that live in the gitignored `test_data/large/`.
+
+    `duckdb_path` points at the DuckDB copy of the same log, which the `_db` algorithms
+    need. `leading_object_type` is the object type used as the "case" when an algorithm
+    needs one, such as variant discovery.
     """
 
     name: str
@@ -181,6 +185,8 @@ class EvaluationLog:
     path: Path
     statistics: LogStatistics | None = None
     file_format: str | None = None
+    duckdb_path: Path | None = None
+    leading_object_type: str | None = None
     download_url: str | None = None
     md5: str | None = None
     size_bytes: int | None = None
@@ -189,6 +195,11 @@ class EvaluationLog:
     def available(self) -> bool:
         """Whether the log is present on disk and ready to load."""
         return self.path.exists()
+
+    @property
+    def has_duckdb(self) -> bool:
+        """Whether the DuckDB copy is on disk, which the *_db algorithms need."""
+        return self.duckdb_path is not None and self.duckdb_path.exists()
 
     @property
     def bundled(self) -> bool:
@@ -215,6 +226,8 @@ LOGS: tuple[EvaluationLog, ...] = tuple(
                 name="ocel2-p2p",
                 source_url="https://doi.org/10.5281/zenodo.8412919",
                 path=SMALL / "ocel2-p2p.json",
+                duckdb_path=SMALL / "ocel2-p2p.duckdb",
+                leading_object_type="purchase_requisition",
                 statistics=LogStatistics(
                     num_events=14671,
                     num_objects=9054,
@@ -230,6 +243,8 @@ LOGS: tuple[EvaluationLog, ...] = tuple(
                 name="order-management",
                 source_url="https://doi.org/10.5281/zenodo.8337463",
                 path=SMALL / "order-management.json",
+                duckdb_path=SMALL / "order-management.duckdb",
+                leading_object_type="orders",
                 statistics=LogStatistics(
                     num_events=21008,
                     num_objects=10840,
@@ -245,6 +260,8 @@ LOGS: tuple[EvaluationLog, ...] = tuple(
                 name="container_logistics",
                 source_url="https://doi.org/10.5281/zenodo.8289899",
                 path=SMALL / "container_logistics.json",
+                duckdb_path=SMALL / "container_logistics.duckdb",
+                leading_object_type="Customer Order",
                 statistics=LogStatistics(
                     num_events=35372,
                     num_objects=13882,
