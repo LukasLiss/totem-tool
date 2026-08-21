@@ -1,5 +1,9 @@
 import copy
 import json
+import os
+import shutil
+import tempfile
+import time
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -8,11 +12,12 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory
 from totem_lib.totem import Totem, totem_to_dict
 
+from .lru_filecache import LRUFileBasedCache
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
 
@@ -766,6 +771,95 @@ class ProjectAssetApiTests(TestCase):
         response = self.client.get(f"/api/assets/{foreign_asset.pk}/download/")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class LRUFileBasedCacheTests(SimpleTestCase):
+    """Eviction policy of the result cache backend (Epic #71).
+
+    Mtimes are set explicitly rather than relying on wall-clock ordering —
+    consecutive writes can land inside the filesystem's timestamp resolution,
+    which would make ordering assertions flaky.
+    """
+
+    def _make_cache(self, max_entries, cull_frequency=2):
+        cache_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, cache_dir, ignore_errors=True)
+        return LRUFileBasedCache(
+            cache_dir,
+            {
+                "TIMEOUT": None,
+                "OPTIONS": {
+                    "MAX_ENTRIES": max_entries,
+                    "CULL_FREQUENCY": cull_frequency,
+                },
+            },
+        )
+
+    def _age(self, backend, key, seconds):
+        """Backdate *key*'s file by *seconds* to simulate an older access."""
+        path = backend._key_to_file(key)
+        old = time.time() - seconds
+        os.utime(path, (old, old))
+
+    def test_cull_evicts_least_recently_used(self):
+        """The oldest *written* entries survive if they were recently *read*.
+
+        k0-k3 start out as the stalest entries, so a random-eviction backend
+        would be as likely to drop them as any other; reading them must make
+        them the safest. Culling 5 of 10 entries means a random policy has a
+        1-in-252 chance of coincidentally matching this assertion.
+        """
+        backend = self._make_cache(max_entries=10, cull_frequency=2)
+        keys = [f"k{i}" for i in range(10)]
+        for i, key in enumerate(keys):
+            backend.set(key, f"value-{key}")
+            self._age(backend, key, 1000 - i)  # k0 oldest ... k9 newest
+
+        # Read the four *oldest* entries, promoting them to most-recently-used.
+        for key in keys[:4]:
+            self.assertEqual(backend.get(key), f"value-{key}")
+
+        # Trips the cap: culls the 5 least-recently-used, now k4-k8.
+        backend.set("k10", "value-k10")
+
+        survivors = {"k0", "k1", "k2", "k3", "k9", "k10"}
+        evicted = {"k4", "k5", "k6", "k7", "k8"}
+        for key in survivors:
+            self.assertEqual(backend.get(key), f"value-{key}", f"{key} should survive")
+        for key in evicted:
+            self.assertIsNone(backend.get(key), f"{key} should be evicted")
+
+    def test_get_marks_entry_as_recently_used(self):
+        backend = self._make_cache(max_entries=10)
+        backend.set("k", "v")
+        self._age(backend, "k", 1000)
+        before = os.path.getmtime(backend._key_to_file("k"))
+
+        backend.get("k")
+
+        self.assertGreater(os.path.getmtime(backend._key_to_file("k")), before)
+
+    def test_miss_does_not_create_entry_and_returns_default(self):
+        backend = self._make_cache(max_entries=10)
+        self.assertEqual(backend.get("absent", "fallback"), "fallback")
+        self.assertFalse(backend._list_cache_files())
+
+    def test_cached_none_is_returned_as_a_hit(self):
+        """A stored ``None`` must not be mistaken for a miss."""
+        backend = self._make_cache(max_entries=10)
+        backend.set("k", None)
+        self.assertIsNone(backend.get("k", "fallback"))
+
+    def test_cull_frequency_zero_clears_cache(self):
+        """Matches the superclass contract: CULL_FREQUENCY=0 purges everything."""
+        backend = self._make_cache(max_entries=2, cull_frequency=0)
+        backend.set("a", "value-a")
+        backend.set("b", "value-b")  # cap reached -> next set() clears
+        backend.set("c", "value-c")
+
+        self.assertIsNone(backend.get("a"))
+        self.assertIsNone(backend.get("b"))
+        self.assertEqual(backend.get("c"), "value-c")
 
 
 # ---------------------------------------------------------------------------

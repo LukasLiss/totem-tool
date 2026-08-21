@@ -2,9 +2,9 @@ from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
-from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
+from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, UserSettings
 from .serializers import EventLogSerializer, ProjectAssetSerializer, DashboardSerializer, DashboardComponentPolymorphicSerializer
 from django.db.models import Max
 
@@ -33,12 +33,23 @@ import networkx as nx
 
 
 
-from django.core.cache import cache
+from .cache_utils import get_cached_result, set_cached_result
 
 import os
 from hashlib import sha1
 import json
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+
+
+def _should_use_cache(request) -> bool:
+    """Check if the request should use cache (default: True).
+
+    Pass ``?bypass_cache=1`` or ``?bypass_cache=true`` to skip reading
+    from the cache.  Results are **always stored** even on bypass so
+    the next normal request benefits.
+    """
+    val = request.query_params.get("bypass_cache", "").lower()
+    return val not in ("1", "true", "yes")
 
 
 TOTEM_MOCK = {
@@ -241,12 +252,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file, "noe")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
+
         try:
             with _with_ocel_db(user_file) as db:
                 processed = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         except Exception as e:
             return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        set_cached_result(user_file, "noe", processed)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -257,12 +274,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file, "object_types")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
+
         try:
             with _with_ocel_db(user_file) as db:
                 types = _object_types(db)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        set_cached_result(user_file, "object_types", types)
         return Response(types, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -273,16 +296,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"totem_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            if _should_use_cache(request):
+                cached = get_cached_result(user_file, "discover_totem")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
             serialized = totem_to_dict(totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -297,10 +320,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            cache_key = f"mlpa_discovery_{user_file.pk}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            if _should_use_cache(request):
+                cached = get_cached_result(user_file, "discover_mlpa")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
                 totem = totemDiscovery_db(db)
@@ -309,7 +332,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             process_view = mlpaDiscovery(totem)
             serialized = _serialize_mlpa(process_view, totem)
 
-            cache.set(cache_key, serialized, timeout=3600)
+            set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -321,6 +344,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if _should_use_cache(request):
+            cached = get_cached_result(user_file, "statistics")
+            if cached is not None:
+                return Response(cached, status=status.HTTP_200_OK)
 
         try:
             with _with_ocel_db(user_file) as db:
@@ -339,14 +367,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 ).fetchone()
             earliest_timestamp, newest_timestamp = ts_row if ts_row else (None, None)
 
-            return Response({
+            result = {
                 "num_events": num_events,
                 "num_unique_activities": num_unique_activities,
                 "num_objects": num_objects,
                 "num_object_types": num_object_types,
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
-            }, status=status.HTTP_200_OK)
+            }
+            set_cached_result(user_file, "statistics", result)
+            return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -743,8 +773,8 @@ def _build_ocel_db_from_path(path: str) -> OcelDuckDB:
 # We can't use Django's cache here even though LocMemCache is "in-process":
 # LocMemCache pickles every value on set() to preserve copy-on-read
 # semantics, and `duckdb.DuckDBPyConnection` is a native C handle that
-# cannot be pickled. Serializable derived results (totem_discovery_{pk},
-# mlpa_discovery_{pk}) still use Django's cache normally.
+# cannot be pickled. Serializable derived results go through the "results"
+# cache instead — see `cache_utils` (get_cached_result/set_cached_result).
 #
 # Concurrency model — a DuckDB connection is documented as "thread-safe but
 # only one thread can execute a query at a time". Worse, our algorithms
@@ -942,6 +972,19 @@ def variants(request):
     except (TypeError, ValueError):
         timeout_s = 10.0
 
+    # --- Cache lookup (#72 / #74) ---
+    leading_object_type = request.query_params.get("leading_type")
+    cache_params = {
+        "leading_type": leading_object_type or "",
+        "extraction": extraction,
+        "iso": iso,
+        "timeout_s": timeout_s,
+    }
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file, "variants", cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
     try:
         with _with_ocel_db(user_file) as db:
             obj_types = _object_types(db)
@@ -949,7 +992,6 @@ def variants(request):
             # Leading type is only needed for the leading_* extractions.
             # For "connected" we skip the default-to-first-alphabetical
             # fallback entirely — the param is ignored downstream anyway.
-            leading_object_type = request.query_params.get("leading_type")
             if extraction.startswith("leading"):
                 if not leading_object_type or leading_object_type not in obj_types:
                     if not obj_types:
@@ -1030,10 +1072,14 @@ def variants(request):
             },
         })
 
-    return Response({
+    result = {
         "variants": out,
         "object_types": obj_types,
-    }, status=status.HTTP_200_OK)
+    }
+    # Update cache_params with the resolved leading_type
+    cache_params["leading_type"] = leading_object_type or ""
+    set_cached_result(user_file, "variants", result, cache_params)
+    return Response(result, status=status.HTTP_200_OK)
 
 
 # --- Playout of editor models (OCPN / OCCN) --------------------------------
@@ -2325,6 +2371,15 @@ def OCDFGViewSet(request):
     except (EventLog.DoesNotExist, ValueError):
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
+    # --- Cache lookup (#72 / #74) ---
+    ocdfg_cache_params = {
+        "object_types": sorted(object_type_filter) if object_type_filter else [],
+    }
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file, "ocdfg", ocdfg_cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
     try:
         with _with_ocel_db(user_file) as db:
             # Full OCDFG (unfiltered) for register.
@@ -2386,6 +2441,7 @@ def OCDFGViewSet(request):
         if trace_variants:
             response_payload["trace_variants"] = trace_variants
 
+        set_cached_result(user_file, "ocdfg", response_payload, ocdfg_cache_params)
         return Response(response_payload, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2576,3 +2632,51 @@ def delete_user_data(request):
         {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
         status=status.HTTP_200_OK
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache management endpoints  (#76)
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def cache_stats(request):
+    """Return current cache statistics."""
+    from .cache_utils import get_cache_stats
+    return Response(get_cache_stats())
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cache_clear(request):
+    """Clear the entire results cache."""
+    from .cache_utils import clear_all_cache
+    clear_all_cache()
+    return Response({"status": "cleared"})
+
+
+# ---------------------------------------------------------------------------
+# Per-user settings
+# ---------------------------------------------------------------------------
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def user_settings(request):
+    """Read or update the current user's settings.
+
+    GET returns the settings (creating a default row on first access).
+    PATCH updates individual fields — currently only ``bypass_cache``.
+    """
+    settings_obj, _ = UserSettings.objects.get_or_create(user=request.user)
+
+    if request.method == "PATCH":
+        if "bypass_cache" in request.data:
+            # Coerce via DRF's BooleanField so string payloads like "false"/"0"
+            # are parsed correctly (bool("false") would wrongly be True). Invalid
+            # values raise ValidationError -> 400.
+            settings_obj.bypass_cache = serializers.BooleanField().to_internal_value(
+                request.data["bypass_cache"]
+            )
+            settings_obj.save(update_fields=["bypass_cache"])
+
+    return Response({"bypass_cache": settings_obj.bypass_cache})
