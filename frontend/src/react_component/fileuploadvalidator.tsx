@@ -14,6 +14,7 @@ import {
   CardContent,
 } from "@/components/ui/card"
 import { toast } from "sonner"
+import { TOUR_IDS } from "@/tour/tourIds"
 
 
 export function FileUploadValidator() {
@@ -125,7 +126,13 @@ export function FileUploadValidator() {
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
                 <span>{file?.name ?? "No file chosen"}</span>
             </div>
-              <Button className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg" type="submit">Validate & Upload</Button>
+              <Button
+                data-tour-id={TOUR_IDS.UPLOAD_BUTTON}
+                className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg"
+                type="submit"
+              >
+                Validate & Upload
+              </Button>
           </div>
         </CardFooter>
       </form>

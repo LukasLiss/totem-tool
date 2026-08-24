@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { TourId } from "./tourIds";
 
 export interface HighlighterProps {
@@ -10,6 +10,15 @@ export interface HighlighterProps {
   showNav: boolean;
 }
 
+interface TargetRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  bottom: number;
+  right: number;
+}
+
 export function Highlighter({
   tourId,
   label,
@@ -18,30 +27,112 @@ export function Highlighter({
   isLastStep,
   showNav,
 }: HighlighterProps) {
+  const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
+
+  useEffect(() => {
+    if (!showNav || !tourId) {
+      setTargetRect(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const el = document.querySelector(`[data-tour-id="${tourId}"]`);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        setTargetRect({
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+          bottom: rect.bottom,
+          right: rect.right,
+        });
+        el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      } else {
+        setTargetRect(null);
+      }
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    const timer = setTimeout(updatePosition, 100);
+
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      clearTimeout(timer);
+    };
+  }, [showNav, tourId]);
+
   if (!showNav || !tourId) return null;
 
   return (
     <div
       data-testid="tour-highlighter"
-      className="fixed inset-0 z-50 pointer-events-none flex items-center justify-center bg-black/30"
+      className="fixed inset-0 z-50 pointer-events-none transition-all duration-200"
     >
-      <div className="pointer-events-auto bg-popover text-popover-foreground p-4 rounded-lg shadow-xl border max-w-sm">
-        <p className="text-sm font-medium mb-3">{label}</p>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onSkip}
-            className="px-2 py-1 text-xs text-muted-foreground hover:underline"
-          >
-            Skip
-          </button>
-          <button
-            onClick={onNext}
-            className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded hover:opacity-90"
-          >
-            {isLastStep ? "Done" : "Next"}
-          </button>
+      {/* Dimmed backdrop */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] pointer-events-auto" onClick={onSkip} />
+
+      {/* Target element spotlight frame */}
+      {targetRect && (
+        <div
+          data-testid="tour-spotlight"
+          className="absolute z-10 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background transition-all duration-300 animate-pulse pointer-events-none"
+          style={{
+            top: `${Math.max(0, targetRect.top - 4)}px`,
+            left: `${Math.max(0, targetRect.left - 4)}px`,
+            width: `${targetRect.width + 8}px`,
+            height: `${targetRect.height + 8}px`,
+          }}
+        />
+      )}
+
+      {/* Tour Callout Card */}
+      <div
+        className="fixed z-20 pointer-events-auto flex items-center justify-center p-4"
+        style={
+          targetRect
+            ? {
+                top: `${Math.min(window.innerHeight - 160, Math.max(20, targetRect.bottom + 16))}px`,
+                left: `${Math.min(window.innerWidth - 340, Math.max(20, targetRect.left))}px`,
+              }
+            : {
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+              }
+        }
+      >
+        <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-80 bg-background/95 backdrop-blur-md">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 text-primary text-xs font-bold">
+              ★
+            </span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Teach Mode Guide
+            </span>
+          </div>
+          <p className="text-sm font-medium mb-4 leading-relaxed">{label}</p>
+          <div className="flex items-center justify-between pt-2 border-t border-border/50">
+            <button
+              onClick={onSkip}
+              className="px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Skip Tour
+            </button>
+            <button
+              onClick={onNext}
+              className="px-3.5 py-1.5 text-xs font-semibold bg-primary text-primary-foreground rounded-md shadow hover:opacity-90 active:scale-95 transition-all"
+            >
+              {isLastStep ? "Finish Tour" : "Next Step →"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
