@@ -191,5 +191,24 @@ CHANNEL_LAYERS = {
     },
 }
 
+# Load environment variables from .env files
+for env_candidate in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
+    if env_candidate.exists():
+        try:
+            with open(env_candidate, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.6-flash')
+ASSISTANT_AGENT_ENABLED = True
+

@@ -87,11 +87,11 @@ class GeminiProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-3.6-flash",
+        model: Optional[str] = None,
         timeout: int = 30,
     ):
         self.api_key = api_key or getattr(settings, "GEMINI_API_KEY", "")
-        self.model = model
+        self.model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
         self.timeout = timeout
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -151,8 +151,8 @@ class GeminiProvider(BaseLLMProvider):
             resp = requests.post(url, json=payload, timeout=self.timeout)
             if resp.status_code != 200:
                 # Attempt fallback model if 404 or unsupported
-                if resp.status_code == 404 and self.model != "gemini-1.5-flash":
-                    fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
+                if resp.status_code == 404 and self.model != "gemini-3.6-flash":
+                    fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-3.6-flash")
                     return fallback_provider.complete(system_prompt, user_message, tools, history)
                 logger.error("Gemini API error %d: %s", resp.status_code, resp.text)
                 return {
@@ -217,8 +217,8 @@ class GeminiProvider(BaseLLMProvider):
         try:
             resp = requests.post(url, json=payload, stream=True, timeout=self.timeout)
             if resp.status_code != 200:
-                if resp.status_code == 404 and self.model != "gemini-1.5-flash":
-                    fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
+                if resp.status_code == 404 and self.model != "gemini-3.6-flash":
+                    fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-3.6-flash")
                     yield from fallback_provider.stream_chat(system_prompt, user_message, tools, history)
                     return
                 err_msg = f"Gemini stream error ({resp.status_code}): {resp.text}"
