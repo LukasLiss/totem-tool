@@ -109,8 +109,10 @@ state limit.
 Replay starts from the empty OCCN state and processes every replay unit in its
 existing event order.
 
-1. Each object is introduced through its artificial `START_<object type>`
-   activity immediately before its first visible event.
+1. Each newly observed object is introduced through its artificial
+   `START_<object type>` activity immediately before its first visible event.
+   When an event introduces several objects, they are started in deterministic
+   `(object type, object ID)` order.
 2. A visible event is replayed only by bindings that involve exactly the
    objects observed for that event.
 3. Every possible valid input and output binding is retained until it fails or
@@ -125,6 +127,25 @@ existing event order.
 Artificial start and end events are internal replay operations. They are not
 added to the event log or returned as visible events.
 
+The implementation advances a frontier of possible OCCN states. A replay step
+can therefore branch when several bindings are enabled. Failure of one branch
+does not make the unit non-fitting while another branch remains. A unit is
+proven non-fitting only when a replay phase produces no successor state across
+the complete current frontier.
+
+The stopping phase and reason identify where that frontier became empty:
+
+| Phase | Reason | Meaning |
+| --- | --- | --- |
+| `object_start` | `no_enabled_object_start` | A newly observed object could not be introduced through its artificial start activity. |
+| `visible_event` | `no_enabled_event_binding` | No enabled binding matched the activity and exact observed object set. |
+| `object_end` | `no_enabled_object_end` | An observed object could not complete through its artificial end activity. |
+| `completion` | `remaining_obligations` | All end activities were processed, but no explored state was empty. |
+
+These diagnostics describe the first replay phase at which all candidate paths
+were eliminated. They are a bounded operational stopping point, not proof that
+the named activity is the root cause of the process deviation.
+
 ## Result Semantics
 
 `OCCNReplayFitnessResult` contains the aggregate values and ordered
@@ -137,10 +158,30 @@ added to the event log or returned as visible events.
   was proven.
 
 Each unit result also contains its event count, involved object types, explored
-state count, and any available failure or search-limit information. Object
-types are returned in deterministic alphabetical order. The result contract
-does not include full event or object details; those remain replay-unit input
-data rather than aggregate fitness data.
+state count, and any available failure or search-limit information. The JSON
+fields have the following meanings:
+
+| Field | Meaning |
+| --- | --- |
+| `unit_id` | Deterministic identifier assigned during replay-unit extraction. |
+| `status` | `fitting`, `non_fitting`, or `inconclusive`. |
+| `replayable` | `true` for fitting, `false` for non-fitting, and `null` for inconclusive. |
+| `event_count` | Number of visible log events in the replay unit. |
+| `explored_state_count` | Distinct replay-position/state pairs admitted for this unit, including the initial empty state. |
+| `object_types` | Alphabetically sorted object types represented in the unit. |
+| `failure_event_index` | Zero-based visible-event index when visible replay or a preceding object start failed; otherwise `null`. |
+| `failure_event_id` | Event ID at `failure_event_index`; otherwise `null`. |
+| `limit_reason` | `max_states` when bounded search was exhausted; otherwise `null`. |
+| `stopping_activity` | Visible or artificial activity being attempted when replay stopped. |
+| `stopping_phase` | Replay phase listed in the stopping table above. |
+| `stopping_reason` | Machine-readable reason for the stopping point. |
+| `last_replayed_activity` | Last activity successfully passed before replay stopped. |
+| `replayed_activities` | Activities successfully passed by the frontier, in first-occurrence order; artificial start and end activities may be included. |
+| `stopping_object_types` | Object types involved in the activity at which replay stopped. |
+
+Fields without applicable diagnostic information are `null` or an empty list.
+Full event and object details are deliberately omitted from the fitness result;
+they can be requested through the replay-unit detail endpoint.
 
 Inconclusive units are not treated as deviations. Aggregate values are:
 
@@ -156,6 +197,66 @@ inconclusive count.
 For a visible event that has no successor state, the unit result records the
 first proven failure event. A completion failure does not claim a specific
 visible event as its cause.
+
+The aggregate JSON repeats `fitness` and `coverage` alongside `total_units`,
+`fitting_units`, `non_fitting_units`, `inconclusive_units`, and the ordered
+`unit_results`. Empty replay-unit populations have coverage `1.0` and fitness
+`null` because there is nothing to classify.
+
+## Backend Integration
+
+OCCN conformance is exposed below the selected event log resource. All three
+endpoints operate on event logs visible to the current user.
+
+### Run conformance
+
+`POST /api/files/{event_log_id}/occn_conformance/`
+
+The request body accepts:
+
+| Field | Requirement |
+| --- | --- |
+| `asset_id` | Required positive ID of an OCCN model asset. |
+| `replay_unit_strategy` | Optional; defaults to `connected_components`. |
+| `leading_object_type` | Required only for `leading_object`; rejected for `connected_components`. |
+| `max_states` | Optional integer from `1000` through `15000`; defaults to `1000`. |
+
+The backend requires the model asset to be visible to the current user, belong
+to the same project as the event log, have asset type `OCCN`, and deserialize
+successfully through the canonical OCCN model contract. For leading-object
+replay, it also verifies that the selected object type exists in the event log.
+
+After validation, the endpoint loads the selected OCEL, extracts replay units
+with the requested strategy, invokes `occn_replay_fitness`, and adds
+`file_id`, `asset_id`, the effective strategy, leading object type, and state
+limit to the aggregate library result. Invalid request combinations and model
+selections return `400`; an inaccessible event log or asset returns `404`;
+unexpected extraction or replay failures return `500`.
+
+### List object types
+
+`GET /api/files/{event_log_id}/object_types/`
+
+This returns the object types present in the selected event log. The frontend
+uses the response to populate the leading-object-type selection; it does not
+infer this list from the model asset.
+
+### Inspect a replay unit
+
+`GET /api/files/{event_log_id}/occn_replay_unit_detail/`
+
+The query must identify `unit_id` and use the same
+`replay_unit_strategy`/`leading_object_type` combination as the conformance
+run. `offset` defaults to `0`; `limit` defaults to `50` and may range from `1`
+through `250`.
+
+The endpoint deterministically extracts the replay units again, resolves the
+requested unit ID, and returns a bounded page of ordered visible events. Each
+event contains its zero-based `event_index`, event ID, activity, Unix
+timestamp, and objects grouped by type. Pagination metadata includes total and
+returned counts plus previous and next offsets. The endpoint does not persist
+replay results or replay-unit snapshots, so callers must retain the strategy
+parameters that produced a unit ID.
 
 ## Search Limits
 
