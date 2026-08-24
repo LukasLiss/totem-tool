@@ -1,14 +1,90 @@
 # OCCN Replay Fitness
 
-The library-level OCCN replay-fitness implementation checks whether complete,
-ordered replay units can be executed by an `OCCausalNet`. It uses the current
-OCCN binding semantics directly and does not access Django projects, model
-assets, or event-log storage.
+OCCN conformance checks whether complete, ordered event sets from an
+object-centric event log can be executed by a stored `OCCausalNet`. These event
+sets are called replay units. The selected extraction strategy defines what one
+unit represents and therefore also defines the population over which fitness is
+reported.
+
+This document is the implementation-level contract for replay-unit extraction
+and replay fitness. Related concerns are documented separately:
+
+- [Model Assets](MODEL_ASSETS.md) defines the canonical OCCN JSON format,
+  validation, project scoping, and asset storage.
+- [The canonical OCCN example](examples/model-assets/occn-v1.json) is a complete
+  model payload accepted by the asset store and OCCN deserializer.
+- The library README contains a concise API entry point; this document is the
+  source of truth for conformance semantics and limitations.
+
+The library API is storage-independent after extraction. It does not access
+Django projects, model assets, or HTTP state. The backend is responsible for
+loading the selected event log and model asset before invoking the library.
+
+## Replay-Unit Extraction
+
+`extract_occn_replay_units` accepts either an `ObjectCentricEventLog` or an
+`OcelDuckDB`. Both storage paths first normalize visible events into immutable
+`OCCNReplayEvent` values containing the event ID, activity, Unix timestamp, and
+objects grouped by object type.
+
+The normalized contract is deterministic:
+
+- events are ordered by `(timestamp_unix, event_id)`;
+- object types and object IDs are sorted;
+- duplicate event IDs and inconsistent object metadata are rejected;
+- objectless events remain available to the connected-components strategy;
+- replay units contain visible log events only.
+
+Two extraction strategies are implemented.
+
+### Connected components (`connected_components`)
+
+This is the default strategy. It builds an undirected bipartite graph of event
+and object nodes and creates one replay unit for every connected component.
+Consequently, two events belong to the same unit when they are connected by a
+chain of shared objects, even if they do not directly share an object.
+
+Units are ordered by their ordered event sequence and receive deterministic IDs
+such as `connected_components:000001`. An event belongs to exactly one unit.
+An objectless event forms a singleton component. Objects without events do not
+create empty units.
+
+This strategy preserves complete connected process executions, but highly
+connected logs can collapse into one very large replay unit. The resulting
+unit is not a traditional single-object trace or a precomputed variant.
+
+### Leading object (`leading_object`)
+
+This strategy requires `leading_object_type`. It creates one replay unit for
+each object of that type and includes every visible event that directly
+references the leading object. Unit IDs use the object identifier, for example
+`leading_object:order-42`.
+
+Events shared by several leading objects occur in each corresponding replay
+unit. Events that do not reference an object of the selected type are excluded,
+even when they are indirectly connected through other objects. The resulting
+units are therefore overlapping leading-object projections rather than a
+partition of the log.
+
+Leading-object replay is useful for investigating whether a deviation affects
+all or only some objects of a selected type. Its aggregate fitness has a
+different denominator from connected-component fitness and the two values must
+not be compared as if they described the same replay-unit population.
 
 ## Public API
 
 ```python
-from totem_lib import occn_replay_fitness
+from totem_lib import (
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    extract_occn_replay_units,
+    occn_replay_fitness,
+)
+
+replay_units = extract_occn_replay_units(
+    event_log,
+    strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+    leading_object_type="orders",
+)
 
 result = occn_replay_fitness(
     occn,
@@ -16,6 +92,10 @@ result = occn_replay_fitness(
     max_states=1000,
 )
 ```
+
+Omitting `strategy` selects connected components. `leading_object_type` is
+required for leading-object replay and rejected for connected-component replay.
+Unsupported strategy values are rejected.
 
 `occn` must already be deserialized as an `OCCausalNet`. `replay_units` must
 contain the storage-independent `OCCNReplayUnit` values produced by the replay
