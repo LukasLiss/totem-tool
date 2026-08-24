@@ -258,6 +258,104 @@ returned counts plus previous and next offsets. The endpoint does not persist
 replay results or replay-unit snapshots, so callers must retain the strategy
 parameters that produced a unit ID.
 
+## Frontend Workflow
+
+The OCCN Conformance view compares the currently selected project event log
+with one stored OCCN model asset. It does not discover a replacement model.
+Model Assets can open the view with the corresponding OCCN already selected.
+
+Before replay, the user selects the replay-unit strategy and a state limit:
+
+- `Standard` maps to `connected_components`;
+- `Leading object type` maps to `leading_object` and loads the available object
+  types from the event log;
+- the state-limit slider ranges from `1000` through `15000` in steps of `100`;
+- raising the limit above `1000` displays a warning about potentially much
+  longer computation time.
+
+Changing the event log, project, model, strategy, leading object type, or state
+limit clears the previous result. While a request is running, model and
+strategy controls are disabled and duplicate submissions are prevented. A
+response from an obsolete request context is ignored.
+
+### Result summary and replay units
+
+The result summary always presents fitness, coverage, total replay units, and
+the three status counts together. Its top-level label follows these rules, in
+order:
+
+1. no units produces `No replay units`;
+2. any non-fitting unit produces `Deviations found`, or `Deviations found
+   (partial)` when inconclusive units also exist;
+3. only inconclusive units produces `Inconclusive`;
+4. fitting and inconclusive units produces `Partial result`;
+5. only fitting units produces `Fitting`.
+
+The replay-unit table shows status, event count, object types, and explored
+states. It can be filtered by status and displays 25 units per page. Selecting
+a unit scopes the model annotations to that unit and loads its visible event
+sequence in pages of 50. The detail view shows the unit metadata, highlights a
+known failure event in the sequence, and distinguishes an inconclusive search
+from a proven non-fitting result.
+
+### Model annotations
+
+The conformance visualization renders the selected canonical OCCN asset with
+the same visual language as the OCCN analysis/editor view. It does not render a
+newly discovered OCCN. Stopping activities are annotated as follows:
+
+- red identifies a proven non-fitting stopping point;
+- amber identifies a state-limit stopping point with an inconclusive result;
+- when at least one displayed unit is non-fitting, model activities not listed
+  as successfully replayed are muted in grey;
+- a stopping activity absent from the selected model is added as a separate
+  deviation node so the diagnostic remains visible;
+- `Focus stopping point` zooms to an annotated activity and cycles through
+  multiple stopping points.
+
+The annotation explains why replay stopped, the last successfully replayed
+activity where available, and explored-state information for inconclusive
+units. When a non-fitting stopping point names involved object types, each type
+is offered as a drill-down action. Choosing it immediately runs conformance
+again with the leading-object strategy for that type.
+
+These annotations visualize operational replay diagnostics. Grey activities
+mean that the displayed replay result did not report them as successfully
+passed; they do not prove that the activities are globally unreachable or
+incorrect.
+
+## Process Executions, Components, and Variants
+
+The reference OCCN fitness algorithm describes its inputs as concrete process
+executions. This implementation uses the more explicit term *replay unit*
+because the extraction strategy determines which event set is being tested.
+The terms are related, but they are not interchangeable in every strategy.
+
+| Concept | Meaning in this implementation | Effect on fitness |
+| --- | --- | --- |
+| Connected component | A maximal set of events connected through shared objects. Visible events are partitioned across components. | Each component is replayed once and contributes one equally weighted unit. |
+| Connected process execution | The process-execution interpretation used for a connected component by the reference algorithm. | Valid only under the modeling assumption that event-object connectedness defines one execution. |
+| Leading-object projection | All events directly referencing one selected object. Units may overlap and omit events unrelated to that leading type. | Each leading object contributes one unit; this creates a different population and denominator. |
+| Variant | A group of executions with equivalent behavior according to a separate variant definition. | Variants are not calculated or grouped for OCCN replay fitness. |
+
+Connected-component replay therefore evaluates concrete connected event sets,
+not one representative per variant. Two behaviorally identical components are
+both replayed and both contribute to the aggregate. Conversely, one highly
+connected component contributes only one unit even when it contains many
+business objects or repeated behavioral patterns.
+
+Leading-object replay is an investigative projection rather than a partition
+of the log. A shared event can influence several units, and events without the
+selected leading type do not influence the resulting score. Fitness values
+from the two strategies must always be interpreted with their strategy and
+unit counts; they are not directly comparable measurements of an unchanged
+population.
+
+Replay fitness also differs from precision. Fitness asks whether the observed
+replay units can be executed by the model. It does not penalize behavior that
+the model permits but the log never exhibits. That complementary question is
+handled by the separate [OCCN precision](OCCN_PRECISION.md) metric.
+
 ## Search Limits
 
 Binding search can grow exponentially with the number of events, objects, and
@@ -279,3 +377,52 @@ concerns.
   cost-optimal alignment or a complete causal diagnosis.
 - The current default state limit is an initial safeguard and has not been
   calibrated as a universal value for all logs and models.
+
+## Known Limitations
+
+- OCCN binding search can grow exponentially. The state limit makes the result
+  bounded and deterministic but does not impose a strict runtime limit on
+  successor enumeration.
+- A connected log can collapse into one very large component. This can make
+  standard replay expensive and can make one unit represent more behavior than
+  users intuitively consider one process execution.
+- Leading-object units include only events that directly reference the leading
+  object. They do not follow indirect connections, they can overlap, and there
+  is no universally correct leading object type.
+- Timestamp ties are resolved by event ID because the supported OCEL storage
+  representations do not expose one common source-row order.
+- Activity labels and observed object bindings are matched exactly. Missing
+  activities, object types, or compatible bindings can therefore stop replay;
+  the result does not infer mappings between model and log terminology.
+- A stopping point identifies where all current binding branches failed or the
+  state budget was exhausted. It is not a cost-optimal alignment, minimal
+  repair, or causal root-cause explanation.
+- Inconclusive units are excluded from fitness. A higher state limit can turn
+  them into fitting or non-fitting units and can therefore change both fitness
+  and coverage.
+- Every extracted unit has equal aggregate weight. The implementation does not
+  provide variant-weighted, event-weighted, or business-volume-weighted
+  fitness.
+- Replay results and derived units are not persisted. Detail requests repeat
+  deterministic extraction, and changing the underlying log would invalidate
+  previously retained unit identifiers.
+- The visualization derives muted activities from reported replay progress.
+  Muting is an aid for inspection, not proof that a model region is impossible
+  to reach in another binding branch or replay unit.
+
+## Open Questions
+
+The following are possible follow-up decisions, not promises made by the
+current API:
+
+- Should logs with one dominant connected component recommend a leading object
+  type, and what evidence should drive that recommendation?
+- Should the state limit be calibrated from model/log characteristics, or
+  should expensive replay move to cancellable background jobs with explicit
+  runtime limits?
+- Should reporting add variant grouping while retaining concrete-unit counts,
+  and how should repeated or overlapping units then be weighted?
+- Should later conformance provide alignments, repair suggestions, or richer
+  binding-level explanations beyond the first operational stopping point?
+- Should replay results and unit snapshots be cached or persisted so detail
+  inspection cannot diverge from the original run after data changes?
