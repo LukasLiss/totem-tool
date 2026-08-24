@@ -13,6 +13,9 @@ and replay fitness. Related concerns are documented separately:
   validation, project scoping, and asset storage.
 - [The canonical OCCN example](examples/model-assets/occn-v1.json) is a complete
   model payload accepted by the asset store and OCCN deserializer.
+- [The compatibility analysis](OCCN_REPLAY_FITNESS_COMPATIBILITY.md) records
+  how the reference algorithm was mapped to the current library. It is design
+  history; this document defines the implemented behavior.
 - The library README contains a concise API entry point; this document is the
   source of truth for conformance semantics and limitations.
 
@@ -103,6 +106,26 @@ unit extraction API.
 
 Pass `max_states=None` to request exhaustive replay without the deterministic
 state limit.
+
+## Canonical Example
+
+The repository's [OCCN v1 example](examples/model-assets/occn-v1.json) models
+one visible activity, `a`, synchronizing the `order` and `item` object types.
+Its marker groups require exactly one order and at least one item. The file is a
+model payload and can be uploaded directly through Model Assets; it is not an
+asset API envelope and does not contain a project or asset name.
+
+With the default state limit, the following single-event replay units exercise
+both central outcomes:
+
+| Visible event | Observed objects | Result | Diagnostic |
+| --- | --- | --- | --- |
+| `a` | `order-1`, `item-1` | `fitting` | Replay passes `START_item`, `START_order`, `a`, `END_item`, and `END_order`. |
+| `a` | `order-1` only | `non_fitting` | Replay stops at visible activity `a` with `no_enabled_event_binding` because the required item binding is absent. |
+
+These examples illustrate exact observed-object matching. They are intentionally
+small contract examples, not representative performance benchmarks or a
+recommendation for choosing replay units in a production log.
 
 ## Replay Procedure
 
