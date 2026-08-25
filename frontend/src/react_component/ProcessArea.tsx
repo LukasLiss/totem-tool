@@ -8,13 +8,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
-import {
-  RefreshCcw,
-  ScanIcon,
-  ZoomOut,
-  ZoomIn,
-} from 'lucide-react';
+import { RefreshCcw } from 'lucide-react';
 import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
@@ -75,35 +69,6 @@ export default function ProcessArea({
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
         <CardTitle>Process Area Visualizer</CardTitle>
         <CardAction className="flex items-center gap-2">
-          {totemControls && (
-            <>
-              <div className="flex items-center gap-2">
-                <ZoomOut className="h-4 w-4 text-muted-foreground" />
-                <Slider
-                  min={totemControls.minScale}
-                  max={totemControls.maxScale}
-                  step={totemControls.scaleStep}
-                  value={[totemControls.processAreaScale]}
-                  onValueChange={(values) =>
-                    totemControls.onProcessAreaScaleChange(values?.[0] ?? totemControls.minScale)
-                  }
-                  className="w-[120px]"
-                />
-                <ZoomIn className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <Button
-                type="button"
-                variant={totemControls.autoZoomEnabled ? 'secondary' : 'outline'}
-                size="icon"
-                onClick={totemControls.onAutoZoomToggle}
-                className="rounded-full h-8 w-8"
-                title={totemControls.autoZoomEnabled ? 'Disable auto-zoom (enables panning)' : 'Enable auto-zoom'}
-              >
-                <ScanIcon className="h-4 w-4" />
-              </Button>
-              <div className="w-px h-6 bg-border" />
-            </>
-          )}
           <Button
             variant="outline"
             size="sm"
