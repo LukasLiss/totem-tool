@@ -33,5 +33,5 @@ The Windows executable is built using Electron and includes everything needed to
 - [GIT_GUIDE.md](docs/GIT_GUIDE.md) - Git management guidelines
 - [MODEL_ASSETS.md](docs/MODEL_ASSETS.md) - Project model asset formats and upload behavior
 - [MODEL_EDITORS.md](docs/MODEL_EDITORS.md) - Visual editors for TOTeM models, OC causal nets and OC Petri nets (incl. JSON formats)
-- [OCCN_REPLAY_FITNESS.md](docs/OCCN_REPLAY_FITNESS.md) - OCCN replay-fitness API, result semantics, and search limits
+- [OCCN_REPLAY_FITNESS.md](docs/OCCN_REPLAY_FITNESS.md) - OCCN replay strategies, API and UI behavior, result interpretation, examples, and limitations
 - [PLAYOUT.md](docs/PLAYOUT.md) - Object-centric playout: enumerate and export all variants an OCPN/OCCN allows

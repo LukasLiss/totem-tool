@@ -49,15 +49,24 @@ not need delimiter escaping.
 
 ## OCCN replay-unit extraction
 
-OCCN conformance checks concrete event sets called replay units. The initial
-extraction strategy groups events by connected components of their shared
-objects:
+OCCN conformance checks concrete event sets called replay units. The default
+strategy groups events by connected components of their shared objects. A
+leading-object strategy is also available for targeted investigation:
 
 ```python
-from totem_lib import extract_occn_replay_units, import_ocel
+from totem_lib import (
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    extract_occn_replay_units,
+    import_ocel,
+)
 
 event_log = import_ocel("example_data/ocel2-p2p.json")
-replay_units = extract_occn_replay_units(event_log)
+connected_units = extract_occn_replay_units(event_log)
+order_units = extract_occn_replay_units(
+    event_log,
+    strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+    leading_object_type="orders",
+)
 ```
 
 The same API accepts an `ObjectCentricEventLog` or an `OcelDuckDB`. Both paths
@@ -72,14 +81,21 @@ produce immutable `OCCNReplayUnit` values with the same deterministic contract:
 - objects without events do not create empty units;
 - an empty log produces no replay units.
 
+Connected-component units partition the visible events. Leading-object units
+contain all events that directly reference one object of the selected type;
+shared events can therefore occur in several leading-object units. Their IDs
+use the leading object, for example `leading_object:order-42`.
+
 Replay units contain only visible log events. Artificial `START_<type>` and
 `END_<type>` activities are introduced internally by replay fitness and are
 not added to the event log or extraction result.
 
-The initial strategy can produce a very large unit when a few objects connect
-most of a log. It does not yet support variant-based or leading-object
-extraction, and timestamp ties are resolved by event ID because the supported
-storage backends do not expose a shared source-row index.
+Connected-component extraction can produce a very large unit when a few
+objects connect most of a log. Neither strategy groups units into variants.
+Timestamp ties are resolved by event ID because the supported storage backends
+do not expose a shared source-row index. See
+[`docs/OCCN_REPLAY_FITNESS.md`](../docs/OCCN_REPLAY_FITNESS.md) for the complete
+strategy, replay, result, and limitation contract.
 
 ## Installation
 

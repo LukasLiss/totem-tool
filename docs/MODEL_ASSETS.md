@@ -486,6 +486,10 @@ request. They can be uploaded directly in the Model Assets view by selecting
 the matching model type. They can also be used as `content_json` for direct JSON
 creation.
 
+The OCCN example is also used by the
+[OCCN replay-fitness documentation](OCCN_REPLAY_FITNESS.md#canonical-example)
+to demonstrate fitting and non-fitting exact-object replay.
+
 ## Adding a New Asset Type
 
 Adding an asset type requires one canonical model format and coordinated changes

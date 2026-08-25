@@ -4,6 +4,10 @@ This note supports issue #220. It compares the replay-fitness implementation
 in `LukasLiss/OCCN-ConfCheck` with the OCCN and OCEL APIs currently available
 in `totem_lib`.
 
+This is the historical compatibility and implementation analysis. See
+[OCCN Replay Fitness](OCCN_REPLAY_FITNESS.md) for the current behavior,
+frontend interpretation, examples, and known limitations.
+
 The comparison uses commit
 `d335c957a1ae1c11f4e05a83ebedbff19fa23bf0` from the external repository's
 default branch, `feature/ocpn-occn-translation-evaluation`. The main reference
