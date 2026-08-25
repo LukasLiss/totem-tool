@@ -26,6 +26,13 @@ from .datasets import (
     get_log,
     import_args,
 )
+from .plots import (
+    FIGURES_DIR,
+    plot_all,
+    plot_metric,
+    rows_from_csv,
+    series_for,
+)
 from .harness import (
     DEFAULT_REPEATS,
     BenchmarkResult,
@@ -49,6 +56,7 @@ __all__ = [
     "downloadable_logs",
     "EvaluationLog",
     "export",
+    "FIGURES_DIR",
     "FORMATS",
     "get_algorithm",
     "get_log",
@@ -59,6 +67,10 @@ __all__ = [
     "measure_once",
     "Measurement",
     "MissingInput",
+    "plot_all",
+    "plot_metric",
+    "rows_from_csv",
+    "series_for",
     "SIZE_METRICS",
     "STATISTIC_FIELDS",
     "write_csv",
