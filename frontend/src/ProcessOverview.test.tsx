@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
@@ -127,16 +128,18 @@ const occnAsset: ProjectAsset = {
 
 function renderOverview() {
   return render(
-    <SelectedFileContext.Provider
-      value={{
-        selectedFile: { id: 12, project: 7, file: "event-log.xml" },
-        setSelectedFile: vi.fn(),
-      }}
-    >
-      <DashboardProvider>
-        <ProcessOverview />
-      </DashboardProvider>
-    </SelectedFileContext.Provider>
+    <MemoryRouter initialEntries={["/overview"]}>
+      <SelectedFileContext.Provider
+        value={{
+          selectedFile: { id: 12, project: 7, file: "event-log.xml" },
+          setSelectedFile: vi.fn(),
+        }}
+      >
+        <DashboardProvider>
+          <ProcessOverview />
+        </DashboardProvider>
+      </SelectedFileContext.Provider>
+    </MemoryRouter>
   );
 }
 
