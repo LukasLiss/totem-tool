@@ -112,6 +112,26 @@ Use `--out-dir` to save somewhere else and `--formats` to write only some of the
 example `--formats md`. Each run overwrites the previous files. The generated JSON is
 gitignored; the Markdown and CSV are not, so an example run can be committed.
 
+It also saves one plot per size metric to `figures/`, named
+`runtime_vs_<metric>.png`. Each figure uses two channels: the line **colour** says which algorithm, the
+**marker shape** says which log a point came from. Runtime is on a log scale because the
+algorithms differ by five orders of magnitude, and `import_ocel` is drawn as a grey
+dashed baseline because it is the loading step the others build on, not a discovery
+algorithm.
+
+Reading the same results against different metrics matters. `discover_occn` looks
+erratic against the event count - slowest on the middle-sized log - but rises steadily
+against the number of event-to-object relations, which is what it actually scales with.
+
+Use `--no-figures` for a quick partial run: a filtered run would otherwise overwrite the
+committed figures with incomplete data. To rebuild the figures from the saved results
+without running anything:
+
+```python
+from evaluation.plots import plot_all, rows_from_csv
+plot_all(rows_from_csv("evaluation/results/benchmark_results.csv"))
+```
+
 The algorithms differ enormously in cost — from `CCDFG.from_ocel` at ~0.01 s to
 `discover_occn` at ~20 s on the smallest log — so try anything new on `ocel2-p2p` with
 `--repeats 1` first. `evaluation/algorithms.py` lists what runs and how each one is
