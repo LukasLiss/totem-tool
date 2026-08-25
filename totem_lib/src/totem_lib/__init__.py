@@ -17,6 +17,7 @@ from .totem import (
 from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars
 from .occn import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
     OCCausalNet,
     OCCausalNetSemantics,
     OCCausalNetState,
@@ -28,6 +29,7 @@ from .occn import (
     OCCNReplayUnit,
     OCCNReplayUnitResult,
     build_connected_component_replay_units,
+    build_leading_object_replay_units,
     discover_occn,
     extract_occn_replay_events,
     extract_occn_replay_units,
@@ -66,6 +68,7 @@ from .playout import (
 # All other symbols may be imported directly from their respective submodules.
 __all__ = [
     "build_connected_component_replay_units",
+    "build_leading_object_replay_units",
     "calculate_layout",
     "canonicalize_execution",
     "CCDFG",
@@ -81,6 +84,7 @@ __all__ = [
     "event_letter",
     "filter_dead_objects",
     "import_ocel",
+    "LEADING_OBJECT_REPLAY_STRATEGY",
     "mlpaDiscovery",
     "ObjectCentricEventLog",
     "OCCausalNet",

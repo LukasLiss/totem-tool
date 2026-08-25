@@ -37,6 +37,12 @@ def test_unit_result_exposes_binary_and_inconclusive_outcomes():
     assert non_fitting.replayable is False
     assert inconclusive.replayable is None
     assert inconclusive.to_dict()["status"] == "inconclusive"
+    assert inconclusive.to_dict()["stopping_activity"] is None
+    assert inconclusive.to_dict()["stopping_phase"] is None
+    assert inconclusive.to_dict()["stopping_reason"] is None
+    assert inconclusive.to_dict()["last_replayed_activity"] is None
+    assert inconclusive.to_dict()["replayed_activities"] == []
+    assert inconclusive.to_dict()["stopping_object_types"] == []
     assert inconclusive.object_types == ("item", "order")
     assert inconclusive.to_dict()["object_types"] == ["item", "order"]
 
@@ -51,6 +57,41 @@ def test_unit_result_rejects_invalid_object_type_summaries():
                 explored_state_count=1,
                 object_types=object_types,
             )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "stopping_activity",
+        "stopping_phase",
+        "stopping_reason",
+        "last_replayed_activity",
+    ),
+)
+def test_unit_result_rejects_invalid_replay_diagnostic(field_name):
+    with pytest.raises(ValueError, match=field_name):
+        OCCNReplayUnitResult(
+            unit_id="invalid-replay-diagnostic",
+            status=OCCNReplayStatus.NON_FITTING,
+            event_count=1,
+            explored_state_count=1,
+            **{field_name: ""},
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ("replayed_activities", "stopping_object_types"),
+)
+def test_unit_result_rejects_invalid_activity_collections(field_name):
+    with pytest.raises(ValueError, match=field_name):
+        OCCNReplayUnitResult(
+            unit_id="invalid-activity-collection",
+            status=OCCNReplayStatus.NON_FITTING,
+            event_count=1,
+            explored_state_count=1,
+            **{field_name: ("duplicate", "duplicate")},
+        )
 
 
 def test_object_types_do_not_change_existing_positional_arguments():

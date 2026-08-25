@@ -40,8 +40,12 @@ describe("OccnReplayUnitExplorer", () => {
   it("renders unit summaries and selects a unit", () => {
     const onSelectUnit = vi.fn();
     const units = [unit(1), unit(2, "non_fitting"), unit(3, "inconclusive")];
-    render(
-      <OccnReplayUnitExplorer units={units} onSelectUnit={onSelectUnit} />
+    const { rerender } = render(
+      <OccnReplayUnitExplorer
+        units={units}
+        selectedUnitId={null}
+        onSelectUnit={onSelectUnit}
+      />
     );
 
     expect(screen.getByText("Non-fitting")).toBeTruthy();
@@ -53,8 +57,21 @@ describe("OccnReplayUnitExplorer", () => {
     });
     fireEvent.click(unitButton);
 
-    expect(unitButton.getAttribute("aria-pressed")).toBe("true");
+    expect(unitButton.getAttribute("aria-pressed")).toBe("false");
     expect(onSelectUnit).toHaveBeenCalledWith(units[1]);
+
+    rerender(
+      <OccnReplayUnitExplorer
+        units={units}
+        selectedUnitId={units[1].unit_id}
+        onSelectUnit={onSelectUnit}
+      />
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000002" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
   });
 
   it("paginates large result sets without rendering every unit", () => {

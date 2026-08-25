@@ -10,6 +10,7 @@ from .serializers import (
     DashboardSerializer,
     EventLogSerializer,
     OCCNConformanceRequestSerializer,
+    OCCNReplayUnitDetailRequestSerializer,
     ProjectAssetSerializer,
     TotemConformanceRequestSerializer,
 )
@@ -277,8 +278,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            with _with_ocel_db(user_file) as db:
-                types = _object_types(db)
+            types = _get_ocel_object_types(user_file)
         except Exception as e:
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -425,11 +425,28 @@ class EventLogViewSet(viewsets.ModelViewSet):
         replay_unit_strategy = request_serializer.validated_data[
             "replay_unit_strategy"
         ]
+        leading_object_type = request_serializer.validated_data.get(
+            "leading_object_type"
+        )
+        max_states = request_serializer.validated_data["max_states"]
         try:
             with _with_ocel_db(user_file) as db:
+                if (
+                    leading_object_type is not None
+                    and leading_object_type not in _object_types(db)
+                ):
+                    return Response(
+                        {
+                            "leading_object_type": (
+                                "Object type does not exist in the event log."
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 replay_units = extract_occn_replay_units(
                     db,
                     strategy=replay_unit_strategy,
+                    leading_object_type=leading_object_type,
                 )
         except Exception as exc:
             return Response(
@@ -438,7 +455,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            result = occn_replay_fitness(occn, replay_units)
+            result = occn_replay_fitness(
+                occn,
+                replay_units,
+                max_states=max_states,
+            )
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate OCCN conformance: {exc}"},
@@ -450,7 +471,115 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
+                "leading_object_type": leading_object_type,
+                "max_states": max_states,
                 **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["get"])
+    def occn_replay_unit_detail(self, request, pk=None):
+        """Return one bounded event page for a derived OCCN replay unit."""
+        request_serializer = OCCNReplayUnitDetailRequestSerializer(
+            data=request.query_params
+        )
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        replay_unit_strategy = request_serializer.validated_data[
+            "replay_unit_strategy"
+        ]
+        leading_object_type = request_serializer.validated_data.get(
+            "leading_object_type"
+        )
+        try:
+            with _with_ocel_db(user_file) as db:
+                if (
+                    leading_object_type is not None
+                    and leading_object_type not in _object_types(db)
+                ):
+                    return Response(
+                        {
+                            "leading_object_type": (
+                                "Object type does not exist in the event log."
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                replay_units = extract_occn_replay_units(
+                    db,
+                    strategy=replay_unit_strategy,
+                    leading_object_type=leading_object_type,
+                )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to extract OCCN replay units: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        unit_id = request_serializer.validated_data["unit_id"]
+        replay_unit = next(
+            (unit for unit in replay_units if unit.unit_id == unit_id),
+            None,
+        )
+        if replay_unit is None:
+            return Response(
+                {"unit_id": "Replay unit not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        offset = request_serializer.validated_data["offset"]
+        limit = request_serializer.validated_data["limit"]
+        total_count = len(replay_unit.events)
+        event_page = replay_unit.events[offset : offset + limit]
+        returned_count = len(event_page)
+        has_previous = offset > 0 and total_count > 0
+        has_next = offset + returned_count < total_count
+        last_page_offset = (
+            ((total_count - 1) // limit) * limit if total_count > 0 else 0
+        )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "unit_id": replay_unit.unit_id,
+                "replay_unit_strategy": replay_unit_strategy,
+                "leading_object_type": leading_object_type,
+                "event_count": total_count,
+                "object_types": list(replay_unit.object_types),
+                "pagination": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned_count": returned_count,
+                    "total_count": total_count,
+                    "has_previous": has_previous,
+                    "has_next": has_next,
+                    "previous_offset": (
+                        min(max(0, offset - limit), last_page_offset)
+                        if has_previous
+                        else None
+                    ),
+                    "next_offset": offset + limit if has_next else None,
+                },
+                "events": [
+                    {
+                        "event_index": offset + index,
+                        **event.to_dict(),
+                    }
+                    for index, event in enumerate(event_page)
+                ],
             },
             status=status.HTTP_200_OK,
         )
@@ -932,6 +1061,7 @@ import threading
 from contextlib import contextmanager
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB]       = {}
 _OCEL_DB_LOCKS:    dict[int, threading.Lock]   = {}
+_OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[str, ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 
 
@@ -952,9 +1082,21 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
         db = _OCEL_DB_REGISTRY.get(pk)
         if db is None:
             db = _build_ocel_db_from_path(user_file.file.path)
+            object_types = tuple(_object_types(db))
             _OCEL_DB_REGISTRY[pk] = db
             _OCEL_DB_LOCKS[pk]    = threading.Lock()
+            _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
+
+
+def _get_ocel_object_types(user_file) -> list[str]:
+    """Return immutable log metadata without waiting for algorithm work."""
+    pk = int(user_file.pk)
+    object_types = _OCEL_OBJECT_TYPES_REGISTRY.get(pk)
+    if object_types is None:
+        _get_or_load_ocel_db(user_file)
+        object_types = _OCEL_OBJECT_TYPES_REGISTRY[pk]
+    return list(object_types)
 
 
 @contextmanager

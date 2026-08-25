@@ -1,27 +1,44 @@
-import { useContext, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   FileText,
   Info,
   LoaderCircle,
-  Network,
   Play,
+  RefreshCw,
 } from "lucide-react";
 
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  DEFAULT_OCCN_MAX_STATES,
+  LEADING_OBJECT_REPLAY_STRATEGY,
+  MAX_OCCN_MAX_STATES,
+  type OCCNConformanceResponse,
+  type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Slider } from "@/components/ui/slider";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnAssetSelector } from "./OccnAssetSelector";
+import { OccnConformanceVisualization } from "./OccnConformanceVisualization";
 import { OccnConformanceSummary } from "./OccnConformanceSummary";
+import { OccnReplayUnitDetail } from "./OccnReplayUnitDetail";
 import { OccnReplayUnitExplorer } from "./OccnReplayUnitExplorer";
 import { useOccnConformanceWorkflow } from "./useOccnConformanceWorkflow";
+import { useOccnReplayUnitDetail } from "./useOccnReplayUnitDetail";
 
 type SelectedEventLog = {
   id?: number;
@@ -30,8 +47,15 @@ type SelectedEventLog = {
 };
 
 const REPLAY_UNIT_STRATEGY_LABELS: Record<OCCNReplayUnitStrategy, string> = {
-  [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Connected components",
+  [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Standard",
+  [LEADING_OBJECT_REPLAY_STRATEGY]: "Leading object type",
 };
+
+interface ReplayUnitSelection {
+  contextKey: string;
+  result: OCCNConformanceResponse;
+  unitId: string;
+}
 
 export function OccnConformanceView({
   initialAssetId,
@@ -49,6 +73,37 @@ export function OccnConformanceView({
     positiveId(initialAssetId)
   );
   const { assetSelection } = workflow;
+  const [replayUnitSelection, setReplayUnitSelection] =
+    useState<ReplayUnitSelection | null>(null);
+  const replayUnitContextKey =
+    eventLogId && projectId && assetSelection.selectedAssetId
+      ? `${eventLogId}:${projectId}:${assetSelection.selectedAssetId}:${workflow.replayUnitStrategy}:${workflow.leadingObjectType ?? ""}`
+      : null;
+  const selectedReplayUnit = resolveSelectedReplayUnit(
+    replayUnitSelection,
+    replayUnitContextKey,
+    workflow.result
+  );
+
+  useEffect(() => {
+    setReplayUnitSelection(null);
+  }, [replayUnitContextKey, workflow.result]);
+
+  const replayUnitDetail = useOccnReplayUnitDetail(
+    eventLogId,
+    selectedReplayUnit,
+    workflow.replayUnitStrategy,
+    workflow.leadingObjectType
+  );
+
+  function selectReplayUnit(unit: OCCNReplayUnitResult) {
+    if (!replayUnitContextKey || !workflow.result) return;
+    setReplayUnitSelection({
+      contextKey: replayUnitContextKey,
+      result: workflow.result,
+      unitId: unit.unit_id,
+    });
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -61,7 +116,13 @@ export function OccnConformanceView({
             </h1>
           </header>
 
-          <section className="grid items-end gap-4 border-b pb-6 md:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_minmax(280px,1.3fr)_minmax(200px,1fr)_auto]">
+          <section
+            className={`grid items-end gap-4 border-b pb-6 md:grid-cols-2 ${
+              workflow.replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY
+                ? "xl:grid-cols-5"
+                : "xl:grid-cols-4"
+            }`}
+          >
             <div className="space-y-2">
               <Label>Event log</Label>
               <div className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-background px-3 text-sm">
@@ -93,20 +154,88 @@ export function OccnConformanceView({
 
             <div className="space-y-2">
               <Label>Replay unit strategy</Label>
-              <div
-                aria-label="Replay unit strategy"
-                className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-3 text-sm"
+              <Select
+                value={workflow.replayUnitStrategy}
+                onValueChange={(value) =>
+                  workflow.setReplayUnitStrategy(
+                    value as OCCNReplayUnitStrategy
+                  )
+                }
+                disabled={workflow.running}
               >
-                <Network className="size-4 shrink-0 text-muted-foreground" />
-                <span className="truncate">
-                  {REPLAY_UNIT_STRATEGY_LABELS[workflow.replayUnitStrategy]}
-                </span>
-              </div>
+                <SelectTrigger aria-label="Replay unit strategy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(REPLAY_UNIT_STRATEGY_LABELS).map(
+                    ([strategy, label]) => (
+                      <SelectItem key={strategy} value={strategy}>
+                        {label}
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
             </div>
+
+            {workflow.replayUnitStrategy ===
+            LEADING_OBJECT_REPLAY_STRATEGY ? (
+              <div className="space-y-2">
+                <Label>Leading object type</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={workflow.leadingObjectType ?? undefined}
+                    onValueChange={workflow.setLeadingObjectType}
+                    disabled={
+                      workflow.running ||
+                      workflow.objectTypesLoading ||
+                      workflow.objectTypesError !== null ||
+                      workflow.availableObjectTypes.length === 0
+                    }
+                  >
+                    <SelectTrigger aria-label="Leading object type">
+                      <SelectValue
+                        placeholder={
+                          workflow.objectTypesLoading
+                            ? "Loading object types"
+                            : workflow.availableObjectTypes.length === 0
+                              ? "No object types available"
+                              : "Select object type"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {workflow.availableObjectTypes.map((objectType) => (
+                        <SelectItem key={objectType} value={objectType}>
+                          {objectType}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {workflow.objectTypesError ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="Retry loading object types"
+                      aria-label="Retry loading object types"
+                      onClick={workflow.retryObjectTypes}
+                    >
+                      <RefreshCw />
+                    </Button>
+                  ) : null}
+                </div>
+                {workflow.objectTypesError ? (
+                  <p className="text-xs text-destructive">
+                    {workflow.objectTypesError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <Button
               type="button"
-              className="w-full xl:w-auto"
+              className="w-full"
               disabled={!workflow.canRun}
               onClick={() => void workflow.run()}
             >
@@ -117,6 +246,39 @@ export function OccnConformanceView({
               )}
               {workflow.running ? "Running" : "Run conformance"}
             </Button>
+
+            <div className="space-y-3 border-t pt-4 md:col-span-2 xl:col-span-full">
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="occn-state-limit">State limit per replay unit</Label>
+                <span className="text-sm font-medium tabular-nums">
+                  {workflow.maxStates.toLocaleString()}
+                </span>
+              </div>
+              <Slider
+                id="occn-state-limit"
+                thumbAriaLabel="State limit per replay unit"
+                min={DEFAULT_OCCN_MAX_STATES}
+                max={MAX_OCCN_MAX_STATES}
+                step={100}
+                value={[workflow.maxStates]}
+                disabled={workflow.running}
+                onValueChange={([maxStates]) =>
+                  workflow.setMaxStates(maxStates)
+                }
+              />
+              {workflow.maxStates > DEFAULT_OCCN_MAX_STATES ? (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    Higher state limits can significantly increase computation
+                    time.
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </section>
 
           {!eventLogId || !projectId ? (
@@ -143,7 +305,26 @@ export function OccnConformanceView({
           ) : workflow.result ? (
             <div className="grid gap-4">
               <OccnConformanceSummary result={workflow.result} />
-              <OccnReplayUnitExplorer units={workflow.result.unit_results} />
+              {assetSelection.selectedAsset ? (
+                <OccnConformanceVisualization
+                  asset={assetSelection.selectedAsset}
+                  result={workflow.result}
+                  selectedUnit={selectedReplayUnit}
+                  running={workflow.running}
+                  onRunLeadingObjectType={workflow.runLeadingObjectType}
+                />
+              ) : null}
+              <OccnReplayUnitExplorer
+                units={workflow.result.unit_results}
+                selectedUnitId={selectedReplayUnit?.unit_id ?? null}
+                onSelectUnit={selectReplayUnit}
+              />
+              {selectedReplayUnit ? (
+                <OccnReplayUnitDetail
+                  unit={selectedReplayUnit}
+                  detailState={replayUnitDetail}
+                />
+              ) : null}
             </div>
           ) : assetSelection.selectedAsset ? (
             <StatusMessage
@@ -165,6 +346,26 @@ export function OccnConformanceView({
         </div>
       </main>
     </div>
+  );
+}
+
+function resolveSelectedReplayUnit(
+  selection: ReplayUnitSelection | null,
+  contextKey: string | null,
+  result: OCCNConformanceResponse | null
+): OCCNReplayUnitResult | null {
+  if (
+    !selection ||
+    !contextKey ||
+    selection.contextKey !== contextKey ||
+    selection.result !== result
+  ) {
+    return null;
+  }
+
+  return (
+    result.unit_results.find((unit) => unit.unit_id === selection.unitId) ??
+    null
   );
 }
 

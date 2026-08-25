@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProjectAsset } from "@/api/assetsApi";
@@ -12,6 +18,10 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 
 import { OccnConformanceView } from "./OccnConformanceView";
 import { useOccnConformanceWorkflow } from "./useOccnConformanceWorkflow";
+import {
+  useOccnReplayUnitDetail,
+  type OccnReplayUnitDetailState,
+} from "./useOccnReplayUnitDetail";
 
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 vi.mock("./OccnAssetSelector", () => ({
@@ -20,8 +30,12 @@ vi.mock("./OccnAssetSelector", () => ({
 vi.mock("./useOccnConformanceWorkflow", () => ({
   useOccnConformanceWorkflow: vi.fn(),
 }));
+vi.mock("./useOccnReplayUnitDetail", () => ({
+  useOccnReplayUnitDetail: vi.fn(),
+}));
 
 const useWorkflowMock = vi.mocked(useOccnConformanceWorkflow);
+const useReplayUnitDetailMock = vi.mocked(useOccnReplayUnitDetail);
 
 const asset: ProjectAsset = {
   id: 42,
@@ -39,6 +53,8 @@ const response: OCCNConformanceResponse = {
   file_id: 12,
   asset_id: asset.id,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  leading_object_type: null,
+  max_states: 1_000,
   fitness: 1,
   coverage: 1,
   total_units: 1,
@@ -72,6 +88,15 @@ function workflowState(overrides: Record<string, unknown> = {}) {
       retry: vi.fn(),
     },
     replayUnitStrategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    setReplayUnitStrategy: vi.fn(),
+    leadingObjectType: null,
+    setLeadingObjectType: vi.fn(),
+    availableObjectTypes: [],
+    objectTypesLoading: false,
+    objectTypesError: null,
+    retryObjectTypes: vi.fn(),
+    maxStates: 1_000,
+    setMaxStates: vi.fn(),
     canRun: true,
     running: false,
     result: null,
@@ -89,7 +114,18 @@ function renderView(
     file: "event-log.xml",
   }
 ) {
-  return render(
+  return render(viewElement(initialAssetId, selectedFile));
+}
+
+function viewElement(
+  initialAssetId?: number,
+  selectedFile: { id: number; project: number; file: string } | null = {
+    id: 12,
+    project: 7,
+    file: "event-log.xml",
+  }
+) {
+  return (
     <SelectedFileContext.Provider
       value={{ selectedFile, setSelectedFile: vi.fn() }}
     >
@@ -98,9 +134,23 @@ function renderView(
   );
 }
 
+function replayUnitDetailState(): OccnReplayUnitDetailState {
+  return {
+    detail: null,
+    loading: false,
+    error: null,
+    requestedOffset: 0,
+    loadPage: vi.fn(),
+    retry: vi.fn(),
+    previousPage: vi.fn(),
+    nextPage: vi.fn(),
+  };
+}
+
 describe("OccnConformanceView", () => {
   beforeEach(() => {
     useWorkflowMock.mockReturnValue(workflowState());
+    useReplayUnitDetailMock.mockReturnValue(replayUnitDetailState());
   });
 
   afterEach(() => {
@@ -113,8 +163,42 @@ describe("OccnConformanceView", () => {
 
     expect(screen.getByText("OCCN Conformance")).toBeTruthy();
     expect(screen.getByText("event-log.xml")).toBeTruthy();
-    expect(screen.getByText("Connected components")).toBeTruthy();
+    expect(screen.getByText("Standard")).toBeTruthy();
     expect(screen.getByText("Ready to calculate")).toBeTruthy();
+    expect(
+      screen.getByRole("slider", { name: "State limit per replay unit" })
+    ).toBeTruthy();
+    const stateLimit = screen.getByRole("slider", {
+      name: "State limit per replay unit",
+    });
+    expect(stateLimit.getAttribute("aria-valuemin")).toBe("1000");
+    expect(stateLimit.getAttribute("aria-valuemax")).toBe("15000");
+    expect(stateLimit.getAttribute("aria-valuenow")).toBe("1000");
+    expect(screen.queryByText(/significantly increase/)).toBeNull();
+  });
+
+  it("adjusts the state limit in intermediate 100-state steps", () => {
+    const setMaxStates = vi.fn();
+    useWorkflowMock.mockReturnValue(workflowState({ setMaxStates }));
+    renderView();
+
+    fireEvent.keyDown(
+      screen.getByRole("slider", { name: "State limit per replay unit" }),
+      { key: "ArrowRight" }
+    );
+
+    expect(setMaxStates).toHaveBeenCalledWith(1_100);
+  });
+
+  it("warns when the state limit is raised", () => {
+    useWorkflowMock.mockReturnValue(workflowState({ maxStates: 10_000 }));
+
+    renderView();
+
+    expect(screen.getByText("10,000")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "significantly increase computation time"
+    );
   });
 
   it("passes a Model Assets row selection into the workflow", () => {
@@ -147,6 +231,157 @@ describe("OccnConformanceView", () => {
       screen.getByRole("region", { name: "Replay units" }).textContent
     ).toContain("connected_components:000001");
     expect(screen.queryByText("Conformance completed")).toBeNull();
+  });
+
+  it("loads detail for a controlled unit selection", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    renderView();
+
+    expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+      12,
+      null,
+      CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+      null
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+  });
+
+  it("clears replay-unit inspection when the result or log changes", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    const view = renderView();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+
+    const nextResult = {
+      ...response,
+      unit_results: response.unit_results.map((unit) => ({ ...unit })),
+    };
+    useWorkflowMock.mockReturnValue(workflowState({ result: nextResult }));
+    view.rerender(viewElement());
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        nextResult.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+
+    view.rerender(
+      viewElement(undefined, {
+        id: 13,
+        project: 7,
+        file: "replacement-log.xml",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        13,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+  });
+
+  it("clears replay-unit inspection when the selected model changes", async () => {
+    useWorkflowMock.mockReturnValue(workflowState({ result: response }));
+    const view = renderView();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "connected_components:000001",
+      })
+    );
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        response.unit_results[0],
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+
+    const replacementAsset = {
+      ...asset,
+      id: 43,
+      name: "Replacement OCCN",
+    };
+    useWorkflowMock.mockReturnValue(
+      workflowState({
+        result: response,
+        assetSelection: {
+          ...workflowState().assetSelection,
+          assets: [replacementAsset],
+          selectedAssetId: replacementAsset.id,
+          selectedAsset: replacementAsset,
+        },
+      })
+    );
+    view.rerender(viewElement());
+
+    await waitFor(() =>
+      expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+        12,
+        null,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null
+      )
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "connected_components:000001" })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
   });
 
   it("renders an inconclusive response without a success claim", () => {

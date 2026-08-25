@@ -5,6 +5,7 @@ import {
   useReactFlow,
   applyNodeChanges,
   applyEdgeChanges,
+  useNodesInitialized,
   type NodeChange,
   type EdgeChange,
 } from '@xyflow/react';
@@ -20,6 +21,7 @@ import {
   NetworkIcon,
   ArrowDownIcon,
   ArrowRightIcon,
+  LocateFixedIcon,
 } from 'lucide-react';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
@@ -62,7 +64,20 @@ interface OCCNVisualizerProps {
   objectTypes?: string[];
   /** Hide the in-canvas title when the surrounding page already renders one. */
   showTitle?: boolean;
+  /** Activity ids to emphasize as OCCN replay stopping points. */
+  conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
+  /** Log activities shown only to explain why replay stopped. */
+  missingConformanceActivities?: string[];
+  /** Model activities not reached by the displayed non-fitting replay. */
+  unvisitedActivities?: string[];
 }
+
+const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
+  string,
+  'non_fitting' | 'inconclusive'
+> = {};
+const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
+const EMPTY_UNVISITED_ACTIVITIES: string[] = [];
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -80,9 +95,13 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
+  conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
+  missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
+  unvisitedActivities = EMPTY_UNVISITED_ACTIVITIES,
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
+  const nodesInitialized = useNodesInitialized();
 
   // Track the container's real size so we can re-fit once the dashboard/gridstack
   // cell is actually sized (see the reactive re-fit effect below).
@@ -101,6 +120,8 @@ function OCCNVisualizer({
   const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
   // Bumped by the "re-layout" button to rerun ELK after manual dragging.
   const [layoutTick, setLayoutTick] = useState(0);
+  const [layoutReadyTick, setLayoutReadyTick] = useState(0);
+  const [nextConformanceFocus, setNextConformanceFocus] = useState(0);
 
   const nodeTypes = useMemo(() => ({ occn: OccnNodeComponent }), []);
   const edgeTypes = useMemo(() => ({ occnArc: OccnEdgeComponent }), []);
@@ -196,16 +217,44 @@ function OCCNVisualizer({
         setNodes(
           nextGraph.nodes.map((node) => ({
             ...node,
+            data: {
+              ...node.data,
+              conformanceStatus: conformanceHighlights[node.id],
+              conformanceMissingFromModel:
+                missingConformanceActivities.includes(node.id),
+              conformanceUnvisited:
+                unvisitedActivities.includes(node.id) &&
+                conformanceHighlights[node.id] == null,
+            },
             position: positions[node.id] ?? { x: 0, y: 0 },
           })),
         );
-        setEdges(nextGraph.edges);
-        window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+        setEdges(
+          nextGraph.edges.map((edge) => ({
+            ...edge,
+            data: {
+              ...edge.data,
+              conformanceUnvisited:
+                unvisitedActivities.includes(edge.source) ||
+                unvisitedActivities.includes(edge.target),
+            },
+          }))
+        );
+        setLayoutReadyTick((tick) => tick + 1);
       });
     return () => {
       cancelled = true;
     };
-  }, [net, fitView, maxMarkerGroupsPerSide, layoutDirection, layoutTick]);
+  }, [
+    net,
+    fitView,
+    maxMarkerGroupsPerSide,
+    layoutDirection,
+    layoutTick,
+    conformanceHighlights,
+    missingConformanceActivities,
+    unvisitedActivities,
+  ]);
 
   // Track the container size via a ResizeObserver. In a dashboard the gridstack
   // cell is sized asynchronously, so the initial layout's fitView often runs
@@ -234,10 +283,19 @@ function OCCNVisualizer({
   // placeholders before ELK layout has resolved.
   useEffect(() => {
     if (containerSize.width <= 0 || containerSize.height <= 0) return;
-    if (nodes.length === 0) return;
-    const frame = window.requestAnimationFrame(() => fitView({ padding: 0.15 }));
+    if (nodes.length === 0 || !nodesInitialized || layoutReadyTick === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      void fitView({ padding: 0.25, minZoom: 0.005, duration: 300 });
+    });
     return () => cancelAnimationFrame(frame);
-  }, [containerSize.width, containerSize.height, nodes.length, fitView]);
+  }, [
+    containerSize.width,
+    containerSize.height,
+    nodes.length,
+    nodesInitialized,
+    layoutReadyTick,
+    fitView,
+  ]);
 
   const renderContext = useMemo(
     () => ({
@@ -266,6 +324,47 @@ function OCCNVisualizer({
   );
 
   const interactionsDisabled = interactionLocked;
+  const highlightedNodeIds = useMemo(
+    () =>
+      Object.entries(conformanceHighlights)
+        .sort(
+          ([leftId, leftStatus], [rightId, rightStatus]) =>
+            Number(rightStatus === 'non_fitting') - Number(leftStatus === 'non_fitting') ||
+            leftId.localeCompare(rightId),
+        )
+        .map(([activity]) => activity),
+    [conformanceHighlights],
+  );
+  const focusableNodes = useMemo(
+    () =>
+      highlightedNodeIds
+        .map((activity) => nodes.find((node) => node.id === activity))
+        .filter((node): node is EditorOccnNode => node != null),
+    [highlightedNodeIds, nodes],
+  );
+  const highlightedNodeKey = highlightedNodeIds.join('\u0000');
+  const focusTarget =
+    focusableNodes.length > 0
+      ? focusableNodes[nextConformanceFocus % focusableNodes.length]
+      : null;
+
+  useEffect(() => {
+    setNextConformanceFocus(0);
+  }, [highlightedNodeKey]);
+
+  const focusStoppingPoint = useCallback(() => {
+    if (!focusTarget) return;
+    void fitView({
+      nodes: [focusTarget],
+      padding: 1.2,
+      minZoom: 0.8,
+      maxZoom: 1.4,
+      duration: 600,
+    });
+    setNextConformanceFocus((current) =>
+      focusableNodes.length > 1 ? (current + 1) % focusableNodes.length : current,
+    );
+  }, [fitView, focusTarget, focusableNodes.length]);
 
   return (
     <div
@@ -294,7 +393,7 @@ function OCCNVisualizer({
           proOptions={{ hideAttribution: true }}
           // Dense logs at threshold 0 lay out tens of thousands of px tall;
           // fitView cannot go below minZoom, so keep it low enough to fit.
-          minZoom={0.02}
+          minZoom={0.005}
           maxZoom={2.5}
           nodesDraggable={!interactionsDisabled}
           nodesConnectable={false}
@@ -315,6 +414,7 @@ function OCCNVisualizer({
               focusedGroup={null}
               interactive={false}
               markerTitle={markerTitle}
+              mutedActivities={unvisitedActivities}
             />
           )}
           {graph && (
@@ -326,6 +426,30 @@ function OCCNVisualizer({
           )}
         </ReactFlow>
       </OccnRenderContext.Provider>
+
+      {focusTarget ? (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={focusStoppingPoint}
+          className={`absolute right-4 top-4 z-20 bg-background shadow-md ${
+            conformanceHighlights[focusTarget.id] === 'non_fitting'
+              ? 'border-red-500 text-red-700 hover:text-red-800 dark:text-red-400'
+              : 'border-amber-500 text-amber-700 hover:text-amber-800 dark:text-amber-400'
+          }`}
+          title={`Focus ${focusTarget.id}`}
+          aria-label={`Focus stopping point ${focusTarget.id}`}
+        >
+          <LocateFixedIcon className="size-4" />
+          Focus stopping point
+          {focusableNodes.length > 1 ? (
+            <span className="tabular-nums">
+              {(nextConformanceFocus % focusableNodes.length) + 1}/
+              {focusableNodes.length}
+            </span>
+          ) : null}
+        </Button>
+      ) : null}
 
       {(loading || error) && (
         <div

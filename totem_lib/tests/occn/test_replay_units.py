@@ -5,11 +5,13 @@ import pytest
 
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
     OCCausalNetSemantics,
     OCCausalNetState,
     build_connected_component_replay_units,
+    build_leading_object_replay_units,
     extract_occn_replay_events,
     extract_occn_replay_units,
     replay_events_from_duckdb,
@@ -487,6 +489,71 @@ def test_connected_component_extraction_handles_empty_events():
     assert build_connected_component_replay_units(()) == ()
 
 
+def test_leading_object_units_project_events_per_selected_object():
+    events = (
+        make_event(
+            event_id="e3",
+            activity="Pack orders",
+            timestamp=3,
+            objects_by_type=(
+                ("Order", ("order-1", "order-2")),
+                ("Package", ("package-1",)),
+            ),
+        ),
+        make_event(
+            event_id="e1",
+            activity="Create first order",
+            timestamp=1,
+            objects_by_type=(("Order", ("order-1",)),),
+        ),
+        make_event(
+            event_id="e2",
+            activity="Create second order",
+            timestamp=2,
+            objects_by_type=(("Order", ("order-2",)),),
+        ),
+    )
+
+    units = build_leading_object_replay_units(events, "Order")
+
+    assert tuple(unit.unit_id for unit in units) == (
+        "leading_object:order-1",
+        "leading_object:order-2",
+    )
+    assert tuple(unit.event_ids for unit in units) == (
+        ("e1", "e3"),
+        ("e2", "e3"),
+    )
+    assert all(
+        unit.strategy == LEADING_OBJECT_REPLAY_STRATEGY for unit in units
+    )
+    assert units[0].object_types == ("Order", "Package")
+
+
+def test_leading_object_units_ignore_events_without_selected_type():
+    units = build_leading_object_replay_units(
+        (
+            make_event(objects_by_type=(("Item", ("item-1",)),)),
+            make_event(event_id="e2", objects_by_type=()),
+        ),
+        "Order",
+    )
+
+    assert units == ()
+
+
+def test_leading_object_unit_validation_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="leading_object_type"):
+        build_leading_object_replay_units((), "")
+
+    with pytest.raises(ValueError, match="OCCNReplayEvent"):
+        build_leading_object_replay_units(("e1",), "Order")
+
+    event = make_event()
+    with pytest.raises(ValueError, match="unique"):
+        build_leading_object_replay_units((event, event), "Order")
+
+
 def test_replay_unit_extraction_handles_empty_ocel_sources():
     source = make_ocel(events=[], objects=[])
     database = OcelDuckDB(source)
@@ -495,6 +562,35 @@ def test_replay_unit_extraction_handles_empty_ocel_sources():
         assert extract_occn_replay_units(database) == ()
     finally:
         database.conn.close()
+
+
+def test_replay_unit_extraction_dispatches_leading_object_strategy():
+    source = make_ocel()
+
+    units = extract_occn_replay_units(
+        source,
+        strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+        leading_object_type="Order",
+    )
+
+    assert tuple(unit.unit_id for unit in units) == ("leading_object:o1",)
+    assert units[0].event_ids == ("e1", "e2", "e3")
+
+
+def test_replay_unit_extraction_validates_strategy_options():
+    source = make_ocel()
+
+    with pytest.raises(ValueError, match="required"):
+        extract_occn_replay_units(
+            source,
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+        )
+
+    with pytest.raises(ValueError, match="only supported"):
+        extract_occn_replay_units(
+            source,
+            leading_object_type="Order",
+        )
 
 
 def test_connected_component_extraction_rejects_invalid_events():

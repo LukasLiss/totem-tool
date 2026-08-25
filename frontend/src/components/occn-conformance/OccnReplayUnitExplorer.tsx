@@ -33,16 +33,17 @@ type StatusFilter = OCCNReplayStatus | typeof ALL_STATUSES;
 
 export interface OccnReplayUnitExplorerProps {
   units: OCCNReplayUnitResult[];
+  selectedUnitId?: string | null;
   onSelectUnit?: (unit: OCCNReplayUnitResult) => void;
 }
 
 export function OccnReplayUnitExplorer({
   units,
+  selectedUnitId = null,
   onSelectUnit,
 }: OccnReplayUnitExplorerProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUSES);
   const [page, setPage] = useState(1);
-  const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
 
   const filteredUnits = useMemo(
     () =>
@@ -60,22 +61,12 @@ export function OccnReplayUnitExplorer({
     setPage((current) => Math.min(current, pageCount));
   }, [pageCount]);
 
-  useEffect(() => {
-    if (
-      selectedUnitId !== null &&
-      !units.some((unit) => unit.unit_id === selectedUnitId)
-    ) {
-      setSelectedUnitId(null);
-    }
-  }, [selectedUnitId, units]);
-
   function changeFilter(value: StatusFilter) {
     setStatusFilter(value);
     setPage(1);
   }
 
   function selectUnit(unit: OCCNReplayUnitResult) {
-    setSelectedUnitId(unit.unit_id);
     onSelectUnit?.(unit);
   }
 
@@ -153,7 +144,7 @@ export function OccnReplayUnitExplorer({
                     </Button>
                   </TableCell>
                   <TableCell>
-                    <ReplayStatusBadge status={unit.status} />
+                    <OccnReplayStatusBadge status={unit.status} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {unit.event_count.toLocaleString()}
@@ -225,7 +216,11 @@ export function OccnReplayUnitExplorer({
   );
 }
 
-function ReplayStatusBadge({ status }: { status: OCCNReplayStatus }) {
+export function OccnReplayStatusBadge({
+  status,
+}: {
+  status: OCCNReplayStatus;
+}) {
   const styles: Record<OCCNReplayStatus, string> = {
     fitting:
       "border-emerald-600/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",

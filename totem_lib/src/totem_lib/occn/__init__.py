@@ -13,9 +13,11 @@ from .replay_fitness import (
 )
 from .replay_units import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
     OCCNReplayEvent,
     OCCNReplayUnit,
     build_connected_component_replay_units,
+    build_leading_object_replay_units,
     extract_occn_replay_events,
     extract_occn_replay_units,
     replay_events_from_duckdb,
@@ -24,10 +26,12 @@ from .replay_units import (
 
 __all__ = [
     "build_connected_component_replay_units",
+    "build_leading_object_replay_units",
     "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "discover_occn",
     "extract_occn_replay_events",
     "extract_occn_replay_units",
+    "LEADING_OBJECT_REPLAY_STRATEGY",
     "OCCausalNet",
     "OCCausalNetSemantics",
     "OCCausalNetState",
