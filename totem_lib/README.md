@@ -113,9 +113,11 @@ example `--formats md`. Each run overwrites the previous files. The generated JS
 gitignored; the Markdown and CSV are not, so an example run can be committed.
 
 It also saves one plot per size metric to `figures/`, named
-`runtime_vs_<metric>.png`. Runtime is on a log scale because the algorithms differ by
-five orders of magnitude, and `import_ocel` is drawn as a grey dashed baseline because
-it is the loading step the others build on, not a discovery algorithm.
+`runtime_vs_<metric>.png`. Each figure uses two channels: the line **colour** says which algorithm, the
+**marker shape** says which log a point came from. Runtime is on a log scale because the
+algorithms differ by five orders of magnitude, and `import_ocel` is drawn as a grey
+dashed baseline because it is the loading step the others build on, not a discovery
+algorithm.
 
 Reading the same results against different metrics matters. `discover_occn` looks
 erratic against the event count - slowest on the middle-sized log - but rises steadily

@@ -15,11 +15,12 @@ import pytest
 # No display in CI. Must be set before pyplot is imported anywhere.
 matplotlib.use("Agg")
 
-from evaluation.datasets import SIZE_METRICS, LogStatistics
+from evaluation.datasets import LOGS, SIZE_METRICS, LogStatistics
 from evaluation.export import write_csv
 from evaluation.harness import BenchmarkResult
 from evaluation.plots import (
     FILE_PREFIX,
+    markers_for_logs,
     plot_all,
     plot_metric,
     rows_from_csv,
@@ -84,8 +85,36 @@ def test_series_sorts_by_the_plotted_metric_not_by_row_order():
         _row(log="big-log", statistics=_stats(num_events=100, num_e2o_relations=500)),
         _row(log="small-log", statistics=_stats(num_events=200, num_e2o_relations=50)),
     ]
-    xs = [x for x, _ in series_for(rows, "num_e2o_relations")["works"]]
+    xs = [x for x, _, _ in series_for(rows, "num_e2o_relations")["works"]]
     assert xs == [50, 500]
+
+
+def test_series_keeps_the_log_name_with_each_point():
+    """The marker shape says which log a point came from, so the name must travel."""
+    rows = [_row(log="log-a"), _row(log="log-b", statistics=_stats(num_events=200))]
+    points = series_for(rows, "num_events")["works"]
+    assert [log for _, _, log in points] == ["log-a", "log-b"]
+
+
+# ---------------------------------------------------------------------------
+# markers_for_logs
+# ---------------------------------------------------------------------------
+
+def test_each_log_gets_its_own_marker():
+    markers = markers_for_logs([_row(log="a"), _row(log="b"), _row(log="c")])
+    shapes = [markers["a"], markers["b"], markers["c"]]
+    assert len(set(shapes)) == 3
+
+
+def test_a_manifest_log_keeps_its_marker_when_others_are_missing():
+    """
+    Same rule as the colours: a log's shape must not change just because a run
+    covered fewer logs, or two figures would disagree.
+    """
+    first, second = LOGS[0].name, LOGS[1].name
+    full = markers_for_logs([_row(log=first), _row(log=second)])
+    partial = markers_for_logs([_row(log=second)])
+    assert partial[second] == full[second]
 
 
 def test_series_drops_a_failed_measurement():

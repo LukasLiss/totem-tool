@@ -42,8 +42,9 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402  (must come after use())
 from matplotlib import ticker  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 
-from evaluation.datasets import SIZE_METRICS, LogStatistics  # noqa: E402
+from evaluation.datasets import LOGS, SIZE_METRICS, LogStatistics  # noqa: E402
 
 FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 FILE_PREFIX = "runtime_vs_"
@@ -128,26 +129,43 @@ def rows_from_csv(path: Path | str) -> list:
 # Shaping the data
 # ---------------------------------------------------------------------------
 
-def series_for(rows: Sequence, metric: str) -> dict[str, list[tuple[int, float]]]:
+def series_for(rows: Sequence, metric: str) -> dict[str, list[tuple[int, float, str]]]:
     """
-    Group the rows into one (x, y) list per algorithm, sorted by x.
+    Group the rows into one (x, y, log) list per algorithm, sorted by x.
+
+    The log name travels with each point because the marker shape identifies which
+    log a point came from.
 
     Rows without a time or without statistics are dropped: a failed algorithm has no
     runtime to plot, and drawing it as zero would be a lie. Sorting matters because the
     logs are not in the same order for every metric.
     """
-    series: dict[str, list[tuple[int, float]]] = {}
+    series: dict[str, list[tuple[int, float, str]]] = {}
     for row in rows:
         if row.statistics is None or row.result.elapsed_s is None:
             continue
-        point = (getattr(row.statistics, metric), row.result.elapsed_s)
+        point = (getattr(row.statistics, metric), row.result.elapsed_s, row.log)
         series.setdefault(row.algorithm, []).append(point)
     return {name: sorted(points) for name, points in series.items()}
 
 
-def _style_for(index: int) -> tuple[str, str]:
-    """Colour and marker for the n-th coloured algorithm."""
-    return SERIES_COLORS[index % len(SERIES_COLORS)], MARKERS[index % len(MARKERS)]
+def _logs_in(series: Mapping, baseline) -> set[str]:
+    """Every log that actually has a point in this figure."""
+    drawn = {log for points in series.values() for _, _, log in points}
+    return drawn | {log for _, _, log in (baseline or [])}
+
+
+def markers_for_logs(rows: Sequence) -> dict[str, str]:
+    """
+    Pick one marker shape per log.
+
+    Logs in the manifest keep the same shape whatever else a run covers, the same way
+    an algorithm keeps its colour. Any other log takes the next free shape.
+    """
+    known = [log.name for log in LOGS]
+    seen = [row.log for row in rows]
+    ordered = known + [name for name in dict.fromkeys(seen) if name not in known]
+    return {name: MARKERS[index % len(MARKERS)] for index, name in enumerate(ordered)}
 
 
 # ---------------------------------------------------------------------------
@@ -168,34 +186,37 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
     figure.patch.set_facecolor(SURFACE)
     axes.set_facecolor(SURFACE)
 
+    log_markers = markers_for_logs(rows)
+
+    def draw(points, color, label, linestyle, zorder):
+        """Draw one algorithm: a line in its colour, a marker per log."""
+        axes.plot(
+            [x for x, _, _ in points],
+            [y for _, y, _ in points],
+            color=color,
+            linewidth=2,
+            linestyle=linestyle,
+            label=label,
+            zorder=zorder,
+        )
+        for x, y, log in points:
+            axes.plot(
+                x, y,
+                color=color,
+                marker=log_markers.get(log, "o"),
+                markersize=7,
+                linestyle="none",
+                zorder=zorder + 1,
+            )
+
     # The baseline is drawn first so the coloured lines sit on top of it.
     baseline = series.pop(BASELINE_ALGORITHM, None)
     if baseline:
-        axes.plot(
-            [x for x, _ in baseline],
-            [y for _, y in baseline],
-            color=BASELINE_COLOR,
-            linewidth=2,
-            linestyle="--",
-            marker="o",
-            markersize=6,
-            label=BASELINE_ALGORITHM + " (loading step)",
-            zorder=2,
-        )
+        draw(baseline, BASELINE_COLOR, BASELINE_ALGORITHM + " (loading step)", "--", 2)
 
     for index, name in enumerate(sorted(series)):
-        color, marker = _style_for(index)
-        points = series[name]
-        axes.plot(
-            [x for x, _ in points],
-            [y for _, y in points],
-            color=color,
-            linewidth=2,
-            marker=marker,
-            markersize=7,
-            label=name,
-            zorder=3,
-        )
+        color = SERIES_COLORS[index % len(SERIES_COLORS)]
+        draw(series[name], color, name, "-", 4)
 
     axes.set_yscale("log")
     axes.set_xlabel(SIZE_METRICS[metric], color=TEXT, fontsize=11)
@@ -220,18 +241,47 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
     # Thousands separators, to match the results table.
     axes.xaxis.set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
 
-    # Legend outside the plot: nine entries would cover the lines. Skipped when a run
-    # produced nothing to draw, since an empty legend only warns.
-    if axes.get_lines():
-        axes.legend(
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
+    # Two legends outside the plot, one per channel: colour says which algorithm,
+    # marker shape says which log. Skipped when a run produced nothing to draw.
+    legends = []
+    handles, labels = axes.get_legend_handles_labels()
+    if handles:
+        algorithms = axes.legend(
+            handles, labels,
+            title="Algorithm (colour)",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
             frameon=False,
             fontsize=9,
             labelcolor=TEXT,
         )
+        algorithms.get_title().set_color(TEXT)
+        axes.add_artist(algorithms)
+        legends.append(algorithms)
 
-    figure.savefig(path, bbox_inches="tight", facecolor=SURFACE)
+        drawn_logs = [name for name in log_markers if name in _logs_in(series, baseline)]
+        log_handles = [
+            Line2D([], [], color=TICKS, marker=log_markers[name], linestyle="none",
+                   markersize=7, label=name)
+            for name in drawn_logs
+        ]
+        if log_handles:
+            logs_legend = axes.legend(
+                handles=log_handles,
+                title="Log (marker)",
+                loc="lower left",
+                bbox_to_anchor=(1.02, 0.0),
+                frameon=False,
+                fontsize=9,
+                labelcolor=TEXT,
+            )
+            logs_legend.get_title().set_color(TEXT)
+            legends.append(logs_legend)
+
+    # Legends sit outside the axes, and one of them is attached by hand, so they have
+    # to be named here or the tight bounding box cuts their text off.
+    figure.savefig(path, bbox_inches="tight", bbox_extra_artists=legends,
+                   facecolor=SURFACE)
     plt.close(figure)
     return path
 
