@@ -504,7 +504,7 @@ class EventLogObjectTypesApiTests(TestCase):
             ) as get_types,
             patch("api.views._with_ocel_db") as algorithm_lock,
         ):
-            response = self.client.get(self.url)
+            response = self.client.get(self.url, {"bypass_cache": "1"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, ["Item", "Order"])
