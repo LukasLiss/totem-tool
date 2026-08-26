@@ -10,7 +10,7 @@ from totem_lib import (
 )
 from .models import EventLog, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, OCPNComponent, SQLQueryComponent, PieChartComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, OCPNComponent, SQLQueryComponent, PieChartComponent, FilterStackComponent
 from django.db.models import Max
 
 
@@ -335,6 +335,10 @@ class PieChartComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 
+class FilterStackComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = FilterStackComponent
+        fields = "__all__"
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -346,6 +350,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         TotemMinerComponent: TotemMinerComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
         OCDFGComponent: OCDFGComponentSerializer,
+        FilterStackComponent: FilterStackComponentSerializer,
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCPNComponent: OCPNComponentSerializer,
