@@ -12,22 +12,9 @@ export async function getUserFiles() {
   return data;
 }
 
-export async function processFile(token: string, fileId: string) {
-  const response = await fetch(`http://localhost:8000/api/files/${fileId}/NoE/`, {
-    method: "GET", // since our Django @action uses GET
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (response.status === 401) {
-    throw new Error("UNAUTHORIZED");
-  }
-  if (!response.ok) {
-    throw new Error(`Processing file failed: ${response.status} ${response.statusText}`);
-  }
-
-  return await response.json();
+export async function processFile(fileId: string | number) {
+  const { data } = await axios.get(`http://localhost:8000/api/files/${fileId}/NoE/`);
+  return data;
 }
 
 // Execute a SQL query on OCEL data
