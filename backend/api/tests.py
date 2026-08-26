@@ -41,10 +41,11 @@ from totem_lib.process_areas import (
     TemporalCounts,
 )
 
+from .cache_utils import RESULTS_CACHE, get_cached_result, make_cache_key
 from .lru_filecache import LRUFileBasedCache
 from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
-from .views import _parse_process_area_params, _process_area_cache_key, EventLogViewSet
+from .views import _parse_process_area_params, _process_area_cache_params, EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -2590,6 +2591,10 @@ class ProcessAreaDiscoveryApiTests(TestCase):
 
     def setUp(self):
         cache.clear()
+        # `cache.clear()` only clears the "default" alias; discovery results
+        # live in the separate file-backed "results" cache, which would
+        # otherwise leak hits between tests.
+        RESULTS_CACHE.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(username="process-area-user")
         self.project = Project.objects.create(name="Project PA")
@@ -2714,8 +2719,13 @@ class ProcessAreaDiscoveryApiTests(TestCase):
         self.assertNotEqual(first.data["layers"], second.data["layers"])
 
     def test_every_parameter_is_part_of_the_cache_key(self):
+        def key(file_pk, params):
+            return make_cache_key(
+                file_pk, "discover_process_areas", _process_area_cache_params(params)
+            )
+
         base = _parse_process_area_params({})
-        base_key = _process_area_cache_key(1, base)
+        base_key = key(1, base)
         for query, value in [
             ("w_temporal", "0.5"),
             ("w_cardinality", "0.5"),
@@ -2724,8 +2734,8 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             ("beta", "3"),
         ]:
             changed = _parse_process_area_params({query: value})
-            self.assertNotEqual(base_key, _process_area_cache_key(1, changed), query)
-        self.assertNotEqual(base_key, _process_area_cache_key(2, base))
+            self.assertNotEqual(base_key, key(1, changed), query)
+        self.assertNotEqual(base_key, key(2, base))
 
     def test_preparation_is_cached_across_parameter_changes(self):
         _, first_prepare = self._get("?alpha=1")
@@ -2770,7 +2780,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
         ):
             response = self.client.get(f"/api/files/{self.event_log.pk}/discover_mlpa/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsNotNone(cache.get(f"mlpa_discovery_{self.event_log.pk}"))
+        self.assertIsNotNone(get_cached_result(self.event_log, "discover_mlpa"))
 
 
 class ProcessAreaComponentPersistenceTests(TestCase):

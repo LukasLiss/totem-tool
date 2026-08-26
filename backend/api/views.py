@@ -709,28 +709,36 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # file alone, which is fine because it takes no parameters; copying
             # that here would make the UI sliders silently return the first
             # result for an hour.
-            cache_key = _process_area_cache_key(user_file.pk, params)
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return Response(cached_result, status=status.HTTP_200_OK)
+            cache_params = _process_area_cache_params(params)
+            use_cache = _should_use_cache(request)
+            if use_cache:
+                cached = get_cached_result(
+                    user_file, "discover_process_areas", cache_params
+                )
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             # Two-tier cache. Preparation reads the log and depends only on it;
             # the weights and alpha/beta only affect scoring and the ILP solve.
             # Caching the two separately turns a slider change into a solve
             # instead of a full rediscovery.
-            prep_key = f"process_area_prep_{user_file.pk}"
-            aggregates = cache.get(prep_key)
-            totem_key = f"totem_discovery_{user_file.pk}"
-            totem_data = cache.get(totem_key)
+            aggregates = (
+                get_cached_result(user_file, "process_area_prep") if use_cache else None
+            )
+            totem_data = (
+                get_cached_result(user_file, "discover_totem_raw") if use_cache else None
+            )
 
             if aggregates is None or totem_data is None:
                 with _with_ocel_db(user_file) as db:
                     if aggregates is None:
                         aggregates = prepare_db(db)
-                        cache.set(prep_key, aggregates, timeout=3600)
+                        set_cached_result(user_file, "process_area_prep", aggregates)
                     if totem_data is None:
                         totem_data = totem_to_dict(totemDiscovery_db(db))
-                        cache.set(totem_key, totem_data, timeout=3600)
+                        set_cached_result(
+                            user_file, "discover_totem_raw", totem_data
+                        )
 
             process_view = process_areas_from_aggregates(
                 aggregates,
@@ -747,7 +755,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "object_type_to_event_types": totem_data["object_type_to_event_types"],
             }
 
-            cache.set(cache_key, serialized, timeout=3600)
+            set_cached_result(
+                user_file, "discover_process_areas", serialized, cache_params
+            )
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -1394,12 +1404,21 @@ def _parse_process_area_params(params) -> dict:
     return {"weights": weights, "alpha": alpha, "beta": beta}
 
 
-def _process_area_cache_key(file_pk, params: dict) -> str:
-    """Cache key covering the file and every discovery parameter."""
-    parts = [f"{name}={params['weights'][name]:.6g}" for name in INDICATOR_NAMES]
-    parts.append(f"alpha={params['alpha']:.6g}")
-    parts.append(f"beta={params['beta']:.6g}")
-    return f"process_areas_{file_pk}_" + "_".join(parts)
+def _process_area_cache_params(params: dict) -> dict:
+    """
+    Flatten the discovery parameters into the ``params`` dict that
+    `cache_utils.make_cache_key` hashes.
+
+    Every parameter has to be in here: `discover_mlpa` keys on the file alone,
+    which is fine because it takes no parameters, but doing that here would
+    make the UI sliders silently return the first result forever. Floats are
+    rendered with `%.6g` rather than passed raw so that 1.0 and 1.0000001 —
+    indistinguishable to the algorithm — do not produce two cache entries.
+    """
+    flat = {name: f"{params['weights'][name]:.6g}" for name in INDICATOR_NAMES}
+    flat["alpha"] = f"{params['alpha']:.6g}"
+    flat["beta"] = f"{params['beta']:.6g}"
+    return flat
 
 
 def _serialize_process_layers(process_view: dict) -> list:
