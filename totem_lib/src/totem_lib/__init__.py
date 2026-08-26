@@ -3,6 +3,9 @@ from .ocel import (
     import_ocel,
     convert_ocel_polars_to_pm4py,
     filter_dead_objects,
+    FilterRule,
+    FilterStack,
+    apply_filter_stack,
 )
 from .totem import (
     conformance_of_totem,
@@ -68,6 +71,7 @@ from .playout import (
 # Exposes the public API functions. These are imported when doing `from totem_lib import *`
 # All other symbols may be imported directly from their respective submodules.
 __all__ = [
+    "apply_filter_stack",
     "build_connected_component_replay_units",
     "build_leading_object_replay_units",
     "calculate_layout",
@@ -87,6 +91,8 @@ __all__ = [
     "EditCosts",
     "event_letter",
     "filter_dead_objects",
+    "FilterRule",
+    "FilterStack",
     "import_ocel",
     "LEADING_OBJECT_REPLAY_STRATEGY",
     "mlpaDiscovery",
