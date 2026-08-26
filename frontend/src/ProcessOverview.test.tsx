@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
@@ -81,8 +82,13 @@ vi.mock("@/components/dev_dashboard", () => ({
 vi.mock("@/components/AnalysisView", () => ({
   AnalysisView: () => <div>Analysis page</div>,
 }));
-vi.mock("@/components/ConformancePlaceholderView", () => ({
-  ConformancePlaceholderView: () => <div>OCCN placeholder</div>,
+vi.mock("@/components/occn-conformance/OccnConformanceView", () => ({
+  OccnConformanceView: ({ initialAssetId }: { initialAssetId?: number }) => (
+    <div data-testid="occn-workflow">
+      OCCN workflow
+      {initialAssetId ? ` for asset ${initialAssetId}` : ""}
+    </div>
+  ),
 }));
 vi.mock("@/components/totem-conformance/TotemConformanceView", () => ({
   TotemConformanceView: ({ initialAssetId }: { initialAssetId?: number }) => (
@@ -113,25 +119,34 @@ const totemAsset: ProjectAsset = {
   updated_at: "2026-07-22T10:00:00Z",
 };
 
+const occnAsset: ProjectAsset = {
+  ...totemAsset,
+  id: 43,
+  name: "Reference OCCN",
+  asset_type: "OCCN",
+};
+
 function renderOverview() {
   return render(
-    <SelectedFileContext.Provider
-      value={{
-        selectedFile: { id: 12, project: 7, file: "event-log.xml" },
-        setSelectedFile: vi.fn(),
-      }}
-    >
-      <DashboardProvider>
-        <ProcessOverview />
-      </DashboardProvider>
-    </SelectedFileContext.Provider>
+    <MemoryRouter initialEntries={["/overview"]}>
+      <SelectedFileContext.Provider
+        value={{
+          selectedFile: { id: 12, project: 7, file: "event-log.xml" },
+          setSelectedFile: vi.fn(),
+        }}
+      >
+        <DashboardProvider>
+          <ProcessOverview />
+        </DashboardProvider>
+      </SelectedFileContext.Provider>
+    </MemoryRouter>
   );
 }
 
-describe("ProcessOverview TOTeM conformance routing", () => {
+describe("ProcessOverview conformance routing", () => {
   beforeEach(() => {
     listAssetsMock.mockReset();
-    listAssetsMock.mockResolvedValue([totemAsset]);
+    listAssetsMock.mockResolvedValue([totemAsset, occnAsset]);
   });
 
   afterEach(() => {
@@ -166,15 +181,39 @@ describe("ProcessOverview TOTeM conformance routing", () => {
     );
   });
 
-  it("keeps Analysis and OCCN navigation outside the TOTeM workflow", () => {
+  it("opens the real OCCN workflow from Conformance navigation", () => {
+    renderOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "OCCN Conformance" }));
+
+    expect(screen.getByTestId("occn-workflow").textContent).toContain(
+      "OCCN workflow"
+    );
+  });
+
+  it("carries a Model Assets row selection into the OCCN workflow", async () => {
+    renderOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Model Assets" }));
+    await waitFor(() => expect(screen.getByText("Reference OCCN")).toBeTruthy());
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Use Reference OCCN for conformance",
+      })
+    );
+
+    expect(screen.getByTestId("occn-workflow").textContent).toContain(
+      "asset 43"
+    );
+  });
+
+  it("keeps Analysis navigation outside the conformance workflows", () => {
     renderOverview();
 
     fireEvent.click(screen.getByRole("button", { name: "Process Area" }));
     expect(screen.getByText("Analysis page")).toBeTruthy();
     expect(screen.queryByTestId("totem-workflow")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "OCCN Conformance" }));
-    expect(screen.getByText("OCCN placeholder")).toBeTruthy();
-    expect(screen.queryByTestId("totem-workflow")).toBeNull();
+    expect(screen.queryByTestId("occn-workflow")).toBeNull();
   });
 });
