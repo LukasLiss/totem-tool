@@ -2,7 +2,9 @@ import { ReactNode, useState } from 'react';
 import {
   Download,
   FilePlus2,
+  FolderOpen,
   Redo2,
+  Save,
   Undo2,
   Upload,
   Wand2,
@@ -44,6 +46,10 @@ type EditorShellProps = {
   onImport: () => void;
   /** Export the current model as a JSON file. */
   onExport: () => void;
+  /** Optional: store the current model in the project model asset store. */
+  onSaveToProject?: () => void;
+  /** Optional: load a model from the project model asset store. */
+  onOpenFromProject?: () => void;
   /** Optional automatic layout of the current graph. */
   onAutoLayout?: () => void;
   /** Optional example model to demonstrate the notation. */
@@ -127,6 +133,8 @@ export function EditorShell({
   onNew,
   onImport,
   onExport,
+  onSaveToProject,
+  onOpenFromProject,
   onAutoLayout,
   onLoadExample,
   undo,
@@ -188,9 +196,19 @@ export function EditorShell({
             <FileButton label="New" variant="outline" onClick={() => setConfirmNewOpen(true)}>
               <FilePlus2 />
             </FileButton>
+            {onOpenFromProject && (
+              <FileButton label="Open from project" variant="outline" onClick={onOpenFromProject}>
+                <FolderOpen />
+              </FileButton>
+            )}
             <FileButton label="Load JSON" variant="outline" onClick={onImport}>
               <Upload />
             </FileButton>
+            {onSaveToProject && (
+              <FileButton label="Save to project" variant="outline" onClick={onSaveToProject}>
+                <Save />
+              </FileButton>
+            )}
             <FileButton label="Save JSON" onClick={onExport}>
               <Download />
             </FileButton>

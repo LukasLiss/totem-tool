@@ -170,6 +170,29 @@ SIMPLE_JWT = {
 MEDIA_ROOT = BASE_DIR / "user_files"
 MEDIA_URL = "/files/"
 
+# ---------------------------------------------------------------------------
+# Request result cache (filesystem-backed, size-capped)  — Epic #71
+# ---------------------------------------------------------------------------
+RESULT_CACHE_DIR = BASE_DIR / "cache" / "results"
+RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("TOTEM_CACHE_MAX_ENTRIES", "300"))
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    },
+    "results": {
+        # LRU subclass of Django's FileBasedCache — the stock backend evicts a
+        # random selection of entries at the size cap, which can discard hot
+        # results while keeping cold ones.
+        "BACKEND": "api.lru_filecache.LRUFileBasedCache",
+        "LOCATION": str(RESULT_CACHE_DIR),
+        "OPTIONS": {
+            "MAX_ENTRIES": RESULT_CACHE_MAX_ENTRIES,
+        },
+        "TIMEOUT": None,  # no auto-expiry; evicted on size cap or explicit clear
+    },
+}
+
 # Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
 LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
 
@@ -211,4 +234,3 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.6-flash')
 ASSISTANT_AGENT_ENABLED = True
-

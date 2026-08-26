@@ -37,6 +37,15 @@ export interface CreateAssetParams {
   metadata?: ProjectAssetMetadata;
 }
 
+export interface UpdateAssetParams {
+  assetId: number;
+  /** New name; omit to keep the current name. */
+  name?: string;
+  /** New model content; omit to keep the current content. */
+  contentJson?: Record<string, unknown>;
+  metadata?: ProjectAssetMetadata;
+}
+
 export interface DownloadedAsset {
   blob: Blob;
   filename: string;
@@ -93,6 +102,18 @@ export async function createAsset(params: CreateAssetParams) {
     content_json: params.contentJson,
     metadata: params.metadata ?? {},
   });
+  return data;
+}
+
+export async function updateAsset(params: UpdateAssetParams) {
+  const payload: Record<string, unknown> = {};
+  if (params.name !== undefined) payload.name = params.name;
+  if (params.contentJson !== undefined) payload.content_json = params.contentJson;
+  if (params.metadata !== undefined) payload.metadata = params.metadata;
+  const { data } = await axios.patch<ProjectAsset>(
+    `${ASSETS_URL}${params.assetId}/`,
+    payload
+  );
   return data;
 }
 

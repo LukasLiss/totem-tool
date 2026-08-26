@@ -48,6 +48,109 @@ type ProcessLayer = {
   areas: ProcessAreaDefinition[];
 };
 
+/**
+ * Which engine decides the object-type hierarchy.
+ *
+ * - `mlpa`      — temporal relations only (Liss & van der Aalst, BPM 2025).
+ * - `advanced`  — the three resource indicators of Schlegelmilch's thesis
+ *                 section 4.1, tunable through {@link ProcessAreaParams}.
+ *
+ * Both endpoints return the same payload, so switching changes the URL and
+ * nothing else in the render path.
+ */
+export type ProcessAreaAlgorithm = 'mlpa' | 'advanced';
+
+/**
+ * Parameters of the advanced algorithm.
+ *
+ * The weights decide how much each indicator contributes. `alpha` and `beta`
+ * balance the two halves of the ILP objective, and follow the **thesis**
+ * convention: `alpha` weights the resource force (separation), `beta` the
+ * attractive force (cohesion). The reference implementation names them the
+ * other way round; getting this backwards makes both sliders feel inverted.
+ */
+export type ProcessAreaParams = {
+  wTemporal: number;
+  wCardinality: number;
+  wDivergence: number;
+  alpha: number;
+  beta: number;
+};
+
+export const DEFAULT_PROCESS_AREA_ALGORITHM: ProcessAreaAlgorithm = 'advanced';
+
+export const DEFAULT_PROCESS_AREA_PARAMS: ProcessAreaParams = {
+  wTemporal: 1,
+  wCardinality: 1,
+  wDivergence: 1,
+  alpha: 1,
+  beta: 1,
+};
+
+export const PROCESS_AREA_ALGORITHM_LABELS: Record<ProcessAreaAlgorithm, string> = {
+  mlpa: 'MLPA (temporal)',
+  advanced: 'Advanced (resource indicators)',
+};
+
+/**
+ * Slider bounds. The lower bounds come from the thesis, the upper ones from how
+ * the result actually responds — the maths bounds none of these above.
+ *
+ * **Weights** may be zero: Def. 4.1.11 takes `w_i ∈ ℝ≥0`, and a zero weight
+ * simply drops that indicator. They are normalised by their sum, so only their
+ * ratios matter and `0..2` around a default of `1` reaches every relative
+ * weighting.
+ *
+ * **α and β may not.** Def. 4.1.12 takes them from `ℝ⁺`, strictly positive, and
+ * the degenerate cases show why: at `α = 0` nothing separates the object types
+ * and the whole log collapses onto one layer; at `β = 0` nothing holds peers
+ * together. Neither is a hierarchy. The sliders therefore start at `0.1`.
+ *
+ * Their upper bound is `10`: only the ratio α/β matters — scaling both leaves
+ * the ILP's argmin unchanged — so `0.1..10` spans ratios from 1:100 to 100:1.
+ * Sweeping α against β = 1, container-logistics settles by 1.5,
+ * order-management by 6 and p2p by 4. Only p2p moves again past 25, and by then
+ * the resource force has drowned out cohesion entirely.
+ */
+export const PROCESS_AREA_PARAM_RANGES: Record<
+  keyof ProcessAreaParams,
+  { min: number; max: number; step: number }
+> = {
+  wTemporal: { min: 0, max: 2, step: 0.05 },
+  wCardinality: { min: 0, max: 2, step: 0.05 },
+  wDivergence: { min: 0, max: 2, step: 0.05 },
+  alpha: { min: 0.1, max: 10, step: 0.1 },
+  beta: { min: 0.1, max: 10, step: 0.1 },
+};
+
+/** Pull a value into its slider's range. */
+function clampProcessAreaParam(key: keyof ProcessAreaParams, value: number): number {
+  const { min, max } = PROCESS_AREA_PARAM_RANGES[key];
+  if (!Number.isFinite(value)) return DEFAULT_PROCESS_AREA_PARAMS[key];
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Clamp a whole parameter set. Persisted dashboards may hold an α or β of `0`
+ * from before the lower bound existed; those must land on `0.1` rather than
+ * leaving the slider stuck below its own minimum.
+ */
+export function clampProcessAreaParams(
+  params: Partial<ProcessAreaParams> | undefined,
+): ProcessAreaParams {
+  const merged = { ...DEFAULT_PROCESS_AREA_PARAMS, ...params };
+  return (Object.keys(DEFAULT_PROCESS_AREA_PARAMS) as Array<keyof ProcessAreaParams>).reduce(
+    (result, key) => {
+      result[key] = clampProcessAreaParam(key, merged[key]);
+      return result;
+    },
+    {} as ProcessAreaParams,
+  );
+}
+
+/** Every committed slider change is a backend round-trip; don't fire per pixel. */
+const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
+
 export type TotemVisualizerControls = {
   processAreaScale: number;
   onProcessAreaScaleChange: (value: number) => void;
@@ -56,6 +159,11 @@ export type TotemVisualizerControls = {
   minScale: number;
   maxScale: number;
   scaleStep: number;
+  algorithm: ProcessAreaAlgorithm;
+  onAlgorithmChange: (value: ProcessAreaAlgorithm) => void;
+  params: ProcessAreaParams;
+  onParamChange: (key: keyof ProcessAreaParams, value: number) => void;
+  onParamsReset: () => void;
 };
 
 type TotemVisualizerProps = {
@@ -68,6 +176,14 @@ type TotemVisualizerProps = {
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
+  /** Persisted starting values; changes to these re-seed the local state. */
+  initialAlgorithm?: ProcessAreaAlgorithm;
+  initialParams?: Partial<ProcessAreaParams>;
+  /** Fired whenever the user changes the algorithm or a parameter. */
+  onSettingsChange?: (settings: {
+    algorithm: ProcessAreaAlgorithm;
+    params: ProcessAreaParams;
+  }) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -226,7 +342,7 @@ type ProcessAreaMetrics = {
   detailMinDistance: number;
 };
 
-const DEFAULT_BACKEND = 'http://127.0.0.1:8000';
+const DEFAULT_BACKEND = 'http://localhost:8000';
 const DEFAULT_PROCESS_AREA_SCALE = 0.9;
 const MIN_PROCESS_AREA_SCALE = 0.2;
 const MAX_PROCESS_AREA_SCALE = 1.2;
@@ -4398,6 +4514,63 @@ function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): Lay
     }
   });
 
+  // Areas of one layer are siblings in a single CSS grid, each spanning
+  // `[min column .. max column]` of the object types it holds. Nothing above
+  // keeps a layer's areas apart — the crossing search orders individual nodes —
+  // so two areas can interleave, their spans overlap, and grid auto-placement
+  // drops the second one onto an implicit second row. It then reads as an
+  // object type that belongs to no layer at all: on container-logistics,
+  // `Truck` lands between `CustomerOrder` and `TransportDocument` and its area
+  // is pushed into the gap below level 2.
+  //
+  // Re-seat each layer's types so every area occupies a contiguous block. The
+  // columns already in use at the layer are kept and only redistributed, so the
+  // layer's horizontal footprint — and its alignment against the layers above
+  // and below — does not move, and neither does the crossing search's ordering
+  // of the areas themselves.
+  levelNodeMap.forEach((descriptors) => {
+    if (descriptors.length === 0) return;
+
+    const byArea = new Map<string, LevelNodeDescriptor[]>();
+    descriptors.forEach((descriptor) => {
+      const group = byArea.get(descriptor.areaId);
+      if (group) group.push(descriptor);
+      else byArea.set(descriptor.areaId, [descriptor]);
+    });
+    if (byArea.size < 2) return;
+
+    const columnOf = (descriptor: LevelNodeDescriptor) =>
+      nodeColumns[descriptor.id] ?? 0;
+    const slots = descriptors.map(columnOf).sort((a, b) => a - b);
+    // Areas keep the left-to-right order their nodes' mean column earned.
+    const areas = Array.from(byArea.values()).sort((a, b) => {
+      const meanA = a.reduce((sum, d) => sum + columnOf(d), 0) / a.length;
+      const meanB = b.reduce((sum, d) => sum + columnOf(d), 0) / b.length;
+      if (meanA === meanB) return a[0].orderHint - b[0].orderHint;
+      return meanA - meanB;
+    });
+
+    const reseated = new Map<string, number>();
+    let slot = 0;
+    areas.forEach((group) => {
+      group
+        .slice()
+        .sort((a, b) => {
+          const diff = columnOf(a) - columnOf(b);
+          return diff !== 0 ? diff : a.orderHint - b.orderHint;
+        })
+        .forEach((descriptor) => {
+          reseated.set(descriptor.id, slots[slot]);
+          slot += 1;
+        });
+    });
+
+    reseated.forEach((column, nodeId) => {
+      nodeColumns[nodeId] = column;
+      positions.set(nodeId, column);
+    });
+  });
+
   const areaPlacements: Record<string, { startColumn: number; span: number }> = {};
   const levelAreaCursor = new Map<number, number>();
 
@@ -4745,266 +4918,9 @@ function computeDetailLayout(
   return layout;
 }
 
-function computeLevelAssignments(data: TotemApiResponse): Map<string, number> {
-  const nodes = new Set<string>();
-
-  const ensureNode = (node: string | undefined | null) => {
-    if (!node) return;
-    nodes.add(node);
-  };
-
-  (data.tempgraph?.nodes ?? []).forEach((node) => ensureNode(node));
-
-  const collectEdgeNodes = (edges?: unknown) => {
-    if (!Array.isArray(edges)) return;
-    (edges as string[][]).forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        ensureNode(pair[0]);
-        ensureNode(pair[1]);
-      }
-    });
-  };
-
-  collectEdgeNodes(data.tempgraph?.D);
-  collectEdgeNodes((data.tempgraph as Record<string, unknown>)?.Di);
-  collectEdgeNodes(data.tempgraph?.P);
-
-  class UnionFind {
-    private parent = new Map<string, string>();
-    private rank = new Map<string, number>();
-
-    constructor(values: Iterable<string>) {
-      Array.from(values).forEach((value) => {
-        this.parent.set(value, value);
-        this.rank.set(value, 0);
-      });
-    }
-
-    find(value: string): string {
-      const parentValue = this.parent.get(value);
-      if (!parentValue || parentValue === value) return value;
-      const root = this.find(parentValue);
-      this.parent.set(value, root);
-      return root;
-    }
-
-    union(a?: string, b?: string) {
-      if (!a || !b) return;
-      const rootA = this.find(a);
-      const rootB = this.find(b);
-      if (rootA === rootB) return;
-      const rankA = this.rank.get(rootA) ?? 0;
-      const rankB = this.rank.get(rootB) ?? 0;
-      if (rankA < rankB) {
-        this.parent.set(rootA, rootB);
-      } else if (rankA > rankB) {
-        this.parent.set(rootB, rootA);
-      } else {
-        this.parent.set(rootB, rootA);
-        this.rank.set(rootA, rankA + 1);
-      }
-    }
-  }
-
-  const unionFind = new UnionFind(nodes);
-
-  const parallelEdges = data.tempgraph?.P as string[][];
-  if (Array.isArray(parallelEdges)) {
-    parallelEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        unionFind.union(pair[0], pair[1]);
-      }
-    });
-  }
-
-  const componentByNode = new Map<string, string>();
-  nodes.forEach((node) => {
-    componentByNode.set(node, unionFind.find(node));
-  });
-
-  const componentAdjacency = new Map<string, Set<string>>();
-  const componentIndegree = new Map<string, number>();
-
-  const ensureComponent = (component: string) => {
-    if (!componentAdjacency.has(component)) componentAdjacency.set(component, new Set());
-    if (!componentIndegree.has(component)) componentIndegree.set(component, 0);
-  };
-
-  componentByNode.forEach((component) => ensureComponent(component));
-
-  const registerComponentEdge = (source?: string, target?: string) => {
-    if (!source || !target) return;
-    const sourceComponent = componentByNode.get(source);
-    const targetComponent = componentByNode.get(target);
-    if (!sourceComponent || !targetComponent || sourceComponent === targetComponent) return;
-    ensureComponent(sourceComponent);
-    ensureComponent(targetComponent);
-    const neighbours = componentAdjacency.get(sourceComponent)!;
-    if (!neighbours.has(targetComponent)) {
-      neighbours.add(targetComponent);
-      componentIndegree.set(targetComponent, (componentIndegree.get(targetComponent) ?? 0) + 1);
-    }
-  };
-
-  const dependentEdges = data.tempgraph?.D as string[][];
-  if (Array.isArray(dependentEdges)) {
-    dependentEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        registerComponentEdge(pair[0], pair[1]);
-      }
-    });
-  }
-
-  const dependentInverseEdges = (data.tempgraph as Record<string, unknown>)?.Di as string[][];
-  if (Array.isArray(dependentInverseEdges)) {
-    dependentInverseEdges.forEach((pair) => {
-      if (Array.isArray(pair) && pair.length >= 2) {
-        registerComponentEdge(pair[1], pair[0]);
-      }
-    });
-  }
-
-  const componentQueue: string[] = [];
-  componentIndegree.forEach((value, component) => {
-    if (value === 0) {
-      componentQueue.push(component);
-    }
-  });
-
-  const componentLevels = new Map<string, number>();
-  const visitedComponents = new Set<string>();
-
-  componentQueue.forEach((component) => {
-    if (!componentLevels.has(component)) {
-      componentLevels.set(component, 0);
-    }
-  });
-
-  while (componentQueue.length > 0) {
-    const component = componentQueue.shift()!;
-    visitedComponents.add(component);
-    const currentLevel = componentLevels.get(component) ?? 0;
-
-    componentAdjacency.get(component)?.forEach((neighbour) => {
-      const proposed = currentLevel + 1;
-      const previous = componentLevels.get(neighbour) ?? 0;
-      if (proposed > previous) {
-        componentLevels.set(neighbour, proposed);
-      }
-      const remaining = (componentIndegree.get(neighbour) ?? 0) - 1;
-      componentIndegree.set(neighbour, remaining);
-      if (remaining <= 0 && !visitedComponents.has(neighbour)) {
-        componentQueue.push(neighbour);
-      }
-    });
-  }
-
-  const sortedComponents = Array.from(new Set(componentByNode.values())).sort((a, b) => a.localeCompare(b));
-  sortedComponents.forEach((component) => {
-    if (!componentLevels.has(component)) {
-      componentLevels.set(component, 0);
-    }
-  });
-
-  const nodeLevels = new Map<string, number>();
-
-  componentByNode.forEach((component, node) => {
-    nodeLevels.set(node, componentLevels.get(component) ?? 0);
-  });
-
-  const levelValues = Array.from(nodeLevels.values());
-  const minLevel = levelValues.length > 0 ? Math.min(...levelValues) : 0;
-  if (minLevel !== 0 && Number.isFinite(minLevel)) {
-    nodeLevels.forEach((value, key) => {
-      nodeLevels.set(key, value - minLevel);
-    });
-  }
-
-  return nodeLevels;
-}
-
-function computeProcessAreas(
-  levels: Map<string, number>,
-  typeRelations?: Array<string[]>,
-): ProcessAreaDefinition[] {
-  const nodesByLevel = new Map<number, string[]>();
-  levels.forEach((level, node) => {
-    const numericLevel = Number.isFinite(level) ? level : 0;
-    if (!nodesByLevel.has(numericLevel)) {
-      nodesByLevel.set(numericLevel, []);
-    }
-    nodesByLevel.get(numericLevel)!.push(node);
-  });
-
-  const adjacency = new Map<string, Set<string>>();
-  typeRelations?.forEach((relation) => {
-    if (!Array.isArray(relation)) return;
-    for (let i = 0; i < relation.length; i += 1) {
-      for (let j = i + 1; j < relation.length; j += 1) {
-        const a = relation[i];
-        const b = relation[j];
-        if (!a || !b) continue;
-        if (!adjacency.has(a)) adjacency.set(a, new Set());
-        if (!adjacency.has(b)) adjacency.set(b, new Set());
-        adjacency.get(a)!.add(b);
-        adjacency.get(b)!.add(a);
-      }
-    }
-  });
-
-  const areas: ProcessAreaDefinition[] = [];
-  const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
-
-  sortedLevels.forEach((level) => {
-    const nodesAtLevel = nodesByLevel.get(level)?.slice().sort((a, b) => a.localeCompare(b)) ?? [];
-    const seen = new Set<string>();
-    let areaIndex = 0;
-
-    nodesAtLevel.forEach((node) => {
-      if (seen.has(node)) return;
-      const stack = [node];
-      const group: string[] = [];
-
-      while (stack.length > 0) {
-        const current = stack.pop()!;
-        if (seen.has(current)) continue;
-        seen.add(current);
-        group.push(current);
-        adjacency.get(current)?.forEach((neighbour) => {
-          if (!seen.has(neighbour) && (levels.get(neighbour) ?? level) === level) {
-            stack.push(neighbour);
-          }
-        });
-      }
-
-      group.sort((a, b) => a.localeCompare(b));
-      const alphabetIndex = String.fromCharCode(65 + (areaIndex % 26));
-      const repetition = areaIndex >= 26 ? Math.floor(areaIndex / 26) + 1 : '';
-      const suffix = group.length > 0 ? `-${alphabetIndex}${repetition}` : '';
-      areas.push({
-        id: `process-area-${level}-${areaIndex}`,
-        level,
-        label: `Process Area ${level}${suffix}`,
-        objectTypes: group,
-      });
-      areaIndex += 1;
-    });
-
-    if (nodesAtLevel.length === 0 && !areas.some((area) => area.level === level)) {
-      areas.push({
-        id: `process-area-${level}-empty`,
-        level,
-        label: `Process Area ${level}`,
-        objectTypes: [],
-      });
-    }
-  });
-
-  return areas;
-}
-
 function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
-  // Use pre-computed layers from the backend MLPA algorithm
+  // Both discovery algorithms return the same payload, so the only thing that
+  // ever builds layers is this: read what the backend decided.
   if (!data.layers || data.layers.length === 0) return [];
 
   // Sort layers by level descending (highest level first for display)
@@ -5020,32 +4936,6 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
         : mlpaArea.objectTypes.join(' & '),
       objectTypes: mlpaArea.objectTypes,
     })),
-  }));
-}
-
-function buildLayersFromFrontend(data: TotemApiResponse): ProcessLayer[] {
-  // Use frontend's greedy MLPA-like algorithm
-  const levels = computeLevelAssignments(data);
-  if (levels.size === 0) return [];
-
-  const areas = computeProcessAreas(levels, data.type_relations);
-  const areasByLevel = new Map<number, ProcessAreaDefinition[]>();
-
-  areas.forEach((area) => {
-    if (!areasByLevel.has(area.level)) {
-      areasByLevel.set(area.level, []);
-    }
-    areasByLevel.get(area.level)!.push(area);
-  });
-
-  areasByLevel.forEach((entries) => {
-    entries.sort((a, b) => a.label.localeCompare(b.label));
-  });
-
-  const sortedLevels = Array.from(areasByLevel.keys()).sort((a, b) => b - a);
-  return sortedLevels.map((level) => ({
-    level,
-    areas: areasByLevel.get(level) ?? [],
   }));
 }
 
@@ -5115,14 +5005,6 @@ function getFilteredDetailData(
   };
 }
 
-function buildLayers(data: TotemApiResponse, useBackendMlpa: boolean): ProcessLayer[] {
-  if (useBackendMlpa && data.layers && data.layers.length > 0) {
-    return buildLayersFromBackend(data);
-  }
-  return buildLayersFromFrontend(data);
-}
-
-
 function TotemVisualizer({
   eventLogId,
   height = '100%',
@@ -5132,12 +5014,44 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
+  initialAlgorithm,
+  initialParams,
+  onSettingsChange,
 }: TotemVisualizerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
+  const seededAlgorithm = initialAlgorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM;
+  const seededParams = useMemo(
+    () => clampProcessAreaParams(initialParams),
+    [
+      initialParams?.wTemporal,
+      initialParams?.wCardinality,
+      initialParams?.wDivergence,
+      initialParams?.alpha,
+      initialParams?.beta,
+    ],
+  );
+  const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(seededAlgorithm);
+  // `params` follows the sliders; `appliedParams` lags behind it by the
+  // debounce and is the only thing the fetch depends on.
+  const [params, setParams] = useState<ProcessAreaParams>(seededParams);
+  const [appliedParams, setAppliedParams] = useState<ProcessAreaParams>(seededParams);
+
+  // Re-seed when the persisted settings change — a dashboard finishing its
+  // load, or the user editing the component's configuration.
+  useEffect(() => {
+    setAlgorithm(seededAlgorithm);
+  }, [seededAlgorithm]);
+
+  useEffect(() => {
+    setParams(seededParams);
+    setAppliedParams(seededParams);
+  }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
+  /** Sequence number of the most recently started hierarchy request. */
+  const latestTotemRequestRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -5318,6 +5232,52 @@ function TotemVisualizer({
     setProcessAreaScale(clamped);
   }, []);
 
+  // Reported only from the change handlers, never from the seeding effects —
+  // echoing a seed straight back to the owner would loop.
+  const onSettingsChangeRef = useRef(onSettingsChange);
+  useEffect(() => {
+    onSettingsChangeRef.current = onSettingsChange;
+  }, [onSettingsChange]);
+
+  const handleAlgorithmChange = useCallback(
+    (value: ProcessAreaAlgorithm) => {
+      setAlgorithm(value);
+      onSettingsChangeRef.current?.({ algorithm: value, params });
+    },
+    [params],
+  );
+
+  const handleParamChange = useCallback(
+    (key: keyof ProcessAreaParams, value: number) => {
+      if (!Number.isFinite(value)) return;
+      const next = { ...params, [key]: clampProcessAreaParam(key, value) };
+      setParams(next);
+      onSettingsChangeRef.current?.({ algorithm, params: next });
+    },
+    [algorithm, params],
+  );
+
+  const handleParamsReset = useCallback(() => {
+    setParams(DEFAULT_PROCESS_AREA_PARAMS);
+    onSettingsChangeRef.current?.({
+      algorithm,
+      params: DEFAULT_PROCESS_AREA_PARAMS,
+    });
+  }, [algorithm]);
+
+  // Debounce the sliders. Weights that are all zero would be a 400, so the
+  // fetch is simply held back until at least one of them is non-zero again.
+  useEffect(() => {
+    const weightSum = params.wTemporal + params.wCardinality + params.wDivergence;
+    if (weightSum <= 0) return;
+    const timer = window.setTimeout(
+      () => setAppliedParams(params),
+      PROCESS_AREA_PARAM_DEBOUNCE_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [params]);
+
+
   // ── Viewport pan handlers (transform-based, no scrollbars) ────────────────
   const handlePanStart = useCallback(
     (e: React.MouseEvent) => {
@@ -5430,7 +5390,12 @@ function TotemVisualizer({
     const gridW = levelMinimumWidthRef.current;
 
     // Calculate unscaled bounding box of actual diagram contents (nodes + gap + legend + details)
-    const leftLimit = bounds ? Math.min(padL, bounds.left) : 0;
+    //
+    // Start at the leftmost thing actually drawn. Widening the box out to the
+    // content padding instead folds the empty gutter left of the first column
+    // into it, and centring that box leaves the diagram sitting right of
+    // centre with a large dead margin on the left.
+    const leftLimit = bounds ? bounds.left : 0;
     const rightLimit = bounds ? Math.max(padL + gridW + 40 + 120, bounds.right) : contentEl.offsetWidth;
 
     const unscaledW = rightLimit - leftLimit;
@@ -5512,8 +5477,23 @@ function TotemVisualizer({
       minScale: MIN_PROCESS_AREA_SCALE,
       maxScale: MAX_PROCESS_AREA_SCALE,
       scaleStep: PROCESS_AREA_SCALE_STEP,
+      algorithm,
+      onAlgorithmChange: handleAlgorithmChange,
+      params,
+      onParamChange: handleParamChange,
+      onParamsReset: handleParamsReset,
     });
-  }, [onControlsReady, processAreaScale, handleProcessAreaScaleChange, panLocked]);
+  }, [
+    onControlsReady,
+    processAreaScale,
+    handleProcessAreaScaleChange,
+    panLocked,
+    algorithm,
+    handleAlgorithmChange,
+    params,
+    handleParamChange,
+    handleParamsReset,
+  ]);
 
   useEffect(() => {
     smoothedProcessAreaScaleRef.current = smoothedProcessAreaScale;
@@ -5601,7 +5581,7 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayers(rawTotem, true) : []), [rawTotem]);
+  const layers = useMemo(() => (rawTotem ? buildLayersFromBackend(rawTotem) : []), [rawTotem]);
   const levelCount = layers.length;
   const extraTopPadding = useMemo(() => {
     const deficit = Math.max(0, 4 - levelCount);
@@ -5755,22 +5735,48 @@ function TotemVisualizer({
       return;
     }
 
+    // Parameter changes fire repeatedly and the backend answers a cached
+    // combination in milliseconds while a cold one takes hundreds. Without a
+    // sequence number, a slow early response lands after a fast later one and
+    // the canvas ends up showing the parameters the user has already left.
+    const requestId = ++latestTotemRequestRef.current;
+    const isCurrent = () => requestId === latestTotemRequestRef.current;
+
     setLoading(true);
     setError(null);
-    setRawTotem(null);
+    // The previous hierarchy stays on screen while the new one is computed.
+    // Blanking it here would collapse every expanded process area and reset the
+    // zoom on every slider commit.
     try {
-      const { data: payload } = await axios.get<TotemApiResponse>(
-        `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`
-      );
+      const url =
+        algorithm === 'advanced'
+          ? `${backendBaseUrl}/api/files/${eventLogId}/discover_process_areas/?` +
+            new URLSearchParams({
+              w_temporal: String(appliedParams.wTemporal),
+              w_cardinality: String(appliedParams.wCardinality),
+              w_divergence: String(appliedParams.wDivergence),
+              alpha: String(appliedParams.alpha),
+              beta: String(appliedParams.beta),
+            }).toString()
+          : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
+      const { data: payload } = await axios.get<TotemApiResponse>(url);
+      if (!isCurrent()) return;
       setRawTotem(payload);
     } catch (err) {
+      if (!isCurrent()) return;
       console.error('[TotemVisualizer] Failed to load Totem data', err);
-      setError(err instanceof Error ? err.message : 'Failed to load Totem data');
+      const message =
+        axios.isAxiosError(err) && err.response?.data?.error
+          ? String(err.response.data.error)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to load Totem data';
+      setError(message);
       setRawTotem(null);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId]);
+  }, [backendBaseUrl, eventLogId, algorithm, appliedParams]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -5898,6 +5904,15 @@ function TotemVisualizer({
     setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
   }, [effectiveReloadSignal]);
 
+  // Reset the view when the *log* changes, not on every response. Re-layering
+  // the same log keeps the same object types, so the expanded areas and the
+  // OCDFG details cached against them stay valid; throwing them away on each
+  // parameter change would make the panel unusable to tune with.
+  const totemNodeSignature = useMemo(
+    () => JSON.stringify([...(rawTotem?.tempgraph?.nodes ?? [])].sort()),
+    [rawTotem?.tempgraph],
+  );
+
   useEffect(() => {
     setExpandedAreas({});
     setDetailSizes({});
@@ -5911,9 +5926,13 @@ function TotemVisualizer({
     setSmoothedProcessAreaScale(DEFAULT_PROCESS_AREA_SCALE);
     setPendingCenter((value) => value + 1);
     hasManuallyInteractedRef.current = false;
-  }, [rawTotem?.tempgraph]);
+  }, [totemNodeSignature, effectiveReloadSignal]);
 
   useEffect(() => {
+    // A different log invalidates the hierarchy outright, so blank it rather
+    // than leaving the previous log's boxes on screen during the fetch. (A
+    // parameter change deliberately does not do this — see fetchTotem.)
+    setRawTotem(null);
     setDetailCache({});
     setDetailLoading({});
     setDetailError({});
@@ -6702,6 +6721,14 @@ function TotemVisualizer({
                               key={area.id}
                               style={{
                                 gridColumn: `${startColumn + 1} / span ${spanColumns}`,
+                                // Every area of a layer belongs on the layer's
+                                // single row. Without this, grid auto-placement
+                                // moves an area whose columns start left of the
+                                // previously placed one onto an implicit second
+                                // row, and it reads as a type with no layer.
+                                // `prepareGridLayout` keeps the spans disjoint,
+                                // so pinning the row cannot overlap them.
+                                gridRow: 1,
                                 padding: `${processAreaPaddingY}px ${gridColumnGap / 2}px`,
                                 display: 'grid',
                                 gridTemplateColumns: templateColumns,
