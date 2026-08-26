@@ -7,7 +7,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button";
-import { SidebarTrigger } from "@/components/ui/sidebar"
 import { ReactFlowProvider } from "@xyflow/react";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -23,7 +22,6 @@ export function DevDashboard() {
 
   return (
     <div>
-      <SidebarTrigger/>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <LogStatistics
           fileId={selectedFile?.id}

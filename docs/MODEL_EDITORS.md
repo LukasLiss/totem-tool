@@ -1,15 +1,16 @@
 # Visual Model Editors
 
 The **Editor** category in the left side panel provides visual editors for the
-three object-centric model types supported by the TOTeM tool:
+object-centric model types supported by the TOTeM tool:
 
 | Editor | Model | Reference |
 | --- | --- | --- |
 | TOTeM Model | Temporal Object Type Model | Liss et al., *TOTeM: Temporal Object Type Model for Object-Centric Process Mining*, BPM 2024 |
 | OC Causal Net | Object-Centric Causal Net (OCCN) | Liss et al., *Object-Centric Causal Nets*, CAiSE 2025 |
 | OC Petri Net | Object-Centric Petri Net (OCPN) | van der Aalst & Berti, *Discovering Object-Centric Petri Nets*, Fundamenta Informaticae |
+| OC-DFG | Object-Centric Directly-Follows Graph | van der Aalst & Berti, *Discovering Object-Centric Petri Nets*, Fundamenta Informaticae (Sect. 4) |
 
-All three editors share the same workflow:
+All editors share the same workflow:
 
 - **Start from scratch** — add elements from the floating toolbar on the
   canvas, connect them by dragging between the small handles on node borders,
@@ -180,5 +181,59 @@ just the net can ignore:
     { "id": "a1", "source": "o1", "target": "t_place" },
     { "id": "a2", "source": "t_place", "target": "o2" }
   ]
+}
+```
+
+## OC-DFG format (`"schema": "ocdfg"`)
+
+An object-centric directly-follows graph: **activity** nodes plus one
+artificial **START** (▶) and **END** (●) node per object type — drawn with
+the same visual language as the OC-DFG analysis views (a rounded tile filled
+with the type color) — connected by **typed arcs**. Every arc belongs to
+exactly one object type and is drawn in that type's color (a multigraph: the
+same two activities can be connected by one arc per type). Self-loops (an
+activity directly follows itself) are allowed; while drawing an arc, hovering
+back over the source node previews the loop that would be created. Arcs
+cannot leave an END node or enter a START node, and arcs at a START/END node
+always belong to that node's object type. There are no variable arcs.
+
+Arcs float and support the same **bend points** as the OCPN editor
+(double-click the arc to add, drag to route, double-click the point to
+remove). Parallel arcs between the same two nodes and stacked self-loops are
+routed apart automatically until you place your own bend points.
+
+The saved file is the **canonical OC-DFG model JSON** — the backend's
+spelling of a directly-follows graph (`totem_lib.dfg`): activities are
+identified by their unique name, the START/END node of a type is the pseudo
+node `__start__:<type>` / `__end__:<type>`, and edges are
+`{source, target, object_type}` triples. The editor adds an OPTIONAL
+`layout` block (node positions, type colors, arc bend points, and START/END
+nodes without edges) that model consumers simply ignore — so one validator
+covers both plain model files and editor files, and a file without `layout`
+opens with auto layout. The editor also still reads its earlier
+`"format": "ocdfg"` files.
+
+```json
+{
+  "schema": "ocdfg",
+  "version": 1,
+  "name": "Order fulfilment (OC-DFG)",
+  "object_types": ["Item", "Order"],
+  "activities": ["pick item", "place order"],
+  "edges": [
+    { "source": "__start__:Order", "target": "place order", "object_type": "Order" },
+    { "source": "pick item", "target": "pick item", "object_type": "Item" },
+    { "source": "place order", "target": "pick item", "object_type": "Item" }
+  ],
+  "layout": {
+    "objectTypes": { "Order": { "color": "#10B981" }, "Item": { "color": "#2563EB" } },
+    "activities": { "place order": { "position": { "x": 300, "y": 170 } } },
+    "starts": { "Order": { "position": { "x": 40, "y": 70 } } },
+    "ends": {},
+    "edges": [
+      { "source": "place order", "target": "pick item", "object_type": "Item",
+        "waypoints": [{ "x": 470, "y": 260 }] }
+    ]
+  }
 }
 ```

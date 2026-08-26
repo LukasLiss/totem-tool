@@ -1,4 +1,4 @@
-import { ChevronRight, PenLine, Share2, Workflow, CircleDot, Table2 } from "lucide-react"
+import { ChevronRight, PenLine, Share2, Workflow, CircleDot, GitBranch, Table2 } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -21,6 +21,7 @@ const editorItems: { id: EditorComponent; label: string; icon: typeof Share2 }[]
   { id: 'totem', label: 'TOTeM Model', icon: Share2 },
   { id: 'occn', label: 'OC Causal Net', icon: Workflow },
   { id: 'ocpn', label: 'OC Petri Net', icon: CircleDot },
+  { id: 'ocdfg', label: 'OC-DFG', icon: GitBranch },
   { id: 'ocel', label: 'OCEL Editor', icon: Table2 },
 ];
 
