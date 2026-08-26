@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useCallback, useMemo } from "react";
 import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
@@ -23,6 +23,14 @@ import VariantsExplorer, {
   type IsoStrategy,
 } from '@/react_component/VariantsExplorer';
 import ProcessArea from '@/react_component/ProcessArea';
+import {
+  clampProcessAreaParams,
+  DEFAULT_PROCESS_AREA_ALGORITHM,
+  PROCESS_AREA_ALGORITHM_LABELS,
+  PROCESS_AREA_PARAM_RANGES,
+  type ProcessAreaAlgorithm,
+  type ProcessAreaParams,
+} from '@/react_component/TotemVisualizer';
 import { ReactFlowProvider } from "@xyflow/react";
 import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import DottedChart from '@/react_component/DottedChart';
@@ -37,7 +45,9 @@ import {
 } from '@/react_component/dottedChart/dottedChartUtils';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
+import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
 import { Label } from '@/components/ui/label';
 import {
@@ -86,6 +96,18 @@ interface ComponentProps {
     row_order?: RowOrderOption;
     max_points?: number;
     show_minimap?: boolean;
+    // NewOCDFGComponent / OCCNComponent properties
+    layout_direction?: 'TB' | 'LR';
+    // OCCNComponent properties
+    relative_occurrence_threshold?: number;
+    object_types?: string;
+    // ProcessAreaComponent properties
+    algorithm?: ProcessAreaAlgorithm;
+    w_temporal?: number;
+    w_cardinality?: number;
+    w_divergence?: number;
+    alpha?: number;
+    beta?: number;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -526,26 +548,141 @@ const VariantsComponent: React.FC<ComponentProps> = ({
 
 
 // ProcessAreaComponent: Wrapper for ProcessArea (Totem Visualizer)
+//
+// Persists the discovery algorithm and its five parameters. Tuning happens in
+// view mode through the visualizer's own panel, so `onUpdate` is called from
+// there too — otherwise the main interaction this component offers would be
+// lost on every reload.
+const PROCESS_AREA_PARAM_FIELDS: Array<{
+  nodeKey: 'w_temporal' | 'w_cardinality' | 'w_divergence' | 'alpha' | 'beta';
+  paramKey: keyof ProcessAreaParams;
+  label: string;
+}> = [
+  { nodeKey: 'w_temporal', paramKey: 'wTemporal', label: 'Temporal weight' },
+  { nodeKey: 'w_cardinality', paramKey: 'wCardinality', label: 'Cardinality weight' },
+  { nodeKey: 'w_divergence', paramKey: 'wDivergence', label: 'Divergence weight' },
+  { nodeKey: 'alpha', paramKey: 'alpha', label: 'Separation (α)' },
+  { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
+];
+
 const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
   selectedFile
 }) => {
+  // Local state, kept in step with the node. `onUpdate` mutates the gridstack
+  // node without re-rendering this React root, so reading straight from `node`
+  // would leave the edit-mode sliders frozen while dragging.
+  const [algorithm, setAlgorithm] = useState<ProcessAreaAlgorithm>(
+    node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM,
+  );
+  // Clamped, so a dashboard saved with an alpha or beta of 0 — possible before
+  // the thesis' strictly-positive lower bound was enforced — opens on 0.1
+  // instead of a slider sitting below its own minimum.
+  const paramsFromNode = (): ProcessAreaParams =>
+    clampProcessAreaParams({
+      wTemporal: node.w_temporal,
+      wCardinality: node.w_cardinality,
+      wDivergence: node.w_divergence,
+      alpha: node.alpha,
+      beta: node.beta,
+    });
+
+  const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
+
+  useEffect(() => {
+    setAlgorithm(node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM);
+    setParams(paramsFromNode());
+  }, [
+    node.algorithm,
+    node.w_temporal,
+    node.w_cardinality,
+    node.w_divergence,
+    node.alpha,
+    node.beta,
+  ]);
+
+  const handleSettingsChange = useCallback(
+    (settings: { algorithm: ProcessAreaAlgorithm; params: ProcessAreaParams }) => {
+      setAlgorithm(settings.algorithm);
+      setParams(settings.params);
+      onUpdate?.({
+        algorithm: settings.algorithm,
+        w_temporal: settings.params.wTemporal,
+        w_cardinality: settings.params.wCardinality,
+        w_divergence: settings.params.wDivergence,
+        alpha: settings.params.alpha,
+        beta: settings.params.beta,
+      } as any);
+    },
+    [onUpdate],
+  );
+
   if (isEditMode) {
-    // EDIT MODE: Show configuration placeholder
+    // EDIT MODE: Show configuration controls
     return (
-      <Card className="w-full h-full rounded-none">
+      <Card className="w-full h-full rounded-none overflow-y-auto">
         <CardHeader>
           <CardTitle>Process Area Settings</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            The Process Area visualizes the totem/MLPA structure of your event log.
-          </p>
-          <p className="text-sm text-muted-foreground">
+            The Process Area visualizes the object-type hierarchy of your event log.
             Select an event log file to see the visualization.
           </p>
+          <div className="flex items-center justify-between">
+            <Label>Discovery algorithm</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[240px] justify-between font-normal">
+                  <span className="truncate">{PROCESS_AREA_ALGORITHM_LABELS[algorithm]}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[240px]">
+                <DropdownMenuRadioGroup
+                  value={algorithm}
+                  onValueChange={(value) =>
+                    handleSettingsChange({
+                      algorithm: value as ProcessAreaAlgorithm,
+                      params,
+                    })
+                  }
+                >
+                  {(Object.keys(PROCESS_AREA_ALGORITHM_LABELS) as ProcessAreaAlgorithm[]).map(
+                    (value) => (
+                      <DropdownMenuRadioItem key={value} value={value}>
+                        {PROCESS_AREA_ALGORITHM_LABELS[value]}
+                      </DropdownMenuRadioItem>
+                    ),
+                  )}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          {algorithm === 'advanced' &&
+            PROCESS_AREA_PARAM_FIELDS.map(({ nodeKey, paramKey, label }) => (
+              <div className="space-y-2" key={nodeKey}>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor={`process-area-${nodeKey}`}>{label}</Label>
+                  <span className="text-sm text-muted-foreground">
+                    {params[paramKey].toFixed(2)}
+                  </span>
+                </div>
+                <Slider
+                  id={`process-area-${nodeKey}`}
+                  {...PROCESS_AREA_PARAM_RANGES[paramKey]}
+                  value={[params[paramKey]]}
+                  onValueChange={(values) =>
+                    handleSettingsChange({
+                      algorithm,
+                      params: { ...params, [paramKey]: values?.[0] ?? 0 },
+                    })
+                  }
+                />
+              </div>
+            ))}
         </CardContent>
       </Card>
     );
@@ -557,6 +694,9 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
       fileId={selectedFile?.id}
       embedded={false}
       height="100%"
+      initialAlgorithm={algorithm}
+      initialParams={params}
+      onSettingsChange={handleSettingsChange}
     />
   );
 };
@@ -1046,6 +1186,153 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 };
 
 
+// OCCNComponent: Dashboard wrapper for the Object-Centric Causal Net (ELK layout)
+const OCCNComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
+  const [objectTypes, setObjectTypes] = useState(node.object_types ?? '');
+  const [showControls, setShowControls] = useState(node.show_controls ?? true);
+  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'LR');
+
+  useEffect(() => {
+    setThreshold(node.relative_occurrence_threshold ?? 0);
+    setObjectTypes(node.object_types ?? '');
+    setShowControls(node.show_controls ?? true);
+    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
+    setLayoutDirection(node.layout_direction ?? 'LR');
+  }, [
+    node.relative_occurrence_threshold,
+    node.object_types,
+    node.show_controls,
+    node.initial_interaction_locked,
+    node.layout_direction,
+  ]);
+
+  const handleThresholdChange = (value: number[]) => {
+    const next = value[0] ?? 0;
+    setThreshold(next);
+    onUpdate?.({ relative_occurrence_threshold: next } as any);
+  };
+
+  const handleObjectTypesChange = (value: string) => {
+    setObjectTypes(value);
+    onUpdate?.({ object_types: value } as any);
+  };
+
+  const handleShowControlsChange = (checked: boolean) => {
+    setShowControls(checked);
+    onUpdate?.({ show_controls: checked } as any);
+  };
+
+  const handleInitialInteractionLockedChange = (checked: boolean) => {
+    setInitialInteractionLocked(checked);
+    onUpdate?.({ initial_interaction_locked: checked } as any);
+  };
+
+  const handleLayoutDirectionChange = (value: string) => {
+    setLayoutDirection(value as 'TB' | 'LR');
+    onUpdate?.({ layout_direction: value } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Show configuration controls
+    return (
+      <Card className="w-full h-full rounded-none overflow-y-auto">
+        <CardHeader>
+          <CardTitle>OCCN Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Object-Centric Causal Net (OCCN) with activity bindings and automatic ELK layout.
+          </p>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="occn-threshold">Frequency Threshold</Label>
+              <span className="text-sm text-muted-foreground">{threshold.toFixed(2)}</span>
+            </div>
+            <Slider
+              id="occn-threshold"
+              min={0}
+              max={1}
+              step={0.05}
+              value={[threshold]}
+              onValueChange={handleThresholdChange}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="occn-object-types">Object Type Filter</Label>
+            <Input
+              id="occn-object-types"
+              value={objectTypes}
+              onChange={(e) => handleObjectTypesChange(e.target.value)}
+              placeholder="e.g. orders, items (empty = all types)"
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated object types to include; leave empty to use all.
+            </p>
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="occn-show-controls">Show Controls Panel</Label>
+            <Switch
+              id="occn-show-controls"
+              checked={showControls}
+              onCheckedChange={handleShowControlsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="occn-initial-locked">Lock Interactions Initially</Label>
+            <Switch
+              id="occn-initial-locked"
+              checked={initialInteractionLocked}
+              onCheckedChange={handleInitialInteractionLockedChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Layout Direction</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-[180px] justify-between font-normal">
+                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[180px]">
+                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
+                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render OCCNVisualizer
+  return (
+    <div className="w-full h-full bg-white">
+      <ReactFlowProvider>
+        <OCCNVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          initialLayoutDirection={layoutDirection}
+          initialThreshold={threshold}
+          objectTypes={objectTypes.split(',').map((t) => t.trim()).filter(Boolean)}
+        />
+      </ReactFlowProvider>
+    </div>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -1058,4 +1345,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   OCDottedChartComponent,
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
+  OCCNComponent,
 };

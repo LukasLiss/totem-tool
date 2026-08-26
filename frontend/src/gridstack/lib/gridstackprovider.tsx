@@ -265,6 +265,23 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
           layout_direction: (node as any).layout_direction ?? 'TB',
         };
+      } else if (component_name === "ProcessAreaComponent") {
+        props = {
+          algorithm: (node as any).algorithm ?? "advanced",
+          w_temporal: (node as any).w_temporal ?? 1,
+          w_cardinality: (node as any).w_cardinality ?? 1,
+          w_divergence: (node as any).w_divergence ?? 1,
+          alpha: (node as any).alpha ?? 1,
+          beta: (node as any).beta ?? 1,
+        };
+      } else if (component_name === "OCCNComponent") {
+        props = {
+          relative_occurrence_threshold: (node as any).relative_occurrence_threshold ?? 0,
+          object_types: (node as any).object_types ?? "",
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'LR',
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -348,6 +365,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Arc Weight)";
         } else if (item.component_name === "NewOCDFGVariantsComponent") {
           content = "Object-Centric DFG (Variants)";
+        } else if (item.component_name === "OCCNComponent") {
+          content = "Object-Centric Causal Net (OCCN)";
         } else {
           content = "Unknown";
         }
@@ -393,6 +412,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             row_order: item.row_order,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
+            // OCCNComponent properties
+            relative_occurrence_threshold: item.relative_occurrence_threshold,
+            object_types: item.object_types,
+            // ProcessAreaComponent properties
+            algorithm: item.algorithm,
+            w_temporal: item.w_temporal,
+            w_cardinality: item.w_cardinality,
+            w_divergence: item.w_divergence,
+            alpha: item.alpha,
+            beta: item.beta,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -428,6 +457,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).row_order = item.row_order;
               (node as any).max_points = item.max_points;
               (node as any).layout_direction = item.layout_direction;
+              // OCCNComponent properties
+              (node as any).relative_occurrence_threshold = item.relative_occurrence_threshold;
+              (node as any).object_types = item.object_types;
+              // ProcessAreaComponent properties
+              (node as any).algorithm = item.algorithm;
+              (node as any).w_temporal = item.w_temporal;
+              (node as any).w_cardinality = item.w_cardinality;
+              (node as any).w_divergence = item.w_divergence;
+              (node as any).alpha = item.alpha;
+              (node as any).beta = item.beta;
             }
           }
           // Set data attribute for persistence

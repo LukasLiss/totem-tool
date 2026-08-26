@@ -186,10 +186,14 @@ class OcelDuckDB:
             for obj_id, qualifier in zip(objects, qualifiers):
                 event_object_rows.append((row["_eventId"], obj_id, qualifier or None))
 
-        self.conn.executemany(f"INSERT INTO events VALUES ({event_ph})", event_rows)
-        self.conn.executemany(
-            "INSERT INTO event_object VALUES (?, ?, ?)", event_object_rows
-        )
+        if event_rows:
+            self.conn.executemany(
+                f"INSERT INTO events VALUES ({event_ph})", event_rows
+            )
+        if event_object_rows:
+            self.conn.executemany(
+                "INSERT INTO event_object VALUES (?, ?, ?)", event_object_rows
+            )
 
     def _insert_objects(self, ocel: ObjectCentricEventLog) -> None:
         obj_snapshots: dict[str, list[tuple[int, dict]]] = {}
@@ -222,7 +226,10 @@ class OcelDuckDB:
                 obj_row.append(str(val) if val is not None else None)
             obj_rows.append(tuple(obj_row))
 
-        self.conn.executemany(f"INSERT INTO objects VALUES ({obj_ph})", obj_rows)
+        if obj_rows:
+            self.conn.executemany(
+                f"INSERT INTO objects VALUES ({obj_ph})", obj_rows
+            )
 
         if self._obj_attr_cols:
             n_hist_cols = 2 + len(self._obj_attr_cols)
@@ -336,6 +343,13 @@ class OcelDuckDB:
             JOIN objects o       ON eo.obj_id   = o.obj_id
             ORDER BY e.timestamp_unix
         """).pl()
+
+    @property
+    def object_types(self) -> list:
+        """Returns a list of all unique object types present in the log."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT obj_type FROM objects ORDER BY obj_type"
+        ).fetchall()]
 
     def query(self, sql: str) -> pl.DataFrame:
         """Execute an arbitrary SQL query and return a Polars DataFrame."""

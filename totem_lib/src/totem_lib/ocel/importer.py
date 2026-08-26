@@ -481,8 +481,9 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
         pl.DataFrame: A DataFrame containing event data with columns
                       _eventId, _activity, _timestampUnix, _objects, and _qualifiers.
     """
-    # Reads the file into a dict
-    with open(json_path, "r") as f:
+    # Reads the file into a dict. OCEL 2.0 JSON is UTF-8; pin the encoding so
+    # Windows (cp1252 default) doesn't misread multi-byte characters.
+    with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     events = data.get("events", [])
     # Build a DataFrame with id, type, timestamp and a list of related object IDs
@@ -526,7 +527,9 @@ def load_objects_from_json(json_path: str) -> pl.DataFrame:
         pl.DataFrame: A DataFrame containing object data with columns
                       _objId, _objType, _targetObjects, and _qualifiers.
     """
-    with open(json_path, "r") as f:
+    # OCEL 2.0 JSON is UTF-8; pin the encoding so Windows (cp1252 default)
+    # doesn't misread multi-byte characters.
+    with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     objects = data.get("objects", [])
     df = pl.DataFrame(

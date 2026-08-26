@@ -7,7 +7,11 @@ import {
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
+import { OccnConformanceView } from "./components/occn-conformance/OccnConformanceView";
+import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
+import { ModelAssetsView } from "./components/ModelAssetsView";
 import { EditorView } from "./editors/EditorView";
+import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
 
 export function ProcessOverview() {
@@ -19,8 +23,16 @@ export function ProcessOverview() {
         return <DevDashboard />;
       case 'analysis':
         return <AnalysisView />;
+      case 'modelAssets':
+        return <ModelAssetsView />;
+      case 'conformance':
+        return viewMode.component === 'totem'
+          ? <TotemConformanceView initialAssetId={viewMode.assetId} />
+          : <OccnConformanceView initialAssetId={viewMode.assetId} />;
       case 'editor':
         return <EditorView />;
+      case 'playout':
+        return <PlayoutView />;
       case 'dashboard':
         return <Grid />;
       default:
