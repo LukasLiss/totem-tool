@@ -10,6 +10,7 @@ from pm4py.objects.ocel.constants import (
     DEFAULT_QUALIFIER,
 )
 from . import ObjectCentricEventLog
+from .ocel_duckdb import OcelDuckDB
 
 # Default column names for the converted PM4Py OCEL
 PM4PY_EVENT_ID = DEFAULT_EVENT_ID
@@ -112,3 +113,85 @@ def convert_ocel_polars_to_pm4py(polars_ocel: ObjectCentricEventLog) -> OCEL:
     )
 
     return pm4py_ocel
+
+
+def convert_ocel_duckdb_to_pm4py(ocel_db: OcelDuckDB) -> OCEL:
+    """
+    Converts a DuckDB-backed OcelDuckDB to a PM4Py OCEL object.
+
+    Produces the same structure as convert_ocel_polars_to_pm4py. The JOIN
+    across events × event_object × objects naturally excludes dead objects
+    (objects not referenced by any event), matching filter_dead_objects.
+
+    Args:
+        ocel_db: A populated OcelDuckDB instance.
+
+    Returns:
+        A pm4py.objects.ocel.obj.OCEL object.
+    """
+    conn = ocel_db.conn
+
+    # Events table: all unique events with timestamp converted from Unix seconds to datetime.
+    raw_events = conn.execute(
+        "SELECT event_id, activity, timestamp_unix FROM events"
+    ).df()
+    pm4py_events = pd.DataFrame({
+        PM4PY_EVENT_ID: raw_events["event_id"],
+        PM4PY_ACTIVITY: raw_events["activity"],
+        PM4PY_TIMESTAMP: pd.to_datetime(raw_events["timestamp_unix"], unit="s").astype("datetime64[ns]"),
+    })
+
+    # Objects table: only objects referenced by at least one event (dead objects excluded).
+    raw_objects = conn.execute("""
+        SELECT DISTINCT o.obj_id, o.obj_type
+        FROM objects o
+        WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+    """).df()
+    pm4py_objects = raw_objects.rename(columns={
+        "obj_id": PM4PY_OBJECT_ID,
+        "obj_type": PM4PY_OBJECT_TYPE,
+    })
+
+    # Relations table: one row per (event, object) pair with activity and timestamp.
+    # The three-way JOIN naturally drops dead objects and events with no objects.
+    raw_relations = conn.execute("""
+        SELECT
+            e.event_id,
+            e.activity,
+            e.timestamp_unix,
+            eo.obj_id,
+            o.obj_type,
+            eo.qualifier
+        FROM events e
+        JOIN event_object eo ON e.event_id = eo.event_id
+        JOIN objects o       ON eo.obj_id  = o.obj_id
+    """).df()
+    pm4py_relations = pd.DataFrame({
+        PM4PY_EVENT_ID:    raw_relations["event_id"],
+        PM4PY_ACTIVITY:    raw_relations["activity"],
+        PM4PY_TIMESTAMP:   pd.to_datetime(raw_relations["timestamp_unix"], unit="s").astype("datetime64[ns]"),
+        PM4PY_OBJECT_ID:   raw_relations["obj_id"],
+        PM4PY_OBJECT_TYPE: raw_relations["obj_type"],
+        PM4PY_QUALIFIER:   raw_relations["qualifier"],
+    })
+
+    # Object-to-object relations from the object_relations table.
+    raw_o2o = conn.execute(
+        "SELECT source_obj_id, target_obj_id, qualifier FROM object_relations"
+    ).df()
+    pm4py_o2o = raw_o2o.rename(columns={
+        "source_obj_id": PM4PY_OBJECT_ID,
+        "target_obj_id": PM4PY_OBJECT_ID + "_2",
+        "qualifier":     PM4PY_QUALIFIER,
+    })
+
+    return OCEL(
+        events=pm4py_events,
+        objects=pm4py_objects,
+        relations=pm4py_relations,
+        o2o=pm4py_o2o,
+        globals={},
+        parameters={},
+        e2e=pd.DataFrame(),
+        object_changes=pd.DataFrame(),
+    )

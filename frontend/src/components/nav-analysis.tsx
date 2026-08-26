@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, CircleDot } from "lucide-react"
+import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/collapsible"
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -23,6 +22,7 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
   { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
+  { id: 'occn', label: 'OCCN', icon: Workflow },
 ];
 
 export function NavAnalysis() {
@@ -33,9 +33,8 @@ export function NavAnalysis() {
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Analysis</SidebarGroupLabel>
       <SidebarMenu>
-        <Collapsible asChild defaultOpen className="group/collapsible">
+        <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
               <SidebarMenuButton tooltip="Analysis Tools" data-active={isAnalysisActive}>

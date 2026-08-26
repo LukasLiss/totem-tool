@@ -25,6 +25,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  OCCN_SCHEMA,
+  assetToOccnModel,
+  isAssetModel,
+  occnModelToAsset,
+} from '@/editors/shared/asset-format';
 import { assignTypeColors, nextFreeColor } from '@/editors/shared/colors';
 import EditorShell from '@/editors/shared/EditorShell';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
@@ -32,6 +38,7 @@ import {
   loadEditorSession,
   saveEditorSession,
 } from '@/editors/shared/sessionCache';
+import { useProjectAssetBridge } from '@/editors/shared/useProjectAssetBridge';
 import {
   OCCN_FORMAT,
   occnEndActivity,
@@ -45,6 +52,7 @@ import {
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 import { cn } from '@/lib/utils';
 
+import { computeIncidentTypes, computeParallelOffsets } from './derive';
 import MarkerOverlay from './MarkerOverlay';
 import OccnConnectionLine from './OccnConnectionLine';
 import OccnEdgeComponent from './OccnEdge';
@@ -82,6 +90,15 @@ import {
 
 const nodeTypes = { occn: OccnNodeComponent };
 const edgeTypes = { occnArc: OccnEdgeComponent };
+
+/** Read a non-empty `name` from a parsed asset object, if present. */
+function occnAssetName(raw: unknown): string | null {
+  if (typeof raw === 'object' && raw !== null && 'name' in raw) {
+    const name = (raw as { name?: unknown }).name;
+    if (typeof name === 'string' && name.trim().length > 0) return name.trim();
+  }
+  return null;
+}
 
 type ObjectType = { name: string; color: string };
 
@@ -219,46 +236,12 @@ function OccnEditorInner() {
     return result;
   }, [types]);
 
-  const incidentTypes = useMemo(() => {
-    const order = new Map(types.map((t, i) => [t.name, i]));
-    // Null prototype: keys are activity names (user data, e.g. "__proto__").
-    const sets: Record<string, Set<string>> = Object.create(null);
-    for (const edge of edges) {
-      const ot = edge.data?.objectType;
-      if (!ot) continue;
-      (sets[edge.source] ??= new Set()).add(ot);
-      (sets[edge.target] ??= new Set()).add(ot);
-    }
-    const result: Record<string, string[]> = Object.create(null);
-    for (const [name, set] of Object.entries(sets)) {
-      result[name] = [...set].sort(
-        (a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99),
-      );
-    }
-    return result;
-  }, [edges, types]);
+  const incidentTypes = useMemo(
+    () => computeIncidentTypes(edges, types.map((t) => t.name)),
+    [edges, types],
+  );
 
-  const parallelOffset = useMemo(() => {
-    const pairs = new Map<string, OccnEdge[]>();
-    for (const edge of edges) {
-      const key = [edge.source, edge.target].sort().join(' ');
-      const list = pairs.get(key);
-      if (list) list.push(edge);
-      else pairs.set(key, [edge]);
-    }
-    const result: Record<string, number> = {};
-    for (const list of pairs.values()) {
-      const sorted = [...list].sort((a, b) => a.id.localeCompare(b.id));
-      sorted.forEach((edge, index) => {
-        let offset = (index - (sorted.length - 1) / 2) * 42;
-        // Canonical perpendicular direction per unordered node pair, so
-        // opposite-direction arcs fan out consistently.
-        if (edge.source > edge.target) offset = -offset;
-        result[edge.id] = offset;
-      });
-    }
-    return result;
-  }, [edges]);
+  const parallelOffset = useMemo(() => computeParallelOffsets(edges), [edges]);
 
   const renderContext = useMemo(
     () => ({ typeColors, incidentTypes, parallelOffset, activeType }),
@@ -966,7 +949,13 @@ function OccnEditorInner() {
     try {
       const raw = await openJsonFile();
       if (raw === null) return;
-      const parsed = parseOccnModelFile(raw);
+      // Accept both the canonical asset-store JSON ("schema": "occn") and the
+      // legacy editor file ("format": "occn").
+      let candidate = raw;
+      if (isAssetModel(raw, OCCN_SCHEMA)) {
+        candidate = assetToOccnModel(raw, occnAssetName(raw) ?? modelName);
+      }
+      const parsed = parseOccnModelFile(candidate);
       if (parsed.ok === false) {
         toast.error(parsed.error);
         return;
@@ -979,11 +968,14 @@ function OccnEditorInner() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not read the file.');
     }
-  }, [applyModel, history, serialize]);
+  }, [applyModel, history, serialize, modelName]);
 
   const onExport = useCallback(() => {
     const filename = toFilename(modelName, 'occn-model');
-    downloadJson(filename, serialize());
+    // Save in the canonical asset-store format so the file can be uploaded to
+    // the project model asset store directly; the editor's layout (positions,
+    // colors, bindingless arcs) travels in the optional `layout` block.
+    downloadJson(filename, occnModelToAsset(serialize()));
     toast.success(`Saved ${filename}.json`);
   }, [modelName, serialize]);
 
@@ -999,6 +991,23 @@ function OccnEditorInner() {
     await applyModel(parsed.model, { fit: true });
     toast.success('Loaded the shipping example.');
   }, [applyModel, history, serialize]);
+
+  const bridge = useProjectAssetBridge({
+    assetType: 'OCCN',
+    modelName,
+    serializeAsset: () => occnModelToAsset(serialize()),
+    onOpen: (content, assetName) => {
+      const model = assetToOccnModel(content, assetName);
+      const parsed = parseOccnModelFile(model);
+      if (parsed.ok === false) {
+        toast.error(parsed.error);
+        return;
+      }
+      history.record(serialize());
+      void applyModel(parsed.model, { fit: true });
+      toast.success(`Loaded "${parsed.model.name}".`);
+    },
+  });
 
   const onAutoLayout = useCallback(async () => {
     if (nodes.length === 0) return;
@@ -1181,6 +1190,8 @@ function OccnEditorInner() {
       onNew={onNew}
       onImport={() => void onImport()}
       onExport={onExport}
+      onSaveToProject={bridge.available ? bridge.onSaveToProject : undefined}
+      onOpenFromProject={bridge.available ? bridge.onOpenFromProject : undefined}
       onAutoLayout={() => void onAutoLayout()}
       onLoadExample={() => void onLoadExample()}
       undo={{ onClick: doUndo, disabled: !history.canUndo }}
@@ -1274,6 +1285,7 @@ function OccnEditorInner() {
           </div>
         )}
       </div>
+      {bridge.dialogs}
     </EditorShell>
   );
 }

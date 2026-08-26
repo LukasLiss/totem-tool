@@ -144,6 +144,26 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
+      ".sidepanel .occn-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric Causal Net (OCCN)",
+        component_name: "OCCNComponent",
+        relative_occurrence_threshold: 0,
+        object_types: "",
+        show_controls: true,
+        initial_interaction_locked: true,
+        layout_direction: "LR",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
       ".sidepanel .ocpn-component",
       {
         helper: "clone",
@@ -231,6 +251,28 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>Object-Centric DFG (Variants)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item occn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OCCN preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="26" y1="25" x2="42" y2="25" stroke="#475569" strokeWidth="2" />
+          <line x1="58" y1="25" x2="74" y2="25" stroke="#475569" strokeWidth="2" />
+          <rect x="8" y="17" width="18" height="16" rx="3" fill="#2563eb" />
+          <rect x="42" y="17" width="18" height="16" rx="3" fill="#16a34a" />
+          <rect x="74" y="17" width="18" height="16" rx="3" fill="#ca8a04" />
+          <circle cx="38" cy="12" r="3" fill="#dc2626" />
+          <circle cx="64" cy="12" r="3" fill="#9333ea" />
+          <circle cx="38" cy="38" r="3" fill="#0891b2" />
+          <circle cx="64" cy="38" r="3" fill="#db2777" />
+        </svg>
+        <div>Object-Centric Causal Net (OCCN)</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item ocpn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
