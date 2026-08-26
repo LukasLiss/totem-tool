@@ -1,5 +1,13 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Box, Filter, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  Box,
+  Filter,
+  GitCompareArrows,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -10,6 +18,7 @@ import {
   listAssets,
   uploadAsset,
 } from "@/api/assetsApi";
+import { DashboardContext, EditorComponent } from "@/contexts/DashboardContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,10 +54,16 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { ModelAssetDropzone } from "@/components/model-assets/ModelAssetDropzone";
 
 type AssetFilter = "ALL" | AssetType;
 
 const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, string> = {
+  TOTEM: "totem",
+  OCCN: "occn",
+};
+
+const EDITOR_COMPONENT_BY_TYPE: Record<AssetType, EditorComponent> = {
   TOTEM: "totem",
   OCCN: "occn",
 };
@@ -67,6 +82,7 @@ const DEFAULT_TABLE_FILTERS: AssetTableFilters = {
 
 export function ModelAssetsView() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const { setViewMode } = useContext(DashboardContext);
   const projectId = selectedFile?.project;
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [filters, setFilters] = useState<AssetTableFilters>(DEFAULT_TABLE_FILTERS);
@@ -74,6 +90,18 @@ export function ModelAssetsView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [assetToDelete, setAssetToDelete] = useState<ProjectAsset | null>(null);
+
+  const handleOpenInEditor = useCallback(
+    (asset: ProjectAsset) => {
+      const component = EDITOR_COMPONENT_BY_TYPE[asset.asset_type];
+      if (!component) {
+        toast.error("This asset type cannot be opened in an editor.");
+        return;
+      }
+      setViewMode({ type: "editor", component, openAssetId: asset.id });
+    },
+    [setViewMode]
+  );
 
   const loadAssets = useCallback(async () => {
     if (!projectId) {
@@ -150,7 +178,18 @@ export function ModelAssetsView() {
               description="No stored model assets match the current filters."
             />
           ) : (
-            <AssetList assets={filteredAssets} onDeleteClick={setAssetToDelete} />
+            <AssetList
+              assets={filteredAssets}
+              onConformanceClick={(asset) =>
+                setViewMode({
+                  type: "conformance",
+                  component: asset.asset_type === "TOTEM" ? "totem" : "occn",
+                  assetId: asset.id,
+                })
+              }
+              onOpenInEditorClick={handleOpenInEditor}
+              onDeleteClick={setAssetToDelete}
+            />
           )}
           <DeleteAssetDialog
             asset={assetToDelete}
@@ -303,6 +342,9 @@ function UploadAssetDialog({
   const [name, setName] = useState("");
   const [assetType, setAssetType] = useState<AssetType>("TOTEM");
   const [file, setFile] = useState<File | null>(null);
+  const [fileSelectionError, setFileSelectionError] = useState<string | null>(
+    null
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -311,9 +353,15 @@ function UploadAssetDialog({
     setName("");
     setAssetType("TOTEM");
     setFile(null);
+    setFileSelectionError(null);
     setFormError(null);
     setIsSubmitting(false);
     setFileInputKey((value) => value + 1);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    onOpenChange(nextOpen);
+    if (!nextOpen) resetForm();
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -330,6 +378,10 @@ function UploadAssetDialog({
       setFormError("Choose a model file.");
       return;
     }
+    if (fileSelectionError) {
+      setFormError("Choose a valid JSON model file.");
+      return;
+    }
 
     setIsSubmitting(true);
     setFormError(null);
@@ -342,8 +394,7 @@ function UploadAssetDialog({
         file,
       });
       toast.success("Model asset uploaded");
-      onOpenChange(false);
-      resetForm();
+      handleOpenChange(false);
       await onUploaded();
     } catch (error) {
       setFormError(extractAssetApiError(error).message);
@@ -355,10 +406,7 @@ function UploadAssetDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={(nextOpen) => {
-        onOpenChange(nextOpen);
-        if (!nextOpen) resetForm();
-      }}
+      onOpenChange={handleOpenChange}
     >
       <DialogTrigger asChild>
         <Button type="button" disabled={!projectId}>
@@ -405,13 +453,20 @@ function UploadAssetDialog({
             </div>
 
             <div className="grid gap-2">
-              <Label htmlFor="model-asset-file">Model file</Label>
-              <Input
+              <Label>Model file</Label>
+              <ModelAssetDropzone
                 key={fileInputKey}
-                id="model-asset-file"
-                type="file"
+                file={file}
+                error={fileSelectionError}
                 disabled={isSubmitting}
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                onFileChange={(selectedFile) => {
+                  setFile(selectedFile);
+                  setFormError(null);
+                }}
+                onErrorChange={(nextError) => {
+                  setFileSelectionError(nextError);
+                  if (nextError) setFormError(null);
+                }}
               />
             </div>
 
@@ -427,12 +482,15 @@ function UploadAssetDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={isSubmitting}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting || !projectId}>
+            <Button
+              type="submit"
+              disabled={isSubmitting || !projectId || Boolean(fileSelectionError)}
+            >
               {isSubmitting ? "Uploading" : "Upload"}
             </Button>
           </DialogFooter>
@@ -444,41 +502,73 @@ function UploadAssetDialog({
 
 function AssetList({
   assets,
+  onConformanceClick,
+  onOpenInEditorClick,
   onDeleteClick,
 }: {
   assets: ProjectAsset[];
+  onConformanceClick: (asset: ProjectAsset) => void;
+  onOpenInEditorClick: (asset: ProjectAsset) => void;
   onDeleteClick: (asset: ProjectAsset) => void;
 }) {
+  const columns = "grid-cols-[minmax(200px,1.7fr)_100px_160px_160px]";
   return (
     <div className="overflow-x-auto rounded-md border bg-background">
-      <div className="min-w-[650px]">
-        <div className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground">
+      <div className="min-w-[720px]">
+        <div
+          className={`grid ${columns} border-b bg-muted/40 px-4 py-3 text-xs font-medium uppercase text-muted-foreground`}
+        >
           <span>Name</span>
           <span>Type</span>
           <span>Last changed</span>
-          <span>Actions</span>
+          <span className="text-right">Actions</span>
         </div>
         <div className="divide-y">
           {assets.map((asset) => (
             <div
               key={asset.id}
-              className="grid grid-cols-[minmax(220px,1.7fr)_110px_170px_90px] items-center px-4 py-3 text-sm"
+              className={`grid ${columns} items-center px-4 py-3 text-sm`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium" title={asset.name}>
                   {asset.name}
                 </div>
               </div>
-              <Badge variant="secondary">{formatAssetType(asset.asset_type)}</Badge>
+              <Badge variant="secondary" className="w-fit">
+                {formatAssetType(asset.asset_type)}
+              </Badge>
               <span className="text-muted-foreground">
                 {formatDate(asset.updated_at)}
               </span>
-              <div>
+              <div className="flex justify-end gap-0.5">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Use ${asset.name} for conformance`}
+                  aria-label={`Use ${asset.name} for conformance`}
+                  onClick={() => onConformanceClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <GitCompareArrows />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  title={`Edit ${asset.name}`}
+                  aria-label={`Edit ${asset.name}`}
+                  onClick={() => onOpenInEditorClick(asset)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil />
+                </Button>
                 <Button
                   type="button"
                   size="icon"
                   variant="ghost"
                   title={`Delete ${asset.name}`}
+                  aria-label={`Delete ${asset.name}`}
                   onClick={() => onDeleteClick(asset)}
                   className="text-muted-foreground hover:text-destructive"
                 >

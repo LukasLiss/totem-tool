@@ -7,7 +7,8 @@ import {
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
-import { ConformancePlaceholderView } from "./components/ConformancePlaceholderView";
+import { OccnConformanceView } from "./components/occn-conformance/OccnConformanceView";
+import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { EditorView } from "./editors/EditorView";
 import { PlayoutView } from "./playout/PlayoutView";
@@ -25,7 +26,9 @@ export function ProcessOverview() {
       case 'modelAssets':
         return <ModelAssetsView />;
       case 'conformance':
-        return <ConformancePlaceholderView />;
+        return viewMode.component === 'totem'
+          ? <TotemConformanceView initialAssetId={viewMode.assetId} />
+          : <OccnConformanceView initialAssetId={viewMode.assetId} />;
       case 'editor':
         return <EditorView />;
       case 'playout':
