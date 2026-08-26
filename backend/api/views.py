@@ -457,8 +457,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 return Response(cached, status=status.HTTP_200_OK)
 
         try:
-            with _with_ocel_db(user_file) as db:
-                types = _object_types_with_counts(db)
+            types = _get_ocel_object_types(user_file)
         except Exception as e:
             return Response(
                 {"error": f"Failed to load OCEL: {e}"},
@@ -1467,7 +1466,7 @@ from contextlib import contextmanager
 
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
 _OCEL_DB_LOCKS: dict[int, threading.Lock] = {}
-_OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[str, ...]] = {}
+_OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 
 
@@ -1488,21 +1487,28 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
         db = _OCEL_DB_REGISTRY.get(pk)
         if db is None:
             db = _build_ocel_db_from_path(user_file.file.path)
-            object_types = tuple(_object_types(db))
+            object_types = tuple(
+                (row["name"], row["count"]) for row in _object_types_with_counts(db)
+            )
             _OCEL_DB_REGISTRY[pk] = db
             _OCEL_DB_LOCKS[pk] = threading.Lock()
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
 
 
-def _get_ocel_object_types(user_file) -> list[str]:
-    """Return immutable log metadata without waiting for algorithm work."""
+def _get_ocel_object_types(user_file) -> list[dict]:
+    """Return immutable log metadata without waiting for algorithm work.
+
+    Entries are ``{"name": <object type>, "count": <object count>}`` dicts;
+    the counts are computed once when the log is first loaded, so serving
+    them never has to wait for the per-file algorithm lock.
+    """
     pk = int(user_file.pk)
     object_types = _OCEL_OBJECT_TYPES_REGISTRY.get(pk)
     if object_types is None:
         _get_or_load_ocel_db(user_file)
         object_types = _OCEL_OBJECT_TYPES_REGISTRY[pk]
-    return list(object_types)
+    return [{"name": name, "count": count} for name, count in object_types]
 
 
 @contextmanager
