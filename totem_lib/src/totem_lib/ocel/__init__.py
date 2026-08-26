@@ -10,3 +10,4 @@ from .importer_duckdb import (
 )
 from .ocel_duckdb import OcelDuckDB
 from .importer_db import import_ocel_db
+from .validation import OCELValidationException, validate_ocel

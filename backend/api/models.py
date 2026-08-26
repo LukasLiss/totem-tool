@@ -14,6 +14,24 @@ def user_directory_path(instance, filename):
 def project_directory_path(instance, filename):
     return os.path.join(instance.dashboard.project.name, filename)
 
+class UserSettings(models.Model):
+    """Per-user application settings, independent of any project.
+
+    Kept as a separate OneToOne row (rather than columns on the auth User)
+    so we can add more preferences over time without touching auth. Created
+    lazily on first access via ``get_or_create``.
+    """
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="settings"
+    )
+    # When True the frontend adds ``?bypass_cache=1`` to every request so the
+    # backend recomputes results instead of serving them from the disk cache.
+    bypass_cache = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Settings for {self.user.username}"
+
+
 class Project(models.Model):
     users = models.ManyToManyField(User)
     name = models.CharField(max_length=30)
@@ -30,6 +48,45 @@ class EventLog(models.Model):
 
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"
+
+
+class ProjectAsset(models.Model):
+    class AssetType(models.TextChoices):
+        TOTEM = "TOTEM", "TOTeM"
+        OCCN = "OCCN", "OCCN"
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="assets",
+    )
+    name = models.CharField(max_length=100)
+    asset_type = models.CharField(max_length=20, choices=AssetType.choices)
+    content_json = models.JSONField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="unique_project_asset_name",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["project", "asset_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.project.name} - {self.name} ({self.asset_type})"
+
 
 class Dashboard(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
@@ -84,7 +141,27 @@ class VariantsComponent(DashboardComponent):
 
 
 class ProcessAreaComponent(DashboardComponent):
-    pass
+    # Which engine decides the object-type hierarchy. "advanced" is the
+    # default: it is the thesis section 4.1 algorithm, it reproduces MLPA's
+    # hierarchy on the reference logs at these defaults, and it is faster.
+    ALGORITHM_CHOICES = [
+        ('mlpa', 'MLPA (temporal)'),
+        ('advanced', 'Advanced (resource indicators)'),
+    ]
+    algorithm = models.CharField(
+        max_length=16, choices=ALGORITHM_CHOICES, default='advanced'
+    )
+
+    # Parameters of the advanced algorithm. Weights per resource indicator,
+    # then the two halves of the ILP objective: alpha weights the resource
+    # force (separation), beta the attractive force (cohesion). These follow
+    # the thesis convention, not the reference implementation's, which swaps
+    # the two names.
+    w_temporal = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    w_cardinality = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    alpha = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
 
 
 class LogStatisticsComponent(DashboardComponent):
@@ -137,3 +214,18 @@ class PieChartComponent(DashboardComponent):
     show_legend = models.BooleanField(default=True)
     show_tooltip = models.BooleanField(default=True)
 
+
+class OCCNComponent(DashboardComponent):
+    relative_occurrence_threshold = models.FloatField(
+        default=0.0,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+    )
+    show_controls = models.BooleanField(default=True)
+    initial_interaction_locked = models.BooleanField(default=True)
+    layout_direction = models.CharField(
+        max_length=2,
+        choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
+        default='LR',
+    )
+    # Comma-separated object type filter; empty = discover on all types.
+    object_types = models.TextField(default="", blank=True)

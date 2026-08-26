@@ -33,6 +33,10 @@ type MarkerDrag = {
  * Markers support two pointer gestures: a plain click selects the marker's
  * group, and dragging a marker onto another marker of the same activity side
  * merges the two groups (the drag shows a dashed preview line).
+ *
+ * `interactive={false}` (the read-only discovery visualizer) disables both
+ * gestures but keeps pointer events on so the `<title>` tooltips still work;
+ * `markerTitle` lets that caller enrich the tooltip (e.g. support counts).
  */
 const MarkerOverlay = memo(function MarkerOverlay({
   nodes,
@@ -41,6 +45,9 @@ const MarkerOverlay = memo(function MarkerOverlay({
   typeColors,
   parallelOffset,
   focusedGroup,
+  interactive = true,
+  markerTitle,
+  mutedActivities = [],
   onSelectGroup,
   onMergeGroups,
 }: {
@@ -50,13 +57,25 @@ const MarkerOverlay = memo(function MarkerOverlay({
   typeColors: Record<string, string>;
   parallelOffset: Record<string, number>;
   focusedGroup: GroupRef | null;
-  onSelectGroup: (ref: GroupRef) => void;
-  onMergeGroups: (from: GroupRef, to: GroupRef) => void;
+  interactive?: boolean;
+  markerTitle?: (vis: MarkerVis) => string;
+  mutedActivities?: string[];
+  onSelectGroup?: (ref: GroupRef) => void;
+  onMergeGroups?: (from: GroupRef, to: GroupRef) => void;
 }) {
   const { markers, lines } = useMemo(
     () => computeMarkerLayout({ nodes, edges, bindings, typeColors, parallelOffset }),
     [nodes, edges, bindings, typeColors, parallelOffset],
   );
+  const mutedActivitySet = useMemo(
+    () => new Set(mutedActivities),
+    [mutedActivities],
+  );
+
+  // Markers in crowded stacks never render labels/badges: the markers sit
+  // 12–20 flow-px apart, so their labels overlap into mush at every reachable
+  // zoom. The tooltips (and the visualizer's "+N" chips) carry the details.
+  const labelVisible = (vis: MarkerVis) => !vis.crowded;
 
   const { screenToFlowPosition } = useReactFlow();
   const [drag, setDrag] = useState<MarkerDrag | null>(null);
@@ -105,7 +124,18 @@ const MarkerOverlay = memo(function MarkerOverlay({
     }
   };
 
-  const interactionProps = (vis: MarkerVis) => ({
+  const titleFor = (vis: MarkerVis) =>
+    markerTitle?.(vis) ?? defaultMarkerTitle(vis.ref.side, vis.marker[0], vis.marker[1]);
+
+  const interactionProps = (vis: MarkerVis) => {
+    if (!interactive) {
+      // Pointer events stay on so the SVG <title> tooltip is reachable.
+      return { style: { pointerEvents: 'all', cursor: 'default' } as const };
+    }
+    return staticInteractionProps(vis);
+  };
+
+  const staticInteractionProps = (vis: MarkerVis) => ({
     [MARKER_REF_ATTR]: JSON.stringify([
       vis.ref.activity,
       vis.ref.side,
@@ -158,10 +188,10 @@ const MarkerOverlay = memo(function MarkerOverlay({
       const active = dragRef.current;
       updateDrag(null);
       if (!active) {
-        onSelectGroup(pending.vis.ref);
+        onSelectGroup?.(pending.vis.ref);
         return;
       }
-      if (active.target) onMergeGroups(active.from, active.target);
+      if (active.target) onMergeGroups?.(active.from, active.target);
     },
     onPointerCancel: (event: React.PointerEvent) => {
       if (pendingRef.current?.pointerId !== event.pointerId) return;
@@ -187,12 +217,19 @@ const MarkerOverlay = memo(function MarkerOverlay({
         {/* AND-group connector lines (below the markers) */}
         {lines.map((line) => {
           const focused = groupRefEquals(line.ref, focusedGroup);
+          const muted = mutedActivitySet.has(line.ref.activity);
           return (
             <polyline
               key={line.id}
               points={line.points.map((p) => `${p.x},${p.y}`).join(' ')}
               fill="none"
-              stroke={focused ? '#2563EB' : 'rgba(15, 23, 42, 0.7)'}
+              stroke={
+                muted
+                  ? 'rgba(148, 163, 184, 0.45)'
+                  : focused
+                    ? '#2563EB'
+                    : 'rgba(15, 23, 42, 0.7)'
+              }
               strokeWidth={focused ? 2 : 1.2}
             />
           );
@@ -219,6 +256,11 @@ const MarkerOverlay = memo(function MarkerOverlay({
             ? groupRefEquals(vis.ref, drag.target)
             : false;
           const half = MARKER_SIZE / 2;
+          const muted =
+            mutedActivitySet.has(vis.ref.activity) ||
+            mutedActivitySet.has(vis.marker[0]);
+          const markerColor = muted ? '#D1D5DB' : vis.color;
+          const outlineColor = muted ? '#9CA3AF' : OUTLINE;
           // Perpendicular of the tangent — labels sit beside the arc.
           const perpX = -vis.tangent.y;
           const perpY = vis.tangent.x;
@@ -245,12 +287,12 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   cx={vis.pos.x}
                   cy={vis.pos.y}
                   r={half}
-                  fill={vis.color}
-                  stroke={OUTLINE}
+                  fill={markerColor}
+                  stroke={outlineColor}
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
-                  <title>{markerTitle(vis.ref.side, vis.marker[0], vis.marker[1])}</title>
+                  <title>{titleFor(vis)}</title>
                 </circle>
               ) : (
                 <rect
@@ -258,15 +300,15 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   y={vis.pos.y - half}
                   width={MARKER_SIZE}
                   height={MARKER_SIZE}
-                  fill={vis.color}
-                  stroke={OUTLINE}
+                  fill={markerColor}
+                  stroke={outlineColor}
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
-                  <title>{markerTitle(vis.ref.side, vis.marker[0], vis.marker[1])}</title>
+                  <title>{titleFor(vis)}</title>
                 </rect>
               )}
-              {vis.cardinality && (
+              {vis.cardinality && labelVisible(vis) && (
                 <text
                   x={vis.pos.x + perpX * 15}
                   y={vis.pos.y + perpY * 15}
@@ -275,7 +317,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   style={{
                     fontSize: 9,
                     fontWeight: 600,
-                    fill: OUTLINE,
+                    fill: outlineColor,
                     paintOrder: 'stroke',
                     stroke: 'rgba(255, 255, 255, 0.8)',
                     strokeWidth: 3,
@@ -285,12 +327,19 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   {vis.cardinality}
                 </text>
               )}
-              {vis.keyBadge !== null && (
+              {vis.keyBadge !== null && labelVisible(vis) && (
                 <g
                   transform={`translate(${vis.pos.x - perpX * 14}, ${vis.pos.y - perpY * 14})`}
                   style={{ pointerEvents: 'none' }}
                 >
-                  <rect x={-6.5} y={-5.5} width={13} height={11} rx={3} fill={OUTLINE} />
+                  <rect
+                    x={-6.5}
+                    y={-5.5}
+                    width={13}
+                    height={11}
+                    rx={3}
+                    fill={outlineColor}
+                  />
                   <text
                     textAnchor="middle"
                     dominantBaseline="central"
@@ -308,7 +357,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
   );
 });
 
-function markerTitle(side: 'img' | 'omg', related: string, objectType: string) {
+function defaultMarkerTitle(side: 'img' | 'omg', related: string, objectType: string) {
   return side === 'img'
     ? `input marker — from ${related} (${objectType}). Click to edit, drag onto another input marker of this activity to merge the groups.`
     : `output marker — to ${related} (${objectType}). Click to edit, drag onto another output marker of this activity to merge the groups.`;

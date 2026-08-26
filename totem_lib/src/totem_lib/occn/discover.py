@@ -9,10 +9,12 @@ from collections import Counter
 from tqdm.auto import tqdm
 from . import OCCausalNet
 from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, filter_dead_objects
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 
 
 def discover_occn(
-    ocel: ObjectCentricEventLog,
+    ocel: ObjectCentricEventLog | OcelDuckDB,
     relativeOccuranceThreshold: float,
     parameters: dict = None,
 ) -> OCCausalNet:
@@ -77,6 +79,14 @@ def discover_occn(
 
     # Pre-process OCEL
     eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
+
+    # If object_types was specified, filter both DataFrames to only those types.
+    if "object_types" in parameters:
+        eventLogForMiner = eventLogForMiner[
+            eventLogForMiner["object_type"].isin(objectTypes)
+        ].copy()
+        valid_event_ids = set(eventLogForMiner["event_id"])
+        eventLog = eventLog[eventLog["event_id"].isin(valid_event_ids)].copy()
 
     # Pre-process data
     objectSet = set(eventLogForMiner["object"])
@@ -162,13 +172,43 @@ def _prepare_ocel_for_discovery(ocel):
     Prepares the OCEL and returns two DataFrames:
     1. event_log: A log of unique events.
     2. event_log_for_miner: A flattened log of event-to-object relationships.
+
+    Accepts either an ObjectCentricEventLog (Polars-backed) or an OcelDuckDB.
     """
-    # Pre-process OCEL
+    if isinstance(ocel, OcelDuckDB):
+        return _prepare_ocel_duckdb_for_discovery(ocel)
+    return _prepare_ocel_polars_for_discovery(ocel)
+
+
+def _prepare_ocel_polars_for_discovery(ocel: ObjectCentricEventLog):
+    """Polars path: filters dead objects, converts to pm4py, then extracts the two DataFrames."""
     ocel = filter_dead_objects(ocel)
-    
-    # Convert to PM4Py event log
     ocel_pm4py = convert_ocel_polars_to_pm4py(ocel)
-    
+    return _extract_dataframes_from_pm4py(ocel_pm4py)
+
+
+def _prepare_ocel_duckdb_for_discovery(ocel_db: OcelDuckDB):
+    """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames."""
+    pk = getattr(ocel_db, "_lock_pk", None)
+    lock = None
+    if pk is not None:
+        try:
+            from api.views import _OCEL_DB_LOCKS
+            lock = _OCEL_DB_LOCKS.get(int(pk))
+        except Exception:
+            lock = None
+
+    if lock:
+        with lock:
+            ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+    else:
+        ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+
+    return _extract_dataframes_from_pm4py(ocel_pm4py)
+
+
+def _extract_dataframes_from_pm4py(ocel_pm4py):
+    """Shared logic: extracts event_log and event_log_for_miner from a pm4py OCEL."""
     # Create the unique event log
     event_log = ocel_pm4py.events.rename(
         columns={
@@ -1341,7 +1381,7 @@ class SimpleOCCNet:
                         marker[0], marker[1], (marker[3][0], marker[3][1]), marker[2]
                     )
                 )
-            return OCCausalNet.MarkerGroup(markers)
+            return OCCausalNet.MarkerGroup(markers, support_count=marker_group[1])
 
         dependency_graph = self.dependencyGraph
         input_bindings = {
@@ -1356,6 +1396,7 @@ class SimpleOCCNet:
             dependency_graph,
             output_bindings,
             input_bindings,
+            activity_count=dict(self.activityCount),
             relative_occurrence_threshold=relativeOccurenceThreshold,
         )
 
