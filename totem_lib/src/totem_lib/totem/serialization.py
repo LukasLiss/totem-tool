@@ -198,6 +198,51 @@ def validate_totem_dict(data: dict[str, Any]) -> None:
                     f"object_type_to_event_types.{object_type}"
                 )
 
+    if "layout" in data:
+        _validate_totem_layout(data["layout"], node_set)
+
+
+def _validate_totem_layout(layout: Any, node_set: set[str]) -> None:
+    """Validate the optional editor-supplied ``layout`` block.
+
+    ``layout`` is an optional, purely presentational add-on written by the
+    visual editor. It is validated when present but ignored when rebuilding the
+    in-memory :class:`Totem`. Every referenced object type must exist in
+    ``tempgraph.nodes`` so a layout can never introduce phantom nodes.
+    """
+    if not isinstance(layout, dict):
+        raise ValueError("layout must be an object")
+
+    object_types = layout.get("objectTypes", {})
+    if not isinstance(object_types, dict):
+        raise ValueError("layout.objectTypes must be an object")
+    for name, entry in object_types.items():
+        path = f"layout.objectTypes.{name}"
+        _require_known_node(name, node_set, path)
+        _validate_layout_node(entry, path)
+
+
+def _validate_layout_node(entry: Any, path: str) -> None:
+    """Validate one ``{position?: {x, y}, color?: str}`` layout entry."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"{path} must be an object")
+    position = entry.get("position")
+    if position is not None:
+        _validate_position(position, f"{path}.position")
+    color = entry.get("color")
+    if color is not None and not isinstance(color, str):
+        raise ValueError(f"{path}.color must be a string")
+
+
+def _validate_position(position: Any, path: str) -> None:
+    """Validate a ``{x: number, y: number}`` position."""
+    if not isinstance(position, dict):
+        raise ValueError(f"{path} must be an object")
+    for axis in ("x", "y"):
+        value = position.get(axis)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{path}.{axis} must be a number")
+
 
 def _sorted_strings(values: Any, path: str) -> list[str]:
     return sorted(_validate_string_list(values, path))
