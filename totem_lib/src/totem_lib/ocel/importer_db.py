@@ -26,6 +26,7 @@ import ijson
 import polars as pl
 
 from .ocel_duckdb import OcelDuckDB, create_ocel_schema
+from .validation import OCELValidationException, validate_ocel
 
 BATCH_SIZE = 50_000
 STREAMING_THRESHOLD_MB = 200
@@ -40,6 +41,7 @@ def import_ocel_db(
     db_path: str = ":memory:",
     streaming_threshold_mb: float = STREAMING_THRESHOLD_MB,
     graceful_import: bool = True,
+    strict_mode: bool = False,
 ) -> OcelDuckDB:
     """
     Import an OCEL 2.0 file directly into a DuckDB database.
@@ -113,7 +115,7 @@ def import_ocel_db(
         )
     size_mb = os.path.getsize(file_path) / 1024 / 1024
     dispatchers = stream if size_mb >= streaming_threshold_mb else bulk
-    return dispatchers[fmt](file_path, db_path, graceful_import)
+    return dispatchers[fmt](file_path, db_path, graceful_import, strict_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ def _graceful_cleanup(conn: duckdb.DuckDBPyConnection) -> None:
 # SQLite — bulk (DuckDB ATTACH, pure SQL pipeline)
 # ---------------------------------------------------------------------------
 
-def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     con = sqlite3.connect(file_path)
     cur = con.cursor()
 
@@ -225,6 +227,25 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True) -> 
     _sqlite_bulk_o2o(conn)
 
     conn.execute("DETACH src")
+
+    if strict_mode:
+        errors = []
+        union_all_parts = [f'SELECT ocel_id FROM src."event_{act}"' for act in activities]
+        if union_all_parts:
+            query = f"""
+                SELECT ocel_id, COUNT(*) 
+                FROM ({ " UNION ALL ".join(union_all_parts) }) 
+                GROUP BY ocel_id 
+                HAVING COUNT(*) > 1
+                LIMIT 10
+            """
+            dups = conn.execute(query).fetchall()
+            for row in dups:
+                errors.append(f"Validation Failed: Found duplicate Event ID '{row[0]}' in source database.")
+        errors.extend(validate_ocel(conn))
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)
@@ -364,7 +385,7 @@ def _sqlite_bulk_o2o(conn: duckdb.DuckDBPyConnection) -> None:
 # JSON — bulk (json.load + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
 
     with open(file_path, "r", encoding="utf-8") as f:
@@ -497,6 +518,25 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oc
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    json_errors = []
+    if strict_mode:
+        seen = set()
+        dups = set()
+        for ev in raw_events:
+            ev_id = ev.get("id")
+            if ev_id:
+                if ev_id in seen:
+                    dups.add(ev_id)
+                seen.add(ev_id)
+        for ev_id in sorted(dups)[:10]:
+            json_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
+
+    if strict_mode:
+        errors = json_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -507,7 +547,7 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oc
 # XML — bulk (ET.parse + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
     tree = ET.parse(file_path)
     root = tree.getroot()
@@ -647,6 +687,24 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    xml_errors = []
+    if strict_mode:
+        seen = set()
+        dups = set()
+        for ev_id in ev_ids:
+            if ev_id:
+                if ev_id in seen:
+                    dups.add(ev_id)
+                seen.add(ev_id)
+        for ev_id in sorted(dups)[:10]:
+            xml_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
+
+    if strict_mode:
+        errors = xml_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -657,7 +715,7 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
 # CSV — bulk (DictReader + Polars register)
 # ---------------------------------------------------------------------------
 
-def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     inserter = _bulk_insert_ignore if graceful else _bulk_insert
     with open(file_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -765,6 +823,24 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    csv_errors = []
+    if strict_mode:
+        seen = set()
+        dups = set()
+        for ev_id in ev_ids:
+            if ev_id:
+                if ev_id in seen:
+                    dups.add(ev_id)
+                seen.add(ev_id)
+        for ev_id in sorted(dups)[:10]:
+            csv_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
+
+    if strict_mode:
+        errors = csv_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -775,7 +851,7 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True) -> Oce
 # SQLite
 # ---------------------------------------------------------------------------
 
-def _import_sqlite(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_sqlite(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     con = sqlite3.connect(file_path)
     cur = con.cursor()
 
@@ -795,7 +871,31 @@ def _import_sqlite(file_path: str, db_path: str, graceful: bool = True) -> OcelD
     # --- Pass 2: stream object-to-object relations ---
     _sqlite_insert_o2o(cur, conn)
 
+    sqlite_errors = []
+    if strict_mode:
+        cur.execute("SELECT ocel_type_map FROM event_map_type")
+        activities = [r[0] for r in cur.fetchall()]
+        union_all_parts = [f'SELECT ocel_id FROM "event_{act}"' for act in activities]
+        if union_all_parts:
+            query = f"""
+                SELECT ocel_id, COUNT(*) 
+                FROM ({ " UNION ALL ".join(union_all_parts) }) 
+                GROUP BY ocel_id 
+                HAVING COUNT(*) > 1
+                LIMIT 10
+            """
+            cur.execute(query)
+            dups = cur.fetchall()
+            for row in dups:
+                sqlite_errors.append(f"Validation Failed: Found duplicate Event ID '{row[0]}' in source database.")
+
     con.close()
+
+    if strict_mode:
+        errors = sqlite_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)
@@ -1004,7 +1104,7 @@ def _sqlite_insert_o2o(cur: sqlite3.Cursor, conn: duckdb.DuckDBPyConnection) -> 
 # JSON (ijson streaming)
 # ---------------------------------------------------------------------------
 
-def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_json(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # --- Pass 1: collect attribute column names ---
     event_attr_cols: set[str] = set()
     obj_attr_cols:   set[str] = set()
@@ -1035,9 +1135,16 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuc
     event_rows: list[tuple] = []
     eo_rows:    list[tuple] = []
 
+    seen_event_ids = set()
+    dup_event_ids = set()
+
     with open(file_path, "rb") as f:
         for ev in ijson.items(f, "events.item"):
             ev_id    = ev.get("id", "")
+            if strict_mode and ev_id:
+                if ev_id in seen_event_ids:
+                    dup_event_ids.add(ev_id)
+                seen_event_ids.add(ev_id)
             activity = ev.get("type", "")
             ts_unix  = _parse_ts(ev.get("time", ""))
 
@@ -1065,6 +1172,11 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuc
 
     flusher(conn, "events", event_ph, event_rows)
     flusher(conn, "event_object", "?, ?, ?", eo_rows)
+
+    json_errors = []
+    if strict_mode:
+        for ev_id in sorted(dup_event_ids)[:10]:
+            json_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
 
     # --- Pass 2: stream objects ---
     obj_ph   = ", ".join(["?"] * (2 + len(obj_attr_cols_sorted)))
@@ -1119,6 +1231,12 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True) -> OcelDuc
         flusher(conn, "object_attribute_history", hist_ph, hist_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
+    if strict_mode:
+        errors = json_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -1143,7 +1261,7 @@ def _xml_attr_value(elem: ET.Element) -> str | None:
     return text or None
 
 
-def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_xml(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # --- Pass 1: collect attribute column names ---
     # Only collect names from data attributes (those with a "value" attr),
     # not from schema-definition attributes (those with a "type" attr only).
@@ -1199,6 +1317,9 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
     obj_rows:   list[tuple] = []
     hist_rows:  list[tuple] = []
     o2o_rows:   list[tuple] = []
+
+    seen_event_ids = set()
+    dup_event_ids = set()
 
     _in_top_events  = False
     _in_top_objects = False
@@ -1259,6 +1380,10 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
             elif elem.tag == "event":
                 _in_event = False
                 ev_id    = cur_event["id"]
+                if strict_mode and ev_id:
+                    if ev_id in seen_event_ids:
+                        dup_event_ids.add(ev_id)
+                    seen_event_ids.add(ev_id)
                 activity = cur_event["type"]
                 ts_unix  = _parse_ts(cur_event["time"])
                 attrs    = cur_event["attrs"]
@@ -1318,6 +1443,17 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
         flusher(conn, "object_attribute_history", hist_ph, hist_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
+    xml_errors = []
+    if strict_mode:
+        for ev_id in sorted(dup_event_ids)[:10]:
+            xml_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
+
+    if strict_mode:
+        errors = xml_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
+
     if graceful:
         _graceful_cleanup(conn)
 
@@ -1330,7 +1466,7 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
 # CSV
 # ---------------------------------------------------------------------------
 
-def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuckDB:
+def _import_csv(file_path: str, db_path: str, graceful: bool = True, strict_mode: bool = False) -> OcelDuckDB:
     # CSV headers tell us the attribute columns upfront — no separate pass needed.
     # utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add to CSV files
     with open(file_path, newline="", encoding="utf-8-sig") as f:
@@ -1354,6 +1490,9 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
     obj_rows:   list[tuple] = []
     o2o_rows:   list[tuple] = []
     seen_objs:  dict[str, str] = {}  # obj_id → obj_type
+
+    seen_event_ids = set()
+    dup_event_ids = set()
 
     def _parse_obj_cell(cell: str) -> list[tuple[str, str | None]]:
         """Parse 'id[#qualifier][{json}]' cells, '/' separated."""
@@ -1384,6 +1523,10 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
             is_event = activity and not is_o2o
 
             if is_event:
+                if strict_mode and row_id:
+                    if row_id in seen_event_ids:
+                        dup_event_ids.add(row_id)
+                    seen_event_ids.add(row_id)
                 attr_map = {c[3:]: (row.get(c) or "").strip() or None for c in ea_cols}
                 event_rows.append(
                     tuple([row_id, activity, ts_unix] + [attr_map.get(c) for c in event_attr_cols])
@@ -1436,6 +1579,17 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True) -> OcelDuck
     obj_rows = [(obj_id, obj_type) for obj_id, obj_type in seen_objs.items()]
     flusher(conn, "objects", obj_ph, obj_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
+
+    csv_errors = []
+    if strict_mode:
+        for ev_id in sorted(dup_event_ids)[:10]:
+            csv_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
+
+    if strict_mode:
+        errors = csv_errors + validate_ocel(conn)
+        if errors:
+            conn.close()
+            raise OCELValidationException(errors)
 
     if graceful:
         _graceful_cleanup(conn)
