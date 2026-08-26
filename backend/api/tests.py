@@ -7,6 +7,7 @@ import time
 from contextlib import nullcontext
 from unittest.mock import patch
 
+import polars as pl
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
 from django.core.cache import cache
@@ -14,12 +15,30 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import SimpleTestCase, TestCase
 from rest_framework import status
-from rest_framework.test import APIClient, APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
+from totem_lib import (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    OCCausalNet,
+    OCCNReplayEvent,
+    OCCNReplayFitnessResult,
+    OCCNReplayStatus,
+    OCCNReplayUnit,
+    OCCNReplayUnitResult,
+    occn_to_dict,
+)
+from totem_lib.ocel.ocel import (
+    EVENTS_SCHEMA,
+    OBJECTS_SCHEMA,
+    ObjectCentricEventLog,
+)
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 from totem_lib.totem import Totem, totem_to_dict
 
 from .lru_filecache import LRUFileBasedCache
 from .models import EventLog, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
+from .views import EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -98,6 +117,25 @@ def valid_occn_content_json():
         "activity_count": {"START_Order": 1, "END_Order": 1},
         "relative_occurrence_threshold": 0.0,
     }
+
+
+def replayable_occn_content_json():
+    return occn_to_dict(
+        OCCausalNet.from_dict(
+            {
+                "START_Order": {
+                    "omg": [[("Create Order", "Order", (1, 1), 1)]]
+                },
+                "Create Order": {
+                    "img": [[("START_Order", "Order", (1, 1), 1)]],
+                    "omg": [[("END_Order", "Order", (1, 1), 1)]],
+                },
+                "END_Order": {
+                    "img": [[("Create Order", "Order", (1, 1), 1)]]
+                },
+            }
+        )
+    )
 
 
 class ProjectAssetModelTests(TestCase):
@@ -445,6 +483,1382 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class EventLogObjectTypesApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="object-types-user")
+        self.project = Project.objects.create(name="Object Types Project")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="object-types.xml",
+        )
+        self.url = f"/api/files/{self.event_log.pk}/object_types/"
+        self.client.force_authenticate(user=self.user)
+
+    def test_returns_cached_metadata_without_taking_algorithm_lock(self):
+        with (
+            patch(
+                "api.views._get_ocel_object_types",
+                return_value=["Item", "Order"],
+            ) as get_types,
+            patch("api.views._with_ocel_db") as algorithm_lock,
+        ):
+            response = self.client.get(self.url, {"bypass_cache": "1"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, ["Item", "Order"])
+        get_types.assert_called_once()
+        self.assertEqual(get_types.call_args.args[0].pk, self.event_log.pk)
+        algorithm_lock.assert_not_called()
+
+
+class TotemConformanceApiValidationTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="conformance-api-user")
+        self.other_user = User.objects.create_user(username="conformance-other-user")
+
+        self.project = Project.objects.create(name="Project A")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.totem_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Selected TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        self.url = f"/api/files/{self.event_log.pk}/totem_conformance/"
+        self.client.force_authenticate(user=self.user)
+
+    def _post_directly_to_view(self):
+        request = APIRequestFactory().post(
+            self.url,
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        return EventLogViewSet.as_view({"post": "totem_conformance"})(
+            request,
+            pk=self.event_log.pk,
+        )
+
+    def test_request_requires_asset_id(self):
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", response.data)
+
+    def test_request_requires_positive_integer_asset_id(self):
+        zero_response = self.client.post(
+            self.url,
+            {"asset_id": 0},
+            format="json",
+        )
+        string_response = self.client.post(
+            self.url,
+            {"asset_id": "not-an-id"},
+            format="json",
+        )
+
+        self.assertEqual(zero_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(string_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", zero_response.data)
+        self.assertIn("asset_id", string_response.data)
+
+    def test_event_log_is_scoped_to_authenticated_user(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_log = EventLog.objects.create(
+            project=foreign_project,
+            file="foreign-log.json",
+        )
+
+        response = self.client.post(
+            f"/api/files/{foreign_log.pk}/totem_conformance/",
+            {"asset_id": self.totem_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_inaccessible_asset_returns_not_found(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_asset = ProjectAsset.objects.create(
+            project=foreign_project,
+            name="Foreign TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": foreign_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("asset_id", response.data)
+
+    def test_asset_from_another_accessible_project_is_rejected(self):
+        other_project = Project.objects.create(name="Other Accessible Project")
+        other_project.users.add(self.user)
+        other_asset = ProjectAsset.objects.create(
+            project=other_project,
+            name="Other TOTeM",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": other_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("event log project", response.data["asset_id"])
+
+    def test_wrong_asset_type_is_rejected(self):
+        occn_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Wrong model type",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": occn_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("TOTEM", response.data["asset_id"])
+
+    def test_valid_request_executes_conformance_and_returns_result(self):
+        expected_result = {
+            "overall_metrics": {
+                "temporal": {"fitness": 1.0, "precision": 0.75},
+                "log_cardinality": {"fitness": 0.8, "precision": 0.6},
+                "event_cardinality": {"fitness": 0.9, "precision": 0.7},
+            },
+            "object_type_metrics": {
+                "Item": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+                "Order": {
+                    "temporal": {"avg_fitness": 1.0, "avg_precision": 0.75},
+                    "log_cardinality": {
+                        "avg_fitness": 0.8,
+                        "avg_precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "avg_fitness": 0.9,
+                        "avg_precision": 0.7,
+                    },
+                },
+            },
+            "type_pair_metrics": [
+                {
+                    "source_type": "Order",
+                    "target_type": "Item",
+                    "temporal": {
+                        "model_relation": "D",
+                        "fitness": 1.0,
+                        "precision": 0.75,
+                    },
+                    "log_cardinality": {
+                        "model_relation": "1..*",
+                        "fitness": 0.8,
+                        "precision": 0.6,
+                    },
+                    "event_cardinality": {
+                        "model_relation": "0...*",
+                        "fitness": 0.9,
+                        "precision": 0.7,
+                    },
+                }
+            ],
+            "histograms": {
+                "temporal": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+                "event_cardinality": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "event_cardinality_by_activity": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "activity": "Pick Item",
+                        "counts": {"0...*": 5},
+                    }
+                ],
+                "temporal_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"D": 4, "P": 1},
+                    }
+                ],
+                "log_cardinality_by_relation_type": [
+                    {
+                        "source_type": "Order",
+                        "target_type": "Item",
+                        "relation_type": "qualified",
+                        "counts": {"1..*": 4, "0...*": 1},
+                    }
+                ],
+            },
+        }
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ) as load_ocel,
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            conformance.return_value.to_dict.return_value = expected_result
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                "file_id": self.event_log.pk,
+                "asset_id": self.totem_asset.pk,
+                **expected_result,
+            },
+        )
+        load_ocel.assert_called_once()
+        self.assertEqual(load_ocel.call_args.args[0].pk, self.event_log.pk)
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertEqual(
+            deserialized_totem.cardinalities,
+            {("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
+        )
+        self.assertIs(called_db, db)
+
+    def test_invalid_stored_totem_models_return_validation_error(self):
+        wrong_schema = valid_totem_content_json()
+        wrong_schema["schema"] = "occn"
+
+        unsupported_version = valid_totem_content_json()
+        unsupported_version["version"] = 2
+
+        unknown_relation_node = valid_totem_content_json()
+        unknown_relation_node["tempgraph"]["D"] = [["Order", "Unknown"]]
+
+        invalid_cardinality = valid_totem_content_json()
+        invalid_cardinality["cardinalities"][0]["log_cardinality"] = "sometimes"
+
+        invalid_models = (
+            ("non-object payload", []),
+            ("wrong schema", wrong_schema),
+            ("unsupported schema version", unsupported_version),
+            ("relation references unknown node", unknown_relation_node),
+            ("unsupported cardinality", invalid_cardinality),
+        )
+
+        for label, content_json in invalid_models:
+            with self.subTest(label=label):
+                ProjectAsset.objects.filter(pk=self.totem_asset.pk).update(
+                    content_json=content_json
+                )
+                with (
+                    patch("api.views._with_ocel_db") as load_ocel,
+                    patch("api.views.conformance_of_totem") as conformance,
+                ):
+                    response = self.client.post(
+                        self.url,
+                        {"asset_id": self.totem_asset.pk},
+                        format="json",
+                    )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn(
+                    "Stored TOTeM model is invalid",
+                    response.data["asset_id"],
+                )
+                load_ocel.assert_not_called()
+                conformance.assert_not_called()
+
+    def test_ocel_load_failure_returns_server_error(self):
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                side_effect=RuntimeError("OCEL unavailable"),
+            ) as load_ocel,
+            patch("api.views.conformance_of_totem") as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: OCEL unavailable"},
+        )
+        load_ocel.assert_called_once()
+        conformance.assert_not_called()
+
+    def test_conformance_failure_returns_server_error(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch(
+                "api.views.conformance_of_totem",
+                side_effect=RuntimeError("Conformance failed"),
+            ) as conformance,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate TOTeM conformance: Conformance failed"},
+        )
+        conformance.assert_called_once()
+        deserialized_totem, called_db = conformance.call_args.args
+        self.assertIsInstance(deserialized_totem, Totem)
+        self.assertIs(called_db, db)
+
+    def test_conformance_uses_stored_model_without_discovery(self):
+        result_json = {
+            "overall_metrics": {},
+            "object_type_metrics": {},
+            "type_pair_metrics": [],
+            "histograms": {},
+        }
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch("api.views.conformance_of_totem") as conformance,
+            patch("api.views.totemDiscovery_db") as discovery,
+        ):
+            conformance.return_value.to_dict.return_value = result_json
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.totem_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        discovery.assert_not_called()
+        conformance.assert_called_once()
+        self.assertIsInstance(conformance.call_args.args[0], Totem)
+
+
+class OCCNConformanceApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="occn-conformance-user")
+        self.other_user = User.objects.create_user(username="occn-other-user")
+        self.project = Project.objects.create(name="OCCN Project")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="occn-test-log.json",
+        )
+        self.occn_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Selected OCCN",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+        self.url = f"/api/files/{self.event_log.pk}/occn_conformance/"
+        self.client.force_authenticate(user=self.user)
+
+    def _post_directly_to_view(self):
+        request = APIRequestFactory().post(
+            self.url,
+            {"asset_id": self.occn_asset.pk},
+            format="json",
+        )
+        force_authenticate(request, user=self.user)
+        return EventLogViewSet.as_view({"post": "occn_conformance"})(
+            request,
+            pk=self.event_log.pk,
+        )
+
+    def test_authentication_is_required(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": self.occn_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_request_requires_asset_id(self):
+        response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("asset_id", response.data)
+
+    def test_request_requires_positive_integer_asset_id(self):
+        for invalid_id in (0, "not-an-id"):
+            with self.subTest(asset_id=invalid_id):
+                response = self.client.post(
+                    self.url,
+                    {"asset_id": invalid_id},
+                    format="json",
+                )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn("asset_id", response.data)
+
+    def test_state_limit_is_bounded(self):
+        for max_states in (999, 15_001, "not-a-number"):
+            with self.subTest(max_states=max_states):
+                response = self.client.post(
+                    self.url,
+                    {
+                        "asset_id": self.occn_asset.pk,
+                        "max_states": max_states,
+                    },
+                    format="json",
+                )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn("max_states", response.data)
+
+    def test_unsupported_replay_unit_strategy_is_rejected(self):
+        with (
+            patch("api.views._with_ocel_db") as load_ocel,
+            patch("api.views.extract_occn_replay_units") as extract,
+            patch("api.views.occn_replay_fitness") as fitness,
+        ):
+            response = self.client.post(
+                self.url,
+                {
+                    "asset_id": self.occn_asset.pk,
+                    "replay_unit_strategy": "variants",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("replay_unit_strategy", response.data)
+        load_ocel.assert_not_called()
+        extract.assert_not_called()
+        fitness.assert_not_called()
+
+    def test_leading_object_strategy_requires_an_object_type(self):
+        response = self.client.post(
+            self.url,
+            {
+                "asset_id": self.occn_asset.pk,
+                "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+
+    def test_standard_strategy_rejects_a_leading_object_type(self):
+        response = self.client.post(
+            self.url,
+            {
+                "asset_id": self.occn_asset.pk,
+                "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                "leading_object_type": "Order",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+
+    def test_leading_object_type_must_exist_in_event_log(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch("api.views._object_types", return_value=["Item", "Order"]),
+            patch("api.views.extract_occn_replay_units") as extract,
+            patch("api.views.occn_replay_fitness") as fitness,
+        ):
+            response = self.client.post(
+                self.url,
+                {
+                    "asset_id": self.occn_asset.pk,
+                    "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                    "leading_object_type": "Package",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("leading_object_type", response.data)
+        extract.assert_not_called()
+        fitness.assert_not_called()
+
+    def test_event_log_is_scoped_to_authenticated_user(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_log = EventLog.objects.create(
+            project=foreign_project,
+            file="foreign-log.json",
+        )
+
+        response = self.client.post(
+            f"/api/files/{foreign_log.pk}/occn_conformance/",
+            {"asset_id": self.occn_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_inaccessible_asset_returns_not_found(self):
+        foreign_project = Project.objects.create(name="Foreign Project")
+        foreign_project.users.add(self.other_user)
+        foreign_asset = ProjectAsset.objects.create(
+            project=foreign_project,
+            name="Foreign OCCN",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": foreign_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("asset_id", response.data)
+
+    def test_asset_from_another_accessible_project_is_rejected(self):
+        other_project = Project.objects.create(name="Other Accessible Project")
+        other_project.users.add(self.user)
+        other_asset = ProjectAsset.objects.create(
+            project=other_project,
+            name="Other OCCN",
+            asset_type=ProjectAsset.AssetType.OCCN,
+            content_json=valid_occn_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": other_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("event log project", response.data["asset_id"])
+
+    def test_wrong_asset_type_is_rejected(self):
+        totem_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="Wrong model type",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+
+        response = self.client.post(
+            self.url,
+            {"asset_id": totem_asset.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("OCCN", response.data["asset_id"])
+
+    def test_invalid_stored_occn_models_return_validation_error(self):
+        wrong_schema = valid_occn_content_json()
+        wrong_schema["schema"] = "totem"
+
+        unsupported_version = valid_occn_content_json()
+        unsupported_version["version"] = 2
+
+        missing_end_activity = valid_occn_content_json()
+        missing_end_activity["activities"].remove("END_Order")
+
+        unexpected_start = valid_occn_content_json()
+        unexpected_start["activities"].append("START_Unknown")
+        unexpected_start["input_marker_groups"]["START_Unknown"] = []
+        unexpected_start["output_marker_groups"]["START_Unknown"] = []
+        unexpected_start["activity_count"]["START_Unknown"] = 1
+
+        invalid_models = (
+            ("non-object payload", []),
+            ("wrong schema", wrong_schema),
+            ("unsupported schema version", unsupported_version),
+            ("missing end activity", missing_end_activity),
+            ("unexpected artificial start", unexpected_start),
+        )
+
+        for label, content_json in invalid_models:
+            with self.subTest(label=label):
+                ProjectAsset.objects.filter(pk=self.occn_asset.pk).update(
+                    content_json=content_json
+                )
+                with (
+                    patch("api.views._with_ocel_db") as load_ocel,
+                    patch("api.views.extract_occn_replay_units") as extract,
+                    patch("api.views.occn_replay_fitness") as fitness,
+                ):
+                    response = self.client.post(
+                        self.url,
+                        {"asset_id": self.occn_asset.pk},
+                        format="json",
+                    )
+
+                self.assertEqual(
+                    response.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                )
+                self.assertIn(
+                    "Stored OCCN model is invalid",
+                    response.data["asset_id"],
+                )
+                load_ocel.assert_not_called()
+                extract.assert_not_called()
+                fitness.assert_not_called()
+
+    def test_ocel_load_failure_returns_server_error(self):
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                side_effect=RuntimeError("OCEL unavailable"),
+            ) as load_ocel,
+            patch("api.views.extract_occn_replay_units") as extract,
+            patch("api.views.occn_replay_fitness") as fitness,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to extract OCCN replay units: OCEL unavailable"},
+        )
+        load_ocel.assert_called_once()
+        extract.assert_not_called()
+        fitness.assert_not_called()
+
+    def test_replay_unit_extraction_failure_returns_server_error(self):
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                side_effect=RuntimeError("Extraction failed"),
+            ) as extract,
+            patch("api.views.occn_replay_fitness") as fitness,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to extract OCCN replay units: Extraction failed"},
+        )
+        extract.assert_called_once_with(
+            db,
+            strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            leading_object_type=None,
+        )
+        fitness.assert_not_called()
+
+    def test_replay_failure_returns_server_error(self):
+        db = object()
+        replay_units = (object(),)
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=replay_units,
+            ),
+            patch(
+                "api.views.occn_replay_fitness",
+                side_effect=RuntimeError("Replay failed"),
+            ) as fitness,
+        ):
+            response = self._post_directly_to_view()
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to calculate OCCN conformance: Replay failed"},
+        )
+        fitness.assert_called_once()
+        deserialized_occn, called_units = fitness.call_args.args
+        self.assertIsInstance(deserialized_occn, OCCausalNet)
+        self.assertIs(called_units, replay_units)
+
+    def test_valid_request_runs_real_extraction_and_replay(self):
+        ProjectAsset.objects.filter(pk=self.occn_asset.pk).update(
+            content_json=replayable_occn_content_json()
+        )
+        source = ObjectCentricEventLog(
+            events=pl.DataFrame(
+                [
+                    {
+                        "_eventId": "e1",
+                        "_activity": "Create Order",
+                        "_timestampUnix": 1,
+                        "_objects": ["o1"],
+                        "_qualifiers": [None],
+                        "_attributes": "",
+                    }
+                ],
+                schema=EVENTS_SCHEMA,
+            ),
+            objects=pl.DataFrame(
+                [
+                    {
+                        "_objId": "o1",
+                        "_objType": "Order",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    }
+                ],
+                schema=OBJECTS_SCHEMA,
+            ),
+        )
+        database = OcelDuckDB(source)
+        try:
+            with patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(database),
+            ):
+                response = self.client.post(
+                    self.url,
+                    {"asset_id": self.occn_asset.pk},
+                    format="json",
+                )
+        finally:
+            database.conn.close()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["fitness"], 1.0)
+        self.assertEqual(response.data["coverage"], 1.0)
+        self.assertEqual(response.data["total_units"], 1)
+        self.assertEqual(response.data["fitting_units"], 1)
+        self.assertEqual(response.data["non_fitting_units"], 0)
+        self.assertEqual(response.data["inconclusive_units"], 0)
+        self.assertEqual(
+            response.data["unit_results"][0]["status"],
+            OCCNReplayStatus.FITTING.value,
+        )
+        self.assertEqual(
+            response.data["unit_results"][0]["object_types"],
+            ["Order"],
+        )
+
+    def test_valid_leading_object_request_projects_by_selected_type(self):
+        ProjectAsset.objects.filter(pk=self.occn_asset.pk).update(
+            content_json=replayable_occn_content_json()
+        )
+        source = ObjectCentricEventLog(
+            events=pl.DataFrame(
+                [
+                    {
+                        "_eventId": "e1",
+                        "_activity": "Create Order",
+                        "_timestampUnix": 1,
+                        "_objects": ["o1"],
+                        "_qualifiers": [None],
+                        "_attributes": "",
+                    }
+                ],
+                schema=EVENTS_SCHEMA,
+            ),
+            objects=pl.DataFrame(
+                [
+                    {
+                        "_objId": "o1",
+                        "_objType": "Order",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    }
+                ],
+                schema=OBJECTS_SCHEMA,
+            ),
+        )
+        database = OcelDuckDB(source)
+        try:
+            with patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(database),
+            ):
+                response = self.client.post(
+                    self.url,
+                    {
+                        "asset_id": self.occn_asset.pk,
+                        "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                        "leading_object_type": "Order",
+                    },
+                    format="json",
+                )
+        finally:
+            database.conn.close()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["replay_unit_strategy"],
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        )
+        self.assertEqual(response.data["leading_object_type"], "Order")
+        self.assertEqual(response.data["total_units"], 1)
+        self.assertEqual(
+            response.data["unit_results"][0]["unit_id"],
+            "leading_object:o1",
+        )
+
+    def test_valid_request_executes_conformance_and_returns_result(self):
+        replay_units = (object(), object(), object())
+        result = OCCNReplayFitnessResult(
+            unit_results=(
+                OCCNReplayUnitResult(
+                    unit_id="connected_components:000001",
+                    status=OCCNReplayStatus.FITTING,
+                    event_count=2,
+                    explored_state_count=4,
+                    object_types=("Order",),
+                ),
+                OCCNReplayUnitResult(
+                    unit_id="connected_components:000002",
+                    status=OCCNReplayStatus.NON_FITTING,
+                    event_count=1,
+                    explored_state_count=2,
+                    object_types=("Order", "Item"),
+                    failure_event_index=0,
+                    failure_event_id="e3",
+                    stopping_activity="Ship Order",
+                    stopping_phase="visible_event",
+                    stopping_reason="no_enabled_event_binding",
+                    last_replayed_activity="Create Order",
+                    replayed_activities=("START_Order", "Create Order"),
+                    stopping_object_types=("Item", "Order"),
+                ),
+                OCCNReplayUnitResult(
+                    unit_id="connected_components:000003",
+                    status=OCCNReplayStatus.INCONCLUSIVE,
+                    event_count=8,
+                    explored_state_count=1000,
+                    object_types=("Delivery", "Order"),
+                    limit_reason="max_states",
+                    stopping_activity="END_Order",
+                    stopping_phase="object_end",
+                    stopping_reason="max_states",
+                    last_replayed_activity="Ship Order",
+                ),
+            )
+        )
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ) as load_ocel,
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=replay_units,
+            ) as extract,
+            patch(
+                "api.views.occn_replay_fitness",
+                return_value=result,
+            ) as fitness,
+        ):
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.occn_asset.pk, "max_states": 5_000},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                "file_id": self.event_log.pk,
+                "asset_id": self.occn_asset.pk,
+                "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                "leading_object_type": None,
+                "max_states": 5_000,
+                **result.to_dict(),
+            },
+        )
+        load_ocel.assert_called_once()
+        self.assertEqual(load_ocel.call_args.args[0].pk, self.event_log.pk)
+        extract.assert_called_once_with(
+            db,
+            strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            leading_object_type=None,
+        )
+        fitness.assert_called_once()
+        deserialized_occn, called_units = fitness.call_args.args
+        self.assertIsInstance(deserialized_occn, OCCausalNet)
+        self.assertIs(called_units, replay_units)
+        self.assertEqual(fitness.call_args.kwargs, {"max_states": 5_000})
+        self.assertEqual(response.data["fitness"], 0.5)
+        self.assertAlmostEqual(response.data["coverage"], 2 / 3)
+        self.assertEqual(response.data["inconclusive_units"], 1)
+        self.assertEqual(
+            response.data["unit_results"][1]["stopping_activity"],
+            "Ship Order",
+        )
+        self.assertEqual(
+            response.data["unit_results"][2]["stopping_activity"],
+            "END_Order",
+        )
+        self.assertEqual(
+            response.data["unit_results"][1]["stopping_reason"],
+            "no_enabled_event_binding",
+        )
+        self.assertEqual(
+            response.data["unit_results"][2]["last_replayed_activity"],
+            "Ship Order",
+        )
+        self.assertEqual(
+            response.data["unit_results"][1]["replayed_activities"],
+            ["START_Order", "Create Order"],
+        )
+        self.assertEqual(
+            response.data["unit_results"][1]["stopping_object_types"],
+            ["Item", "Order"],
+        )
+
+    def test_empty_replay_result_preserves_complete_aggregate_contract(self):
+        result = OCCNReplayFitnessResult(unit_results=())
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(),
+            ),
+            patch(
+                "api.views.occn_replay_fitness",
+                return_value=result,
+            ),
+        ):
+            response = self.client.post(
+                self.url,
+                {"asset_id": self.occn_asset.pk},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["fitness"])
+        self.assertEqual(response.data["coverage"], 1.0)
+        self.assertEqual(response.data["total_units"], 0)
+        self.assertEqual(response.data["fitting_units"], 0)
+        self.assertEqual(response.data["non_fitting_units"], 0)
+        self.assertEqual(response.data["inconclusive_units"], 0)
+        self.assertEqual(response.data["unit_results"], [])
+
+
+class OCCNReplayUnitDetailApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="occn-detail-user")
+        self.other_user = User.objects.create_user(username="occn-detail-other")
+        self.project = Project.objects.create(name="OCCN Detail Project")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="occn-detail-log.json",
+        )
+        self.url = (
+            f"/api/files/{self.event_log.pk}/occn_replay_unit_detail/"
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @staticmethod
+    def _unit(unit_id="connected_components:000001", event_count=5):
+        return OCCNReplayUnit(
+            unit_id=unit_id,
+            strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            events=tuple(
+                OCCNReplayEvent(
+                    event_id=f"event-{index}",
+                    activity=f"Activity {index}",
+                    timestamp_unix=index,
+                    objects_by_type=(("Order", ("order-1",)),),
+                )
+                for index in range(event_count)
+            ),
+        )
+
+    def _get_directly_to_view(self, query):
+        request = APIRequestFactory().get(self.url, query)
+        force_authenticate(request, user=self.user)
+        return EventLogViewSet.as_view(
+            {"get": "occn_replay_unit_detail"}
+        )(request, pk=self.event_log.pk)
+
+    def test_authentication_is_required(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(
+            self.url,
+            {"unit_id": "connected_components:000001"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_event_log_is_scoped_to_authenticated_user(self):
+        foreign_project = Project.objects.create(name="Foreign Detail Project")
+        foreign_project.users.add(self.other_user)
+        foreign_log = EventLog.objects.create(
+            project=foreign_project,
+            file="foreign-detail-log.json",
+        )
+
+        with patch("api.views._with_ocel_db") as load_ocel:
+            response = self.client.get(
+                f"/api/files/{foreign_log.pk}/occn_replay_unit_detail/",
+                {"unit_id": "connected_components:000001"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        load_ocel.assert_not_called()
+
+    def test_query_parameters_are_validated_before_extraction(self):
+        invalid_queries = (
+            ("missing unit id", {}),
+            ("blank unit id", {"unit_id": " "}),
+            (
+                "unsupported strategy",
+                {"unit_id": "unit-1", "replay_unit_strategy": "variants"},
+            ),
+            ("negative offset", {"unit_id": "unit-1", "offset": -1}),
+            ("zero limit", {"unit_id": "unit-1", "limit": 0}),
+            ("excessive limit", {"unit_id": "unit-1", "limit": 251}),
+        )
+
+        for label, query in invalid_queries:
+            with self.subTest(label=label), patch(
+                "api.views._with_ocel_db"
+            ) as load_ocel:
+                response = self.client.get(self.url, query)
+
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            load_ocel.assert_not_called()
+
+    def test_unknown_replay_unit_returns_not_found(self):
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(self._unit(),),
+            ),
+        ):
+            response = self.client.get(
+                self.url,
+                {"unit_id": "connected_components:999999"},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(
+            response.data,
+            {"unit_id": "Replay unit not found."},
+        )
+
+    def test_leading_object_detail_uses_the_selected_type(self):
+        connected_unit = self._unit(event_count=2)
+        replay_unit = OCCNReplayUnit(
+            unit_id="leading_object:order-1",
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+            events=connected_unit.events,
+        )
+        db = object()
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(db),
+            ),
+            patch("api.views._object_types", return_value=["Order"]),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(replay_unit,),
+            ) as extract,
+        ):
+            response = self.client.get(
+                self.url,
+                {
+                    "unit_id": replay_unit.unit_id,
+                    "replay_unit_strategy": LEADING_OBJECT_REPLAY_STRATEGY,
+                    "leading_object_type": "Order",
+                },
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["replay_unit_strategy"],
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        )
+        self.assertEqual(response.data["leading_object_type"], "Order")
+        extract.assert_called_once_with(
+            db,
+            strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+            leading_object_type="Order",
+        )
+
+    def test_extraction_failure_returns_server_error(self):
+        with patch(
+            "api.views._with_ocel_db",
+            side_effect=RuntimeError("OCEL unavailable"),
+        ):
+            response = self._get_directly_to_view(
+                {"unit_id": "connected_components:000001"}
+            )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            response.data,
+            {"error": "Failed to extract OCCN replay units: OCEL unavailable"},
+        )
+
+    def test_paginates_events_with_stable_global_indexes(self):
+        replay_unit = self._unit(event_count=5)
+        with (
+            patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(object()),
+            ),
+            patch(
+                "api.views.extract_occn_replay_units",
+                return_value=(replay_unit,),
+            ) as extract,
+        ):
+            middle = self.client.get(
+                self.url,
+                {
+                    "unit_id": replay_unit.unit_id,
+                    "offset": 2,
+                    "limit": 2,
+                },
+            )
+            final = self.client.get(
+                self.url,
+                {
+                    "unit_id": replay_unit.unit_id,
+                    "offset": 4,
+                    "limit": 2,
+                },
+            )
+            beyond = self.client.get(
+                self.url,
+                {
+                    "unit_id": replay_unit.unit_id,
+                    "offset": 10,
+                    "limit": 2,
+                },
+            )
+
+        self.assertEqual(middle.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [event["event_id"] for event in middle.data["events"]],
+            ["event-2", "event-3"],
+        )
+        self.assertEqual(
+            [event["event_index"] for event in middle.data["events"]],
+            [2, 3],
+        )
+        self.assertEqual(
+            middle.data["pagination"],
+            {
+                "offset": 2,
+                "limit": 2,
+                "returned_count": 2,
+                "total_count": 5,
+                "has_previous": True,
+                "has_next": True,
+                "previous_offset": 0,
+                "next_offset": 4,
+            },
+        )
+        self.assertEqual(final.data["pagination"]["returned_count"], 1)
+        self.assertFalse(final.data["pagination"]["has_next"])
+        self.assertIsNone(final.data["pagination"]["next_offset"])
+        self.assertEqual(beyond.data["events"], [])
+        self.assertEqual(beyond.data["pagination"]["returned_count"], 0)
+        self.assertFalse(beyond.data["pagination"]["has_next"])
+        self.assertEqual(beyond.data["pagination"]["previous_offset"], 4)
+        self.assertEqual(extract.call_count, 3)
+        for call in extract.call_args_list:
+            self.assertEqual(
+                call.kwargs,
+                {
+                    "strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+                    "leading_object_type": None,
+                },
+            )
+
+    def test_real_ocel_preserves_event_order_and_object_information(self):
+        source = ObjectCentricEventLog(
+            events=pl.DataFrame(
+                [
+                    {
+                        "_eventId": "event-shipped",
+                        "_activity": "Ship Order",
+                        "_timestampUnix": 2,
+                        "_objects": ["order-1", "item-1"],
+                        "_qualifiers": [None, None],
+                        "_attributes": "",
+                    },
+                    {
+                        "_eventId": "event-objectless",
+                        "_activity": "System Check",
+                        "_timestampUnix": 0,
+                        "_objects": [],
+                        "_qualifiers": [],
+                        "_attributes": "",
+                    },
+                    {
+                        "_eventId": "event-created",
+                        "_activity": "Create Order",
+                        "_timestampUnix": 1,
+                        "_objects": ["order-1"],
+                        "_qualifiers": [None],
+                        "_attributes": "",
+                    },
+                ],
+                schema=EVENTS_SCHEMA,
+            ),
+            objects=pl.DataFrame(
+                [
+                    {
+                        "_objId": "order-1",
+                        "_objType": "Order",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    },
+                    {
+                        "_objId": "item-1",
+                        "_objType": "Item",
+                        "_targetObjects": [],
+                        "_qualifiers": [],
+                    },
+                ],
+                schema=OBJECTS_SCHEMA,
+            ),
+        )
+        database = OcelDuckDB(source)
+        try:
+            with patch(
+                "api.views._with_ocel_db",
+                return_value=nullcontext(database),
+            ):
+                objectless = self.client.get(
+                    self.url,
+                    {"unit_id": "connected_components:000001"},
+                )
+                connected = self.client.get(
+                    self.url,
+                    {"unit_id": "connected_components:000002"},
+                )
+        finally:
+            database.conn.close()
+
+        self.assertEqual(objectless.status_code, status.HTTP_200_OK)
+        self.assertEqual(objectless.data["event_count"], 1)
+        self.assertEqual(objectless.data["object_types"], [])
+        self.assertEqual(objectless.data["pagination"]["offset"], 0)
+        self.assertEqual(objectless.data["pagination"]["limit"], 50)
+        self.assertEqual(
+            objectless.data["events"][0]["objects_by_type"],
+            {},
+        )
+
+        self.assertEqual(connected.status_code, status.HTTP_200_OK)
+        self.assertEqual(connected.data["event_count"], 2)
+        self.assertEqual(connected.data["object_types"], ["Item", "Order"])
+        self.assertEqual(
+            [event["event_id"] for event in connected.data["events"]],
+            ["event-created", "event-shipped"],
+        )
+        self.assertEqual(
+            [event["activity"] for event in connected.data["events"]],
+            ["Create Order", "Ship Order"],
+        )
+        self.assertEqual(
+            [event["timestamp_unix"] for event in connected.data["events"]],
+            [1, 2],
+        )
+        self.assertEqual(
+            connected.data["events"][1]["objects_by_type"],
+            {"Item": ["item-1"], "Order": ["order-1"]},
+        )
+
+
 class ProjectAssetApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -772,6 +2186,93 @@ class ProjectAssetApiTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_patch_rename_asset_keeps_content(self):
+        asset = self._create_asset(
+            self.project,
+            "Old name",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        original_content = asset.content_json
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"name": "New name"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        asset.refresh_from_db()
+        self.assertEqual(asset.name, "New name")
+        self.assertEqual(asset.content_json, original_content)
+
+    def test_patch_updates_content_json(self):
+        asset = self._create_asset(
+            self.project,
+            "Updatable",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        updated = valid_totem_content_json()
+        updated["all_event_types"] = ["Create Order", "Pick Item", "Ship Order"]
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"content_json": updated},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        asset.refresh_from_db()
+        self.assertIn("Ship Order", asset.content_json["all_event_types"])
+
+    def test_patch_rejects_invalid_content_json(self):
+        asset = self._create_asset(
+            self.project,
+            "Guarded",
+            ProjectAsset.AssetType.TOTEM,
+        )
+        invalid = valid_totem_content_json()
+        invalid["schema"] = "occn"
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"content_json": invalid},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        asset.refresh_from_db()
+        self.assertEqual(asset.content_json["schema"], "totem")
+
+    def test_patch_rejects_duplicate_name_in_project(self):
+        self._create_asset(self.project, "Existing", ProjectAsset.AssetType.TOTEM)
+        asset = self._create_asset(
+            self.project,
+            "To rename",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.patch(
+            f"/api/assets/{asset.pk}/",
+            {"name": "Existing"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_patch_scoped_to_user_project(self):
+        foreign_asset = self._create_asset(
+            self.other_project,
+            "Foreign update",
+            ProjectAsset.AssetType.OCCN,
+        )
+
+        response = self.client.patch(
+            f"/api/assets/{foreign_asset.pk}/",
+            {"name": "Hacked"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 class LRUFileBasedCacheTests(SimpleTestCase):
     """Eviction policy of the result cache backend (Epic #71).

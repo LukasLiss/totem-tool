@@ -18,6 +18,85 @@ totem = totemDiscovery(ocel, tau=0.9)
 process_view = mlpaDiscovery(totem)
 ```
 
+## TOTeM conformance checking
+
+TOTeM conformance compares an independently loaded model with a current event
+log. It does not discover or modify the model during the check.
+
+```python
+from totem_lib import conformance_of_totem, totem_from_dict
+from totem_lib.ocel import import_ocel_db
+
+model = totem_from_dict(model_json)
+event_log = import_ocel_db("example_data/ContainerLogistics.sqlite")
+try:
+    result = conformance_of_totem(model, event_log)
+    response_data = result.to_dict()
+finally:
+    event_log.close()
+```
+
+The implementation runs directly on `OcelDuckDB`. Discovery and conformance
+share their aggregate histogram queries, while conformance uses the symmetric,
+qualified object-to-object relation behavior of the original paper branch. No
+Polars conversion or temporary model discovery is required.
+
+`TotemConformanceResult` contains overall metrics, averages per object type,
+metrics per directed type pair, and aggregate and detailed histograms. Its
+`to_dict()` output is deterministic and JSON-compatible. Compound keys such as
+type pairs are represented as records with named fields so object-type names do
+not need delimiter escaping.
+
+## OCCN replay-unit extraction
+
+OCCN conformance checks concrete event sets called replay units. The default
+strategy groups events by connected components of their shared objects. A
+leading-object strategy is also available for targeted investigation:
+
+```python
+from totem_lib import (
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    extract_occn_replay_units,
+    import_ocel,
+)
+
+event_log = import_ocel("example_data/ocel2-p2p.json")
+connected_units = extract_occn_replay_units(event_log)
+order_units = extract_occn_replay_units(
+    event_log,
+    strategy=LEADING_OBJECT_REPLAY_STRATEGY,
+    leading_object_type="orders",
+)
+```
+
+The same API accepts an `ObjectCentricEventLog` or an `OcelDuckDB`. Both paths
+produce immutable `OCCNReplayUnit` values with the same deterministic contract:
+
+- events are ordered by `(timestamp_unix, event_id)`;
+- units are ordered by their first event and receive IDs such as
+  `connected_components:000001`;
+- activity names, event IDs, timestamps, object IDs, and object types remain
+  available for replay and diagnostics;
+- events without objects remain visible as singleton units;
+- objects without events do not create empty units;
+- an empty log produces no replay units.
+
+Connected-component units partition the visible events. Leading-object units
+contain all events that directly reference one object of the selected type;
+shared events can therefore occur in several leading-object units. Their IDs
+use the leading object, for example `leading_object:order-42`.
+
+Replay units contain only visible log events. Artificial `START_<type>` and
+`END_<type>` activities are introduced internally by replay fitness and are
+not added to the event log or extraction result.
+
+Connected-component extraction can produce a very large unit when a few
+objects connect most of a log. Neither strategy groups units into variants.
+Timestamp ties are resolved by event ID because the supported storage backends
+do not expose a shared source-row index. See
+[`docs/OCCN_REPLAY_FITNESS.md`](../docs/OCCN_REPLAY_FITNESS.md) for the complete
+strategy, replay, result, and limitation contract.
+
 ## Installation
 
 To set up a development environment for totem-lib, follow these steps. This is required for development only.

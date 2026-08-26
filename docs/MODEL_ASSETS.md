@@ -95,6 +95,29 @@ Multipart upload accepts:
 The HTTP API and current upload form require `asset_type` explicitly. Backend
 validation verifies that the selected type and canonical model structure agree.
 
+### Frontend model upload
+
+The **Project Assets > Model Assets** upload dialog accepts one `.json` model
+file at a time. The user can either drop the file onto the model-file target or
+click the same target to open the operating-system file picker.
+
+Selecting or dropping a valid replacement changes the pending file. Unsupported
+files and multiple-file drops are rejected with a visible message and do not
+replace an already valid selection. A drop only selects the file; no request is
+sent until the user enters an asset name and explicitly confirms **Upload**.
+
+Dropped and file-picker-selected files use the same validation and upload path:
+
+1. The frontend verifies that the file contains JSON with a schema matching the
+   selected asset type.
+2. The multipart request sends the project, name, asset type, and selected file
+   to `POST /api/assets/`.
+3. The backend performs the authoritative canonical model validation before
+   storing the parsed JSON content.
+
+Closing or cancelling the dialog clears the pending name, type, file, and error
+state. Successful upload does the same before the asset list is refreshed.
+
 Direct JSON creation accepts:
 
 ```json
@@ -129,6 +152,87 @@ rejected, and sending neither is rejected.
 
 The download endpoint returns the stored `content_json`. The download filename
 is derived from the asset name and always uses a `.json` extension.
+
+### TOTeM conformance endpoint
+
+TOTeM conformance checking combines one event log with an existing TOTeM asset:
+
+```text
+POST /api/files/<file_id>/totem_conformance/
+```
+
+The request body selects the model asset:
+
+```json
+{
+  "asset_id": 42
+}
+```
+
+The event log and asset must both be accessible to the authenticated user and
+must belong to the same project. The selected asset must have type `TOTEM` and
+contain valid canonical TOTeM JSON. The endpoint reconstructs that stored model
+and checks it against the event log; it does not discover a new model from the
+checked log.
+
+A successful response contains:
+
+- `file_id` and `asset_id`: the inputs used for the calculation.
+- `overall_metrics`: fitness and precision for temporal, log-cardinality, and
+  event-cardinality conformance.
+- `object_type_metrics`: averaged metrics for each object type.
+- `type_pair_metrics`: model relations and metrics for each directed type pair.
+- `histograms`: aggregate and detailed counts used by the visualization.
+
+Invalid request data, wrong asset types, cross-project assets, and invalid
+stored TOTeM JSON are rejected before computation. Inaccessible resources
+return `404`; invalid accessible inputs return `400`; failures while loading the
+event log or calculating conformance return `500`.
+
+## TOTeM Conformance Workflow
+
+The desktop workflow is available under **Conformance > TOTeM Conformance**.
+It combines the selected event log with one stored TOTeM asset from that event
+log's project.
+
+The workflow has two entry points:
+
+- Open **TOTeM Conformance** from the sidebar, then select a stored model.
+- Use the conformance action on a TOTeM row in **Project Assets > Model
+  Assets**. This opens the same workflow with that asset preselected.
+
+The selected event log remains the source of the active project context. The
+frontend requests only `TOTEM` assets from that project. Assets belonging to
+other projects and OCCN assets are not selectable.
+
+Execution proceeds as follows:
+
+1. The user selects a stored TOTeM model.
+2. **Run conformance** calls the event-log endpoint with the selected asset id.
+3. The previous result is cleared while the request is running.
+4. A successful response is checked against the current event-log and asset
+   ids before it is displayed.
+5. The stored model is rendered with the returned conformance metrics.
+
+Changing the selected model, event log, or project clears the current result.
+Responses from requests whose inputs changed while they were running are
+ignored. The user can then run conformance again with the new inputs. Execution
+is disabled while required context is missing, assets are loading, or another
+calculation is running.
+
+The result view provides:
+
+- Overall fitness and precision for temporal, log-cardinality, and
+  event-cardinality conformance.
+- A metric selector that controls which fitness dimension colors the model.
+- Object-type details when a model node is selected.
+- Directional relation metrics and available histogram details when a model
+  relation is selected.
+- Explicit states for unavailable, invalid, empty, stale, loading, and failed
+  results.
+
+This workflow always checks an existing stored model. TOTeM discovery is a
+separate workflow and is not performed implicitly before conformance checking.
 
 ## Validation Behavior
 
@@ -322,6 +426,54 @@ The JSON value `null` is the canonical representation for Python infinity in
 - `relative_occurrence_threshold`: number between `0` and `1`, inclusive. It
   controls filtering of infrequent marker groups when constructing the OCCN.
 
+## Optional `layout` block (editor interop)
+
+Both the TOTeM and OCCN formats accept an **optional** top-level `layout`
+object. It carries purely presentational information written by the visual
+model editors (see [MODEL_EDITORS.md](MODEL_EDITORS.md)): node positions,
+colors, and — for OCCN — dependency arcs that carry no marker groups but should
+survive a round trip.
+
+`layout` is validated only when present, and it is ignored when the JSON is
+turned back into a `Totem` / `OCCausalNet` in `totem_lib`. This keeps an
+editor-saved file a strict superset of the miner format: it uploads to the
+asset store with no conversion, and a downloaded asset re-opens in the editor
+with its layout intact. A model without `layout` (e.g. straight from the miner)
+remains valid.
+
+Every entity referenced in `layout` must exist in the model itself, so a layout
+can never introduce phantom object types, activities, or arcs.
+
+TOTeM `layout`:
+
+```json
+{
+  "layout": {
+    "objectTypes": {
+      "Order": { "position": { "x": 40, "y": 300 }, "color": "#8B5CF6" },
+      "Item": { "position": { "x": 640, "y": 470 } }
+    }
+  }
+}
+```
+
+OCCN `layout`:
+
+```json
+{
+  "layout": {
+    "activities": { "send": { "position": { "x": 470, "y": 205 } } },
+    "objectTypes": { "order": { "color": "#2563EB" } },
+    "arcs": [
+      { "source": "START_order", "target": "send", "object_type": "order" }
+    ]
+  }
+}
+```
+
+Both `position` (`{ "x": number, "y": number }`) and `color` are optional inside
+a layout entry.
+
 ## Example Model Files
 
 The repository contains complete canonical examples:
@@ -333,6 +485,10 @@ These files contain the model payload itself, not the surrounding asset API
 request. They can be uploaded directly in the Model Assets view by selecting
 the matching model type. They can also be used as `content_json` for direct JSON
 creation.
+
+The OCCN example is also used by the
+[OCCN replay-fitness documentation](OCCN_REPLAY_FITNESS.md#canonical-example)
+to demonstrate fitting and non-fitting exact-object replay.
 
 ## Adding a New Asset Type
 
