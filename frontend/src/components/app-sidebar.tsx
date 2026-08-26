@@ -23,7 +23,10 @@ import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
+import { NavProject } from "./nav-project";
+import { NavConformance } from "./nav-conformance";
 import { NavEditor } from "./nav-editor";
+import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
 import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -81,7 +84,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavOverview />
+        <NavProject />
         <NavAnalysis />
+        <NavConformance />
         <NavDashboard
           dashboards={dashboards}
           refreshDashboards={async () => {
@@ -97,8 +102,14 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           }}
         />
         <NavEditor />
+        <NavPlayout />
       </SidebarContent>
       <SidebarFooter>
+        <SidebarMenuButton tooltip="Settings" onClick={() => navigate("/settings")}>
+            <Settings2 />
+            <span>Settings</span>
+            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+        </SidebarMenuButton>
         <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
             <LogOut />
             <span>Log out</span>

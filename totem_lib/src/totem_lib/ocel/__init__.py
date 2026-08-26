@@ -11,3 +11,4 @@ from .importer_duckdb import (
 from .ocel_duckdb import OcelDuckDB
 from .importer_db import import_ocel_db
 from .editor import OcelEditor, OcelEditorError
+from .validation import OCELValidationException, validate_ocel
