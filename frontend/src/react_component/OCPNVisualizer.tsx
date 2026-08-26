@@ -171,7 +171,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
         params: { timeout_s: timeoutRef.current },
       });
       const parsed = parseOcpnModelFile(data?.ocpn);
-      if (!parsed.ok) throw new Error(parsed.error);
+      if (parsed.ok === false) throw new Error(parsed.error);
       const flow = modelToFlow(parsed.model);
       const laidOutNodes = await layoutOcpn(flow.nodes, flow.edges);
       if (seq !== requestSeq.current) return;

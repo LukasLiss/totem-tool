@@ -37,7 +37,6 @@ import DottedChart from '@/react_component/DottedChart';
 import {
   DottedChartControls,
   type DottedChartConfig,
-import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 } from '@/react_component/dottedChart/DottedChartControls';
 import {
   axisOptionToParam,
@@ -46,6 +45,7 @@ import {
 } from '@/react_component/dottedChart/dottedChartUtils';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
+import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
