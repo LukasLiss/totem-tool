@@ -10,7 +10,7 @@ from totem_lib import (
 )
 from .models import EventLog, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent
 from django.db.models import Max
 
 
@@ -313,6 +313,11 @@ class OCCNComponentSerializer(DashboardComponentSerializer):
 
 #Fill in new Component Serializers here and then edit the mapping below
 
+class FilterStackComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = FilterStackComponent
+        fields = "__all__"
+
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -323,6 +328,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ProcessAreaComponent: ProcessAreaComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
         OCDFGComponent: OCDFGComponentSerializer,
+        FilterStackComponent: FilterStackComponentSerializer,
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
