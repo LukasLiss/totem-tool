@@ -233,6 +233,13 @@ class NewOCDFGComponent(DashboardComponent):
     )
 
 
+class OCPNComponent(DashboardComponent):
+    # Start OCPN discovery automatically when the dashboard loads.
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    # Discovery budget in seconds (<= 0 disables the timeout).
+    timeout_s = models.FloatField(default=30.0, null=True, blank=True)
+
+
 class OCCNComponent(DashboardComponent):
     relative_occurrence_threshold = models.FloatField(
         default=0.0,

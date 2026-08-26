@@ -45,6 +45,7 @@ import {
 } from '@/react_component/dottedChart/dottedChartUtils';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
+import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -1333,6 +1334,103 @@ const OCCNComponent: React.FC<ComponentProps> = ({
 };
 
 
+// OCPNComponent: Dashboard wrapper for the OC Petri Net discovery view.
+// Settings: automatic loading (start discovery when the dashboard opens)
+// and the discovery timeout in seconds.
+const OCPNComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
+
+  // Sync with node when it changes (e.g. dashboard reloads with persisted values).
+  useEffect(() => {
+    setAutomaticLoading(node.automatic_loading ?? false);
+    setTimeoutS(node.timeout_s ?? 30);
+  }, [node.automatic_loading, node.timeout_s]);
+
+  const handleAutomaticLoadingChange = (checked: boolean) => {
+    setAutomaticLoading(checked);
+    onUpdate?.({ automatic_loading: checked } as any);
+  };
+
+  const handleTimeoutChange = (raw: string) => {
+    const n = Number(raw);
+    const safe = Number.isFinite(n) && n > 0 ? n : 30;
+    setTimeoutS(safe);
+    onUpdate?.({ timeout_s: safe } as any);
+  };
+
+  if (isEditMode) {
+    // EDIT MODE: Configuration form
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>OC Petri Net Settings</CardTitle>
+          <CardDescription>
+            Discovers an Object-Centric Petri Net from the selected event log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Automatic loading */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="ocpn-auto-loading">Start discovery automatically</Label>
+              <p className="text-xs text-muted-foreground">
+                Run OCPN discovery as soon as the dashboard loads.
+              </p>
+            </div>
+            <Switch
+              id="ocpn-auto-loading"
+              checked={automaticLoading}
+              onCheckedChange={handleAutomaticLoadingChange}
+            />
+          </div>
+
+          {/* Timeout (seconds) */}
+          <div className="space-y-2">
+            <Label htmlFor="ocpn-timeout-setting">Timeout (seconds)</Label>
+            <Input
+              id="ocpn-timeout-setting"
+              type="number"
+              min={1}
+              max={600}
+              step={1}
+              value={timeoutS}
+              onChange={(e) => handleTimeoutChange(e.target.value)}
+              className="w-[120px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Wall-clock budget for the discovery. Increase it for large logs.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render the OCPN visualizer with stored settings
+  return (
+    <div className="w-full h-full bg-white">
+      <OCPNVisualizer
+        height="100%"
+        fileId={selectedFile?.id}
+        autoStart={automaticLoading}
+        defaultTimeoutS={timeoutS}
+        showControls={true}
+        onTimeoutSChange={(t) => {
+          setTimeoutS(t);
+          onUpdate?.({ timeout_s: t } as any);
+        }}
+      />
+    </div>
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -1345,5 +1443,6 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   OCDottedChartComponent,
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
+  OCPNComponent,
   OCCNComponent,
 };
