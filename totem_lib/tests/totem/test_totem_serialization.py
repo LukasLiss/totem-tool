@@ -110,3 +110,49 @@ def test_totem_from_dict_does_not_mutate_input():
     totem_from_dict(data)
 
     assert data == before
+
+
+def test_validate_totem_dict_accepts_optional_layout():
+    data = totem_to_dict(_totem())
+    data["layout"] = {
+        "objectTypes": {
+            "Order": {"position": {"x": 40, "y": 300}, "color": "#8B5CF6"},
+            "Item": {"position": {"x": 640, "y": 470}},
+        }
+    }
+
+    validate_totem_dict(data)
+
+
+def test_totem_from_dict_ignores_layout():
+    data = totem_to_dict(_totem())
+    data["layout"] = {"objectTypes": {"Order": {"position": {"x": 1, "y": 2}}}}
+
+    restored = totem_from_dict(data)
+
+    assert not hasattr(restored, "layout")
+    assert restored.tempgraph == _totem().tempgraph
+
+
+def test_validate_totem_dict_without_layout_still_valid():
+    data = totem_to_dict(_totem())
+    assert "layout" not in data
+    validate_totem_dict(data)
+
+
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        ({"objectTypes": {"Missing": {}}}, "Unknown object type"),
+        ({"objectTypes": {"Order": {"position": {"x": "a", "y": 2}}}}, "must be a number"),
+        ({"objectTypes": {"Order": {"color": 123}}}, "color must be a string"),
+        ({"objectTypes": []}, "layout.objectTypes must be an object"),
+        ("not-an-object", "layout must be an object"),
+    ],
+)
+def test_validate_totem_dict_rejects_malformed_layout(layout, message):
+    data = totem_to_dict(_totem())
+    data["layout"] = layout
+
+    with pytest.raises(ValueError, match=message):
+        validate_totem_dict(data)
