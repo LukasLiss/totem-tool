@@ -153,6 +153,58 @@ export const occnStartActivity = (objectType: string) => `START_${objectType}`;
 export const occnEndActivity = (objectType: string) => `END_${objectType}`;
 
 // ---------------------------------------------------------------------------
+// OC-DFG — object-centric directly-follows graphs
+// ---------------------------------------------------------------------------
+
+export const OCDFG_FORMAT = 'ocdfg' as const;
+
+export type OcdfgActivity = {
+  id: string;
+  /** Activity name shown in the node. */
+  label: string;
+  position?: XY;
+};
+
+/**
+ * Artificial START (source) or END (sink) node of one object type. An OC-DFG
+ * has at most one START and one END node per object type.
+ */
+export type OcdfgControl = {
+  id: string;
+  objectType: string;
+  position?: XY;
+};
+
+/** Directly-follows arc, typed by an object type (multigraph per type). */
+export type OcdfgArc = {
+  id: string;
+  /** Activity id or START/END node id. */
+  source: string;
+  target: string;
+  /** The object type this directly-follows relation belongs to. */
+  objectType: string;
+  /**
+   * Optional bend points the drawn arc is routed through, in canvas
+   * coordinates. Pure layout hint (like node positions) — consumers that only
+   * read the graph can safely ignore it.
+   */
+  waypoints?: XY[];
+};
+
+export type OcdfgModelFile = {
+  format: typeof OCDFG_FORMAT;
+  version: 1;
+  name: string;
+  objectTypes: ObjectTypeDef[];
+  activities: OcdfgActivity[];
+  /** START nodes (sources) — at most one per object type. */
+  starts: OcdfgControl[];
+  /** END nodes (sinks) — at most one per object type. */
+  ends: OcdfgControl[];
+  arcs: OcdfgArc[];
+};
+
+// ---------------------------------------------------------------------------
 // OCPN — object-centric Petri nets
 // ---------------------------------------------------------------------------
 
@@ -225,14 +277,25 @@ const asName = (value: unknown): string | null =>
  */
 export function detectModelFormat(
   raw: unknown,
-): typeof TOTEM_FORMAT | typeof OCCN_FORMAT | typeof OCPN_FORMAT | null {
+): typeof TOTEM_FORMAT | typeof OCCN_FORMAT | typeof OCPN_FORMAT | typeof OCDFG_FORMAT | null {
   if (!isRecord(raw)) return null;
-  if (raw.format === TOTEM_FORMAT || raw.format === OCCN_FORMAT || raw.format === OCPN_FORMAT) {
+  if (
+    raw.format === TOTEM_FORMAT ||
+    raw.format === OCCN_FORMAT ||
+    raw.format === OCPN_FORMAT ||
+    raw.format === OCDFG_FORMAT
+  ) {
     return raw.format;
   }
   if (Array.isArray(raw.relations) && Array.isArray(raw.objectTypes)) return TOTEM_FORMAT;
   if (isRecord(raw.markerGroups)) return OCCN_FORMAT;
   if (Array.isArray(raw.places) && Array.isArray(raw.transitions)) return OCPN_FORMAT;
+  if (
+    Array.isArray(raw.activities) &&
+    (Array.isArray(raw.starts) || Array.isArray(raw.ends))
+  ) {
+    return OCDFG_FORMAT;
+  }
   return null;
 }
 
@@ -242,6 +305,7 @@ export function wrongFormatMessage(expected: string, raw: unknown): string {
     [TOTEM_FORMAT]: 'TOTeM Model editor',
     [OCCN_FORMAT]: 'OC Causal Net editor',
     [OCPN_FORMAT]: 'OC Petri Net editor',
+    [OCDFG_FORMAT]: 'OC-DFG editor',
   };
   if (detected && detected !== expected) {
     return `This file contains a "${detected}" model — open it in the ${editorName[detected]} instead.`;
@@ -543,6 +607,246 @@ export function parseOcpnModelFile(raw: unknown): ParseResult<OcpnModelFile> {
       places,
       transitions,
       arcs,
+    },
+    warnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
+export function parseOcdfgModelFile(raw: unknown): ParseResult<OcdfgModelFile> {
+  if (!isRecord(raw)) return { ok: false, error: 'Model file must be a JSON object.' };
+
+  // Besides the explicit format tag and the starts/ends discriminators, also
+  // accept a minimal {activities, arcs} file as long as no field of another
+  // model format contradicts it (OCCN files carry markerGroups, OCPN places,
+  // TOTeM relations).
+  const looksLikeOcdfg =
+    raw.format === OCDFG_FORMAT ||
+    Array.isArray(raw.starts) ||
+    Array.isArray(raw.ends) ||
+    (Array.isArray(raw.arcs) &&
+      !isRecord(raw.markerGroups) &&
+      !Array.isArray(raw.places) &&
+      !Array.isArray(raw.relations));
+  if (!Array.isArray(raw.activities) || !looksLikeOcdfg) {
+    return { ok: false, error: wrongFormatMessage(OCDFG_FORMAT, raw) };
+  }
+
+  const objectTypes = parseObjectTypeDefs(raw.objectTypes ?? []);
+  if (!objectTypes) {
+    return { ok: false, error: '"objectTypes" must be a list of uniquely named types.' };
+  }
+  const typeNames = new Set(objectTypes.map((t) => t.name));
+  const registerType = (name: string) => {
+    // Be forgiving: auto-register types referenced only by nodes or arcs.
+    if (!typeNames.has(name)) {
+      typeNames.add(name);
+      objectTypes.push({ name });
+    }
+  };
+
+  const nodeIds = new Set<string>();
+  const warnings: string[] = [];
+
+  const activities: OcdfgActivity[] = [];
+  const usedLabels = new Set<string>();
+  for (const [index, entry] of raw.activities.entries()) {
+    if (!isRecord(entry)) {
+      return { ok: false, error: `Activity #${index + 1} must be an object.` };
+    }
+    const id = asName(entry.id);
+    if (!id) return { ok: false, error: `Activity #${index + 1} needs an "id".` };
+    if (nodeIds.has(id)) return { ok: false, error: `Duplicate node id "${id}".` };
+    nodeIds.add(id);
+    // Activity names identify the nodes of an OC-DFG (the canonical model
+    // format uses them as ids), so normalise empty/duplicate names of
+    // legacy or hand-written files instead of keeping them.
+    let label = asName(entry.label) ?? id;
+    if (asName(entry.label) === null && typeof entry.label === 'string') {
+      warnings.push(`Activity "${id}" had an empty name — using its id instead.`);
+    }
+    if (usedLabels.has(label)) {
+      const base = label;
+      let n = 2;
+      while (usedLabels.has(`${base} (${n})`)) n += 1;
+      label = `${base} (${n})`;
+      warnings.push(
+        `Two activities were named "${base}" — renamed one to "${label}" (names must be unique).`,
+      );
+    }
+    usedLabels.add(label);
+    activities.push({
+      id,
+      label,
+      position: isXY(entry.position) ? entry.position : undefined,
+    });
+  }
+
+  const parseControls = (
+    value: unknown,
+    kind: 'START' | 'END',
+  ): OcdfgControl[] | string => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+      return `"${kind === 'START' ? 'starts' : 'ends'}" must be an array.`;
+    }
+    const controls: OcdfgControl[] = [];
+    const typesSeen = new Set<string>();
+    for (const [index, entry] of value.entries()) {
+      if (!isRecord(entry)) return `${kind} node #${index + 1} must be an object.`;
+      const objectType = asName(entry.objectType);
+      if (!objectType) return `${kind} node #${index + 1} needs an "objectType".`;
+      if (typesSeen.has(objectType)) {
+        return `Duplicate ${kind} node for object type "${objectType}" — an OC-DFG has at most one per type.`;
+      }
+      typesSeen.add(objectType);
+      registerType(objectType);
+      let id = asName(entry.id);
+      if (id === null) {
+        // Generated fallback ids dodge existing node ids instead of failing.
+        const base = `${kind === 'START' ? 'start' : 'end'}_${objectType}`;
+        id = base;
+        let n = 2;
+        while (nodeIds.has(id)) id = `${base}_${n++}`;
+      }
+      if (nodeIds.has(id)) return `Duplicate node id "${id}".`;
+      nodeIds.add(id);
+      controls.push({
+        id,
+        objectType,
+        position: isXY(entry.position) ? entry.position : undefined,
+      });
+    }
+    return controls;
+  };
+
+  const starts = parseControls(raw.starts, 'START');
+  if (typeof starts === 'string') return { ok: false, error: starts };
+  const ends = parseControls(raw.ends, 'END');
+  if (typeof ends === 'string') return { ok: false, error: ends };
+
+  const startIds = new Set(starts.map((c) => c.id));
+  const endIds = new Set(ends.map((c) => c.id));
+  const controlType = new Map(
+    [...starts, ...ends].map((c) => [c.id, c.objectType] as const),
+  );
+
+  const arcsRaw = raw.arcs ?? [];
+  if (!Array.isArray(arcsRaw)) return { ok: false, error: '"arcs" must be an array.' };
+  const arcs: OcdfgArc[] = [];
+  // (source, target, objectType) triple → position in `arcs` + whether that
+  // arc's type was coerced to a START/END endpoint's type. Coerced arcs give
+  // way on collisions (dropped with a warning); literal duplicates in the
+  // file are an error.
+  const arcByKey = new Map<string, { position: number; coerced: boolean }>();
+  const droppedPositions = new Set<number>();
+  const seenArcIds = new Set<string>();
+  for (const [index, entry] of arcsRaw.entries()) {
+    if (!isRecord(entry)) return { ok: false, error: `Arc #${index + 1} must be an object.` };
+    const source = asName(entry.source);
+    const target = asName(entry.target);
+    if (!source || !target) {
+      return { ok: false, error: `Arc #${index + 1} needs "source" and "target".` };
+    }
+    if (!nodeIds.has(source)) {
+      return { ok: false, error: `Arc #${index + 1} references unknown node "${source}".` };
+    }
+    if (!nodeIds.has(target)) {
+      return { ok: false, error: `Arc #${index + 1} references unknown node "${target}".` };
+    }
+    if (endIds.has(source)) {
+      return {
+        ok: false,
+        error: `Arc #${index + 1} (${source} → ${target}) is not allowed: arcs cannot leave an END node.`,
+      };
+    }
+    if (startIds.has(target)) {
+      return {
+        ok: false,
+        error: `Arc #${index + 1} (${source} → ${target}) is not allowed: arcs cannot enter a START node.`,
+      };
+    }
+    let objectType = asName(entry.objectType);
+    if (!objectType) {
+      return { ok: false, error: `Arc #${index + 1} needs an "objectType".` };
+    }
+    // START→END arcs must stay within one object type (same rule the editor
+    // enforces) — otherwise the coercion below could not satisfy both ends.
+    const sourceControlType = controlType.get(source);
+    const targetControlType = controlType.get(target);
+    if (
+      sourceControlType !== undefined &&
+      targetControlType !== undefined &&
+      sourceControlType !== targetControlType
+    ) {
+      return {
+        ok: false,
+        error: `Arc #${index + 1} (${source} → ${target}) connects START/END nodes of different object types.`,
+      };
+    }
+    // Arcs at a START/END node always belong to that node's object type.
+    const endpointType = sourceControlType ?? targetControlType;
+    const coerced = endpointType !== undefined && endpointType !== objectType;
+    if (coerced) {
+      warnings.push(
+        `Arc ${source} → ${target}: changed its object type to "${endpointType}" (arcs at a START/END node belong to that node's type).`,
+      );
+      objectType = endpointType;
+    }
+    registerType(objectType);
+    const arcKey = JSON.stringify([source, target, objectType]);
+    const clash = arcByKey.get(arcKey);
+    if (clash) {
+      // A coerced arc loses against the arc it collides with; two literal
+      // duplicates in the file are an error.
+      if (coerced) {
+        warnings.push(
+          `Dropped arc ${source} → ${target} ("${objectType}") — it duplicates another arc after the type change.`,
+        );
+        continue;
+      }
+      if (clash.coerced) {
+        warnings.push(
+          `Dropped a coerced arc ${source} → ${target} ("${objectType}") — the file also contains it with the correct type.`,
+        );
+        droppedPositions.add(clash.position);
+      } else {
+        return {
+          ok: false,
+          error: `Duplicate arc ${source} → ${target} for object type "${objectType}".`,
+        };
+      }
+    }
+    let arcId = typeof entry.id === 'string' && entry.id ? entry.id : `arc-${index + 1}`;
+    while (seenArcIds.has(arcId)) arcId = `${arcId}-dup`;
+    seenArcIds.add(arcId);
+    // Waypoints are a layout hint only — be forgiving and keep just the
+    // well-formed points instead of rejecting the file.
+    const waypoints = Array.isArray(entry.waypoints)
+      ? entry.waypoints.filter(isXY).map((p) => ({ x: p.x, y: p.y }))
+      : [];
+    arcByKey.set(arcKey, { position: arcs.length, coerced });
+    arcs.push({
+      id: arcId,
+      source,
+      target,
+      objectType,
+      waypoints: waypoints.length > 0 ? waypoints : undefined,
+    });
+  }
+
+  return {
+    ok: true,
+    model: {
+      format: OCDFG_FORMAT,
+      version: 1,
+      name: asName(raw.name) ?? 'Object-centric DFG',
+      objectTypes,
+      activities,
+      starts,
+      ends,
+      arcs: droppedPositions.size > 0
+        ? arcs.filter((_, position) => !droppedPositions.has(position))
+        : arcs,
     },
     warnings: warnings.length > 0 ? warnings : undefined,
   };
