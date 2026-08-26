@@ -133,3 +133,65 @@ def test_validate_occn_dict_rejects_malformed_input(mutate, message):
 
     with pytest.raises(ValueError, match=message):
         validate_occn_dict(data)
+
+
+def _occn_layout():
+    return {
+        "activities": {
+            "a": {"position": {"x": 240, "y": 48}},
+            "START_item": {"position": {"x": 40, "y": 40}},
+        },
+        "objectTypes": {"item": {"color": "#10B981"}},
+        "arcs": [
+            {"source": "START_item", "target": "START_order", "object_type": "item"},
+        ],
+    }
+
+
+def test_validate_occn_dict_accepts_optional_layout():
+    data = occn_to_dict(occn_basic())
+    data["layout"] = _occn_layout()
+
+    validate_occn_dict(data)
+
+
+def test_occn_from_dict_ignores_layout():
+    data = occn_to_dict(occn_basic())
+    data["layout"] = _occn_layout()
+
+    restored = occn_from_dict(data)
+
+    assert restored == occn_basic()
+    # The layout must not leak into the canonical serialization.
+    assert "layout" not in occn_to_dict(restored)
+
+
+def test_validate_occn_dict_without_layout_still_valid():
+    data = occn_to_dict(occn_basic())
+    assert "layout" not in data
+    validate_occn_dict(data)
+
+
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        ({"activities": {"Missing": {}}}, "Unknown activity"),
+        ({"objectTypes": {"missing": {}}}, "Unknown object type"),
+        (
+            {"activities": {"a": {"position": {"x": "z", "y": 2}}}},
+            "must be a number",
+        ),
+        (
+            {"arcs": [{"source": "a", "target": "a", "object_type": "missing"}]},
+            "Unknown object type",
+        ),
+        ({"arcs": {}}, "layout.arcs must be a list"),
+        ("nope", "layout must be an object"),
+    ],
+)
+def test_validate_occn_dict_rejects_malformed_layout(layout, message):
+    data = occn_to_dict(occn_basic())
+    data["layout"] = layout
+
+    with pytest.raises(ValueError, match=message):
+        validate_occn_dict(data)

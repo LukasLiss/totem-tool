@@ -197,7 +197,21 @@ def _prepare_ocel_polars_for_discovery(ocel: ObjectCentricEventLog):
 
 def _prepare_ocel_duckdb_for_discovery(ocel_db: OcelDuckDB):
     """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames."""
-    ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+    pk = getattr(ocel_db, "_lock_pk", None)
+    lock = None
+    if pk is not None:
+        try:
+            from api.views import _OCEL_DB_LOCKS
+            lock = _OCEL_DB_LOCKS.get(int(pk))
+        except Exception:
+            lock = None
+
+    if lock:
+        with lock:
+            ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+    else:
+        ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+
     return _extract_dataframes_from_pm4py(ocel_pm4py)
 
 

@@ -593,8 +593,8 @@ function OCDFGVisualizer({
 
     let cancelled = false;
     const url = fileId
-      ? `http://127.0.0.1:8000/api/ocdfg/?file_id=${fileId}`
-      : 'http://127.0.0.1:8000/api/ocdfg/';
+      ? `http://localhost:8000/api/ocdfg/?file_id=${fileId}`
+      : 'http://localhost:8000/api/ocdfg/';
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {

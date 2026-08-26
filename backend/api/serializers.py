@@ -2,11 +2,77 @@ import json
 
 from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
-from totem_lib import validate_occn_dict, validate_totem_dict
+from totem_lib import (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    validate_occn_dict,
+    validate_totem_dict,
+)
 from .models import EventLog, Project, ProjectAsset
 from .models import Dashboard
 from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent
 from django.db.models import Max
+
+
+class TotemConformanceRequestSerializer(serializers.Serializer):
+    asset_id = serializers.IntegerField(min_value=1)
+
+
+class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
+    replay_unit_strategy = serializers.ChoiceField(
+        choices=(
+            CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+            LEADING_OBJECT_REPLAY_STRATEGY,
+        ),
+        default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    )
+    leading_object_type = serializers.CharField(
+        allow_blank=False,
+        required=False,
+        trim_whitespace=True,
+    )
+
+    def validate(self, attrs):
+        strategy = attrs["replay_unit_strategy"]
+        leading_object_type = attrs.get("leading_object_type")
+        if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
+            if leading_object_type is None:
+                raise serializers.ValidationError(
+                    {
+                        "leading_object_type": (
+                            "This field is required for the leading-object "
+                            "replay strategy."
+                        )
+                    }
+                )
+        elif leading_object_type is not None:
+            raise serializers.ValidationError(
+                {
+                    "leading_object_type": (
+                        "This field is only supported for the leading-object "
+                        "replay strategy."
+                    )
+                }
+            )
+        return attrs
+
+
+class OCCNConformanceRequestSerializer(OCCNReplayStrategyRequestSerializer):
+    asset_id = serializers.IntegerField(min_value=1)
+    max_states = serializers.IntegerField(
+        min_value=1_000,
+        max_value=15_000,
+        default=1_000,
+    )
+
+
+class OCCNReplayUnitDetailRequestSerializer(
+    OCCNReplayStrategyRequestSerializer
+):
+    unit_id = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    offset = serializers.IntegerField(min_value=0, default=0)
+    limit = serializers.IntegerField(min_value=1, max_value=250, default=50)
+
 
 class EventLogSerializer(serializers.ModelSerializer):
      class Meta:
@@ -60,8 +126,15 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        # On update, project/name may be omitted from the payload; fall back to
+        # the stored values so the uniqueness check still runs (and a duplicate
+        # rename is rejected with a clean 400 instead of a DB IntegrityError).
         project = attrs.get("project")
+        if project is None and self.instance is not None:
+            project = self.instance.project
         name = attrs.get("name")
+        if name is None and self.instance is not None:
+            name = self.instance.name
         if project and name:
             existing_assets = ProjectAsset.objects.filter(project=project, name=name)
             if self.instance is not None:
@@ -74,21 +147,33 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         file_obj = attrs.pop("file", None)
         content_json = attrs.get("content_json")
 
-        if file_obj is None and content_json is None:
-            raise serializers.ValidationError(
-                {"file": "Provide either a JSON file or direct content_json."}
-            )
         if file_obj is not None and content_json is not None:
             raise serializers.ValidationError(
                 {"file": "Provide either file or content_json, not both."}
             )
 
+        is_update = self.instance is not None
+        if file_obj is None and content_json is None:
+            # Creating an asset always needs its content; on update the model
+            # content may be left unchanged (e.g. a rename-only PATCH).
+            if not is_update:
+                raise serializers.ValidationError(
+                    {"file": "Provide either a JSON file or direct content_json."}
+                )
+            return attrs
+
         if file_obj is not None:
             content_json = self._parse_json_file(file_obj)
 
+        # On update the asset_type is often not resent; fall back to the stored
+        # value so content validation still runs against the correct schema.
+        asset_type = attrs.get("asset_type")
+        if asset_type is None and is_update:
+            asset_type = self.instance.asset_type
+
         attrs["content_json"] = self._validate_content_json(
             content_json,
-            attrs.get("asset_type"),
+            asset_type,
         )
         return attrs
 
