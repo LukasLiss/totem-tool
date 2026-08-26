@@ -23,6 +23,8 @@ from .models import (
     OCCNComponent,
     UserSettings,
     OCPNComponent,
+    SQLQueryComponent,
+    PieChartComponent,
 )
 from .serializers import (
     DashboardComponentPolymorphicSerializer,
@@ -1076,6 +1078,38 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         return Response(result, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"])
+    def execute_query(self, request, pk=None):
+        """Execute a read-only SQL query against the log's DuckDB tables.
+
+        The query runs on the shared per-file DuckDB (tables: events,
+        objects, event_object, object_attribute_history, object_relations)
+        under the per-file lock, so it cannot race other algorithm work.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        query = request.data.get('query')
+        if not query:
+            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: only allow SELECT queries (read-only)
+        query_upper = query.strip().upper()
+        if not query_upper.startswith('SELECT'):
+            return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                cursor = db.conn.execute(query)
+                columns = [d[0] for d in cursor.description]
+                rows = cursor.fetchall()
+        except Exception as e:
+            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        data = [dict(zip(columns, row)) for row in rows]
+        return Response({"data": data, "columns": columns}, status=status.HTTP_200_OK)
 
 class ProjectAssetViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectAssetSerializer
@@ -1113,7 +1147,6 @@ class ProjectAssetViewSet(viewsets.ModelViewSet):
         filename = f"{slugify(asset.name) or 'model-asset'}.json"
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
-
 
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
@@ -1178,6 +1211,10 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCPNComponent":
                 components.append(OCPNComponent.objects.get(id=comp.id))
+            elif comp.component_name == "SQLQueryComponent":
+                components.append(SQLQueryComponent.objects.get(id=comp.id))
+            elif comp.component_name == "PieChartComponent":
+                components.append(PieChartComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCCNComponent":
                 components.append(OCCNComponent.objects.get(id=comp.id))
             else:
@@ -1369,7 +1406,34 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     automatic_loading=item.get('automatic_loading', False),
                     timeout_s=item.get('timeout_s', 30.0),
                 )
+            elif component_name == 'SQLQueryComponent':
+                SQLQueryComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    query=item.get('query', 'SELECT * FROM data LIMIT 10'),
+                )
             # Add more as needed
+            elif component_name == 'PieChartComponent':
+                PieChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    query=item.get('query', ''),
+                    ring_text=item.get('ring_text', ''),
+                    chart_type=item.get('chart_type', 'donut'),
+                    title=item.get('title', ''),
+                    show_legend=item.get('show_legend', True),
+                    show_tooltip=item.get('show_tooltip', True),
+                    label_column=item.get('label_column', ''),
+                    value_column=item.get('value_column', ''),
+                )
 
         return Response({"status": "saved"})
 
