@@ -2583,6 +2583,28 @@ class PlayoutEndpointTests(TestCase):
         self.assertEqual(response.status_code, 400, response.content)
 
 
+class EventLogConversionErrorTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="conv-user", password="password")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    @patch("api.views.import_ocel_db")
+    def test_conversion_failure_deletes_project_eventlog_and_duckdb_file(self, mock_import):
+        mock_import.side_effect = RuntimeError("Simulated DuckDB conversion crash")
+
+        corrupt_file = SimpleUploadedFile("test_log.json", b"{invalid_json_data}", content_type="application/json")
+
+        response = self.client.post("/api/files/", {"file": corrupt_file}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.json())
+        self.assertIn("Failed to convert file to DuckDB format", response.json()["error"])
+
+        self.assertEqual(Project.objects.count(), 0)
+        self.assertEqual(EventLog.objects.count(), 0)
+
+
 class ProcessAreaDiscoveryApiTests(TestCase):
     """
     `discover_process_areas` — the advanced (thesis section 4.1) layering
