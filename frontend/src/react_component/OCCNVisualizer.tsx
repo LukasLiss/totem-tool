@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useFilterVersion } from '@/store/filterStore';
-import { Switch } from '@/components/ui/switch';
 import {
   ReactFlow,
   useReactFlow,
@@ -23,6 +22,7 @@ import {
   ArrowDownIcon,
   ArrowRightIcon,
 } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
   occnNetToEditorGraph,
@@ -64,6 +64,8 @@ interface OCCNVisualizerProps {
   objectTypes?: string[];
   /** Hide the in-canvas title when the surrounding page already renders one. */
   showTitle?: boolean;
+  filterEnabled?: boolean;
+  onToggleFilter?: () => void;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -82,6 +84,8 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
+  filterEnabled = false,
+  onToggleFilter = () => {},
 }: OCCNVisualizerProps) {
   const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
@@ -119,7 +123,6 @@ function OCCNVisualizer({
   );
 
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Normalized to a string so the fetch effect doesn't re-run on array identity.
@@ -281,6 +284,7 @@ function OCCNVisualizer({
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
       className={interactionsDisabled ? 'interactions-disabled' : ''}
     >
+
       {/* The shared editor node renders connection handles; this view is read-only. */}
       <style>{`
         [data-occn-readonly] .react-flow__handle {
@@ -377,8 +381,11 @@ function OCCNVisualizer({
                 minWidth: 240,
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-                Object-Centric Causal Net (OCCN)
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                  Object-Centric Causal Net (OCCN)
+                </div>
+                <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
               </div>
             </div>
           )}
@@ -524,12 +531,6 @@ function OCCNVisualizer({
             >
               {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
             </Button>
-            <Switch
-              checked={filterEnabled}
-              onCheckedChange={setFilterEnabled}
-              aria-label="Apply global filter"
-              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-            />
           </div>
         </>
       )}

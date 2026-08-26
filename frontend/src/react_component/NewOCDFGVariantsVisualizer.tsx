@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -91,6 +92,9 @@ interface NewOCDFGVariantsVisualizerProps {
   onSizeChange?: (size: { width: number; height: number }) => void;
   showControls?: boolean;
   initialInteractionLocked?: boolean;
+  filterEnabled?: boolean;
+  onToggleFilter?: () => void;
+  showTitle?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -226,6 +230,9 @@ function NewOCDFGVariantsVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
+  filterEnabled = false,
+  onToggleFilter = () => {},
+  showTitle = true,
 }: NewOCDFGVariantsVisualizerProps) {
   console.log('[NewOCDFGVariantsVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
@@ -233,7 +240,6 @@ function NewOCDFGVariantsVisualizer({
   const reactFlowId = instanceId ?? generatedInstanceId;
 
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -972,6 +978,7 @@ function NewOCDFGVariantsVisualizer({
       ref={containerRef}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
@@ -1011,21 +1018,26 @@ function NewOCDFGVariantsVisualizer({
             maxHeight: 'calc(100% - 32px)',
           }}
         >
-          <div
-            style={{
-              background: 'transparent',
-              border: '1px solid transparent',
-              borderRadius: 12,
-              padding: '10px 14px',
-              boxShadow: 'none',
-              fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              minWidth: 240,
-            }}
-          >
-            <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-              Object-Centric DFG (Variants)
+          {showTitle && (
+            <div
+              style={{
+                background: 'transparent',
+                border: '1px solid transparent',
+                borderRadius: 12,
+                padding: '10px 14px',
+                boxShadow: 'none',
+                fontFamily: 'var(--font-primary, Inter, sans-serif)',
+                minWidth: 240,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                  Object-Centric DFG (Variants)
+                </div>
+                <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
+              </div>
             </div>
-          </div>
+          )}
 
           {Object.keys(typeColors).length > 0 && (
             <div
@@ -1221,12 +1233,6 @@ function NewOCDFGVariantsVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
-            <Switch
-              checked={filterEnabled}
-              onCheckedChange={setFilterEnabled}
-              aria-label="Apply global filter"
-              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-            />
           </div>
         </div>
       )}

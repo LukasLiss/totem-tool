@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { RefreshCcw } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import TotemVisualizer, { type TotemVisualizerControls } from './TotemVisualizer';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
@@ -28,6 +29,7 @@ export default function ProcessArea({
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
+  const [filterEnabled, setFilterEnabled] = useState(false);
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -50,6 +52,7 @@ export default function ProcessArea({
         title="Totem Visualizer"
         embedded={true}
         onControlsReady={handleControlsReady}
+        filterEnabled={filterEnabled}
       />
     </ReactFlowProvider>
   );
@@ -67,7 +70,10 @@ export default function ProcessArea({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <CardTitle>Process Area Visualizer</CardTitle>
+        <div className="flex items-center gap-2">
+          <CardTitle>Process Area Visualizer</CardTitle>
+          <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
+        </div>
         <CardAction className="flex items-center gap-2">
           <Button
             variant="outline"

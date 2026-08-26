@@ -4,7 +4,6 @@ import { useFilterVersion } from '@/store/filterStore';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import {
   Card,
   CardContent,
@@ -13,6 +12,7 @@ import {
   CardAction,
 } from '@/components/ui/card';
 import { RefreshCcw } from 'lucide-react';
+
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
@@ -70,6 +70,7 @@ type TotemVisualizerProps = {
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
+  filterEnabled?: boolean;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -5134,9 +5135,9 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
+  filterEnabled = false,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -6373,17 +6374,6 @@ function TotemVisualizer({
               </svg>
             )}
           </button>
-          <div
-            data-totem-control
-            style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 4, flexShrink: 0 }}
-            title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-          >
-            <Switch
-              checked={filterEnabled}
-              onCheckedChange={setFilterEnabled}
-              aria-label="Apply global filter"
-            />
-          </div>
         </div>
 
         {/* Transform viewport wrapper: visually positions & scales the diagram without affecting layout measurements */}

@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import React, { useCallback, useContext, useState } from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -15,10 +15,13 @@ import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisual
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
+import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
+  const [filterEnabled, setFilterEnabled] = useState(false);
+  const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
 
   if (viewMode.type !== "analysis") return null;
 
@@ -36,16 +39,20 @@ export function AnalysisView() {
           <div className="w-full max-w-7xl">
             <Card>
               <CardHeader>
-                <CardTitle>Object-Centric DFG</CardTitle>
-                <CardDescription>
-                  Directly-Follows Graph visualization
-                </CardDescription>
+                <div className="flex items-center gap-2">
+                  <CardTitle>Object-Centric DFG</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                </div>
+                <CardDescription>Directly-Follows Graph visualization</CardDescription>
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
                   <NewOCDFGVariantsVisualizer
                     height="100%"
                     fileId={selectedFile?.id}
+                    filterEnabled={filterEnabled}
+                    onToggleFilter={toggleFilter}
+                    showTitle={false}
                   />
                 </ReactFlowProvider>
               </CardContent>
@@ -58,10 +65,11 @@ export function AnalysisView() {
           <div className="w-full max-w-7xl">
             <Card>
               <CardHeader>
-                <CardTitle>Object-Centric Causal Net</CardTitle>
-                <CardDescription>
-                  Causal net with activity bindings and automatic layout
-                </CardDescription>
+                <div className="flex items-center gap-2">
+                  <CardTitle>Object-Centric Causal Net</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                </div>
+                <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
               </CardHeader>
               <CardContent className="h-[700px] p-0">
                 <ReactFlowProvider>
@@ -69,6 +77,8 @@ export function AnalysisView() {
                     height="100%"
                     fileId={selectedFile?.id}
                     showTitle={false}
+                    filterEnabled={filterEnabled}
+                    onToggleFilter={toggleFilter}
                   />
                 </ReactFlowProvider>
               </CardContent>
@@ -81,16 +91,18 @@ export function AnalysisView() {
           <div className="w-full max-w-7xl">
             <Card className="@container/card">
               <CardHeader className="items-center relative z-10 justify-between">
-                <CardTitle>Variants Explorer</CardTitle>
-                <CardDescription>
-                  Object-centric variant analysis
-                </CardDescription>
+                <div className="flex items-center gap-2">
+                  <CardTitle>Variants Explorer</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                </div>
+                <CardDescription>Object-centric variant analysis</CardDescription>
               </CardHeader>
               <CardContent className="p-0 pb-4">
                 <VariantsExplorer
                   fileId={selectedFile?.id}
                   colWidth={120}
                   embedded={true}
+                  filterEnabled={filterEnabled}
                 />
               </CardContent>
             </Card>
@@ -101,11 +113,12 @@ export function AnalysisView() {
         return (
           <div className="w-full max-w-7xl">
             <Card className="@container/card">
-              <CardHeader className="items-center relative z-10 justify-between">
-                <CardTitle>OC Dotted Chart</CardTitle>
-                <CardDescription>
-                  Object-centric event distribution
-                </CardDescription>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <CardTitle>OC Dotted Chart</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                </div>
+                <CardDescription>Object-centric event distribution</CardDescription>
               </CardHeader>
               <CardContent>
                 <DottedChart
@@ -117,6 +130,7 @@ export function AnalysisView() {
                   rowOrder="first_occurrence"
                   maxPoints={10000}
                   showControls={true}
+                  filterEnabled={filterEnabled}
                   className="min-h-[700px]"
                 />
               </CardContent>

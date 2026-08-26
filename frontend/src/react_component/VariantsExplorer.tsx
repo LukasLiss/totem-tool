@@ -151,6 +151,8 @@ type VariantsExplorerProps = {
   /** Called when the user clicks Apply in the advanced-settings popover so
    * the parent dashboard can persist the choices on the VariantsComponent. */
   onAdvancedChange?: (s: AdvancedSettings) => void;
+  /** When provided, overrides internal filter state (controlled mode). */
+  filterEnabled?: boolean;
 };
 
 export default function VariantsExplorer({
@@ -165,9 +167,10 @@ export default function VariantsExplorer({
   defaultIso = "wl+vf2",
   defaultTimeoutS = 10,
   onAdvancedChange,
+  filterEnabled: filterEnabledProp,
 }: VariantsExplorerProps) {
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const filterEnabled = filterEnabledProp ?? false;
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Component state
@@ -557,18 +560,6 @@ export default function VariantsExplorer({
               />
             </div>
 
-            <div className="flex items-center gap-2">
-              <Label htmlFor="variants-filter" className="text-sm font-medium">
-                Filter
-              </Label>
-              <Switch
-                id="variants-filter"
-                checked={filterEnabled}
-                onCheckedChange={setFilterEnabled}
-                aria-label="Apply global filter"
-                title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-              />
-            </div>
           </div>
         </div>
       </CardHeader>
@@ -1067,9 +1058,7 @@ function gradientFor(
     // Find object by type instead of ID (IDs may have different formats)
     const obj = objects.find((o) => o.type === typeFromId);
     const base = obj ? typeColor[obj.type] : UI.textSecondary;
-    const siblings = objects.filter((o) => o.type === typeFromId);
-    const idx = siblings.length > 0 ? 0 : 0; // Use first sibling's shade
-    return shade(base, 0.15 * (idx % 5));
+    return shade(base, 0);
   });
   if (colors.length <= 1) return colors[0] || UI.textSecondary;
   const step = 100 / (colors.length - 1);

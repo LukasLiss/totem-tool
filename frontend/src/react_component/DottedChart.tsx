@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { Map as MapIcon } from "lucide-react";
 import { useFilterVersion } from "@/store/filterStore";
@@ -52,6 +51,7 @@ interface DottedChartProps {
   showMinimap?: boolean;
   className?: string;
   onEventClick?: (event: OCEvent) => void;
+  filterEnabled?: boolean;
 }
 
 const DEFAULT_X_AXIS: AxisOption = { type: "time" };
@@ -82,6 +82,7 @@ export default function DottedChart({
   showMinimap = true,
   className,
   onEventClick,
+  filterEnabled = false,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({
@@ -113,7 +114,6 @@ export default function DottedChart({
   const chartInteractionRef = useRef<HTMLDivElement | null>(null);
 
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const resetZoomFrame = useCallback(() => {
@@ -542,12 +542,6 @@ export default function DottedChart({
         </div>
         <div className="flex items-center gap-2">
           <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
-          <Switch
-            checked={filterEnabled}
-            onCheckedChange={setFilterEnabled}
-            aria-label="Apply global filter"
-            title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-          />
         </div>
       </div>
 
@@ -789,9 +783,12 @@ function DottedChartZoomControls({
   const canReset = isZoomed || isDraftZoomed;
 
   useEffect(() => {
+    const lastIdx = Math.max(0, points.length - 1);
+    const safeStart = Math.min(xRange.startIndex, lastIdx);
+    const safeEnd = Math.min(xRange.endIndex, lastIdx);
     setDraftXRange(xRange);
-    setStartDateInput(formatRangeDateInput(points[xRange.startIndex], xAxis));
-    setEndDateInput(formatRangeDateInput(points[xRange.endIndex], xAxis));
+    setStartDateInput(formatRangeDateInput(points[safeStart], xAxis));
+    setEndDateInput(formatRangeDateInput(points[safeEnd], xAxis));
     setDateError(null);
   }, [points, xRange, xAxis]);
 

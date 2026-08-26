@@ -101,6 +101,7 @@ interface NewOCDFGVisualizerProps {
   onSizeChange?: (size: { width: number; height: number }) => void;
   showControls?: boolean;
   initialInteractionLocked?: boolean;
+  filterEnabled?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -236,6 +237,7 @@ function NewOCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
+  filterEnabled = false,
 }: NewOCDFGVisualizerProps) {
   console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
@@ -243,7 +245,6 @@ function NewOCDFGVisualizer({
   const reactFlowId = instanceId ?? generatedInstanceId;
 
   const filterVersion = useFilterVersion();
-  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -976,6 +977,7 @@ function NewOCDFGVisualizer({
       className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
@@ -1248,12 +1250,6 @@ function NewOCDFGVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
-            <Switch
-              checked={filterEnabled}
-              onCheckedChange={setFilterEnabled}
-              aria-label="Apply global filter"
-              title={filterEnabled ? 'Filter active — click to show unfiltered data' : 'Filter inactive — click to apply global filter'}
-            />
           </div>
         </div>
       )}
