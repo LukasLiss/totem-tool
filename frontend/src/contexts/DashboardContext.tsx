@@ -7,7 +7,8 @@ export type AnalysisComponent =
   | "variants"
   | "dottedChart"
   | "occn"
-  | "ocPetriNet";
+  | "ocPetriNet"
+  | "totemMiner";
 export type ConformanceComponent = "totem" | "occn";
 
 export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";

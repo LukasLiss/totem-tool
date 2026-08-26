@@ -69,16 +69,22 @@ def discover_occn(
     if parameters is None:
         parameters = {}
 
-    objectTypes = parameters.get("object_types", ocel.object_types)
+    # Pre-process OCEL
+    eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
+
+    objectTypes = parameters.get("object_types")
+    if objectTypes is None:
+        if hasattr(ocel, "object_types"):
+            objectTypes = ocel.object_types
+        else:
+            objectTypes = sorted(list(eventLogForMiner["object_type"].unique()))
+
     dependency_threshold = parameters.get("dependency_threshold", 0.5)
     and_threshold = parameters.get("and_threshold", 0.65)
     loop_two_threshold = parameters.get("loop_two_threshold", 0.5)
     combo_threshold = parameters.get("combo_threshold", 1000)
     inconsumableObjects = parameters.get("inconsumableObjects", [])
     inconsumableThreshold = parameters.get("inconsumableThreshold", 1)
-
-    # Pre-process OCEL
-    eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
 
     # If object_types was specified, filter both DataFrames to only those types.
     if "object_types" in parameters:
@@ -173,10 +179,12 @@ def _prepare_ocel_for_discovery(ocel):
     1. event_log: A log of unique events.
     2. event_log_for_miner: A flattened log of event-to-object relationships.
 
-    Accepts either an ObjectCentricEventLog (Polars-backed) or an OcelDuckDB.
+    Accepts an ObjectCentricEventLog (Polars-backed), an OcelDuckDB, or a pm4py OCEL.
     """
     if isinstance(ocel, OcelDuckDB):
         return _prepare_ocel_duckdb_for_discovery(ocel)
+    if hasattr(ocel, "events") and hasattr(ocel, "relations"):
+        return _extract_dataframes_from_pm4py(ocel)
     return _prepare_ocel_polars_for_discovery(ocel)
 
 
