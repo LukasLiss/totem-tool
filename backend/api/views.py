@@ -4,7 +4,25 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
-from .models import EventLog, Project, ProjectAsset, Dashboard, EventLog, DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, UserSettings
+from .models import (
+    EventLog,
+    Project,
+    ProjectAsset,
+    Dashboard,
+    EventLog,
+    DashboardComponent,
+    NumberofEventsComponent,
+    TextBoxComponent,
+    ImageComponent,
+    VariantsComponent,
+    ProcessAreaComponent,
+    LogStatisticsComponent,
+    OCDFGComponent,
+    OCDottedChartComponent,
+    NewOCDFGComponent,
+    OCCNComponent,
+    UserSettings,
+)
 from .serializers import (
     DashboardComponentPolymorphicSerializer,
     DashboardSerializer,
@@ -38,9 +56,17 @@ from totem_lib.totem import (
     totem_from_dict,
     totem_to_dict,
 )
+from totem_lib.process_areas import (
+    INDICATOR_NAMES,
+    prepare_db,
+    process_areas_from_aggregates,
+)
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
-from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
+from totem_lib.oc_dotted_chart import (
+    get_oc_dotted_chart_columns,
+    get_oc_dotted_chart_data,
+)
 from totem_lib.playout import (
     PlayoutEvent,
     PlayoutVariant,
@@ -53,9 +79,9 @@ from collections import OrderedDict
 import networkx as nx
 
 
-
 from .cache_utils import get_cached_result, set_cached_result
 
+import math
 import os
 from hashlib import sha1
 import json
@@ -128,7 +154,7 @@ TOTEM_MOCK_2 = {
     "tempgraph": {
         "nodes": ["Company", "Factory", "Warehouse", "HR", "Worker", "Order", "Item"],
         "D": [
-            #["Order", "HR"],
+            # ["Order", "HR"],
             ["Order", "Worker"],
             ["Item", "Worker"],
             ["Worker", "Factory"],
@@ -230,17 +256,20 @@ TOTEM_MOCK_2 = {
     },
 }
 
-@api_view(['OPTIONS'])
+
+@api_view(["OPTIONS"])
 def debug_options(request):
     return Response({"headers": dict(request.headers)})
 
-@api_view(['GET'])
+
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def greeting(request):
-    
+
     return Response({"message": "Hello, greetings from the backend!"})
 
-@api_view(['GET'])
+
+@api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request):
     return Response({"status": "ok", "message": "Backend is running."})
@@ -252,13 +281,13 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return EventLog.objects.filter(project__users=self.request.user)
-    
+
     def perform_create(self, serializer):
 
         user = self.request.user
 
-        file_name = serializer.validated_data['file'].name
-        project_name = f"{slugify(file_name)}_{user.username}"    
+        file_name = serializer.validated_data["file"].name
+        project_name = f"{slugify(file_name)}_{user.username}"
 
         project = Project.objects.create(name=project_name)
         project.users.add(user)
@@ -271,7 +300,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         if _should_use_cache(request):
             cached = get_cached_result(user_file, "noe")
@@ -282,7 +313,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             with _with_ocel_db(user_file) as db:
                 processed = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         except Exception as e:
-            return Response({"error": f"Failed to process file: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Failed to process file: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         set_cached_result(user_file, "noe", processed)
         return Response(processed, status=status.HTTP_200_OK)
@@ -293,7 +327,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         if _should_use_cache(request):
             cached = get_cached_result(user_file, "object_types")
@@ -303,7 +339,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             types = _get_ocel_object_types(user_file)
         except Exception as e:
-            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Failed to load OCEL: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         set_cached_result(user_file, "object_types", types)
         return Response(types, status=status.HTTP_200_OK)
@@ -313,7 +352,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         try:
             if _should_use_cache(request):
@@ -328,7 +369,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": f"An error occurred during Totem discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"An error occurred during Totem discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["post"])
     def totem_conformance(self, request, pk=None):
@@ -446,9 +490,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        replay_unit_strategy = request_serializer.validated_data[
-            "replay_unit_strategy"
-        ]
+        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
         leading_object_type = request_serializer.validated_data.get(
             "leading_object_type"
         )
@@ -522,9 +564,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        replay_unit_strategy = request_serializer.validated_data[
-            "replay_unit_strategy"
-        ]
+        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
         leading_object_type = request_serializer.validated_data.get(
             "leading_object_type"
         )
@@ -615,7 +655,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         try:
             if _should_use_cache(request):
@@ -633,7 +675,85 @@ class EventLogViewSet(viewsets.ModelViewSet):
             set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": f"An error occurred during Totem and MLPA discovery: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"An error occurred during Totem and MLPA discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=["get"])
+    def discover_process_areas(self, request, pk=None):
+        """
+        Advanced resource-based process area discovery (thesis section 4.1).
+
+        Same response schema as `discover_mlpa` — only the engine that decides
+        the layering differs, so the frontend can switch between the two by
+        changing the URL and nothing else.
+
+        Query parameters: `w_temporal`, `w_cardinality`, `w_divergence`,
+        `alpha`, `beta`.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            params = _parse_process_area_params(request.query_params)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Every parameter is part of the key. `discover_mlpa` keys on the
+            # file alone, which is fine because it takes no parameters; copying
+            # that here would make the UI sliders silently return the first
+            # result for an hour.
+            cache_key = _process_area_cache_key(user_file.pk, params)
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
+            # Two-tier cache. Preparation reads the log and depends only on it;
+            # the weights and alpha/beta only affect scoring and the ILP solve.
+            # Caching the two separately turns a slider change into a solve
+            # instead of a full rediscovery.
+            prep_key = f"process_area_prep_{user_file.pk}"
+            aggregates = cache.get(prep_key)
+            totem_key = f"totem_discovery_{user_file.pk}"
+            totem_data = cache.get(totem_key)
+
+            if aggregates is None or totem_data is None:
+                with _with_ocel_db(user_file) as db:
+                    if aggregates is None:
+                        aggregates = prepare_db(db)
+                        cache.set(prep_key, aggregates, timeout=3600)
+                    if totem_data is None:
+                        totem_data = totem_to_dict(totemDiscovery_db(db))
+                        cache.set(totem_key, totem_data, timeout=3600)
+
+            process_view = process_areas_from_aggregates(
+                aggregates,
+                weights=params["weights"],
+                alpha=params["alpha"],
+                beta=params["beta"],
+            )
+
+            serialized = {
+                "layers": _serialize_process_layers(process_view),
+                "tempgraph": totem_data["tempgraph"],
+                "type_relations": totem_data["type_relations"],
+                "all_event_types": totem_data["all_event_types"],
+                "object_type_to_event_types": totem_data["object_type_to_event_types"],
+            }
+
+            cache.set(cache_key, serialized, timeout=3600)
+            return Response(serialized, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"An error occurred during process area discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
@@ -641,7 +761,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         if _should_use_cache(request):
             cached = get_cached_result(user_file, "statistics")
@@ -652,12 +774,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
             with _with_ocel_db(user_file) as db:
                 # Single round-trip per scalar. All counts are O(table scan)
                 # in DuckDB which dominates over the round-trip cost.
-                num_events            = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                num_events = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[
+                    0
+                ]
                 num_unique_activities = db.conn.execute(
                     "SELECT COUNT(DISTINCT activity) FROM events"
                 ).fetchone()[0]
-                num_objects           = db.conn.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
-                num_object_types      = db.conn.execute(
+                num_objects = db.conn.execute(
+                    "SELECT COUNT(*) FROM objects"
+                ).fetchone()[0]
+                num_object_types = db.conn.execute(
                     "SELECT COUNT(DISTINCT obj_type) FROM objects"
                 ).fetchone()[0]
                 ts_row = db.conn.execute(
@@ -676,7 +802,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             set_cached_result(user_file, "statistics", result)
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": f"Failed to compute statistics: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"Failed to compute statistics: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=["get"])
     def oc_dotted_chart(self, request, pk=None):
@@ -684,7 +813,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         try:
             row_min = _optional_int(request.query_params.get("row_min"))
@@ -693,7 +824,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
             sample_seed = int(request.query_params.get("sample_seed", 0))
         except ValueError:
             return Response(
-                {"error": "row_min, row_max, max_points, and sample_seed must be integers"},
+                {
+                    "error": "row_min, row_max, max_points, and sample_seed must be integers"
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -728,7 +861,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
 
         try:
             with _with_ocel_db(user_file) as db:
@@ -790,12 +925,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
         if project_id:
             qs = qs.filter(project_id=project_id)
         return qs
-    
+
     def perform_create(self, serializer):
         project_id = self.request.data.get("project")
         project = Project.objects.get(id=project_id, users=self.request.user)
         serializer.save(project=project)
-    
+
     @action(detail=True, methods=["PATCH"])
     def rename(self, request, pk=None):
         """
@@ -804,206 +939,232 @@ class DashboardViewSet(viewsets.ModelViewSet):
         dashboard = self.get_object()
         new_name = request.data.get("name")
         if not new_name:
-            return Response({"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
         dashboard.name = new_name
         dashboard.save()
         return Response(self.get_serializer(dashboard).data)
 
-        
         serializer.save(project=project)
-    
+
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
         dashboard = self.get_object()
         base_components = dashboard.components.all()
         components = []
         for comp in base_components:
-            if comp.component_name == 'TextBoxComponent':
+            if comp.component_name == "TextBoxComponent":
                 components.append(TextBoxComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'NumberofEventsComponent':
+            elif comp.component_name == "NumberofEventsComponent":
                 components.append(NumberofEventsComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'ImageComponent':
+            elif comp.component_name == "ImageComponent":
                 components.append(ImageComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'VariantsComponent':
+            elif comp.component_name == "VariantsComponent":
                 components.append(VariantsComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'ProcessAreaComponent':
+            elif comp.component_name == "ProcessAreaComponent":
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'LogStatisticsComponent':
+            elif comp.component_name == "LogStatisticsComponent":
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'OCDFGComponent':
+            elif comp.component_name == "OCDFGComponent":
                 components.append(OCDFGComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'OCDottedChartComponent':
+            elif comp.component_name == "OCDottedChartComponent":
                 components.append(OCDottedChartComponent.objects.get(id=comp.id))
-            elif comp.component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
+            elif comp.component_name in (
+                "NewOCDFGComponent",
+                "NewOCDFGVariantsComponent",
+            ):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
-            elif comp.component_name == 'OCCNComponent':
+            elif comp.component_name == "OCCNComponent":
                 components.append(OCCNComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
         for comp in components:
-            print(f"Component {comp.id}: type {type(comp).__name__}, component_name {comp.component_name}, text {getattr(comp, 'text', 'N/A')}")
+            print(
+                f"Component {comp.id}: type {type(comp).__name__}, component_name {comp.component_name}, text {getattr(comp, 'text', 'N/A')}"
+            )
         serializer = DashboardComponentPolymorphicSerializer(components, many=True)
         data = serializer.data
         print("Serialized data:", data)
         return Response(data)
-    
+
     @action(detail=True, methods=["POST"])
     def save_layout(self, request, pk=None):
         dashboard = self.get_object()
         layout = request.data.get("layout")
 
         if not isinstance(layout, list):
-            return Response({"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
             # Clear existing components
         dashboard.components.all().delete()
-        
+
         for item in layout:
-            component_name = item['component_name']
+            component_name = item["component_name"]
             print(f"Saving item: {item}")
-            if component_name == 'TextBoxComponent':
+            if component_name == "TextBoxComponent":
                 comp = TextBoxComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    text=item.get('text', ''),
-                    font_size=item.get('font_size', 14),
+                    text=item.get("text", ""),
+                    font_size=item.get("font_size", 14),
                 )
                 print(f"Created TextBoxComponent {comp.id} with text '{comp.text}'")
 
-            elif component_name == 'NumberOfEventsComponent':
+            elif component_name == "NumberOfEventsComponent":
                 NumberofEventsComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    color=item.get('color', 'blue'),
+                    color=item.get("color", "blue"),
                 )
-            elif component_name == 'ImageComponent':
+            elif component_name == "ImageComponent":
                 # Extract image path, stripping /files/ prefix if present
-                image_path = item.get('image', None)
-                if image_path and isinstance(image_path, str) and image_path.startswith('/files/'):
+                image_path = item.get("image", None)
+                if (
+                    image_path
+                    and isinstance(image_path, str)
+                    and image_path.startswith("/files/")
+                ):
                     image_path = image_path[7:]  # Remove '/files/' prefix
-                
+
                 ImageComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
                     image=image_path,
                 )
-            elif component_name == 'VariantsComponent':
+            elif component_name == "VariantsComponent":
                 VariantsComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    automatic_loading=item.get('automatic_loading', False),
-                    leading_object_type=item.get('leading_object_type', ''),
-                    extraction=item.get('extraction') or 'leading_1hop',
-                    iso=item.get('iso') or 'wl+vf2',
-                    timeout_s=item.get('timeout_s', 10.0),
+                    automatic_loading=item.get("automatic_loading", False),
+                    leading_object_type=item.get("leading_object_type", ""),
+                    extraction=item.get("extraction") or "leading_1hop",
+                    iso=item.get("iso") or "wl+vf2",
+                    timeout_s=item.get("timeout_s", 10.0),
                 )
-            elif component_name == 'ProcessAreaComponent':
+            elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
+                    algorithm=item.get("algorithm") or "advanced",
+                    w_temporal=item.get("w_temporal", 1.0),
+                    w_cardinality=item.get("w_cardinality", 1.0),
+                    w_divergence=item.get("w_divergence", 1.0),
+                    alpha=item.get("alpha", 1.0),
+                    beta=item.get("beta", 1.0),
                 )
-            elif component_name == 'LogStatisticsComponent':
+            elif component_name == "LogStatisticsComponent":
                 LogStatisticsComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    show_num_events=item.get('show_num_events', True),
-                    show_num_activities=item.get('show_num_activities', True),
-                    show_num_objects=item.get('show_num_objects', True),
-                    show_num_object_types=item.get('show_num_object_types', True),
-                    show_earliest_timestamp=item.get('show_earliest_timestamp', False),
-                    show_newest_timestamp=item.get('show_newest_timestamp', False),
-                    show_duration=item.get('show_duration', False),
+                    show_num_events=item.get("show_num_events", True),
+                    show_num_activities=item.get("show_num_activities", True),
+                    show_num_objects=item.get("show_num_objects", True),
+                    show_num_object_types=item.get("show_num_object_types", True),
+                    show_earliest_timestamp=item.get("show_earliest_timestamp", False),
+                    show_newest_timestamp=item.get("show_newest_timestamp", False),
+                    show_duration=item.get("show_duration", False),
                 )
-            elif component_name == 'OCDFGComponent':
+            elif component_name == "OCDFGComponent":
                 OCDFGComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    show_controls=item.get('show_controls', True),
-                    initial_interaction_locked=item.get('initial_interaction_locked', True),
+                    show_controls=item.get("show_controls", True),
+                    initial_interaction_locked=item.get(
+                        "initial_interaction_locked", True
+                    ),
                 )
-            elif component_name == 'OCDottedChartComponent':
+            elif component_name == "OCDottedChartComponent":
                 OCDottedChartComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    file_id=item.get('file_id'),
-                    x_axis=item.get('x_axis') or 'time',
-                    y_axis=item.get('y_axis') or 'activity',
-                    color_by=item.get('color_by') or 'activity',
-                    shape_by=item.get('shape_by') or 'none',
-                    row_order=item.get('row_order') or 'first_occurrence',
-                    max_points=item.get('max_points', 10000),
-                    show_minimap=item.get('show_minimap', True),
-                    show_controls=item.get('show_controls', True),
+                    file_id=item.get("file_id"),
+                    x_axis=item.get("x_axis") or "time",
+                    y_axis=item.get("y_axis") or "activity",
+                    color_by=item.get("color_by") or "activity",
+                    shape_by=item.get("shape_by") or "none",
+                    row_order=item.get("row_order") or "first_occurrence",
+                    max_points=item.get("max_points", 10000),
+                    show_minimap=item.get("show_minimap", True),
+                    show_controls=item.get("show_controls", True),
                 )
-            elif component_name in ('NewOCDFGComponent', 'NewOCDFGVariantsComponent'):
+            elif component_name in ("NewOCDFGComponent", "NewOCDFGVariantsComponent"):
                 NewOCDFGComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    show_controls=item.get('show_controls', True),
-                    initial_interaction_locked=item.get('initial_interaction_locked', True),
-                    layout_direction=item.get('layout_direction', 'TB'),
+                    show_controls=item.get("show_controls", True),
+                    initial_interaction_locked=item.get(
+                        "initial_interaction_locked", True
+                    ),
+                    layout_direction=item.get("layout_direction", "TB"),
                 )
-            elif component_name == 'OCCNComponent':
+            elif component_name == "OCCNComponent":
                 OCCNComponent.objects.create(
                     dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
                     component_name=component_name,
-                    relative_occurrence_threshold=item.get('relative_occurrence_threshold', 0.0),
-                    show_controls=item.get('show_controls', True),
-                    initial_interaction_locked=item.get('initial_interaction_locked', True),
-                    layout_direction=item.get('layout_direction', 'LR'),
-                    object_types=item.get('object_types') or '',
+                    relative_occurrence_threshold=item.get(
+                        "relative_occurrence_threshold", 0.0
+                    ),
+                    show_controls=item.get("show_controls", True),
+                    initial_interaction_locked=item.get(
+                        "initial_interaction_locked", True
+                    ),
+                    layout_direction=item.get("layout_direction", "LR"),
+                    object_types=item.get("object_types") or "",
                 )
             # Add more as needed
 
         return Response({"status": "saved"})
 
     @action(
-    detail=True,
-    methods=["post"],
-    url_path="components/(?P<component_id>[^/.]+)/image",
-    parser_classes=[MultiPartParser, FormParser],
+        detail=True,
+        methods=["post"],
+        url_path="components/(?P<component_id>[^/.]+)/image",
+        parser_classes=[MultiPartParser, FormParser],
     )
     def upload_image(self, request, pk=None, component_id=None):
         dashboard = self.get_object()
@@ -1028,16 +1189,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         image_component.image = image_file
         image_component.save()
-        
-        return Response(
-        {
-            "id": image_component.id,
-            "component_name": image_component.component_name,
-            "image": image_component.image.url,
-        },
-        status=status.HTTP_200_OK,
-    )
 
+        return Response(
+            {
+                "id": image_component.id,
+                "component_name": image_component.component_name,
+                "image": image_component.image.url,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1211,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
 #
 # Long-term we may also persist the converted DuckDB to disk on upload so
 # cache misses skip the re-import — that's a follow-up, not done here.
+
 
 def _build_ocel_db_from_path(path: str) -> OcelDuckDB:
     """Open an uploaded OCEL file as an `OcelDuckDB`, dispatching on extension."""
@@ -1090,8 +1251,9 @@ def _build_ocel_db_from_path(path: str) -> OcelDuckDB:
 # is no TTL — the connection stays open until the process exits.
 import threading
 from contextlib import contextmanager
-_OCEL_DB_REGISTRY: dict[int, OcelDuckDB]       = {}
-_OCEL_DB_LOCKS:    dict[int, threading.Lock]   = {}
+
+_OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
+_OCEL_DB_LOCKS: dict[int, threading.Lock] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[str, ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 
@@ -1115,7 +1277,7 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
             db = _build_ocel_db_from_path(user_file.file.path)
             object_types = tuple(_object_types(db))
             _OCEL_DB_REGISTRY[pk] = db
-            _OCEL_DB_LOCKS[pk]    = threading.Lock()
+            _OCEL_DB_LOCKS[pk] = threading.Lock()
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
 
@@ -1151,9 +1313,8 @@ def _with_ocel_db(user_file):
 def _object_types(db: OcelDuckDB) -> list[str]:
     """Distinct object types in the log (sorted, frontend-friendly)."""
     return sorted(
-        r[0] for r in db.conn.execute(
-            "SELECT DISTINCT obj_type FROM objects"
-        ).fetchall()
+        r[0]
+        for r in db.conn.execute("SELECT DISTINCT obj_type FROM objects").fetchall()
     )
 
 
@@ -1183,6 +1344,106 @@ def _layout_shim(db: OcelDuckDB):
 #   NewOCDFGDb.from_ocel_db_with_variant_ranks() (full annotated graph)
 
 
+# Defaults reproduce the thesis: uniform indicator weights, both objective
+# terms weighted equally, and the thesis margin of exactly 1 (`margin_scale`
+# is a reference-implementation extension and is not exposed over HTTP).
+PROCESS_AREA_DEFAULTS = {"alpha": 1.0, "beta": 1.0, "weight": 1.0}
+
+
+def _positive_float(params, name: str, default: float) -> float:
+    """
+    Read one non-negative, finite float query parameter.
+
+    Raises `ValueError` so the caller can answer 400 — letting a bad value
+    through surfaces later as a ZeroDivisionError or a NaN in the ILP, i.e. a
+    500 for what is really a malformed request.
+    """
+    raw = params.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number, got {raw!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _parse_process_area_params(params) -> dict:
+    """Validate the query parameters of the process-area discovery endpoint."""
+    weights = {
+        name: _positive_float(params, f"w_{name}", PROCESS_AREA_DEFAULTS["weight"])
+        for name in INDICATOR_NAMES
+    }
+    if sum(weights.values()) <= 0:
+        raise ValueError(
+            "at least one of "
+            + ", ".join(f"w_{name}" for name in INDICATOR_NAMES)
+            + " must be greater than zero"
+        )
+    alpha = _positive_float(params, "alpha", PROCESS_AREA_DEFAULTS["alpha"])
+    beta = _positive_float(params, "beta", PROCESS_AREA_DEFAULTS["beta"])
+    if alpha == 0 and beta == 0:
+        # Both zero makes the ILP objective identically zero, so every layer
+        # assignment is equally optimal and the answer is whatever the solver
+        # happened to pick.
+        raise ValueError("at least one of alpha and beta must be greater than zero")
+    return {"weights": weights, "alpha": alpha, "beta": beta}
+
+
+def _process_area_cache_key(file_pk, params: dict) -> str:
+    """Cache key covering the file and every discovery parameter."""
+    parts = [f"{name}={params['weights'][name]:.6g}" for name in INDICATOR_NAMES]
+    parts.append(f"alpha={params['alpha']:.6g}")
+    parts.append(f"beta={params['beta']:.6g}")
+    return f"process_areas_{file_pk}_" + "_".join(parts)
+
+
+def _serialize_process_layers(process_view: dict) -> list:
+    """
+    Convert a process view — the shape both `mlpaDiscovery` and
+    `discover_process_areas` return — into the frontend's layer list.
+
+    {level: [(object_types, event_types), ...]}
+      -> [{"level": int, "areas": [{"objectTypes": [...], "eventTypes": [...]}]}]
+    """
+    layers = []
+
+    # Sort levels (MLPA produces floats like 0.0, 1.0, 2.0; the process-area
+    # discovery produces ints)
+    for level in sorted(process_view.keys()):
+        areas = []
+        for object_types_set, event_types_set in process_view[level]:
+            # Convert sets to sorted lists for JSON serialization
+            object_types = (
+                sorted(list(object_types_set))
+                if isinstance(object_types_set, set)
+                else list(object_types_set)
+            )
+            event_types = (
+                sorted(list(event_types_set))
+                if isinstance(event_types_set, set)
+                else list(event_types_set)
+            )
+
+            areas.append(
+                {
+                    "objectTypes": object_types,
+                    "eventTypes": event_types,
+                }
+            )
+
+        layers.append(
+            {
+                "level": int(level),  # Convert float to int for cleaner JSON
+                "areas": areas,
+            }
+        )
+
+    return layers
 
 
 def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
@@ -1192,33 +1453,11 @@ def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
     MLPA returns: {level: [(object_types_set, event_types_set), ...], ...}
     We convert to: {layers: [{level, areas: [{objectTypes, eventTypes}]}], ...}
     """
-    layers = []
-
-    # Sort levels (they are floats like 0.0, 1.0, 2.0)
-    sorted_levels = sorted(process_view.keys())
-
-    for level in sorted_levels:
-        areas = []
-        for object_types_set, event_types_set in process_view[level]:
-            # Convert sets to sorted lists for JSON serialization
-            object_types = sorted(list(object_types_set)) if isinstance(object_types_set, set) else list(object_types_set)
-            event_types = sorted(list(event_types_set)) if isinstance(event_types_set, set) else list(event_types_set)
-
-            areas.append({
-                "objectTypes": object_types,
-                "eventTypes": event_types,
-            })
-
-        layers.append({
-            "level": int(level),  # Convert float to int for cleaner JSON
-            "areas": areas,
-        })
-
     # Also include the serialized totem data for edge information
     totem_data = totem_to_dict(totem)
 
     return {
-        "layers": layers,
+        "layers": _serialize_process_layers(process_view),
         "tempgraph": totem_data["tempgraph"],
         "type_relations": totem_data["type_relations"],
         "all_event_types": totem_data["all_event_types"],
@@ -1233,8 +1472,9 @@ def discover_totem_mock(request, pk: int):
     Temporary mock endpoint for Totem discovery until backend integration is ready.
     """
     variant = request.query_params.get("variant")
-    payload = TOTEM_MOCK_2 # if variant == "2" else TOTEM_MOCK
+    payload = TOTEM_MOCK_2  # if variant == "2" else TOTEM_MOCK
     return Response(payload, status=status.HTTP_200_OK)
+
 
 # Accepted enums for the advanced-settings query params on the variants
 # endpoint. Keep in sync with totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}.
@@ -1248,13 +1488,18 @@ def variants(request):
 
     file_id = request.query_params.get("file_id")
     if not file_id:
-        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Verify user has access to this file
     try:
         user_file = EventLog.objects.get(pk=file_id, project__users=request.user)
     except EventLog.DoesNotExist:
-        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "File not found or access denied"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     if not os.path.exists(user_file.file.path):
         return Response(
@@ -1264,11 +1509,13 @@ def variants(request):
 
     # --- Advanced settings (query params, all optional with sane defaults) ---
     extraction = request.query_params.get("extraction") or "leading_1hop"
-    iso        = request.query_params.get("iso")        or "wl+vf2"
+    iso = request.query_params.get("iso") or "wl+vf2"
     if extraction not in _VALID_EXTRACTIONS:
         return Response(
-            {"error": f"Invalid extraction '{extraction}'. "
-                      f"Allowed: {sorted(_VALID_EXTRACTIONS)}"},
+            {
+                "error": f"Invalid extraction '{extraction}'. "
+                f"Allowed: {sorted(_VALID_EXTRACTIONS)}"
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
     if iso not in _VALID_ISOS:
@@ -1306,10 +1553,13 @@ def variants(request):
             if extraction.startswith("leading"):
                 if not leading_object_type or leading_object_type not in obj_types:
                     if not obj_types:
-                        return Response({
-                            "variants": [],
-                            "object_types": [],
-                        }, status=status.HTTP_200_OK)
+                        return Response(
+                            {
+                                "variants": [],
+                                "object_types": [],
+                            },
+                            status=status.HTTP_200_OK,
+                        )
                     leading_object_type = obj_types[0]
             else:
                 leading_object_type = None
@@ -1337,51 +1587,59 @@ def variants(request):
                 "code": "timeout",
                 "timeout_s": timeout_s,
                 "hint": "Try a coarser iso strategy (db_signature / trace) "
-                        "or a different extraction.",
+                "or a different extraction.",
             },
             status=status.HTTP_408_REQUEST_TIMEOUT,
         )
     except Exception as e:
         import traceback
+
         print(f"ERROR in find_variants: {e}")
         traceback.print_exc()
-        return Response({"error": f"Variant computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"error": f"Variant computation failed: {e}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     out = []
     for var in mined:
         layout_data = calculate_layout(var, layout_ocel)
 
         signature = " → ".join(
-            node_data['label']
+            node_data["label"]
             for _, node_data in sorted(
-                var.graph.nodes(data=True), key=lambda x: x[1]['timestamp']
+                var.graph.nodes(data=True), key=lambda x: x[1]["timestamp"]
             )
         )
         signature_hash = sha1(signature.encode("utf-8")).hexdigest()[:8]
 
         final_nodes = []
         for node in layout_data["nodes"]:
-            final_nodes.append({
-                "id": node["id"],
-                "activity": node["activity"],
-                "x": node["x"],
-                "y_lane": node["y_lane"],
-                "y_lanes": node["y_lanes"],
-                "objectIds": [f"type::{t}" for t in node["types"]],
-                "types": node["types"],
-            })
+            final_nodes.append(
+                {
+                    "id": node["id"],
+                    "activity": node["activity"],
+                    "x": node["x"],
+                    "y_lane": node["y_lane"],
+                    "y_lanes": node["y_lanes"],
+                    "objectIds": [f"type::{t}" for t in node["types"]],
+                    "types": node["types"],
+                }
+            )
 
-        out.append({
-            "id": str(var.id),
-            "support": int(var.support),
-            "signature": signature_hash,
-            "signature_hash": signature_hash,
-            "graph": {
-                "nodes": final_nodes,
-                "edges": layout_data["edges"],
-                "objects": layout_data["objects"],
-            },
-        })
+        out.append(
+            {
+                "id": str(var.id),
+                "support": int(var.support),
+                "signature": signature_hash,
+                "signature_hash": signature_hash,
+                "graph": {
+                    "nodes": final_nodes,
+                    "edges": layout_data["edges"],
+                    "objects": layout_data["objects"],
+                },
+            }
+        )
 
     result = {
         "variants": out,
@@ -1397,6 +1655,7 @@ def variants(request):
 #
 # Server-side clamps mirror the UI's input ranges; the computation itself is
 # bounded by the (clamped) timeout, so results are not cached.
+
 
 def _clamped_number(value, field: str, lo, hi, integer: bool = False):
     """Coerce a JSON number, clamped to [lo, hi]. Raises ValueError."""
@@ -1435,8 +1694,10 @@ def playout(request):
     """
     data = request.data
     if not isinstance(data, dict):
-        return Response({"error": "Request body must be a JSON object."},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Request body must be a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         model_format = data.get("modelFormat")
@@ -1445,11 +1706,19 @@ def playout(request):
         model = data.get("model")
         if not isinstance(model, dict):
             raise ValueError('"model" must be the editor model JSON object.')
-        objects_per_type = _clamped_count_map(data.get("objectsPerType"), "objectsPerType", 12)
-        activity_limits = _clamped_count_map(data.get("activityLimits"), "activityLimits", 20)
+        objects_per_type = _clamped_count_map(
+            data.get("objectsPerType"), "objectsPerType", 12
+        )
+        activity_limits = _clamped_count_map(
+            data.get("activityLimits"), "activityLimits", 20
+        )
         timeout_s = _clamped_number(data.get("timeoutS"), "timeoutS", 1.0, 120.0)
         max_stored_variants = _clamped_number(
-            data.get("maxStoredVariants", 2000), "maxStoredVariants", 1, 2000, integer=True
+            data.get("maxStoredVariants", 2000),
+            "maxStoredVariants",
+            1,
+            2000,
+            integer=True,
         )
         max_states = _clamped_number(
             data.get("maxStates", 5_000_000), "maxStates", 1, 5_000_000, integer=True
@@ -1469,8 +1738,9 @@ def playout(request):
     except (TypeError, KeyError, AttributeError) as e:
         # Model dicts are only minimally validated (the editors already did) —
         # a malformed model surfaces here instead of as a 500.
-        return Response({"error": f"Malformed model: {e!r}"},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": f"Malformed model: {e!r}"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     return Response(result, status=status.HTTP_200_OK)
 
@@ -1504,11 +1774,17 @@ def _parse_playout_variants(raw) -> list:
                 raise ValueError(f'{where} needs a non-empty string "activity".')
             objects_raw = event_raw.get("objects")
             if not isinstance(objects_raw, dict):
-                raise ValueError(f'{where}: "objects" must map object types to id lists.')
+                raise ValueError(
+                    f'{where}: "objects" must map object types to id lists.'
+                )
             objects = {}
             for ot, ids in objects_raw.items():
-                if not isinstance(ids, list) or not all(isinstance(o, str) for o in ids):
-                    raise ValueError(f'{where}: "objects" of type "{ot}" must be a list of ids.')
+                if not isinstance(ids, list) or not all(
+                    isinstance(o, str) for o in ids
+                ):
+                    raise ValueError(
+                        f'{where}: "objects" of type "{ot}" must be a list of ids.'
+                    )
                 objects[ot] = list(ids)
             events.append(
                 PlayoutEvent(
@@ -1551,8 +1827,10 @@ def playout_export_ocel(request):
     """Serializes playout variants (result of /api/playout/) to OCEL 2.0 JSON."""
     data = request.data
     if not isinstance(data, dict):
-        return Response({"error": "Request body must be a JSON object."},
-                        status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Request body must be a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         variants = _parse_playout_variants(data.get("variants"))
@@ -1564,14 +1842,16 @@ def playout_export_ocel(request):
         # an id outside "<type>_1".."<type>_<count>" has no export mapping.
         detail = str(e).replace("\x01", ":")
         return Response(
-            {"error": f"Variant events reference an object not covered by objectCounts: {detail}"},
+            {
+                "error": f"Variant events reference an object not covered by objectCounts: {detail}"
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     return Response(ocel, status=status.HTTP_200_OK)
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def OCDFGViewSet(request):
     """
@@ -1579,1100 +1859,743 @@ def OCDFGViewSet(request):
     Args:
         request (_type_): _description_
     """
-    
-    simple_mockup = ({
+
+    simple_mockup = {
         "directed": True,
         "multigraph": False,
-        "graph": {
-            "kind": "ocdfg"
-        },
+        "graph": {"kind": "ocdfg"},
         "nodes": [
             {
                 "label": "Review Document",
-                "types": [
-                    "Document"
-                ],
+                "types": ["Document"],
                 "role": None,
                 "object_type": None,
-                "id": "Review Document"
+                "id": "Review Document",
             },
             {
                 "label": "Document start",
-                "types": [
-                    "Document"
-                ],
+                "types": ["Document"],
                 "role": "start",
                 "object_type": "Document",
-                "id": "__start__:Document"
+                "id": "__start__:Document",
             },
             {
                 "label": "Document end",
-                "types": [
-                    "Document"
-                ],
+                "types": ["Document"],
                 "role": "end",
                 "object_type": "Document",
-                "id": "__end__:Document"
-            }
+                "id": "__end__:Document",
+            },
         ],
         "links": [
             {
-                "weights": {
-                    "Document": 100
-                },
+                "weights": {"Document": 100},
                 "weight": 100,
-                "owners": [
-                    "Document"
-                ],
+                "owners": ["Document"],
                 "role": "start",
                 "source": "__start__:Document",
-                "target": "Review Document"
+                "target": "Review Document",
             },
             {
-                "weights": {
-                    "Document": 20
-                },
+                "weights": {"Document": 20},
                 "weight": 20,
-                "owners": [
-                    "Document"
-                ],
+                "owners": ["Document"],
                 "source": "Review Document",
-                "target": "Review Document"
+                "target": "Review Document",
             },
             {
-                "weights": {
-                    "Document": 80
-                },
+                "weights": {"Document": 80},
                 "weight": 80,
-                "owners": [
-                    "Document"
-                ],
+                "owners": ["Document"],
                 "role": "end",
                 "source": "Review Document",
-                "target": "__end__:Document"
-            }
-        ]
-    })
-    
-    mockup = ({
+                "target": "__end__:Document",
+            },
+        ],
+    }
+
+    mockup = {
         "directed": True,
         "multigraph": False,
-        "graph": {
-            "kind": "ocdfg"
-        },
+        "graph": {"kind": "ocdfg"},
         "nodes": [
             {
                 "label": "Load Truck",
-                "types": [
-                    "Container",
-                    "Handling Unit",
-                    "Truck"
-                ],
+                "types": ["Container", "Handling Unit", "Truck"],
                 "role": None,
                 "object_type": None,
-                "id": "Load Truck"
+                "id": "Load Truck",
             },
             {
                 "label": "Load to Vehicle",
-                "types": [
-                    "Container",
-                    "Forklift",
-                    "Vehicle"
-                ],
+                "types": ["Container", "Forklift", "Vehicle"],
                 "role": None,
                 "object_type": None,
-                "id": "Load to Vehicle"
+                "id": "Load to Vehicle",
             },
             {
                 "label": "Place in Stock",
-                "types": [
-                    "Container",
-                    "Forklift"
-                ],
+                "types": ["Container", "Forklift"],
                 "role": None,
                 "object_type": None,
-                "id": "Place in Stock"
+                "id": "Place in Stock",
             },
             {
                 "label": "Depart",
-                "types": [
-                    "Container",
-                    "Transport Document",
-                    "Vehicle"
-                ],
+                "types": ["Container", "Transport Document", "Vehicle"],
                 "role": None,
                 "object_type": None,
-                "id": "Depart"
+                "id": "Depart",
             },
             {
                 "label": "Bring to Loading Bay",
-                "types": [
-                    "Container",
-                    "Forklift"
-                ],
+                "types": ["Container", "Forklift"],
                 "role": None,
                 "object_type": None,
-                "id": "Bring to Loading Bay"
+                "id": "Bring to Loading Bay",
             },
             {
                 "label": "Reschedule Container",
-                "types": [
-                    "Container",
-                    "Transport Document",
-                    "Vehicle"
-                ],
+                "types": ["Container", "Transport Document", "Vehicle"],
                 "role": None,
                 "object_type": None,
-                "id": "Reschedule Container"
+                "id": "Reschedule Container",
             },
             {
                 "label": "Pick Up Empty Container",
-                "types": [
-                    "Container"
-                ],
+                "types": ["Container"],
                 "role": None,
                 "object_type": None,
-                "id": "Pick Up Empty Container"
+                "id": "Pick Up Empty Container",
             },
             {
                 "label": "Drive to Terminal",
-                "types": [
-                    "Container",
-                    "Truck"
-                ],
+                "types": ["Container", "Truck"],
                 "role": None,
                 "object_type": None,
-                "id": "Drive to Terminal"
+                "id": "Drive to Terminal",
             },
             {
                 "label": "Order Empty Containers",
-                "types": [
-                    "Container",
-                    "Transport Document"
-                ],
+                "types": ["Container", "Transport Document"],
                 "role": None,
                 "object_type": None,
-                "id": "Order Empty Containers"
+                "id": "Order Empty Containers",
             },
             {
                 "label": "Weigh",
-                "types": [
-                    "Container",
-                    "Forklift"
-                ],
+                "types": ["Container", "Forklift"],
                 "role": None,
                 "object_type": None,
-                "id": "Weigh"
+                "id": "Weigh",
             },
             {
                 "label": "Container start",
-                "types": [
-                    "Container"
-                ],
+                "types": ["Container"],
                 "role": "start",
                 "object_type": "Container",
-                "id": "__start__:Container"
+                "id": "__start__:Container",
             },
             {
                 "label": "Container end",
-                "types": [
-                    "Container"
-                ],
+                "types": ["Container"],
                 "role": "end",
                 "object_type": "Container",
-                "id": "__end__:Container"
+                "id": "__end__:Container",
             },
             {
                 "label": "Register Customer Order",
-                "types": [
-                    "Customer Order"
-                ],
+                "types": ["Customer Order"],
                 "role": None,
                 "object_type": None,
-                "id": "Register Customer Order"
+                "id": "Register Customer Order",
             },
             {
                 "label": "Create Transport Document",
-                "types": [
-                    "Customer Order",
-                    "Transport Document"
-                ],
+                "types": ["Customer Order", "Transport Document"],
                 "role": None,
                 "object_type": None,
-                "id": "Create Transport Document"
+                "id": "Create Transport Document",
             },
             {
                 "label": "Customer Order start",
-                "types": [
-                    "Customer Order"
-                ],
+                "types": ["Customer Order"],
                 "role": "start",
                 "object_type": "Customer Order",
-                "id": "__start__:Customer Order"
+                "id": "__start__:Customer Order",
             },
             {
                 "label": "Customer Order end",
-                "types": [
-                    "Customer Order"
-                ],
+                "types": ["Customer Order"],
                 "role": "end",
                 "object_type": "Customer Order",
-                "id": "__end__:Customer Order"
+                "id": "__end__:Customer Order",
             },
             {
                 "label": "Forklift start",
-                "types": [
-                    "Forklift"
-                ],
+                "types": ["Forklift"],
                 "role": "start",
                 "object_type": "Forklift",
-                "id": "__start__:Forklift"
+                "id": "__start__:Forklift",
             },
             {
                 "label": "Forklift end",
-                "types": [
-                    "Forklift"
-                ],
+                "types": ["Forklift"],
                 "role": "end",
                 "object_type": "Forklift",
-                "id": "__end__:Forklift"
+                "id": "__end__:Forklift",
             },
             {
                 "label": "Collect Goods",
-                "types": [
-                    "Handling Unit"
-                ],
+                "types": ["Handling Unit"],
                 "role": None,
                 "object_type": None,
-                "id": "Collect Goods"
+                "id": "Collect Goods",
             },
             {
                 "label": "Handling Unit start",
-                "types": [
-                    "Handling Unit"
-                ],
+                "types": ["Handling Unit"],
                 "role": "start",
                 "object_type": "Handling Unit",
-                "id": "__start__:Handling Unit"
+                "id": "__start__:Handling Unit",
             },
             {
                 "label": "Handling Unit end",
-                "types": [
-                    "Handling Unit"
-                ],
+                "types": ["Handling Unit"],
                 "role": "end",
                 "object_type": "Handling Unit",
-                "id": "__end__:Handling Unit"
+                "id": "__end__:Handling Unit",
             },
             {
                 "label": "Book Vehicles",
-                "types": [
-                    "Transport Document",
-                    "Vehicle"
-                ],
+                "types": ["Transport Document", "Vehicle"],
                 "role": None,
                 "object_type": None,
-                "id": "Book Vehicles"
+                "id": "Book Vehicles",
             },
             {
                 "label": "Transport Document start",
-                "types": [
-                    "Transport Document"
-                ],
+                "types": ["Transport Document"],
                 "role": "start",
                 "object_type": "Transport Document",
-                "id": "__start__:Transport Document"
+                "id": "__start__:Transport Document",
             },
             {
                 "label": "Transport Document end",
-                "types": [
-                    "Transport Document"
-                ],
+                "types": ["Transport Document"],
                 "role": "end",
                 "object_type": "Transport Document",
-                "id": "__end__:Transport Document"
+                "id": "__end__:Transport Document",
             },
             {
                 "label": "Truck start",
-                "types": [
-                    "Truck"
-                ],
+                "types": ["Truck"],
                 "role": "start",
                 "object_type": "Truck",
-                "id": "__start__:Truck"
+                "id": "__start__:Truck",
             },
             {
                 "label": "Truck end",
-                "types": [
-                    "Truck"
-                ],
+                "types": ["Truck"],
                 "role": "end",
                 "object_type": "Truck",
-                "id": "__end__:Truck"
+                "id": "__end__:Truck",
             },
             {
                 "label": "Vehicle start",
-                "types": [
-                    "Vehicle"
-                ],
+                "types": ["Vehicle"],
                 "role": "start",
                 "object_type": "Vehicle",
-                "id": "__start__:Vehicle"
+                "id": "__start__:Vehicle",
             },
             {
                 "label": "Vehicle end",
-                "types": [
-                    "Vehicle"
-                ],
+                "types": ["Vehicle"],
                 "role": "end",
                 "object_type": "Vehicle",
-                "id": "__end__:Vehicle"
-            }
+                "id": "__end__:Vehicle",
+            },
         ],
         "links": [
             {
-                "weights": {
-                    "Container": 1989,
-                    "Truck": 1989
-                },
+                "weights": {"Container": 1989, "Truck": 1989},
                 "weight": 3978,
-                "owners": [
-                    "Container",
-                    "Truck"
-                ],
+                "owners": ["Container", "Truck"],
                 "source": "Load Truck",
-                "target": "Drive to Terminal"
+                "target": "Drive to Terminal",
             },
             {
-                "weights": {
-                    "Container": 8559,
-                    "Truck": 8559
-                },
+                "weights": {"Container": 8559, "Truck": 8559},
                 "weight": 17118,
-                "owners": [
-                    "Container",
-                    "Truck"
-                ],
+                "owners": ["Container", "Truck"],
                 "source": "Load Truck",
-                "target": "Load Truck"
+                "target": "Load Truck",
             },
             {
-                "weights": {
-                    "Container": 5
-                },
+                "weights": {"Container": 5},
                 "weight": 5,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Load Truck",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Handling Unit": 10553
-                },
+                "weights": {"Handling Unit": 10553},
                 "weight": 10553,
-                "owners": [
-                    "Handling Unit"
-                ],
+                "owners": ["Handling Unit"],
                 "role": "end",
                 "source": "Load Truck",
-                "target": "__end__:Handling Unit"
+                "target": "__end__:Handling Unit",
             },
             {
-                "weights": {
-                    "Truck": 5
-                },
+                "weights": {"Truck": 5},
                 "weight": 5,
-                "owners": [
-                    "Truck"
-                ],
+                "owners": ["Truck"],
                 "role": "end",
                 "source": "Load Truck",
-                "target": "__end__:Truck"
+                "target": "__end__:Truck",
             },
             {
-                "weights": {
-                    "Container": 1956,
-                    "Vehicle": 127
-                },
+                "weights": {"Container": 1956, "Vehicle": 127},
                 "weight": 2083,
-                "owners": [
-                    "Container",
-                    "Vehicle"
-                ],
+                "owners": ["Container", "Vehicle"],
                 "source": "Load to Vehicle",
-                "target": "Depart"
+                "target": "Depart",
             },
             {
-                "weights": {
-                    "Container": 10
-                },
+                "weights": {"Container": 10},
                 "weight": 10,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Load to Vehicle",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Forklift": 604
-                },
+                "weights": {"Forklift": 604},
                 "weight": 604,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Load to Vehicle",
-                "target": "Weigh"
+                "target": "Weigh",
             },
             {
-                "weights": {
-                    "Forklift": 9,
-                    "Vehicle": 1827
-                },
+                "weights": {"Forklift": 9, "Vehicle": 1827},
                 "weight": 1836,
-                "owners": [
-                    "Forklift",
-                    "Vehicle"
-                ],
+                "owners": ["Forklift", "Vehicle"],
                 "source": "Load to Vehicle",
-                "target": "Load to Vehicle"
+                "target": "Load to Vehicle",
             },
             {
-                "weights": {
-                    "Forklift": 1352
-                },
+                "weights": {"Forklift": 1352},
                 "weight": 1352,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Load to Vehicle",
-                "target": "Bring to Loading Bay"
+                "target": "Bring to Loading Bay",
             },
             {
-                "weights": {
-                    "Forklift": 1
-                },
+                "weights": {"Forklift": 1},
                 "weight": 1,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "role": "end",
                 "source": "Load to Vehicle",
-                "target": "__end__:Forklift"
+                "target": "__end__:Forklift",
             },
             {
-                "weights": {
-                    "Vehicle": 2
-                },
+                "weights": {"Vehicle": 2},
                 "weight": 2,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "source": "Load to Vehicle",
-                "target": "Book Vehicles"
+                "target": "Book Vehicles",
             },
             {
-                "weights": {
-                    "Container": 1794,
-                    "Forklift": 438
-                },
+                "weights": {"Container": 1794, "Forklift": 438},
                 "weight": 2232,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
+                "owners": ["Container", "Forklift"],
                 "source": "Place in Stock",
-                "target": "Bring to Loading Bay"
+                "target": "Bring to Loading Bay",
             },
             {
-                "weights": {
-                    "Container": 20
-                },
+                "weights": {"Container": 20},
                 "weight": 20,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Place in Stock",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Forklift": 1352
-                },
+                "weights": {"Forklift": 1352},
                 "weight": 1352,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Place in Stock",
-                "target": "Weigh"
+                "target": "Weigh",
             },
             {
-                "weights": {
-                    "Forklift": 24
-                },
+                "weights": {"Forklift": 24},
                 "weight": 24,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Place in Stock",
-                "target": "Load to Vehicle"
+                "target": "Load to Vehicle",
             },
             {
-                "weights": {
-                    "Container": 1956
-                },
+                "weights": {"Container": 1956},
                 "weight": 1956,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Depart",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Transport Document": 21
-                },
+                "weights": {"Transport Document": 21},
                 "weight": 21,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Depart",
-                "target": "Reschedule Container"
+                "target": "Reschedule Container",
             },
             {
-                "weights": {
-                    "Transport Document": 160
-                },
+                "weights": {"Transport Document": 160},
                 "weight": 160,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Depart",
-                "target": "Depart"
+                "target": "Depart",
             },
             {
-                "weights": {
-                    "Transport Document": 573
-                },
+                "weights": {"Transport Document": 573},
                 "weight": 573,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "role": "end",
                 "source": "Depart",
-                "target": "__end__:Transport Document"
+                "target": "__end__:Transport Document",
             },
             {
-                "weights": {
-                    "Vehicle": 127
-                },
+                "weights": {"Vehicle": 127},
                 "weight": 127,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "role": "end",
                 "source": "Depart",
-                "target": "__end__:Vehicle"
+                "target": "__end__:Vehicle",
             },
             {
-                "weights": {
-                    "Container": 36
-                },
+                "weights": {"Container": 36},
                 "weight": 36,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "source": "Bring to Loading Bay",
-                "target": "Reschedule Container"
+                "target": "Reschedule Container",
             },
             {
-                "weights": {
-                    "Container": 1931,
-                    "Forklift": 1933
-                },
+                "weights": {"Container": 1931, "Forklift": 1933},
                 "weight": 3864,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
+                "owners": ["Container", "Forklift"],
                 "source": "Bring to Loading Bay",
-                "target": "Load to Vehicle"
+                "target": "Load to Vehicle",
             },
             {
-                "weights": {
-                    "Container": 2
-                },
+                "weights": {"Container": 2},
                 "weight": 2,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Bring to Loading Bay",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Forklift": 4
-                },
+                "weights": {"Forklift": 4},
                 "weight": 4,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Bring to Loading Bay",
-                "target": "Bring to Loading Bay"
+                "target": "Bring to Loading Bay",
             },
             {
-                "weights": {
-                    "Forklift": 30
-                },
+                "weights": {"Forklift": 30},
                 "weight": 30,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "source": "Bring to Loading Bay",
-                "target": "Weigh"
+                "target": "Weigh",
             },
             {
-                "weights": {
-                    "Forklift": 2
-                },
+                "weights": {"Forklift": 2},
                 "weight": 2,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "role": "end",
                 "source": "Bring to Loading Bay",
-                "target": "__end__:Forklift"
+                "target": "__end__:Forklift",
             },
             {
-                "weights": {
-                    "Container": 35,
-                    "Vehicle": 7
-                },
+                "weights": {"Container": 35, "Vehicle": 7},
                 "weight": 42,
-                "owners": [
-                    "Container",
-                    "Vehicle"
-                ],
+                "owners": ["Container", "Vehicle"],
                 "source": "Reschedule Container",
-                "target": "Load to Vehicle"
+                "target": "Load to Vehicle",
             },
             {
-                "weights": {
-                    "Container": 1
-                },
+                "weights": {"Container": 1},
                 "weight": 1,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Reschedule Container",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Transport Document": 33
-                },
+                "weights": {"Transport Document": 33},
                 "weight": 33,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Reschedule Container",
-                "target": "Depart"
+                "target": "Depart",
             },
             {
-                "weights": {
-                    "Transport Document": 2,
-                    "Vehicle": 16
-                },
+                "weights": {"Transport Document": 2, "Vehicle": 16},
                 "weight": 18,
-                "owners": [
-                    "Transport Document",
-                    "Vehicle"
-                ],
+                "owners": ["Transport Document", "Vehicle"],
                 "source": "Reschedule Container",
-                "target": "Reschedule Container"
+                "target": "Reschedule Container",
             },
             {
-                "weights": {
-                    "Transport Document": 1
-                },
+                "weights": {"Transport Document": 1},
                 "weight": 1,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "role": "end",
                 "source": "Reschedule Container",
-                "target": "__end__:Transport Document"
+                "target": "__end__:Transport Document",
             },
             {
-                "weights": {
-                    "Vehicle": 12
-                },
+                "weights": {"Vehicle": 12},
                 "weight": 12,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "source": "Reschedule Container",
-                "target": "Book Vehicles"
+                "target": "Book Vehicles",
             },
             {
-                "weights": {
-                    "Container": 1994
-                },
+                "weights": {"Container": 1994},
                 "weight": 1994,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "source": "Pick Up Empty Container",
-                "target": "Load Truck"
+                "target": "Load Truck",
             },
             {
-                "weights": {
-                    "Container": 1
-                },
+                "weights": {"Container": 1},
                 "weight": 1,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Pick Up Empty Container",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Container": 1989
-                },
+                "weights": {"Container": 1989},
                 "weight": 1989,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "source": "Drive to Terminal",
-                "target": "Weigh"
+                "target": "Weigh",
             },
             {
-                "weights": {
-                    "Truck": 1988
-                },
+                "weights": {"Truck": 1988},
                 "weight": 1988,
-                "owners": [
-                    "Truck"
-                ],
+                "owners": ["Truck"],
                 "source": "Drive to Terminal",
-                "target": "Load Truck"
+                "target": "Load Truck",
             },
             {
-                "weights": {
-                    "Truck": 1
-                },
+                "weights": {"Truck": 1},
                 "weight": 1,
-                "owners": [
-                    "Truck"
-                ],
+                "owners": ["Truck"],
                 "role": "end",
                 "source": "Drive to Terminal",
-                "target": "__end__:Truck"
+                "target": "__end__:Truck",
             },
             {
-                "weights": {
-                    "Container": 1995
-                },
+                "weights": {"Container": 1995},
                 "weight": 1995,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "source": "Order Empty Containers",
-                "target": "Pick Up Empty Container"
+                "target": "Pick Up Empty Container",
             },
             {
-                "weights": {
-                    "Container": 4
-                },
+                "weights": {"Container": 4},
                 "weight": 4,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "end",
                 "source": "Order Empty Containers",
-                "target": "__end__:Container"
+                "target": "__end__:Container",
             },
             {
-                "weights": {
-                    "Transport Document": 13
-                },
+                "weights": {"Transport Document": 13},
                 "weight": 13,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Order Empty Containers",
-                "target": "Reschedule Container"
+                "target": "Reschedule Container",
             },
             {
-                "weights": {
-                    "Transport Document": 561
-                },
+                "weights": {"Transport Document": 561},
                 "weight": 561,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Order Empty Containers",
-                "target": "Depart"
+                "target": "Depart",
             },
             {
-                "weights": {
-                    "Transport Document": 19
-                },
+                "weights": {"Transport Document": 19},
                 "weight": 19,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "role": "end",
                 "source": "Order Empty Containers",
-                "target": "__end__:Transport Document"
+                "target": "__end__:Transport Document",
             },
             {
-                "weights": {
-                    "Container": 1814,
-                    "Forklift": 1814
-                },
+                "weights": {"Container": 1814, "Forklift": 1814},
                 "weight": 3628,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
+                "owners": ["Container", "Forklift"],
                 "source": "Weigh",
-                "target": "Place in Stock"
+                "target": "Place in Stock",
             },
             {
-                "weights": {
-                    "Container": 175,
-                    "Forklift": 175
-                },
+                "weights": {"Container": 175, "Forklift": 175},
                 "weight": 350,
-                "owners": [
-                    "Container",
-                    "Forklift"
-                ],
+                "owners": ["Container", "Forklift"],
                 "source": "Weigh",
-                "target": "Bring to Loading Bay"
+                "target": "Bring to Loading Bay",
             },
             {
-                "weights": {
-                    "Container": 1999
-                },
+                "weights": {"Container": 1999},
                 "weight": 1999,
-                "owners": [
-                    "Container"
-                ],
+                "owners": ["Container"],
                 "role": "start",
                 "source": "__start__:Container",
-                "target": "Order Empty Containers"
+                "target": "Order Empty Containers",
             },
             {
-                "weights": {
-                    "Customer Order": 594
-                },
+                "weights": {"Customer Order": 594},
                 "weight": 594,
-                "owners": [
-                    "Customer Order"
-                ],
+                "owners": ["Customer Order"],
                 "source": "Register Customer Order",
-                "target": "Create Transport Document"
+                "target": "Create Transport Document",
             },
             {
-                "weights": {
-                    "Customer Order": 6
-                },
+                "weights": {"Customer Order": 6},
                 "weight": 6,
-                "owners": [
-                    "Customer Order"
-                ],
+                "owners": ["Customer Order"],
                 "role": "end",
                 "source": "Register Customer Order",
-                "target": "__end__:Customer Order"
+                "target": "__end__:Customer Order",
             },
             {
-                "weights": {
-                    "Customer Order": 594
-                },
+                "weights": {"Customer Order": 594},
                 "weight": 594,
-                "owners": [
-                    "Customer Order"
-                ],
+                "owners": ["Customer Order"],
                 "role": "end",
                 "source": "Create Transport Document",
-                "target": "__end__:Customer Order"
+                "target": "__end__:Customer Order",
             },
             {
-                "weights": {
-                    "Transport Document": 594
-                },
+                "weights": {"Transport Document": 594},
                 "weight": 594,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Create Transport Document",
-                "target": "Book Vehicles"
+                "target": "Book Vehicles",
             },
             {
-                "weights": {
-                    "Customer Order": 600
-                },
+                "weights": {"Customer Order": 600},
                 "weight": 600,
-                "owners": [
-                    "Customer Order"
-                ],
+                "owners": ["Customer Order"],
                 "role": "start",
                 "source": "__start__:Customer Order",
-                "target": "Register Customer Order"
+                "target": "Register Customer Order",
             },
             {
-                "weights": {
-                    "Forklift": 3
-                },
+                "weights": {"Forklift": 3},
                 "weight": 3,
-                "owners": [
-                    "Forklift"
-                ],
+                "owners": ["Forklift"],
                 "role": "start",
                 "source": "__start__:Forklift",
-                "target": "Weigh"
+                "target": "Weigh",
             },
             {
-                "weights": {
-                    "Handling Unit": 10553
-                },
+                "weights": {"Handling Unit": 10553},
                 "weight": 10553,
-                "owners": [
-                    "Handling Unit"
-                ],
+                "owners": ["Handling Unit"],
                 "source": "Collect Goods",
-                "target": "Load Truck"
+                "target": "Load Truck",
             },
             {
-                "weights": {
-                    "Handling Unit": 10553
-                },
+                "weights": {"Handling Unit": 10553},
                 "weight": 10553,
-                "owners": [
-                    "Handling Unit"
-                ],
+                "owners": ["Handling Unit"],
                 "role": "start",
                 "source": "__start__:Handling Unit",
-                "target": "Collect Goods"
+                "target": "Collect Goods",
             },
             {
-                "weights": {
-                    "Transport Document": 593
-                },
+                "weights": {"Transport Document": 593},
                 "weight": 593,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "source": "Book Vehicles",
-                "target": "Order Empty Containers"
+                "target": "Order Empty Containers",
             },
             {
-                "weights": {
-                    "Transport Document": 1
-                },
+                "weights": {"Transport Document": 1},
                 "weight": 1,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "role": "end",
                 "source": "Book Vehicles",
-                "target": "__end__:Transport Document"
+                "target": "__end__:Transport Document",
             },
             {
-                "weights": {
-                    "Vehicle": 122
-                },
+                "weights": {"Vehicle": 122},
                 "weight": 122,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "source": "Book Vehicles",
-                "target": "Load to Vehicle"
+                "target": "Load to Vehicle",
             },
             {
-                "weights": {
-                    "Vehicle": 596
-                },
+                "weights": {"Vehicle": 596},
                 "weight": 596,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "source": "Book Vehicles",
-                "target": "Book Vehicles"
+                "target": "Book Vehicles",
             },
             {
-                "weights": {
-                    "Vehicle": 19
-                },
+                "weights": {"Vehicle": 19},
                 "weight": 19,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "source": "Book Vehicles",
-                "target": "Reschedule Container"
+                "target": "Reschedule Container",
             },
             {
-                "weights": {
-                    "Transport Document": 594
-                },
+                "weights": {"Transport Document": 594},
                 "weight": 594,
-                "owners": [
-                    "Transport Document"
-                ],
+                "owners": ["Transport Document"],
                 "role": "start",
                 "source": "__start__:Transport Document",
-                "target": "Create Transport Document"
+                "target": "Create Transport Document",
             },
             {
-                "weights": {
-                    "Truck": 6
-                },
+                "weights": {"Truck": 6},
                 "weight": 6,
-                "owners": [
-                    "Truck"
-                ],
+                "owners": ["Truck"],
                 "role": "start",
                 "source": "__start__:Truck",
-                "target": "Load Truck"
+                "target": "Load Truck",
             },
             {
-                "weights": {
-                    "Vehicle": 127
-                },
+                "weights": {"Vehicle": 127},
                 "weight": 127,
-                "owners": [
-                    "Vehicle"
-                ],
+                "owners": ["Vehicle"],
                 "role": "start",
                 "source": "__start__:Vehicle",
-                "target": "Book Vehicles"
-            }
-        ]
-    })
+                "target": "Book Vehicles",
+            },
+        ],
+    }
 
     # return Response({"dfg": mockup}, status=status.HTTP_200_OK)
 
     file_id = request.query_params.get("file_id")
     if not file_id:
-        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Optional object-type filter (comma-separated)
     raw_object_types = request.query_params.get("object_types")
     object_type_filter = None
     if raw_object_types:
-        object_type_filter = set([t.strip() for t in raw_object_types.split(",") if t.strip()])
+        object_type_filter = set(
+            [t.strip() for t in raw_object_types.split(",") if t.strip()]
+        )
 
     # Scope the lookup to the caller's projects: an id alone must not grant
     # access to another user's log. ValueError covers a non-numeric ?file_id,
@@ -2680,7 +2603,10 @@ def OCDFGViewSet(request):
     try:
         user_file = EventLog.objects.get(id=file_id, project__users=request.user)
     except (EventLog.DoesNotExist, ValueError):
-        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "File not found or access denied"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     # --- Cache lookup (#72 / #74) ---
     ocdfg_cache_params = {
@@ -2720,14 +2646,19 @@ def OCDFGViewSet(request):
                     )
                     if len(ocdfg_filtered.nodes) == 0:
                         dfg_json = {
-                            "directed": True, "multigraph": False,
-                            "graph": {"kind": "ocdfg"}, "nodes": [], "links": [],
+                            "directed": True,
+                            "multigraph": False,
+                            "graph": {"kind": "ocdfg"},
+                            "nodes": [],
+                            "links": [],
                         }
                     else:
                         dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
 
                     # Per-object-type trace variants for the filtered types.
-                    trace_variants = NewOCDFGDb.compute_variants(db, object_types=list(object_type_filter))
+                    trace_variants = NewOCDFGDb.compute_variants(
+                        db, object_types=list(object_type_filter)
+                    )
                 except Exception as e:
                     # Gracefully fall back to unfiltered graph to avoid
                     # frontend breakage, but surface warning.
@@ -2742,7 +2673,9 @@ def OCDFGViewSet(request):
                 try:
                     all_object_types = _object_types(db)
                     if all_object_types:
-                        trace_variants = NewOCDFGDb.compute_variants(db, object_types=all_object_types)
+                        trace_variants = NewOCDFGDb.compute_variants(
+                            db, object_types=all_object_types
+                        )
                 except Exception as e:
                     print(f"[OCDFG] Failed to compute trace variants: {e}")
 
@@ -2758,7 +2691,8 @@ def OCDFGViewSet(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@api_view(['GET'])
+
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def NewOCDFGViewSet(request):
     """
@@ -2777,15 +2711,17 @@ def NewOCDFGViewSet(request):
     """
     file_id = request.query_params.get("file_id")
     if not file_id:
-        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Optional object-type filter (comma-separated)
     raw_object_types = request.query_params.get("object_types")
     object_type_filter = None
     if raw_object_types:
-        object_type_filter = sorted(
-            t.strip() for t in raw_object_types.split(",") if t.strip()
-        ) or None
+        object_type_filter = (
+            sorted(t.strip() for t in raw_object_types.split(",") if t.strip()) or None
+        )
 
     # Scope the lookup to the caller's projects: an id alone must not grant
     # access to another user's log. ValueError covers a non-numeric ?file_id,
@@ -2793,7 +2729,10 @@ def NewOCDFGViewSet(request):
     try:
         user_file = EventLog.objects.get(id=file_id, project__users=request.user)
     except (EventLog.DoesNotExist, ValueError):
-        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "File not found or access denied"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     try:
         with _with_ocel_db(user_file) as db:
@@ -2805,8 +2744,11 @@ def NewOCDFGViewSet(request):
 
             if len(ocdfg.nodes) == 0:
                 dfg_json = {
-                    "directed": True, "multigraph": True,
-                    "graph": {"kind": "new_ocdfg"}, "nodes": [], "links": [],
+                    "directed": True,
+                    "multigraph": True,
+                    "graph": {"kind": "new_ocdfg"},
+                    "nodes": [],
+                    "links": [],
                 }
             else:
                 dfg_json = nx.node_link_data(ocdfg, edges="links")
@@ -2832,6 +2774,7 @@ def NewOCDFGViewSet(request):
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2851,7 +2794,7 @@ _occn_base_cache = OrderedDict()
 _occn_cache_lock = threading.Lock()
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def OCCNViewSet(request):
     """
@@ -2864,13 +2807,17 @@ def OCCNViewSet(request):
     """
     file_id = request.query_params.get("file_id")
     if not file_id:
-        return Response({"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"error": "Missing ?file_id parameter"}, status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Parse optional comma-separated object type filter.
     raw_object_types = request.query_params.get("object_types")
     object_type_filter = None
     if raw_object_types:
-        object_type_filter = [t.strip() for t in raw_object_types.split(",") if t.strip()] or None
+        object_type_filter = [
+            t.strip() for t in raw_object_types.split(",") if t.strip()
+        ] or None
 
     # Parse and validate threshold.
     raw_threshold = request.query_params.get("relativeOccuranceThreshold", "0.0")
@@ -2893,11 +2840,19 @@ def OCCNViewSet(request):
     try:
         user_file = EventLog.objects.get(id=file_id, project__users=request.user)
     except (EventLog.DoesNotExist, ValueError):
-        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "File not found or access denied"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
     try:
-        parameters = {"object_types": object_type_filter} if object_type_filter else None
-        cache_key = (user_file.id, tuple(object_type_filter) if object_type_filter else None)
+        parameters = (
+            {"object_types": object_type_filter} if object_type_filter else None
+        )
+        cache_key = (
+            user_file.id,
+            tuple(object_type_filter) if object_type_filter else None,
+        )
 
         with _occn_cache_lock:
             base_occn = _occn_base_cache.get(cache_key)
@@ -2907,14 +2862,20 @@ def OCCNViewSet(request):
         if base_occn is None:
             user_file_db = _get_or_load_ocel_db(user_file)
             user_file_db._lock_pk = int(user_file.pk)
-            base_occn = discover_occn(user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            base_occn = discover_occn(
+                user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters
+            )
             with _occn_cache_lock:
                 _occn_base_cache[cache_key] = base_occn
                 _occn_base_cache.move_to_end(cache_key)
                 while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
                     _occn_base_cache.popitem(last=False)
 
-        occn = base_occn.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base_occn
+        occn = (
+            base_occn.apply_relative_occurrence_threshold(threshold)
+            if threshold > 0
+            else base_occn
+        )
 
         result = serialize_occn(occn)
         return Response(result, status=status.HTTP_200_OK)
@@ -2923,15 +2884,14 @@ def OCCNViewSet(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['DELETE'])
-
+@api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def delete_user_data(request):
     confirm = request.data.get("confirm")
     if confirm != "DELETE":
         return Response(
             {"error": "Please confirm by sending {'confirm': 'DELETE'}"},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     user = request.user
@@ -2940,8 +2900,10 @@ def delete_user_data(request):
     projects.delete()
 
     return Response(
-        {"detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."},
-        status=status.HTTP_200_OK
+        {
+            "detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."
+        },
+        status=status.HTTP_200_OK,
     )
 
 
@@ -2949,11 +2911,13 @@ def delete_user_data(request):
 # Cache management endpoints  (#76)
 # ---------------------------------------------------------------------------
 
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def cache_stats(request):
     """Return current cache statistics."""
     from .cache_utils import get_cache_stats
+
     return Response(get_cache_stats())
 
 
@@ -2962,6 +2926,7 @@ def cache_stats(request):
 def cache_clear(request):
     """Clear the entire results cache."""
     from .cache_utils import clear_all_cache
+
     clear_all_cache()
     return Response({"status": "cleared"})
 
@@ -2969,6 +2934,7 @@ def cache_clear(request):
 # ---------------------------------------------------------------------------
 # Per-user settings
 # ---------------------------------------------------------------------------
+
 
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])

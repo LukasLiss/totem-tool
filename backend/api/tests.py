@@ -34,11 +34,17 @@ from totem_lib.ocel.ocel import (
 )
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 from totem_lib.totem import Totem, totem_to_dict
+from totem_lib.process_areas import (
+    CardinalityCounts,
+    DivergenceCounts,
+    LogAggregates,
+    TemporalCounts,
+)
 
 from .lru_filecache import LRUFileBasedCache
-from .models import EventLog, Project, ProjectAsset
+from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
-from .views import EventLogViewSet
+from .views import _parse_process_area_params, _process_area_cache_key, EventLogViewSet
 
 
 def valid_totem_content_json():
@@ -123,16 +129,12 @@ def replayable_occn_content_json():
     return occn_to_dict(
         OCCausalNet.from_dict(
             {
-                "START_Order": {
-                    "omg": [[("Create Order", "Order", (1, 1), 1)]]
-                },
+                "START_Order": {"omg": [[("Create Order", "Order", (1, 1), 1)]]},
                 "Create Order": {
                     "img": [[("START_Order", "Order", (1, 1), 1)]],
                     "omg": [[("END_Order", "Order", (1, 1), 1)]],
                 },
-                "END_Order": {
-                    "img": [[("Create Order", "Order", (1, 1), 1)]]
-                },
+                "END_Order": {"img": [[("Create Order", "Order", (1, 1), 1)]]},
             }
         )
     )
@@ -1529,9 +1531,7 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             project=self.project,
             file="occn-detail-log.json",
         )
-        self.url = (
-            f"/api/files/{self.event_log.pk}/occn_replay_unit_detail/"
-        )
+        self.url = f"/api/files/{self.event_log.pk}/occn_replay_unit_detail/"
         self.client.force_authenticate(user=self.user)
 
     @staticmethod
@@ -1553,9 +1553,9 @@ class OCCNReplayUnitDetailApiTests(TestCase):
     def _get_directly_to_view(self, query):
         request = APIRequestFactory().get(self.url, query)
         force_authenticate(request, user=self.user)
-        return EventLogViewSet.as_view(
-            {"get": "occn_replay_unit_detail"}
-        )(request, pk=self.event_log.pk)
+        return EventLogViewSet.as_view({"get": "occn_replay_unit_detail"})(
+            request, pk=self.event_log.pk
+        )
 
     def test_authentication_is_required(self):
         self.client.force_authenticate(user=None)
@@ -1598,9 +1598,10 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         )
 
         for label, query in invalid_queries:
-            with self.subTest(label=label), patch(
-                "api.views._with_ocel_db"
-            ) as load_ocel:
+            with (
+                self.subTest(label=label),
+                patch("api.views._with_ocel_db") as load_ocel,
+            ):
                 response = self.client.get(self.url, query)
 
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -1943,7 +1944,9 @@ class ProjectAssetApiTests(TestCase):
         self.assertEqual(first_response.status_code, status.HTTP_200_OK)
         self.assertEqual(second_response.status_code, status.HTTP_200_OK)
         self.assertEqual([item["id"] for item in first_response.data], [first_asset.pk])
-        self.assertEqual([item["id"] for item in second_response.data], [second_asset.pk])
+        self.assertEqual(
+            [item["id"] for item in second_response.data], [second_asset.pk]
+        )
 
     def test_list_assets_filters_by_asset_type(self):
         totem_asset = self._create_asset(
@@ -2274,6 +2277,7 @@ class ProjectAssetApiTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+
 class LRUFileBasedCacheTests(SimpleTestCase):
     """Eviction policy of the result cache backend (Epic #71).
 
@@ -2551,7 +2555,9 @@ class PlayoutEndpointTests(TestCase):
         body["objectsPerType"] = {"order": "__INF__"}
         body["maxStates"] = "__INF__"
         raw = json.dumps(body).replace('"__INF__"', "1e400")
-        response = self.client.post(PLAYOUT_URL, data=raw, content_type="application/json")
+        response = self.client.post(
+            PLAYOUT_URL, data=raw, content_type="application/json"
+        )
         self.assertEqual(response.status_code, 200, response.content)
 
     def test_export_ocel_rejects_oversized_object_counts(self):
@@ -2562,11 +2568,311 @@ class PlayoutEndpointTests(TestCase):
 
     def test_export_ocel_rejects_excessive_total_objects(self):
         variants = [{"events": [], "objectCounts": {"A": 10_000}} for _ in range(51)]
-        response = self.client.post(EXPORT_OCEL_URL, {"variants": variants}, format="json")
+        response = self.client.post(
+            EXPORT_OCEL_URL, {"variants": variants}, format="json"
+        )
         self.assertEqual(response.status_code, 400, response.content)
         self.assertIn("more than", response.json()["error"])
 
     def test_export_ocel_infinite_object_count_is_a_400(self):
         raw = '{"variants": [{"events": [], "objectCounts": {"A": 1e400}}]}'
-        response = self.client.post(EXPORT_OCEL_URL, data=raw, content_type="application/json")
+        response = self.client.post(
+            EXPORT_OCEL_URL, data=raw, content_type="application/json"
+        )
         self.assertEqual(response.status_code, 400, response.content)
+
+
+class ProcessAreaDiscoveryApiTests(TestCase):
+    """
+    `discover_process_areas` — the advanced (thesis section 4.1) layering
+    engine, exposed alongside `discover_mlpa` rather than replacing it.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="process-area-user")
+        self.project = Project.objects.create(name="Project PA")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project,
+            file="test-log.json",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _totem(self):
+        return Totem(
+            tempgraph={
+                "nodes": {"Order", "Item", "Worker"},
+                "D": {("Order", "Item")},
+                "Di": set(),
+                "I": set(),
+                "Ii": set(),
+                "P": {("Order", "Worker")},
+            },
+            cardinalities={("Order", "Item"): {"LC": "1..*", "EC": "0...*"}},
+            type_relations={
+                frozenset(("Order", "Item")),
+                frozenset(("Order", "Worker")),
+            },
+            all_event_types={"Create Order", "Pick Item"},
+            object_type_to_event_types={
+                "Order": {"Create Order"},
+                "Item": {"Pick Item"},
+                "Worker": {"Pick Item"},
+            },
+        )
+
+    def _aggregates(self):
+        """
+        A three-type toy log: Worker outlives Order, which outlives Item.
+        Enough structure that the ILP produces a real hierarchy.
+        """
+        types = ("Item", "Order", "Worker")
+        temporal = {}
+        for source in types:
+            for target in types:
+                temporal[(source, target)] = TemporalCounts(total=10)
+        temporal[("Item", "Order")] = TemporalCounts(total=10, dependent=10)
+        temporal[("Order", "Worker")] = TemporalCounts(total=10, dependent=10)
+        temporal[("Item", "Worker")] = TemporalCounts(total=10, dependent=10)
+
+        return LogAggregates(
+            object_types=types,
+            object_counts={"Item": 30, "Order": 10, "Worker": 2},
+            temporal=temporal,
+            cardinality={
+                (source, target): CardinalityCounts(total=10, constant=10)
+                for source in types
+                for target in types
+            },
+            divergence={
+                (source, target): DivergenceCounts(related_sources=10)
+                for source in types
+                for target in types
+            },
+            event_types_by_object_type={
+                "Order": frozenset({"Create Order"}),
+                "Item": frozenset({"Pick Item"}),
+                "Worker": frozenset({"Pick Item"}),
+            },
+            all_event_types=frozenset({"Create Order", "Pick Item"}),
+            type_relations=frozenset(
+                {frozenset({"Order", "Item"}), frozenset({"Order", "Worker"})}
+            ),
+        )
+
+    def _get(self, query=""):
+        url = f"/api/files/{self.event_log.pk}/discover_process_areas/{query}"
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.totemDiscovery_db", return_value=self._totem()),
+            patch("api.views.prepare_db", return_value=self._aggregates()) as prepared,
+        ):
+            return self.client.get(url), prepared
+
+    def test_returns_the_same_schema_as_mlpa(self):
+        response, _ = self._get()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            set(response.data),
+            {
+                "layers",
+                "tempgraph",
+                "type_relations",
+                "all_event_types",
+                "object_type_to_event_types",
+            },
+        )
+        layers = response.data["layers"]
+        self.assertTrue(layers)
+        for layer in layers:
+            self.assertIn("level", layer)
+            for area in layer["areas"]:
+                self.assertIn("objectTypes", area)
+                self.assertIn("eventTypes", area)
+
+    def test_resources_land_on_the_higher_layers(self):
+        # alpha weights the resource force. Turning it up is exactly how a user
+        # asks for a hierarchy rather than a flat, cohesion-dominated view.
+        response, _ = self._get("?alpha=25")
+        level_of = {
+            object_type: layer["level"]
+            for layer in response.data["layers"]
+            for area in layer["areas"]
+            for object_type in area["objectTypes"]
+        }
+        self.assertGreater(level_of["Worker"], level_of["Order"])
+        self.assertGreater(level_of["Order"], level_of["Item"])
+
+    def test_each_parameter_gets_its_own_cache_entry(self):
+        first, _ = self._get("?alpha=1")
+        second, _ = self._get("?alpha=25")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertNotEqual(first.data["layers"], second.data["layers"])
+
+    def test_every_parameter_is_part_of_the_cache_key(self):
+        base = _parse_process_area_params({})
+        base_key = _process_area_cache_key(1, base)
+        for query, value in [
+            ("w_temporal", "0.5"),
+            ("w_cardinality", "0.5"),
+            ("w_divergence", "0.5"),
+            ("alpha", "2"),
+            ("beta", "3"),
+        ]:
+            changed = _parse_process_area_params({query: value})
+            self.assertNotEqual(base_key, _process_area_cache_key(1, changed), query)
+        self.assertNotEqual(base_key, _process_area_cache_key(2, base))
+
+    def test_preparation_is_cached_across_parameter_changes(self):
+        _, first_prepare = self._get("?alpha=1")
+        _, second_prepare = self._get("?alpha=25")
+        self.assertEqual(first_prepare.call_count, 1)
+        self.assertEqual(second_prepare.call_count, 0)
+
+    def test_repeated_identical_request_is_served_from_cache(self):
+        self._get("?alpha=4")
+        _, prepared = self._get("?alpha=4")
+        self.assertEqual(prepared.call_count, 0)
+
+    def test_unknown_file_is_a_404(self):
+        response = self.client.get("/api/files/999999/discover_process_areas/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_parameters_are_400_not_500(self):
+        for query in [
+            "?alpha=-1",
+            "?beta=-0.5",
+            "?alpha=abc",
+            "?beta=nan",
+            "?alpha=inf",
+            "?w_temporal=-2",
+            "?w_temporal=0&w_cardinality=0&w_divergence=0",
+            "?alpha=0&beta=0",
+        ]:
+            with self.subTest(query=query):
+                response = self.client.get(
+                    f"/api/files/{self.event_log.pk}/discover_process_areas/{query}"
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_400_BAD_REQUEST, query
+                )
+                self.assertIn("error", response.data)
+
+    def test_mlpa_cache_key_is_untouched(self):
+        totem = self._totem()
+        with (
+            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.totemDiscovery_db", return_value=totem),
+        ):
+            response = self.client.get(f"/api/files/{self.event_log.pk}/discover_mlpa/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(cache.get(f"mlpa_discovery_{self.event_log.pk}"))
+
+
+class ProcessAreaComponentPersistenceTests(TestCase):
+    """
+    Dashboard round-trip for the Process Area component's discovery settings.
+
+    Before this the model was an empty `pass`, so tuning the indicator weights
+    was lost on every reload.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="process-area-dash-user")
+        self.project = Project.objects.create(name="Project PA Dash")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="PA", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, extra=None):
+        item = {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 6,
+            "component_name": "ProcessAreaComponent",
+        }
+        item.update(extra or {})
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [item]},
+            format="json",
+        )
+
+    def test_settings_survive_a_save_and_reload(self):
+        response = self._save(
+            {
+                "algorithm": "advanced",
+                "w_temporal": 0.5,
+                "w_cardinality": 0.0,
+                "w_divergence": 1.5,
+                "alpha": 8.0,
+                "beta": 0.5,
+            }
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.status_code, status.HTTP_200_OK)
+        component = layout.data[0]
+        self.assertEqual(component["algorithm"], "advanced")
+        self.assertEqual(component["w_temporal"], 0.5)
+        self.assertEqual(component["w_cardinality"], 0.0)
+        self.assertEqual(component["w_divergence"], 1.5)
+        self.assertEqual(component["alpha"], 8.0)
+        self.assertEqual(component["beta"], 0.5)
+
+    def test_mlpa_selection_is_persisted(self):
+        self._save({"algorithm": "mlpa"})
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.data[0]["algorithm"], "mlpa")
+
+    def test_a_component_saved_without_settings_gets_the_defaults(self):
+        # This is the shape a dashboard created before this change sends back.
+        response = self._save()
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        component = layout.data[0]
+        self.assertEqual(component["algorithm"], "advanced")
+        self.assertEqual(component["w_temporal"], 1.0)
+        self.assertEqual(component["w_cardinality"], 1.0)
+        self.assertEqual(component["w_divergence"], 1.0)
+        self.assertEqual(component["alpha"], 1.0)
+        self.assertEqual(component["beta"], 1.0)
+
+    def test_existing_rows_are_backfilled_by_the_migration_defaults(self):
+        component = ProcessAreaComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0,
+            y=0,
+            w=6,
+            h=6,
+            component_name="ProcessAreaComponent",
+        )
+        component.refresh_from_db()
+        self.assertEqual(component.algorithm, "advanced")
+        self.assertEqual(component.alpha, 1.0)
+        self.assertEqual(component.beta, 1.0)
+
+    def test_get_layout_exposes_the_new_fields(self):
+        self._save({"alpha": 3.0})
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertLessEqual(
+            {
+                "algorithm",
+                "w_temporal",
+                "w_cardinality",
+                "w_divergence",
+                "alpha",
+                "beta",
+            },
+            set(layout.data[0]),
+        )
