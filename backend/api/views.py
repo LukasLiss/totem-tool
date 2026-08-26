@@ -83,6 +83,7 @@ import networkx as nx
 
 
 from .cache_utils import get_cached_result, set_cached_result
+from django.core.cache import cache
 
 import math
 import os
