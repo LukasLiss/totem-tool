@@ -5,7 +5,7 @@ import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
   SidebarInset,
-  SidebarTrigger
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
 import GridContainer from "../gridstack/lib/grid_container";
@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { TOUR_IDS } from "@/tour/tourIds"
+import FilterChipStack from "@/components/FilterChipStack";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -111,9 +112,12 @@ const GridContent: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
-      <div className="flex justify-end p-2 space-x-2">
-        <SidebarTrigger className="mr-auto"/>
-        
+      <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
+        <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
+        <div className="w-px h-7 bg-border shrink-0" />
+        <div className="flex-1 overflow-x-auto">
+          <FilterChipStack />
+        </div>
         {isEditMode ?
           <Button
             variant="ghost"
@@ -123,7 +127,7 @@ const GridContent: React.FC = () => {
             <Save />
             <span className="sr-only">Toggle Sidebar</span>
           </Button>
-          
+
           : null}
         {isEditMode ?<Button
             variant="ghost"
@@ -143,7 +147,7 @@ const GridContent: React.FC = () => {
             <Plus />
             <span className="sr-only">Toggle Sidebar</span>
           </Button> }
-        
+
       </div>
       <div className="flex flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
         

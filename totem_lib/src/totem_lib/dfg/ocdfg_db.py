@@ -36,10 +36,12 @@ class OCDFGDb(OCDFG):
                 SELECT
                     e.event_id,
                     e.activity,
+                    e.timestamp_unix,
                     o.obj_id,
                     o.obj_type,
                     LAG(e.activity)  OVER w AS prev_activity,
-                    LEAD(e.activity) OVER w AS next_activity
+                    LEAD(e.activity) OVER w AS next_activity,
+                    LEAD(e.timestamp_unix) OVER w AS next_timestamp_unix
                 FROM events e
                 JOIN event_object eo ON e.event_id = eo.event_id
                 JOIN objects o       ON eo.obj_id  = o.obj_id
@@ -55,7 +57,8 @@ class OCDFGDb(OCDFG):
             return ocel_db.conn.execute(sql).pl()
 
         edges_df = _q("""
-            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight
+            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight,
+                   AVG(next_timestamp_unix - timestamp_unix) AS avg_lead_time
             FROM event_sequence
             WHERE next_activity IS NOT NULL
             GROUP BY obj_type, activity, next_activity
@@ -90,10 +93,14 @@ class OCDFGDb(OCDFG):
         for row in node_freq_df.iter_rows(named=True):
             act = row["activity"]
             otype = row["obj_type"]
+            count = row["count"]
             if not graph.has_node(act):
-                graph.add_node(act, label=act, types={otype})
+                graph.add_node(act, label=act, types={otype}, metrics={"frequency": count})
             else:
                 graph.nodes[act]["types"].add(otype)
+                if "metrics" not in graph.nodes[act]:
+                    graph.nodes[act]["metrics"] = {"frequency": 0}
+                graph.nodes[act]["metrics"]["frequency"] += count
 
         # 2. Start nodes and edges
         for otype in all_types:
@@ -115,6 +122,7 @@ class OCDFGDb(OCDFG):
                     graph.add_edge(
                         start_node, target,
                         weights={otype: w}, weight=w, owners={otype}, role="start",
+                        metrics={"frequency": w}
                     )
 
         # 3. End nodes and edges
@@ -137,19 +145,37 @@ class OCDFGDb(OCDFG):
                     graph.add_edge(
                         source, end_node,
                         weights={otype: w}, weight=w, owners={otype}, role="end",
+                        metrics={"frequency": w}
                     )
 
         # 4. Regular edges
         for row in edges_df.iter_rows(named=True):
-            u, v, w, otype = row["src"], row["tgt"], row["weight"], row["obj_type"]
+            u, v, w, otype, avg_time = row["src"], row["tgt"], row["weight"], row["obj_type"], row.get("avg_lead_time")
             if graph.has_edge(u, v):
+                prev_metrics = graph.edges[u, v].get("metrics") or {"frequency": 0, "avg_lead_time": 0}
+                prev_freq = prev_metrics.get("frequency", 0)
+                prev_time = prev_metrics.get("avg_lead_time")
+
+                new_freq = prev_freq + w
+                if prev_time is not None and avg_time is not None:
+                    merged_time = (prev_time * prev_freq + avg_time * w) / new_freq
+                else:
+                    merged_time = avg_time if prev_time is None else prev_time
+
                 graph.edges[u, v]["weights"][otype] = (
                     graph.edges[u, v]["weights"].get(otype, 0) + w
                 )
                 graph.edges[u, v]["weight"] += w
                 graph.edges[u, v]["owners"].add(otype)
+                graph.edges[u, v]["metrics"] = {
+                    "frequency": new_freq,
+                    "avg_lead_time": merged_time,
+                }
             else:
-                graph.add_edge(u, v, weights={otype: w}, weight=w, owners={otype})
+                graph.add_edge(
+                    u, v, weights={otype: w}, weight=w, owners={otype},
+                    metrics={"frequency": w, "avg_lead_time": avg_time}
+                )
 
         # 5. Finalize: convert sets to sorted lists
         for node in graph.nodes():
@@ -315,10 +341,12 @@ class NewOCDFGDb(nx.MultiDiGraph):
                 SELECT
                     e.event_id,
                     e.activity,
+                    e.timestamp_unix,
                     o.obj_id,
                     o.obj_type,
                     LAG(e.activity)  OVER w AS prev_activity,
-                    LEAD(e.activity) OVER w AS next_activity
+                    LEAD(e.activity) OVER w AS next_activity,
+                    LEAD(e.timestamp_unix) OVER w AS next_timestamp_unix
                 FROM events e
                 JOIN event_object eo ON e.event_id = eo.event_id
                 JOIN objects o       ON eo.obj_id  = o.obj_id
@@ -334,7 +362,8 @@ class NewOCDFGDb(nx.MultiDiGraph):
             return ocel_db.conn.execute(sql).pl()
 
         edges_df = _q("""
-            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight
+            SELECT obj_type, activity AS src, next_activity AS tgt, COUNT(*) AS weight,
+                   AVG(next_timestamp_unix - timestamp_unix) AS avg_lead_time
             FROM event_sequence
             WHERE next_activity IS NOT NULL
             GROUP BY obj_type, activity, next_activity
@@ -365,17 +394,25 @@ class NewOCDFGDb(nx.MultiDiGraph):
         # Determine the sorted object types present in the result
         all_types = sorted(node_freq_df["obj_type"].unique().to_list())
 
-        # 1. Activity nodes — accumulate types set
+        # 1. Activity nodes — accumulate types set & frequency
         node_types_map = {}
+        node_freq_map = defaultdict(int)
         for row in node_freq_df.iter_rows(named=True):
             act = row["activity"]
             otype = row["obj_type"]
+            count = row["count"]
             if act not in node_types_map:
                 node_types_map[act] = set()
             node_types_map[act].add(otype)
+            node_freq_map[act] += count
 
         for act, otypes in node_types_map.items():
-            graph.add_node(act, label=act, types=sorted(list(otypes)))
+            graph.add_node(
+                act,
+                label=act,
+                types=sorted(list(otypes)),
+                metrics={"frequency": node_freq_map[act]},
+            )
 
         # 2. Start nodes and edges
         for otype in all_types:
@@ -399,7 +436,8 @@ class NewOCDFGDb(nx.MultiDiGraph):
                     # and update the specific parallel edge representing a given object type.
                     graph.add_edge(
                         start_node, target,
-                        key=otype, objtype=otype, weight=w, role="start"
+                        key=otype, objtype=otype, weight=w, role="start",
+                        metrics={"frequency": w}
                     )
 
         # 3. End nodes and edges
@@ -424,16 +462,21 @@ class NewOCDFGDb(nx.MultiDiGraph):
                     # and update the specific parallel edge representing a given object type.
                     graph.add_edge(
                         source, end_node,
-                        key=otype, objtype=otype, weight=w, role="end"
+                        key=otype, objtype=otype, weight=w, role="end",
+                        metrics={"frequency": w}
                     )
 
         # 4. Regular edges
         for row in edges_df.iter_rows(named=True):
-            u, v, w, otype = row["src"], row["tgt"], row["weight"], row["obj_type"]
+            u, v, w, otype, avg_time = row["src"], row["tgt"], row["weight"], row["obj_type"], row.get("avg_lead_time")
             # Since MultiDiGraph allows parallel edges between the same nodes,
             # the key parameter is required by NetworkX to uniquely identify
             # and update the specific parallel edge representing a given object type.
-            graph.add_edge(u, v, key=otype, objtype=otype, weight=w)
+            graph.add_edge(
+                u, v,
+                key=otype, objtype=otype, weight=w,
+                metrics={"frequency": w, "avg_lead_time": avg_time}
+            )
 
         return graph
 

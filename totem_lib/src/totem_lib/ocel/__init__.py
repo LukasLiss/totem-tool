@@ -10,4 +10,5 @@ from .importer_duckdb import (
 )
 from .ocel_duckdb import OcelDuckDB
 from .importer_db import import_ocel_db
+from .filter_stack import FilterRule, FilterStack, apply_filter_stack
 from .validation import OCELValidationException, validate_ocel
