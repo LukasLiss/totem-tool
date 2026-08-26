@@ -14,6 +14,7 @@ import { RefreshCcw } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
+import { MetricTooltip } from './MetricTooltip';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -214,6 +215,7 @@ type EdgeSegment = {
   debugWaypoints?: Array<{ x: number; y: number }>; // For debugging
   crossesNode?: boolean;
   crossingPoints?: Array<{ x: number; y: number }>;
+  metrics?: { frequency?: number | null; avg_lead_time?: number | null } | null;
   renderStart?: Point2D;
   renderEnd?: Point2D;
 };
@@ -5049,6 +5051,7 @@ function TotemVisualizer({
     setAppliedParams(seededParams);
   }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
@@ -6438,7 +6441,24 @@ function TotemVisualizer({
                   const strokeColor = edge.color ?? '#0F172A';
                   const barStrokeWidth = edge.relation === 'P' ? strokeWidth * 1.5 : strokeWidth;
                   return (
-                    <g key={`${edge.id}-primary`}>
+                    <g
+                      key={`${edge.id}-primary`}
+                      style={{ pointerEvents: 'auto' }}
+                      onMouseEnter={(e) => {
+                        if (edge.metrics) {
+                          setTooltipState({
+                            x: e.clientX,
+                            y: e.clientY,
+                            metrics: edge.metrics,
+                            label: 'Relation: ' + (edge.relation || 'Unknown')
+                          });
+                        }
+                      }}
+                      onMouseLeave={() => setTooltipState(null)}
+                      onMouseMove={(e) => {
+                        setTooltipState(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
+                      }}
+                    >
                       <path
                         d={edge.path}
                         stroke={strokeColor}
@@ -7008,6 +7028,7 @@ function TotemVisualizer({
           </div>
         </div>
       )}
+      {tooltipState && <MetricTooltip {...tooltipState} />}
     </div>
   );
 

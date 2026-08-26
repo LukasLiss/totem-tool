@@ -3051,6 +3051,7 @@ def NewOCDFGViewSet(request):
                     "types": n.get("types", []),
                     "role": n.get("role"),
                     "object_type": n.get("object_type"),
+                    "metrics": n.get("metrics"),
                 }
                 for n in dfg_json.get("nodes", [])
             ]
