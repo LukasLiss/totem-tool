@@ -10,7 +10,7 @@ export type AnalysisComponent =
   | "totemMiner";
 export type ConformanceComponent = "totem" | "occn";
 
-export type EditorComponent = "totem" | "occn" | "ocpn";
+export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg";
 
 export type ViewMode =
   | { type: "overview" }

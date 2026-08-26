@@ -114,10 +114,10 @@ export async function runOCCNConformance(
 export async function getEventLogObjectTypes(
   eventLogId: number
 ): Promise<string[]> {
-  const { data } = await axios.get<string[]>(
+  const { data } = await axios.get<(string | { name: string })[]>(
     `${FILES_URL}${eventLogId}/object_types/`
   );
-  return data;
+  return data.map((entry) => (typeof entry === "string" ? entry : entry.name));
 }
 
 export async function getOCCNReplayUnitDetail(

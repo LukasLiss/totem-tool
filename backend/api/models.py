@@ -183,6 +183,9 @@ class OCDFGComponent(DashboardComponent):
     initial_interaction_locked = models.BooleanField(default=True)
 
 
+class FilterStackComponent(DashboardComponent):
+    filter_stack_json = models.JSONField(default=list, blank=True)
+    
 class OCDottedChartComponent(DashboardComponent):
     file_id = models.PositiveIntegerField(null=True, blank=True)
     x_axis = models.CharField(max_length=255, default="time")

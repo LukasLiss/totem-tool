@@ -23,6 +23,7 @@ from .models import (
     OCCNComponent,
     UserSettings,
     TotemMinerComponent,
+    FilterStackComponent,
 )
 from .serializers import (
     DashboardComponentPolymorphicSerializer,
@@ -62,7 +63,7 @@ from totem_lib.process_areas import (
     prepare_db,
     process_areas_from_aggregates,
 )
-from totem_lib.ocel import OcelDuckDB, import_ocel_db
+from totem_lib.ocel import OcelDuckDB, import_ocel_db, FilterStack, apply_filter_stack
 from totem_lib.ocel.validation import OCELValidationException, validate_ocel
 from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.oc_dotted_chart import (
@@ -466,6 +467,72 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         set_cached_result(user_file, "object_types", types)
         return Response(types, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def activities(self, request, pk=None):
+        """Returns the sorted list of unique activity names in the event log."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                acts = _activities_with_counts(db)
+        except Exception as e:
+            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(acts, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def event_distribution(self, request, pk=None):
+        """Returns monthly event counts for the time range histogram."""
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                rows = db.conn.execute("""
+                    SELECT
+                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
+                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
+                        COUNT(*) AS count
+                    FROM events
+                    GROUP BY yr, mo
+                    ORDER BY yr, mo
+                """).fetchall()
+            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(distribution, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def apply_filters(self, request, pk=None):
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        filters_data = request.data.get("filters", [])
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                filter_stack = FilterStack.from_dict({"filters": filters_data})
+                _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
+        except Exception as e:
+            return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "object_percentage":   stats["object_percentage"],
+            "object_count_before": stats["object_count_before"],
+            "object_count_after":  stats["object_count_after"],
+            "event_percentage":    stats["event_percentage"],
+            "event_count_before":  stats["event_count_before"],
+            "event_count_after":   stats["event_count_after"],
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def discover_totem(self, request, pk=None):
@@ -1331,6 +1398,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     layout_direction=item.get("layout_direction", "LR"),
                     object_types=item.get("object_types") or "",
                 )
+            elif component_name == 'FilterStackComponent':
+                FilterStackComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    filter_stack_json=item.get('filter_stack_json', []),
+                )
             # Add more as needed
 
         return Response({"status": "saved"})
@@ -1435,7 +1512,7 @@ from contextlib import contextmanager
 
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
 _OCEL_DB_LOCKS: dict[int, threading.Lock] = {}
-_OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[str, ...]] = {}
+_OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 
 
@@ -1456,21 +1533,28 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
         db = _OCEL_DB_REGISTRY.get(pk)
         if db is None:
             db = _build_ocel_db_from_path(user_file.file.path)
-            object_types = tuple(_object_types(db))
+            object_types = tuple(
+                (row["name"], row["count"]) for row in _object_types_with_counts(db)
+            )
             _OCEL_DB_REGISTRY[pk] = db
             _OCEL_DB_LOCKS[pk] = threading.Lock()
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
 
 
-def _get_ocel_object_types(user_file) -> list[str]:
-    """Return immutable log metadata without waiting for algorithm work."""
+def _get_ocel_object_types(user_file) -> list[dict]:
+    """Return immutable log metadata without waiting for algorithm work.
+
+    Entries are ``{"name": <object type>, "count": <object count>}`` dicts;
+    the counts are computed once when the log is first loaded, so serving
+    them never has to wait for the per-file algorithm lock.
+    """
     pk = int(user_file.pk)
     object_types = _OCEL_OBJECT_TYPES_REGISTRY.get(pk)
     if object_types is None:
         _get_or_load_ocel_db(user_file)
         object_types = _OCEL_OBJECT_TYPES_REGISTRY[pk]
-    return list(object_types)
+    return [{"name": name, "count": count} for name, count in object_types]
 
 
 @contextmanager
@@ -1499,6 +1583,24 @@ def _object_types(db: OcelDuckDB) -> list[str]:
     )
 
 
+def _object_types_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Object types with per-type object counts, sorted by name."""
+    return [
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT obj_type, COUNT(*) FROM objects GROUP BY obj_type ORDER BY obj_type"
+        ).fetchall()
+    ]
+
+
+def _activities_with_counts(db: OcelDuckDB) -> list[dict]:
+    """Activity names with per-activity event counts, sorted by name."""
+    return [
+        {"name": r[0], "count": r[1]}
+        for r in db.conn.execute(
+            "SELECT activity, COUNT(*) FROM events GROUP BY activity ORDER BY activity"
+        ).fetchall()
+    ]
 def _optional_int(value):
     if value in (None, ""):
         return None
@@ -2949,6 +3051,7 @@ def NewOCDFGViewSet(request):
                     "types": n.get("types", []),
                     "role": n.get("role"),
                     "object_type": n.get("object_type"),
+                    "metrics": n.get("metrics"),
                 }
                 for n in dfg_json.get("nodes", [])
             ]
