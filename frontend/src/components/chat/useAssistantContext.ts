@@ -2,9 +2,9 @@
 import { useLocation } from "react-router-dom";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
-import { AssistantContextPayload } from "@/api/assistantApi";
+import { AssistantContext } from "@/api/assistantApi";
 
-export function useAssistantContext(overrides?: Partial<AssistantContextPayload>): AssistantContextPayload {
+export function useAssistantContext(overrides?: Partial<AssistantContext>): AssistantContext {
   const fileContext = useContext(SelectedFileContext);
   const dashboardContext = useContext(DashboardContext);
   const location = useLocation();
@@ -27,7 +27,7 @@ export function useAssistantContext(overrides?: Partial<AssistantContextPayload>
       }
     }
 
-    const payload: AssistantContextPayload = {
+    const payload: AssistantContext = {
       active_file_id: selectedFile?.id ?? undefined,
       selected_file_id: selectedFile?.id ?? undefined,
       view_mode: viewModeStr,

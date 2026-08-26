@@ -341,10 +341,11 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
       ];
 
       for (const toolName of mutatingTools) {
-        window.dispatchEvent({
-          type: "totem:refresh-dashboard",
-          detail: { dashboard_id: "dash-123", tool: toolName },
-        });
+        window.dispatchEvent(
+          new CustomEvent("totem:refresh-dashboard", {
+            detail: { dashboard_id: "dash-123", tool: toolName },
+          })
+        );
       }
 
       expect(eventListener).toHaveBeenCalledTimes(6);
@@ -368,10 +369,11 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
       const approved = true;
 
       if (approved && DASHBOARD_MUTATING_TOOLS.has(actionName)) {
-        window.dispatchEvent({
-          type: "totem:refresh-dashboard",
-          detail: { dashboard_id: "dash-123" },
-        });
+        window.dispatchEvent(
+          new CustomEvent("totem:refresh-dashboard", {
+            detail: { dashboard_id: "dash-123" },
+          })
+        );
       }
 
       expect(eventListener).not.toHaveBeenCalled();
@@ -402,8 +404,8 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
 
       const steps: TourStep[] = [
         { tour_id: TOUR_IDS.NAV_OVERVIEW, label: "Overview Tab" },
-        { tour_id: TOUR_IDS.FILTER_PANEL, label: "Filter Controls" },
-        { tour_id: TOUR_IDS.DISCOVERY_VIEW, label: "Process Graph" },
+        { tour_id: TOUR_IDS.FILE_SELECTOR, label: "Filter Controls" },
+        { tour_id: TOUR_IDS.NAV_ANALYSIS, label: "Process Graph" },
       ];
 
       const mode: ChatMode = "teach";

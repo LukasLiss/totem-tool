@@ -5,7 +5,11 @@ const ASSISTANT_URL = `${API_BASE}/api/assistant`;
 
 export interface AssistantContext {
   selected_file_id?: number;
+  active_file_id?: number;
   current_view?: string;
+  view_mode?: string;
+  pathname?: string;
+  session_id?: string;
   current_dashboard_id?: number;
 }
 
