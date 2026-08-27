@@ -256,6 +256,22 @@ def get_most_precise_ec(directed_type_tuple, tau, event_cardinalities):
     return "None"
 
 
+def has_valid_event_cardinality_pair(event_cardinality, inverse_event_cardinality, tau):
+    """Reject contradictory exact event-cardinality pairs.
+
+    At tau=1, EC=1 from type A to type B guarantees at least one A in every
+    event counted for B through that relation. The inverse EC=0 would rule out
+    those same events, so the pair cannot describe one TOTeM connection.
+    """
+    if tau < 1:
+        return True
+
+    return not (
+        (event_cardinality == EC_ONE and inverse_event_cardinality == EC_ZERO)
+        or (event_cardinality == EC_ZERO and inverse_event_cardinality == EC_ONE)
+    )
+
+
 def get_most_precise_tr(directed_type_tuple, tau, temporal_relation):
     total = 0
     if (
@@ -638,7 +654,7 @@ def totemDiscovery(ocel, tau=0.9):
     # setup temporal graph
     print(f"building the temporal graph, start time: {datetime.now()}")
     tempgraph = {
-        "nodes": set(),
+        "nodes": set(obj_typ_to_ev_type.keys()),
         TR_PARALLEL: set(),
         TR_INITIATING: set(),
         TR_DEPENDENT: set(),
@@ -661,6 +677,9 @@ def totemDiscovery(ocel, tau=0.9):
         ec = get_most_precise_ec((t1, t2), tau, h_event_cardinalities)
         ec_i = get_most_precise_ec((t2, t1), tau, h_event_cardinalities)
         print(f"EC: {ec_i} - {ec}")
+        if not has_valid_event_cardinality_pair(ec, ec_i, tau):
+            print("Skipping inconsistent event-cardinality pair")
+            continue
         # get temporal relation
         tr = get_most_precise_tr((t1, t2), tau, h_temporal_relations)
         tr_i = get_most_precise_tr((t2, t1), tau, h_temporal_relations)
@@ -680,6 +699,9 @@ def totemDiscovery(ocel, tau=0.9):
     totem = Totem(
         tempgraph, cardinalities, type_relations, all_event_types, obj_typ_to_ev_type
     )
+    totem.h_event_cardinalities = h_event_cardinalities
+    totem.h_log_cardinalities = h_log_cardinalities
+    totem.h_temporal_relations = h_temporal_relations
     return totem
 
 

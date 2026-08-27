@@ -22,6 +22,7 @@ from .models import (
     NewOCDFGComponent,
     OCCNComponent,
     UserSettings,
+    TotemMinerComponent,
     FilterStackComponent,
 )
 from .serializers import (
@@ -552,8 +553,42 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                totem = totemDiscovery_db(db)
+                # Run with tau=0.0 so the frontend can filter the full relation set.
+                totem = totemDiscovery_db(db, tau=0.0)
             serialized = totem_to_dict(totem)
+            
+            # Augment with relations_stats for frontend tau filtering
+            h_log = getattr(totem, "h_log_cardinalities", {})
+            h_event = getattr(totem, "h_event_cardinalities", {})
+            h_tr = getattr(totem, "h_temporal_relations", {})
+            
+            all_pairs = set(h_log.keys()) | set(h_event.keys()) | set(h_tr.keys())
+            relations_stats = []
+            for t1, t2 in all_pairs:
+                log_card = h_log.get((t1, t2), {})
+                event_card = h_event.get((t1, t2), {})
+                tr_rel = h_tr.get((t1, t2), {})
+
+                lc_total = log_card.get("total", 0)
+                ec_total = event_card.get("total", 0)
+                tr_total = tr_rel.get("total", 0)
+
+                lc_pct = {k: log_card[k] / lc_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in log_card and lc_total > 0}
+                ec_pct = {k: event_card[k] / ec_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in event_card and ec_total > 0}
+                tr_pct = {k: tr_rel[k] / tr_total for k in ["D", "Di", "I", "Ii", "P"] if k in tr_rel and tr_total > 0}
+
+                relations_stats.append({
+                    "from": t1,
+                    "to": t2,
+                    "lc_total": lc_total,
+                    "ec_total": ec_total,
+                    "tr_total": tr_total,
+                    "lc_percentages": lc_pct,
+                    "ec_percentages": ec_pct,
+                    "tr_percentages": tr_pct
+                })
+            
+            serialized["relations_stats"] = relations_stats
 
             set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
@@ -1164,6 +1199,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(VariantsComponent.objects.get(id=comp.id))
             elif comp.component_name == "ProcessAreaComponent":
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
+            elif comp.component_name == "TotemMinerComponent":
+                components.append(TotemMinerComponent.objects.get(id=comp.id))
             elif comp.component_name == "LogStatisticsComponent":
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCDFGComponent":
@@ -1275,6 +1312,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w_divergence=item.get("w_divergence", 1.0),
                     alpha=item.get("alpha", 1.0),
                     beta=item.get("beta", 1.0),
+                )
+            elif component_name == "TotemMinerComponent":
+                TotemMinerComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
+                    component_name=component_name,
                 )
             elif component_name == "LogStatisticsComponent":
                 LogStatisticsComponent.objects.create(
@@ -3063,17 +3109,11 @@ def NewOCDFGViewSet(request):
 
 # OCCN discovery dominates request time (seconds to ~1 min per log) while
 # thresholding is a cheap marker filter, so cache the threshold-0 base net per
-# (file, object-type filter) and apply the requested threshold per request —
-# the pattern discover_occn's own docstring recommends. In-process cache: it
-# is cleared on backend restart/reload and sized small because nets can be
-# large in memory.
-#
-# The key has no user component on purpose: the cache is only ever reached
-# after the ownership check on the event log below, so a hit already implies
-# the caller may read that log. Keep the lookup above the cache read.
+# (file, object-type filter) and apply the requested threshold per request.
 _OCCN_CACHE_MAX_ENTRIES = 4
 _occn_base_cache = OrderedDict()
 _occn_cache_lock = threading.Lock()
+_occn_inflight = {}
 
 
 @api_view(["GET"])
@@ -3142,18 +3182,40 @@ def OCCNViewSet(request):
                 _occn_base_cache.move_to_end(cache_key)
 
         if base_occn is None:
-            # Hold the per-file lock for the whole discovery: it queries the
-            # shared connection, and running it unlocked raced against the
-            # other dashboard endpoints (which fire in parallel on load).
-            with _with_ocel_db(user_file) as user_file_db:
-                base_occn = discover_occn(
-                    user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters
-                )
+            # Single-flight deduplication: ensure only one thread mines OCCN for a given cache_key
+            event = None
+            is_primary = False
             with _occn_cache_lock:
-                _occn_base_cache[cache_key] = base_occn
-                _occn_base_cache.move_to_end(cache_key)
-                while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
-                    _occn_base_cache.popitem(last=False)
+                base_occn = _occn_base_cache.get(cache_key)
+                if base_occn is None:
+                    event = _occn_inflight.get(cache_key)
+                    if event is None:
+                        event = threading.Event()
+                        _occn_inflight[cache_key] = event
+                        is_primary = True
+
+            if not is_primary and base_occn is None and event is not None:
+                event.wait(timeout=120)
+                with _occn_cache_lock:
+                    base_occn = _occn_base_cache.get(cache_key)
+
+            if is_primary:
+                try:
+                    with _with_ocel_db(user_file) as db:
+                        ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
+                    with _occn_cache_lock:
+                        _occn_base_cache[cache_key] = base_occn
+                        _occn_base_cache.move_to_end(cache_key)
+                        while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                            _occn_base_cache.popitem(last=False)
+                finally:
+                    with _occn_cache_lock:
+                        _occn_inflight.pop(cache_key, None)
+                    event.set()
+
+        if base_occn is None:
+            return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         occn = (
             base_occn.apply_relative_occurrence_threshold(threshold)

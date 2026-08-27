@@ -23,6 +23,7 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
   { id: 'occn', label: 'OCCN', icon: Workflow },
+  { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
 ];
 
 export function NavAnalysis() {

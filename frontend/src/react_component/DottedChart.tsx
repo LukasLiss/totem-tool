@@ -1483,8 +1483,8 @@ function DottedChartYAxisTick({
   payload,
   labels,
 }: {
-  x?: number;
-  y?: number;
+  x?: number | string;
+  y?: number | string;
   payload?: { value: number | string };
   labels: Map<number, string>;
 }) {

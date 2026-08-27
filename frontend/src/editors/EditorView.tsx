@@ -5,6 +5,7 @@ import TotemEditor from "./totem/TotemEditor";
 import OccnEditor from "./occn/OccnEditor";
 import OcpnEditor from "./ocpn/OcpnEditor";
 import OcdfgEditor from "./ocdfg/OcdfgEditor";
+import OcelEditor from "./ocel/OcelEditor";
 
 export function EditorView() {
   const { viewMode } = useContext(DashboardContext);
@@ -21,6 +22,8 @@ export function EditorView() {
         return <OcpnEditor />;
       case 'ocdfg':
         return <OcdfgEditor />;
+      case 'ocel':
+        return <OcelEditor />;
       default:
         return null;
     }
