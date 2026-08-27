@@ -48,8 +48,9 @@ EXPORT_EXTENSIONS = {
 }
 
 # DuckDB allows only one read-write connection per file, so requests for the
-# same session must be serialised. Same pattern as `_OCEL_DB_LOCKS` in
-# views.py, keyed by session id.
+# same session must be serialised. Same idea as the per-instance lock on
+# `OcelDuckDB` used by views.py, keyed by session id here because editor
+# sessions open and close their working copy per request.
 _EDITOR_LOCKS: dict[str, threading.Lock] = {}
 _EDITOR_LOCKS_GUARD = threading.Lock()
 
