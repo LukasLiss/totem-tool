@@ -1,0 +1,3 @@
+# Explicit ruff rule selection for backend/ and totem_lib/
+[lint]
+select = ["E4", "E7", "E9", "F"]
