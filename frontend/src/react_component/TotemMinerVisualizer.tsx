@@ -115,7 +115,11 @@ type TotemMinerVisualizerProps = {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DEFAULT_BACKEND = 'http://localhost:8000';
+const DEFAULT_BACKEND = (
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+  'http://localhost:8000'
+).replace(/\/$/, '');
 
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',

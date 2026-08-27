@@ -51,6 +51,8 @@ import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
+import SQLQueryComponent from './SQLQueryComponent';
+import PieChartComponent from './PieChartComponent';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -288,7 +290,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
           <CardContent>
           
           <img
-            src={`http://localhost:8000${node.image}`}
+            src={node.image.startsWith('http') ? node.image : `${import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}${node.image.startsWith('/') ? '' : '/'}${node.image}`}
             alt="Uploaded"
             className="w-full h-full object-cover"
           />
@@ -1517,5 +1519,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
   OCPNComponent,
+  SQLQueryComponent,
+  PieChartComponent,
   OCCNComponent,
 };

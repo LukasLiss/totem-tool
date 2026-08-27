@@ -66,7 +66,7 @@ export interface TotemConformanceResponse {
   histograms: TotemConformanceHistograms;
 }
 
-const FILES_URL = "http://localhost:8000/api/files/";
+const FILES_URL = "/api/files/";
 
 export async function runTotemConformance(
   eventLogId: number,

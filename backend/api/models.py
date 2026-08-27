@@ -239,6 +239,20 @@ class NewOCDFGComponent(DashboardComponent):
         default='TB',
     )
 
+class SQLQueryComponent(DashboardComponent):
+    query = models.TextField(default="SELECT * FROM data LIMIT 10")
+
+
+class PieChartComponent(DashboardComponent):
+    query = models.TextField(default="SELECT * FROM events LIMIT 10")
+    ring_text = models.CharField(max_length=200, blank=True, default="")
+    chart_type = models.CharField(max_length=20, default="donut")
+    title = models.CharField(max_length=200, blank=True, default="")
+    label_column = models.CharField(max_length=100, blank=True, default="")
+    value_column = models.CharField(max_length=100, blank=True, default="")
+    show_legend = models.BooleanField(default=True)
+    show_tooltip = models.BooleanField(default=True)
+
 
 class OCPNComponent(DashboardComponent):
     # Start OCPN discovery automatically when the dashboard loads.

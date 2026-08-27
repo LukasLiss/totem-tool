@@ -21,10 +21,12 @@ export type TotemMinerProps = {
   onToggleFilter?: () => void;
 };
 
+import { API_BASE_URL } from '../config/api';
+
 export default function TotemMiner({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
   filterEnabled = false,
   onToggleFilter,
