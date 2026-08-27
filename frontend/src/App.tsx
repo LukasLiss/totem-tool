@@ -20,7 +20,7 @@ import { getUserSettings } from "./api/settingsApi";
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 async function guestLogin() {
-  const { data } = await axios.post("http://localhost:8000/token/", {
+  const { data } = await axios.post("/token/", {
     username: "Guest",
     password: "guest",
   });

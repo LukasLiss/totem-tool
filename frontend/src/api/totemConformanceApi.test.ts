@@ -44,7 +44,7 @@ describe("runTotemConformance", () => {
 
     await expect(runTotemConformance(12, 34)).resolves.toEqual(response);
     expect(post).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/totem_conformance/",
+      "/api/files/12/totem_conformance/",
       { asset_id: 34 }
     );
   });

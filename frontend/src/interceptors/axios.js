@@ -1,4 +1,10 @@
 import axios from "axios";
+import { API_BASE_URL, getApiUrl } from "../config/api";
+
+/**
+ * Configure default Axios base URL from environment / config
+ */
+axios.defaults.baseURL = API_BASE_URL;
 
 /**
  * Token refresh strategy
@@ -72,7 +78,7 @@ async function performRefresh() {
     throw new Error("No refresh token available");
   }
   const response = await axios.post(
-    "http://localhost:8000/token/refresh/",
+    getApiUrl("/token/refresh/"),
     { refresh: refreshToken },
     {
       headers: { "Content-Type": "application/json" },
@@ -94,7 +100,7 @@ async function performRefresh() {
 
 async function guestReAuth() {
   const resp = await axios.post(
-    "http://localhost:8000/token/",
+    getApiUrl("/token/"),
     { username: "Guest", password: "guest" },
     { headers: { "Content-Type": "application/json" } }
   );

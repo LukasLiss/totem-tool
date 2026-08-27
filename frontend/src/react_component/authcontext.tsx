@@ -14,7 +14,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 async function guestReAuth() {
   const resp = await axios.post(
-    "http://localhost:8000/token/",
+    "/token/",
     { username: "Guest", password: "guest" },
     { headers: { "Content-Type": "application/json" } }
   );

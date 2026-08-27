@@ -229,7 +229,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   );
 
   useEffect(() => {
-    axios.get<DfgData>('http://localhost:8000/api/ocdfg/')
+    axios.get<DfgData>('/api/ocdfg/')
       .then(({ data }) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
         // Accept trace variants from either the dfg payload or top-level.

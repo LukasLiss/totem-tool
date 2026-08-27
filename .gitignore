@@ -11,10 +11,10 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !docs/OCCN_REPLAY_FITNESS.md
 !docs/EDGE_CASE_TAXONOMY.md
 !totem_lib/test_data/edge_cases/README.md
-!.claude/**/*.md
 *.txt
-
-# Reinclude totem_lib tests
+!*requirements*.txt
+!backend/requirements.txt
+!totem_lib/requirements.txt
 !totem_lib/tests/
 
 

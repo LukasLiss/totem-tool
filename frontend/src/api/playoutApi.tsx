@@ -5,7 +5,7 @@ export async function runPlayout(
   request: PlayoutRequest,
   signal?: AbortSignal,
 ): Promise<PlayoutResult> {
-  const { data } = await axios.post("http://localhost:8000/api/playout/", request, { signal });
+  const { data } = await axios.post("/api/playout/", request, { signal });
   return data;
 }
 
@@ -14,7 +14,7 @@ export async function exportPlayoutOcel(
   signal?: AbortSignal,
 ) {
   const { data } = await axios.post(
-    "http://localhost:8000/api/playout/export-ocel/",
+    "/api/playout/export-ocel/",
     { variants },
     { signal },
   );

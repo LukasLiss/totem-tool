@@ -5,13 +5,13 @@ export interface UserSettings {
 }
 
 export async function getUserSettings(): Promise<UserSettings> {
-  const { data } = await axios.get("http://localhost:8000/api/settings/");
+  const { data } = await axios.get("/api/settings/");
   return data;
 }
 
 export async function updateUserSettings(
   patch: Partial<UserSettings>
 ): Promise<UserSettings> {
-  const { data } = await axios.patch("http://localhost:8000/api/settings/", patch);
+  const { data } = await axios.patch("/api/settings/", patch);
   return data;
 }
