@@ -7,10 +7,11 @@ export type AnalysisComponent =
   | "variants"
   | "dottedChart"
   | "occn"
-  | "ocPetriNet";
+  | "ocPetriNet"
+  | "totemMiner";
 export type ConformanceComponent = "totem" | "occn";
 
-export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg";
+export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";
 
 export type ViewMode =
   | { type: "overview" }

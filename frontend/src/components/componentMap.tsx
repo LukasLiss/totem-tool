@@ -43,6 +43,7 @@ import {
   type AxisOption,
   type RowOrderOption,
 } from '@/react_component/dottedChart/dottedChartUtils';
+import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
@@ -698,6 +699,45 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
       initialAlgorithm={algorithm}
       initialParams={params}
       onSettingsChange={handleSettingsChange}
+    />
+  );
+};
+
+
+// TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
+const TotemMinerComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile
+}) => {
+  if (isEditMode) {
+    // EDIT MODE: Show configuration placeholder
+    return (
+      <Card className="w-full h-full rounded-none">
+        <CardHeader>
+          <CardTitle>TOTeM Miner</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            The TOTeM Miner discovers and visualizes the structure of your event log.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {selectedFile 
+              ? `Currently analyzing: ${selectedFile.name || selectedFile.filename || 'Event Log'}`
+              : 'Automatically analyzing the current project\'s event log.'}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE: Render TotemMiner with controls visible
+  return (
+    <TotemMiner
+      fileId={selectedFile?.id}
+      embedded={false}
+      height="100%"
     />
   );
 };
@@ -1438,6 +1478,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ImageComponent,
   VariantsComponent,
   ProcessAreaComponent,
+  TotemMinerComponent,
   LogStatisticsComponent,
   OCDFGComponent,
   OCDottedChartComponent,
