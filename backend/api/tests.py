@@ -481,7 +481,9 @@ class EventLogTotemDiscoveryApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, totem_to_dict(totem))
+        expected = totem_to_dict(totem)
+        expected["relations_stats"] = []
+        self.assertEqual(response.data, expected)
         self.assertEqual(response.data["schema"], "totem")
         self.assertEqual(response.data["version"], 1)
 
@@ -2996,9 +2998,10 @@ class OcelDbConcurrencyTests(TestCase):
                 t.join()
         self.assertEqual(held_elsewhere, [False])
 
-    def test_occn_view_holds_the_file_lock_during_discovery(self):
-        """discover_occn queries the shared connection, so the endpoint must
-        serialise it against the other dashboard endpoints via the file lock."""
+    def test_occn_view_reads_the_shared_connection_only_under_the_lock(self):
+        """The OCCN endpoint touches the shared DuckDB only for the pm4py
+        conversion, which must run under the per-file lock; the discovery
+        itself then works on the converted data, off the shared connection."""
         user = User.objects.create_user(username="occn-lock-user")
         project = Project.objects.create(name="OCCN Lock Project")
         project.users.add(user)
@@ -3010,8 +3013,9 @@ class OcelDbConcurrencyTests(TestCase):
         fake_db = OcelDuckDB.load(self.db_path, read_only=True)
         self.addCleanup(fake_db.close)
         lock_was_held = []
+        converted = object()
 
-        def fake_discover(db, relativeOccuranceThreshold, parameters):
+        def fake_convert(db):
             holder = []
 
             def probe():
@@ -3021,10 +3025,17 @@ class OcelDbConcurrencyTests(TestCase):
             t.start()
             t.join()
             lock_was_held.append(holder == [False])
+            return converted
+
+        discover_inputs = []
+
+        def fake_discover(ocel, relativeOccuranceThreshold, parameters):
+            discover_inputs.append(ocel)
             return object()
 
         with (
             patch.object(_views, "_get_or_load_ocel_db", return_value=fake_db),
+            patch.object(_views, "convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
             patch.object(_views, "discover_occn", side_effect=fake_discover),
             patch.object(_views, "serialize_occn", return_value={"ok": True}),
         ):
@@ -3034,3 +3045,5 @@ class OcelDbConcurrencyTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(lock_was_held, [True])
+        # discovery ran on the converted data, not the shared connection
+        self.assertEqual(discover_inputs, [converted])
