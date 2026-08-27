@@ -5,6 +5,7 @@ djangorestframework-simplejwt==5.5.1
 pulp==3.3.0
 drf-polymorphic==2.1.1
 django-rest-polymorphic==0.1.10
+duckdb
 gunicorn==22.0.0
 whitenoise==6.6.0
 dj-database-url==2.1.0
