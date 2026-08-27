@@ -344,7 +344,11 @@ type ProcessAreaMetrics = {
   detailMinDistance: number;
 };
 
-const DEFAULT_BACKEND = 'http://localhost:8000';
+const DEFAULT_BACKEND = (
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+  'http://localhost:8000'
+).replace(/\/$/, '');
 const DEFAULT_PROCESS_AREA_SCALE = 0.9;
 const MIN_PROCESS_AREA_SCALE = 0.2;
 const MAX_PROCESS_AREA_SCALE = 1.2;

@@ -67,10 +67,12 @@ export type ProcessAreaProps = {
   }) => void;
 };
 
+import { API_BASE_URL } from '../config/api';
+
 export default function ProcessArea({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
   initialAlgorithm,
   initialParams,

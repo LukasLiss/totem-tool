@@ -275,7 +275,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
           <CardContent>
           
           <img
-            src={`http://localhost:8000${node.image}`}
+            src={node.image.startsWith('http') ? node.image : `${import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}${node.image.startsWith('/') ? '' : '/'}${node.image}`}
             alt="Uploaded"
             className="w-full h-full object-cover"
           />

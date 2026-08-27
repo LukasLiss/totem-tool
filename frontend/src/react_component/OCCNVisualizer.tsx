@@ -156,7 +156,7 @@ function OCCNVisualizer({
     setError(null);
     axios
       .get<OccnNet>(
-        `http://localhost:8000/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
+        `/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
           objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
         }`,
       )

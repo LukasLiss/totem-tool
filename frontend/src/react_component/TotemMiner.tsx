@@ -18,10 +18,12 @@ export type TotemMinerProps = {
   height?: string | number;
 };
 
+import { API_BASE_URL } from '../config/api';
+
 export default function TotemMiner({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);

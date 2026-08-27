@@ -57,7 +57,7 @@ export interface AssetApiError {
   status?: number;
 }
 
-const ASSETS_URL = "http://localhost:8000/api/assets/";
+const ASSETS_URL = "/api/assets/";
 
 export async function listAssets(params: ListAssetsParams = {}) {
   const queryParams = new URLSearchParams();

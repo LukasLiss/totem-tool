@@ -86,7 +86,7 @@ export interface OCCNReplayUnitDetailRequestOptions {
 
 export const DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT = 50;
 
-const FILES_URL = "http://localhost:8000/api/files/";
+const FILES_URL = "/api/files/";
 
 export async function runOCCNConformance(
   eventLogId: number,

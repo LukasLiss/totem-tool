@@ -573,7 +573,7 @@ function NewOCDFGVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://localhost:8000/api/new-ocdfg/?file_id=${fileId}`;
+    const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {
