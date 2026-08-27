@@ -481,7 +481,9 @@ class EventLogTotemDiscoveryApiTests(TestCase):
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, totem_to_dict(totem))
+        expected = totem_to_dict(totem)
+        expected["relations_stats"] = []
+        self.assertEqual(response.data, expected)
         self.assertEqual(response.data["schema"], "totem")
         self.assertEqual(response.data["version"], 1)
 
@@ -2908,3 +2910,254 @@ class ProcessAreaComponentPersistenceTests(TestCase):
             },
             set(layout.data[0]),
         )
+
+
+# ---------------------------------------------------------------------------
+# OCPN discovery endpoint tests
+# ---------------------------------------------------------------------------
+import tempfile
+
+import duckdb
+from django.contrib.auth.models import User
+from django.core.cache import cache
+from django.test import override_settings
+from rest_framework.test import APITestCase
+
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB, create_ocel_schema
+
+from .models import EventLog, Project
+from . import views
+
+_MEDIA_ROOT = tempfile.mkdtemp(prefix="totem-test-media-")
+
+
+def _write_paper_example_duckdb(path: str) -> None:
+    """The order/item example from the OCPN paper as a native .duckdb OCEL."""
+    conn = duckdb.connect(":memory:")
+    create_ocel_schema(conn, [], [])
+    conn.executemany(
+        "INSERT INTO events VALUES (?, ?, ?)",
+        [
+            ("e1", "place order", 1),
+            ("e2", "pick item", 2),
+            ("e3", "pick item", 3),
+            ("e4", "complete order", 4),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO objects VALUES (?, ?)",
+        [("o1", "order"), ("i1", "item"), ("i2", "item")],
+    )
+    conn.executemany(
+        "INSERT INTO event_object VALUES (?, ?, NULL)",
+        [
+            ("e1", "o1"),
+            ("e1", "i1"),
+            ("e1", "i2"),
+            ("e2", "i1"),
+            ("e3", "i2"),
+            ("e4", "o1"),
+            ("e4", "i1"),
+            ("e4", "i2"),
+        ],
+    )
+    db = OcelDuckDB._from_prepared_connection(conn, [], [])
+    db.save(path)
+    db.close()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class DiscoverOcpnEndpointTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"paper-example-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def test_discover_ocpn_returns_model(self):
+        response = self.client.get(f"/api/files/{self.log.pk}/discover_ocpn/")
+        self.assertEqual(response.status_code, 200)
+        model = response.json()["ocpn"]
+        self.assertEqual(model["format"], "ocpn")
+        self.assertEqual(model["version"], 1)
+        labels = sorted(
+            t["label"] for t in model["transitions"] if not t.get("silent")
+        )
+        self.assertEqual(labels, ["complete order", "pick item", "place order"])
+        self.assertEqual(
+            [ot["name"] for ot in model["objectTypes"]], ["item", "order"]
+        )
+        self.assertTrue(model["places"])
+        self.assertTrue(model["arcs"])
+        # "place order"/"complete order" involve two items -> variable arcs.
+        self.assertTrue(any(arc.get("variable") for arc in model["arcs"]))
+
+    def test_object_types_filter(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_ocpn/",
+            {"object_types": "order"},
+        )
+        self.assertEqual(response.status_code, 200)
+        model = response.json()["ocpn"]
+        self.assertEqual([ot["name"] for ot in model["objectTypes"]], ["order"])
+        labels = sorted(t["label"] for t in model["transitions"])
+        self.assertEqual(labels, ["complete order", "place order"])
+
+    def test_requires_project_membership(self):
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self.client.get(f"/api/files/{self.log.pk}/discover_ocpn/")
+        self.assertEqual(response.status_code, 404)
+
+    def test_invalid_timeout_falls_back_to_default(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_ocpn/",
+            {"timeout_s": "not-a-number"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# DuckDB concurrency model tests
+# ---------------------------------------------------------------------------
+#
+# The dashboard fires several endpoints in parallel on first load; all of
+# them funnel into one shared DuckDB connection per file. These tests pin
+# down the model that makes that safe: stored .duckdb logs open read-only,
+# every OcelDuckDB carries a reentrant lock, and the OCCN endpoint (the one
+# that used to run unlocked) holds that lock for its whole discovery.
+
+import threading as _threading
+
+import duckdb as _duckdb
+
+from totem_lib.ocel.ocel_duckdb import create_ocel_schema
+from . import views as _views
+
+
+def _write_minimal_duckdb_log(path: str) -> None:
+    conn = _duckdb.connect(":memory:")
+    create_ocel_schema(conn, [], [])
+    conn.executemany(
+        "INSERT INTO events VALUES (?, ?, ?)",
+        [("e1", "create order", 1), ("e2", "ship order", 2)],
+    )
+    conn.executemany(
+        "INSERT INTO objects VALUES (?, ?)",
+        [("o1", "Order"), ("i1", "Item")],
+    )
+    conn.executemany(
+        "INSERT INTO event_object VALUES (?, ?, NULL)",
+        [("e1", "o1"), ("e1", "i1"), ("e2", "o1")],
+    )
+    db = OcelDuckDB._from_prepared_connection(conn, [], [])
+    db.save(path)
+    db.close()
+
+
+class OcelDbConcurrencyTests(TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="totem-duckdb-tests-")
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        self.db_path = os.path.join(self.tmpdir, "log.duckdb")
+        _write_minimal_duckdb_log(self.db_path)
+
+    def test_stored_duckdb_logs_open_read_only(self):
+        """The registry connection must never take the exclusive write lock.
+
+        A read-write open is exclusive per file, so a second opener (another
+        process, or a converter still holding its handle) fails with a lock
+        conflict — the "error when loading many things at once" failure mode.
+        Read-only connections coexist; TEMP tables (which the algorithms
+        rely on) still work on them.
+        """
+        db = _views._build_ocel_db_from_path(self.db_path)
+        self.addCleanup(db.close)
+
+        with self.assertRaises(Exception):
+            db.conn.execute("CREATE TABLE not_allowed (a INTEGER)")
+
+        db.conn.execute("CREATE TEMP TABLE scratch AS SELECT * FROM events")
+        self.assertEqual(
+            db.conn.execute("SELECT COUNT(*) FROM scratch").fetchone()[0], 2
+        )
+
+        # A second concurrent open of the same file must succeed.
+        other = OcelDuckDB.load(self.db_path, read_only=True)
+        other.close()
+
+    def test_every_ocel_db_carries_a_reentrant_lock(self):
+        db = OcelDuckDB.load(self.db_path, read_only=True)
+        self.addCleanup(db.close)
+
+        # Reentrant: a view holding the lock can call helpers that lock again.
+        with db.lock:
+            with db.lock:
+                held_elsewhere = []
+
+                def probe():
+                    held_elsewhere.append(db.lock.acquire(blocking=False))
+
+                t = _threading.Thread(target=probe)
+                t.start()
+                t.join()
+        self.assertEqual(held_elsewhere, [False])
+
+    def test_occn_view_reads_the_shared_connection_only_under_the_lock(self):
+        """The OCCN endpoint touches the shared DuckDB only for the pm4py
+        conversion, which must run under the per-file lock; the discovery
+        itself then works on the converted data, off the shared connection."""
+        user = User.objects.create_user(username="occn-lock-user")
+        project = Project.objects.create(name="OCCN Lock Project")
+        project.users.add(user)
+        event_log = EventLog.objects.create(project=project, file="occn-lock.duckdb")
+
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        fake_db = OcelDuckDB.load(self.db_path, read_only=True)
+        self.addCleanup(fake_db.close)
+        lock_was_held = []
+        converted = object()
+
+        def fake_convert(db):
+            holder = []
+
+            def probe():
+                holder.append(db.lock.acquire(blocking=False))
+
+            t = _threading.Thread(target=probe)
+            t.start()
+            t.join()
+            lock_was_held.append(holder == [False])
+            return converted
+
+        discover_inputs = []
+
+        def fake_discover(ocel, relativeOccuranceThreshold, parameters):
+            discover_inputs.append(ocel)
+            return object()
+
+        with (
+            patch.object(_views, "_get_or_load_ocel_db", return_value=fake_db),
+            patch.object(_views, "convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
+            patch.object(_views, "discover_occn", side_effect=fake_discover),
+            patch.object(_views, "serialize_occn", return_value={"ok": True}),
+        ):
+            _views._occn_base_cache.clear()
+            response = client.get("/api/occn/", {"file_id": event_log.pk})
+            _views._occn_base_cache.clear()
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(lock_was_held, [True])
+        # discovery ran on the converted data, not the shared connection
+        self.assertEqual(discover_inputs, [converted])

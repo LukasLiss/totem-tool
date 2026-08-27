@@ -12,7 +12,6 @@ import { componentMap } from "../../components/componentMap";
 
 interface GridContextValue {
   grid: GridStack | null;
-  gridRef: React.RefObject<HTMLDivElement>;
   addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
   getLayout: () => any[];
   loadLayout: (layout: any[]) => void;
@@ -28,7 +27,7 @@ interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
   selectedFile?: any;  // Made optional
-  dashboardId: number;  // Added
+  dashboardId?: number;
 }
 
 export const useGridMode = () => useContext(GridModeContext);
@@ -41,16 +40,11 @@ export const useGrid = () => {
   return ctx;
 };
 
-interface GridProviderProps {
-  children: ReactNode;
-  options?: GridStackOptions;
-}
-
 export const GridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
   selectedFile,
-  dashboardId,
+  dashboardId = 0,
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
@@ -77,7 +71,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     gridRef.current = instance;
     setGrid(instance);
 
-    return () => instance.destroy(false);
+    return () => {
+      instance.destroy(false);
+    };
   }, []); // Empty dependency: run once on mount
 
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
@@ -93,7 +89,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const root = ReactDOM.createRoot(el);
         root.render(
           <Component
-            node={w}
+            node={w as any}
             isEditMode={isEditMode}
             selectedFile={selectedFile}
             dashboardId={dashboardId}  // Pass dashboardId
@@ -118,10 +114,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
-        const contentEl = item.querySelector('.grid-stack-item-content') || item;
+        const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as any)._reactRoot;
         const node = (contentEl as any).gridstackNode;
-        const component_name = (node as any)?.component_name || (contentEl as HTMLElement).dataset.componentName || item.dataset.componentName;
+        const component_name = (node as any)?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -161,7 +157,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       component_id: newId,
     });
     if (widgetEl) {
-      const node = grid.getGridItems().find(item => item.el === widgetEl)?.gridstackNode;
+      const node = grid.getGridItems().find(item => item === widgetEl)?.gridstackNode;
       if (node) {
         (node as any).component_name = componentName;
         (node as any).component_id = newId;
@@ -181,7 +177,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         // Clear the DOM manually to ensure clean state
         if (gridRef.current) {
           console.log("Clearing DOM");
-          gridRef.current.innerHTML = '';
+          grid.el.innerHTML = '';
         }
         
         console.log("Grid reset complete - kept instance");
@@ -193,8 +189,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       // If reset fails, try to recreate the grid
       try {
         if (gridRef.current) {
-          gridRef.current.innerHTML = '';
-          const newGrid = GridStack.init(gridOptions, gridRef.current);
+          grid.el.innerHTML = '';
+          const newGrid = GridStack.init(gridOptions, grid.el);
           setGrid(newGrid);
           console.log("Grid recreated after reset failure");
         }
@@ -282,6 +278,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
           layout_direction: (node as any).layout_direction ?? 'LR',
         };
+      } else if (component_name === "OCPNComponent") {
+        props = {
+          automatic_loading: (node as any).automatic_loading ?? false,
+          timeout_s: (node as any).timeout_s ?? 30.0,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -321,7 +322,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     
     console.log("Clearing grid before loading new layout");
     try {
-      gridRef.current.removeAll(true);
+      grid.removeAll(true);
     } catch (error) {
       console.warn("Error clearing grid, resetting:", error);
       resetGrid();
@@ -355,6 +356,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Variants Explorer";
         } else if (item.component_name === "ProcessAreaComponent") {
           content = "Process Area";
+        } else if (item.component_name === "TotemMinerComponent") {
+          content = "TOTeM Miner";
         } else if (item.component_name === "LogStatisticsComponent") {
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
@@ -365,6 +368,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Arc Weight)";
         } else if (item.component_name === "NewOCDFGVariantsComponent") {
           content = "Object-Centric DFG (Variants)";
+        } else if (item.component_name === "OCPNComponent") {
+          content = "OC Petri Net";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else {
@@ -425,7 +430,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
-            const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
+            const node = grid.getGridItems().find(gridItem => gridItem === widgetEl)?.gridstackNode;
             if (node) {
               (node as any).component_name = item.component_name;
               (node as any).component_id = component_id;  // Ensure it's set
@@ -488,7 +493,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
   return (
     <GridModeContext.Provider value={{ isEditMode, setIsEditMode }}>
-      <GridContext.Provider value={{ grid, gridRef, addWidget, getLayout, loadLayout, resetGrid }}>
+      <GridContext.Provider value={{ grid, addWidget, getLayout, loadLayout, resetGrid }}>
         {children}
       </GridContext.Provider>
     </GridModeContext.Provider>

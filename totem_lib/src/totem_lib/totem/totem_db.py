@@ -12,6 +12,7 @@ from .totem import (
     get_most_precise_ec,
     get_most_precise_lc,
     get_most_precise_tr,
+    has_valid_event_cardinality_pair,
 )
 
 
@@ -50,7 +51,7 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
     temporal_relations = histograms.temporal
 
     tempgraph = {
-        "nodes": set(),
+        "nodes": set(object_type_to_event_types.keys()),
         TR_PARALLEL: set(),
         TR_INITIATING: set(),
         TR_DEPENDENT: set(),
@@ -74,6 +75,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         inverse_event_cardinality = get_most_precise_ec(
             (target, source), tau, event_cardinalities
         )
+        if not has_valid_event_cardinality_pair(
+            event_cardinality, inverse_event_cardinality, tau
+        ):
+            continue
         temporal_relation = get_most_precise_tr(
             (source, target), tau, temporal_relations
         )
@@ -98,10 +103,14 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
             "EC": inverse_event_cardinality,
         }
 
-    return Totem(
+    totem = Totem(
         tempgraph,
         cardinalities,
         type_relations,
         all_event_types,
         object_type_to_event_types,
     )
+    totem.h_event_cardinalities = event_cardinalities
+    totem.h_log_cardinalities = log_cardinalities
+    totem.h_temporal_relations = temporal_relations
+    return totem

@@ -2,7 +2,9 @@ from django.db import models
 from django.core.files.storage import FileSystemStorage
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.conf import settings
 import os
+import uuid
 # Create your models here.
 
 #This is the general OCM datastructure
@@ -49,6 +51,36 @@ class EventLog(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"
 
+class OcelEditorSession(models.Model):
+    """
+    Ephemeral working copy for the OCEL editor.
+
+    Each session owns a `.duckdb` working file under
+    MEDIA_ROOT/_ocel_editor/. The file only becomes a proper Project /
+    EventLog when the user explicitly saves; discarded or stale sessions
+    are deleted together with their files (see signals.py and the cleanup
+    in views_ocel_editor.py).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100, default="Untitled OCEL")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def working_dir(self) -> str:
+        return os.path.join(settings.MEDIA_ROOT, "_ocel_editor")
+
+    @property
+    def working_path(self) -> str:
+        return os.path.join(self.working_dir, f"{self.id}.duckdb")
+
+    def export_path(self, extension: str) -> str:
+        """Scratch path for downloads; lives and dies with the session."""
+        return os.path.join(self.working_dir, f"{self.id}-export{extension}")
+
+    def __str__(self):
+        return f"OcelEditorSession {self.id} ({self.name})"
 
 class ProjectAsset(models.Model):
     class AssetType(models.TextChoices):
@@ -164,6 +196,10 @@ class ProcessAreaComponent(DashboardComponent):
     beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
 
 
+class TotemMinerComponent(DashboardComponent):
+    pass
+
+
 class LogStatisticsComponent(DashboardComponent):
     show_num_events = models.BooleanField(default=True)
     show_num_activities = models.BooleanField(default=True)
@@ -202,6 +238,13 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+
+
+class OCPNComponent(DashboardComponent):
+    # Start OCPN discovery automatically when the dashboard loads.
+    automatic_loading = models.BooleanField(default=False, null=True, blank=True)
+    # Discovery budget in seconds (<= 0 disables the timeout).
+    timeout_s = models.FloatField(default=30.0, null=True, blank=True)
 
 
 class OCCNComponent(DashboardComponent):

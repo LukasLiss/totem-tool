@@ -22,6 +22,8 @@ from .models import (
     NewOCDFGComponent,
     OCCNComponent,
     UserSettings,
+    OCPNComponent,
+    TotemMinerComponent,
     FilterStackComponent,
 )
 from .serializers import (
@@ -63,6 +65,7 @@ from totem_lib.process_areas import (
     process_areas_from_aggregates,
 )
 from totem_lib.ocel import OcelDuckDB, import_ocel_db, FilterStack, apply_filter_stack
+from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.ocel.validation import OCELValidationException, validate_ocel
 from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.oc_dotted_chart import (
@@ -82,6 +85,7 @@ import networkx as nx
 
 
 from .cache_utils import get_cached_result, set_cached_result
+from django.core.cache import cache
 
 import math
 import os
@@ -369,7 +373,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db
-                _OCEL_DB_LOCKS[pk] = threading.Lock()
+                _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
+                    (row["name"], row["count"])
+                    for row in _object_types_with_counts(db)
+                )
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
@@ -550,8 +557,42 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                totem = totemDiscovery_db(db)
+                # Run with tau=0.0 so the frontend can filter the full relation set.
+                totem = totemDiscovery_db(db, tau=0.0)
             serialized = totem_to_dict(totem)
+            
+            # Augment with relations_stats for frontend tau filtering
+            h_log = getattr(totem, "h_log_cardinalities", {})
+            h_event = getattr(totem, "h_event_cardinalities", {})
+            h_tr = getattr(totem, "h_temporal_relations", {})
+            
+            all_pairs = set(h_log.keys()) | set(h_event.keys()) | set(h_tr.keys())
+            relations_stats = []
+            for t1, t2 in all_pairs:
+                log_card = h_log.get((t1, t2), {})
+                event_card = h_event.get((t1, t2), {})
+                tr_rel = h_tr.get((t1, t2), {})
+
+                lc_total = log_card.get("total", 0)
+                ec_total = event_card.get("total", 0)
+                tr_total = tr_rel.get("total", 0)
+
+                lc_pct = {k: log_card[k] / lc_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in log_card and lc_total > 0}
+                ec_pct = {k: event_card[k] / ec_total for k in ["0", "1", "0...1", "1..*", "0...*"] if k in event_card and ec_total > 0}
+                tr_pct = {k: tr_rel[k] / tr_total for k in ["D", "Di", "I", "Ii", "P"] if k in tr_rel and tr_total > 0}
+
+                relations_stats.append({
+                    "from": t1,
+                    "to": t2,
+                    "lc_total": lc_total,
+                    "ec_total": ec_total,
+                    "tr_total": tr_total,
+                    "lc_percentages": lc_pct,
+                    "ec_percentages": ec_pct,
+                    "tr_percentages": tr_pct
+                })
+            
+            serialized["relations_stats"] = relations_stats
 
             set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
@@ -967,6 +1008,74 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["get"])
+    def discover_ocpn(self, request, pk=None):
+        """Discovers an Object-Centric Petri Net from the event log.
+
+        Runs the DuckDB-backed OCPN discovery of totem_lib (inductive
+        miner per object type + merge, following van der Aalst & Berti).
+        Query params:
+          - timeout_s: abort with HTTP 408 after this many seconds
+            (default 30; <= 0 disables the timeout).
+          - object_types: optional comma-separated subset of object types.
+        Returns the OCPN in the "format: ocpn" JSON exchange format.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            timeout_s = float(request.query_params.get("timeout_s", "30.0"))
+            if timeout_s <= 0:
+                timeout_s = None  # disable
+        except (TypeError, ValueError):
+            timeout_s = 30.0
+
+        raw_object_types = request.query_params.get("object_types")
+        object_type_filter = None
+        if raw_object_types:
+            object_type_filter = sorted(
+                t.strip() for t in raw_object_types.split(",") if t.strip()
+            ) or None
+
+        # The discovered model only depends on the log and the selected
+        # object types, not on the timeout budget — cache accordingly.
+        types_key = ",".join(object_type_filter) if object_type_filter else "all"
+        cache_key = f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            return Response(cached_result, status=status.HTTP_200_OK)
+
+        try:
+            with _with_ocel_db(user_file) as db:
+                model = discover_ocpn_db(
+                    db,
+                    object_types=object_type_filter,
+                    timeout_s=timeout_s,
+                    name=os.path.splitext(os.path.basename(user_file.file.name))[0],
+                )
+        except TimeoutError as e:
+            return Response(
+                {
+                    "error": str(e),
+                    "code": "timeout",
+                    "timeout_s": timeout_s,
+                    "hint": "Increase the timeout or restrict the discovery "
+                            "to fewer object types.",
+                },
+                status=status.HTTP_408_REQUEST_TIMEOUT,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"An error occurred during OCPN discovery: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        result = {"ocpn": model}
+        cache.set(cache_key, result, timeout=3600)
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
         """Returns basic statistics of the event log."""
         try:
@@ -1172,6 +1281,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(VariantsComponent.objects.get(id=comp.id))
             elif comp.component_name == "ProcessAreaComponent":
                 components.append(ProcessAreaComponent.objects.get(id=comp.id))
+            elif comp.component_name == "TotemMinerComponent":
+                components.append(TotemMinerComponent.objects.get(id=comp.id))
             elif comp.component_name == "LogStatisticsComponent":
                 components.append(LogStatisticsComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCDFGComponent":
@@ -1183,6 +1294,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 "NewOCDFGVariantsComponent",
             ):
                 components.append(NewOCDFGComponent.objects.get(id=comp.id))
+            elif comp.component_name == "OCPNComponent":
+                components.append(OCPNComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCCNComponent":
                 components.append(OCCNComponent.objects.get(id=comp.id))
             else:
@@ -1284,6 +1397,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     alpha=item.get("alpha", 1.0),
                     beta=item.get("beta", 1.0),
                 )
+            elif component_name == "TotemMinerComponent":
+                TotemMinerComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item["x"],
+                    y=item["y"],
+                    w=item["w"],
+                    h=item["h"],
+                    component_name=component_name,
+                )
             elif component_name == "LogStatisticsComponent":
                 LogStatisticsComponent.objects.create(
                     dashboard=dashboard,
@@ -1363,6 +1485,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     layout_direction=item.get("layout_direction", "LR"),
                     object_types=item.get("object_types") or "",
                 )
+            elif component_name == 'OCPNComponent':
+                OCPNComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    automatic_loading=item.get('automatic_loading', False),
+                    timeout_s=item.get('timeout_s', 30.0),
+                )
             elif component_name == 'FilterStackComponent':
                 FilterStackComponent.objects.create(
                     dashboard=dashboard,
@@ -1434,7 +1567,14 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
     """Open an uploaded OCEL file as an `OcelDuckDB`, dispatching on extension."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".duckdb":
-        db = OcelDuckDB.load(path)
+        # Read-only: the registry connection only ever reads (algorithms use
+        # TEMP tables, which work on read-only connections). A read-write
+        # open would be exclusive and conflict with any other opener of the
+        # same file — DuckDB then raises "Could not set lock on file" /
+        # "Can't open a connection to same database file with a different
+        # configuration", which used to surface when several things loaded
+        # at once.
+        db = OcelDuckDB.load(path, read_only=True)
         if strict_mode:
             errors = validate_ocel(db.conn)
             if errors:
@@ -1466,19 +1606,46 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
 # React dashboard fires four endpoints in parallel on first load, so this
 # is not hypothetical.
 #
-# Solution: a per-file `threading.Lock`, acquired by every view for the
-# duration of its algorithm work via `_with_ocel_db(user_file)`. Requests
-# for different files still run in parallel.
+# Solution: every `OcelDuckDB` carries a reentrant `lock`; every view
+# acquires it for the duration of its algorithm work via
+# `_with_ocel_db(user_file)`. Because the lock lives on the instance (not in
+# a side table here), totem_lib code that receives the db object can take
+# the same lock without importing backend internals, and a consumer that
+# already holds it can call helpers that lock again (RLock). Requests for
+# different files still run in parallel.
 #
-# Both dicts live for the lifetime of the gunicorn/runserver worker. There
-# is no TTL — the connection stays open until the process exits.
+# The registry lives for the lifetime of the gunicorn/runserver worker.
+# There is no TTL — the connection stays open until the process exits.
 import threading
+import time
 from contextlib import contextmanager
 
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
-_OCEL_DB_LOCKS: dict[int, threading.Lock] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
+
+
+def _open_ocel_db_with_retry(path: str) -> OcelDuckDB:
+    """Open an OCEL database, retrying briefly on file-lock conflicts.
+
+    A concurrent writer (e.g. an upload conversion finishing, or another
+    process holding the file) makes `duckdb.connect` fail immediately.
+    Those windows are short, so a few retries turn a user-visible 500 into
+    a slightly slower first load. Anything still failing after the retries
+    is re-raised with the original message.
+    """
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            return _build_ocel_db_from_path(path)
+        except Exception as exc:  # duckdb.IOException / ConnectionException
+            message = str(exc).lower()
+            if "lock" in message or "different configuration" in message:
+                last_error = exc
+                time.sleep(0.2)
+                continue
+            raise
+    raise last_error
 
 
 def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
@@ -1497,12 +1664,11 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
     with _OCEL_DB_REGISTRY_LOCK:
         db = _OCEL_DB_REGISTRY.get(pk)
         if db is None:
-            db = _build_ocel_db_from_path(user_file.file.path)
+            db = _open_ocel_db_with_retry(user_file.file.path)
             object_types = tuple(
                 (row["name"], row["count"]) for row in _object_types_with_counts(db)
             )
             _OCEL_DB_REGISTRY[pk] = db
-            _OCEL_DB_LOCKS[pk] = threading.Lock()
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
 
@@ -1535,8 +1701,7 @@ def _with_ocel_db(user_file):
             totem = totemDiscovery_db(db)
     """
     db = _get_or_load_ocel_db(user_file)
-    lock = _OCEL_DB_LOCKS[int(user_file.pk)]
-    with lock:
+    with db.lock:
         yield db
 
 
@@ -3242,17 +3407,11 @@ def NewOCDFGViewSet(request):
 
 # OCCN discovery dominates request time (seconds to ~1 min per log) while
 # thresholding is a cheap marker filter, so cache the threshold-0 base net per
-# (file, object-type filter) and apply the requested threshold per request —
-# the pattern discover_occn's own docstring recommends. In-process cache: it
-# is cleared on backend restart/reload and sized small because nets can be
-# large in memory.
-#
-# The key has no user component on purpose: the cache is only ever reached
-# after the ownership check on the event log below, so a hit already implies
-# the caller may read that log. Keep the lookup above the cache read.
+# (file, object-type filter) and apply the requested threshold per request.
 _OCCN_CACHE_MAX_ENTRIES = 4
 _occn_base_cache = OrderedDict()
 _occn_cache_lock = threading.Lock()
+_occn_inflight = {}
 
 
 @api_view(["GET"])
@@ -3322,15 +3481,48 @@ def OCCNViewSet(request):
 
         if base_occn is None:
             fp_no_types = {k: v for k, v in fp.items() if k != "object_types"}
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db.conn, fp_no_types):
-                    base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
-            if not has_event_filter:
+
+            if has_event_filter:
+                # Filter active — skip deduplication and caching, compute fresh each time
+                with _with_ocel_db(user_file) as db:
+                    with _filter_shadow(db.conn, fp_no_types):
+                        ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
+            else:
+                # Single-flight deduplication: ensure only one thread mines OCCN for a given cache_key
+                event = None
+                is_primary = False
                 with _occn_cache_lock:
-                    _occn_base_cache[cache_key] = base_occn
-                    _occn_base_cache.move_to_end(cache_key)
-                    while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
-                        _occn_base_cache.popitem(last=False)
+                    base_occn = _occn_base_cache.get(cache_key)
+                    if base_occn is None:
+                        event = _occn_inflight.get(cache_key)
+                        if event is None:
+                            event = threading.Event()
+                            _occn_inflight[cache_key] = event
+                            is_primary = True
+
+                if not is_primary and base_occn is None and event is not None:
+                    event.wait(timeout=120)
+                    with _occn_cache_lock:
+                        base_occn = _occn_base_cache.get(cache_key)
+
+                if is_primary:
+                    try:
+                        with _with_ocel_db(user_file) as db:
+                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                        base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
+                        with _occn_cache_lock:
+                            _occn_base_cache[cache_key] = base_occn
+                            _occn_base_cache.move_to_end(cache_key)
+                            while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                                _occn_base_cache.popitem(last=False)
+                    finally:
+                        with _occn_cache_lock:
+                            _occn_inflight.pop(cache_key, None)
+                        event.set()
+
+        if base_occn is None:
+            return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         occn = (
             base_occn.apply_relative_occurrence_threshold(threshold)

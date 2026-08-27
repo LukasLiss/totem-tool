@@ -16,6 +16,8 @@ import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import OCPNVisualizer from "@/react_component/OCPNVisualizer";
+import TotemMiner from "@/react_component/TotemMiner";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
@@ -135,6 +137,35 @@ export function AnalysisView() {
                 />
               </CardContent>
             </Card>
+          </div>
+        );
+
+      case 'ocPetriNet':
+        return (
+          <div className="w-full max-w-7xl">
+            <Card>
+              <CardHeader>
+                <CardTitle>OC Petri Net</CardTitle>
+                <CardDescription>
+                  Object-Centric Petri Net discovered from the event log
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[700px] p-0">
+                <OCPNVisualizer
+                  height="100%"
+                  fileId={selectedFile?.id}
+                  autoStart={true}
+                  showControls={true}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case 'totemMiner':
+        return (
+          <div className="w-full max-w-7xl">
+            <TotemMiner fileId={selectedFile?.id} height={700} />
           </div>
         );
 
