@@ -2,7 +2,9 @@ from django.db import models
 from django.core.files.storage import FileSystemStorage
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.conf import settings
 import os
+import uuid
 # Create your models here.
 
 #This is the general OCM datastructure
@@ -49,6 +51,36 @@ class EventLog(models.Model):
     def __str__(self):
         return f"{self.project.name} - {self.file.name}"
 
+class OcelEditorSession(models.Model):
+    """
+    Ephemeral working copy for the OCEL editor.
+
+    Each session owns a `.duckdb` working file under
+    MEDIA_ROOT/_ocel_editor/. The file only becomes a proper Project /
+    EventLog when the user explicitly saves; discarded or stale sessions
+    are deleted together with their files (see signals.py and the cleanup
+    in views_ocel_editor.py).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100, default="Untitled OCEL")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def working_dir(self) -> str:
+        return os.path.join(settings.MEDIA_ROOT, "_ocel_editor")
+
+    @property
+    def working_path(self) -> str:
+        return os.path.join(self.working_dir, f"{self.id}.duckdb")
+
+    def export_path(self, extension: str) -> str:
+        """Scratch path for downloads; lives and dies with the session."""
+        return os.path.join(self.working_dir, f"{self.id}-export{extension}")
+
+    def __str__(self):
+        return f"OcelEditorSession {self.id} ({self.name})"
 
 class ProjectAsset(models.Model):
     class AssetType(models.TextChoices):
