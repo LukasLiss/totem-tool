@@ -371,7 +371,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db
-                _OCEL_DB_LOCKS[pk] = threading.Lock()
+                _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
+                    (row["name"], row["count"])
+                    for row in _object_types_with_counts(db)
+                )
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
@@ -1487,7 +1490,14 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
     """Open an uploaded OCEL file as an `OcelDuckDB`, dispatching on extension."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".duckdb":
-        db = OcelDuckDB.load(path)
+        # Read-only: the registry connection only ever reads (algorithms use
+        # TEMP tables, which work on read-only connections). A read-write
+        # open would be exclusive and conflict with any other opener of the
+        # same file — DuckDB then raises "Could not set lock on file" /
+        # "Can't open a connection to same database file with a different
+        # configuration", which used to surface when several things loaded
+        # at once.
+        db = OcelDuckDB.load(path, read_only=True)
         if strict_mode:
             errors = validate_ocel(db.conn)
             if errors:
@@ -1519,19 +1529,46 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
 # React dashboard fires four endpoints in parallel on first load, so this
 # is not hypothetical.
 #
-# Solution: a per-file `threading.Lock`, acquired by every view for the
-# duration of its algorithm work via `_with_ocel_db(user_file)`. Requests
-# for different files still run in parallel.
+# Solution: every `OcelDuckDB` carries a reentrant `lock`; every view
+# acquires it for the duration of its algorithm work via
+# `_with_ocel_db(user_file)`. Because the lock lives on the instance (not in
+# a side table here), totem_lib code that receives the db object can take
+# the same lock without importing backend internals, and a consumer that
+# already holds it can call helpers that lock again (RLock). Requests for
+# different files still run in parallel.
 #
-# Both dicts live for the lifetime of the gunicorn/runserver worker. There
-# is no TTL — the connection stays open until the process exits.
+# The registry lives for the lifetime of the gunicorn/runserver worker.
+# There is no TTL — the connection stays open until the process exits.
 import threading
+import time
 from contextlib import contextmanager
 
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
-_OCEL_DB_LOCKS: dict[int, threading.Lock] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
+
+
+def _open_ocel_db_with_retry(path: str) -> OcelDuckDB:
+    """Open an OCEL database, retrying briefly on file-lock conflicts.
+
+    A concurrent writer (e.g. an upload conversion finishing, or another
+    process holding the file) makes `duckdb.connect` fail immediately.
+    Those windows are short, so a few retries turn a user-visible 500 into
+    a slightly slower first load. Anything still failing after the retries
+    is re-raised with the original message.
+    """
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            return _build_ocel_db_from_path(path)
+        except Exception as exc:  # duckdb.IOException / ConnectionException
+            message = str(exc).lower()
+            if "lock" in message or "different configuration" in message:
+                last_error = exc
+                time.sleep(0.2)
+                continue
+            raise
+    raise last_error
 
 
 def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
@@ -1550,12 +1587,11 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
     with _OCEL_DB_REGISTRY_LOCK:
         db = _OCEL_DB_REGISTRY.get(pk)
         if db is None:
-            db = _build_ocel_db_from_path(user_file.file.path)
+            db = _open_ocel_db_with_retry(user_file.file.path)
             object_types = tuple(
                 (row["name"], row["count"]) for row in _object_types_with_counts(db)
             )
             _OCEL_DB_REGISTRY[pk] = db
-            _OCEL_DB_LOCKS[pk] = threading.Lock()
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
     return db
 
@@ -1588,8 +1624,7 @@ def _with_ocel_db(user_file):
             totem = totemDiscovery_db(db)
     """
     db = _get_or_load_ocel_db(user_file)
-    lock = _OCEL_DB_LOCKS[int(user_file.pk)]
-    with lock:
+    with db.lock:
         yield db
 
 
@@ -3171,11 +3206,13 @@ def OCCNViewSet(request):
                 _occn_base_cache.move_to_end(cache_key)
 
         if base_occn is None:
-            user_file_db = _get_or_load_ocel_db(user_file)
-            user_file_db._lock_pk = int(user_file.pk)
-            base_occn = discover_occn(
-                user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters
-            )
+            # Hold the per-file lock for the whole discovery: it queries the
+            # shared connection, and running it unlocked raced against the
+            # other dashboard endpoints (which fire in parallel on load).
+            with _with_ocel_db(user_file) as user_file_db:
+                base_occn = discover_occn(
+                    user_file_db, relativeOccuranceThreshold=0.0, parameters=parameters
+                )
             with _occn_cache_lock:
                 _occn_base_cache[cache_key] = base_occn
                 _occn_base_cache.move_to_end(cache_key)

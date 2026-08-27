@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import pandas as pd
 import pm4py
 import networkx as nx
@@ -188,20 +189,16 @@ def _prepare_ocel_polars_for_discovery(ocel: ObjectCentricEventLog):
 
 
 def _prepare_ocel_duckdb_for_discovery(ocel_db: OcelDuckDB):
-    """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames."""
-    pk = getattr(ocel_db, "_lock_pk", None)
-    lock = None
-    if pk is not None:
-        try:
-            from api.views import _OCEL_DB_LOCKS
-            lock = _OCEL_DB_LOCKS.get(int(pk))
-        except Exception:
-            lock = None
+    """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames.
 
-    if lock:
-        with lock:
-            ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
-    else:
+    The conversion queries the shared connection, so it runs under the
+    instance's reentrant lock. Callers that already hold ``ocel_db.lock``
+    (e.g. a backend view serialising all work on the log) simply re-enter it.
+    """
+    lock = getattr(ocel_db, "lock", None)
+    if lock is None:
+        lock = nullcontext()
+    with lock:
         ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
 
     return _extract_dataframes_from_pm4py(ocel_pm4py)
