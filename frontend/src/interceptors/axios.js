@@ -116,11 +116,15 @@ axios.interceptors.request.use((config) => {
   if (config._skipGlobalFilter) return config;
   const { appliedRules, isApplied } = useFilterStore.getState();
   const url = config.url ?? "";
+  // NOTE: check "/api/ocdfg/" as well as "/api/new-ocdfg/" — they are two
+  // distinct routes, and the process-area drill-down uses the former.
   const isDataEndpoint =
     url.includes("/api/files/") ||
+    url.includes("/api/ocdfg/") ||
     url.includes("/api/new-ocdfg/") ||
     url.includes("/api/variants/") ||
-    url.includes("/api/occn/");
+    url.includes("/api/occn/") ||
+    url.includes("/api/ocpn/");
   if (isApplied && isDataEndpoint) {
     const filterParams = buildFilterParams(appliedRules);
     config.params = { ...config.params, ...filterParams };

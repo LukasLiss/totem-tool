@@ -1813,48 +1813,90 @@ def _filter_shadow(db, fp):
 
     conn = db.conn
 
-    conditions, params = [], []
+    # Event-level predicates (time window / activity set). These decide which
+    # *events* survive and are independent of the object-type predicate.
+    event_conditions, event_params = [], []
     if "after" in fp:
-        conditions.append("e.timestamp_unix >= ?")
-        params.append(fp["after"])
+        event_conditions.append("e.timestamp_unix >= ?")
+        event_params.append(fp["after"])
     if "before" in fp:
-        conditions.append("e.timestamp_unix <= ?")
-        params.append(fp["before"])
+        event_conditions.append("e.timestamp_unix <= ?")
+        event_params.append(fp["before"])
     if "activities" in fp:
         placeholders = ",".join("?" for _ in fp["activities"])
-        conditions.append(f"e.activity IN ({placeholders})")
-        params.extend(fp["activities"])
+        event_conditions.append(f"e.activity IN ({placeholders})")
+        event_params.extend(fp["activities"])
 
+    # Order matters. Objects are filtered *by type directly*, then the relation
+    # is narrowed to the surviving objects, then events to the relation.
+    # Deriving objects from events (the reverse) silently re-admits a removed
+    # type whenever one of its objects shares an event with a kept type — in an
+    # OCEL that is almost always the case, so the removed type never disappears.
     if "object_types" in fp:
         placeholders = ",".join("?" for _ in fp["object_types"])
-        conditions.append(f"o.obj_type IN ({placeholders})")
-        params.extend(fp["object_types"])
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        conn.execute(f"""
-            CREATE OR REPLACE TEMP TABLE events AS
-            SELECT DISTINCT e.*
-            FROM main.events e
-            JOIN main.event_object eo USING (event_id)
-            JOIN main.objects o ON o.obj_id = eo.obj_id
-            {where}
-        """, params)
+        conn.execute(
+            f"""
+            CREATE OR REPLACE TEMP TABLE objects AS
+            SELECT * FROM main.objects WHERE obj_type IN ({placeholders})
+            """,
+            list(fp["object_types"]),
+        )
     else:
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        conn.execute(f"""
-            CREATE OR REPLACE TEMP TABLE events AS
-            SELECT * FROM main.events e {where}
-        """, params)
+        conn.execute(
+            "CREATE OR REPLACE TEMP TABLE objects AS SELECT * FROM main.objects"
+        )
 
     conn.execute("""
         CREATE OR REPLACE TEMP TABLE event_object AS
         SELECT eo.* FROM main.event_object eo
-        WHERE eo.event_id IN (SELECT event_id FROM events)
+        WHERE eo.obj_id IN (SELECT obj_id FROM objects)
     """)
-    conn.execute("""
-        CREATE OR REPLACE TEMP TABLE objects AS
-        SELECT o.* FROM main.objects o
-        WHERE o.obj_id IN (SELECT obj_id FROM event_object)
-    """)
+
+    # An event survives if it passes the event-level predicates *and* still has
+    # at least one surviving object relation: an event stripped of all its
+    # objects carries no object-centric information.
+    event_where = (
+        f"WHERE {' AND '.join(event_conditions)} AND" if event_conditions else "WHERE"
+    )
+    conn.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE events AS
+        SELECT e.* FROM main.events e
+        {event_where} e.event_id IN (SELECT event_id FROM event_object)
+        """,
+        event_params,
+    )
+
+    # Re-narrow the relation and the objects: the event-level predicates may
+    # have dropped events that `event_object` still references, and objects may
+    # be left with no relation at all.
+    if event_conditions:
+        conn.execute("""
+            CREATE OR REPLACE TEMP TABLE event_object AS
+            SELECT eo.* FROM event_object eo
+            WHERE eo.event_id IN (SELECT event_id FROM events)
+        """)
+        conn.execute("""
+            CREATE OR REPLACE TEMP TABLE objects AS
+            SELECT o.* FROM objects o
+            WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+        """)
+
+    # `CREATE TABLE AS` copies no indexes, so every unqualified query in the
+    # algorithms would scan the shadows linearly — the opposite of the speed-up
+    # a filter is meant to buy. Mirror the indexes `ocel_duckdb` puts on main.
+    for stmt in (
+        "CREATE INDEX idx_shadow_eo_obj ON event_object(obj_id)",
+        "CREATE INDEX idx_shadow_eo_ev ON event_object(event_id)",
+        "CREATE INDEX idx_shadow_obj_type ON objects(obj_type)",
+        "CREATE INDEX idx_shadow_obj_id ON objects(obj_id)",
+        "CREATE INDEX idx_shadow_ev_ts ON events(timestamp_unix)",
+        "CREATE INDEX idx_shadow_ev_id ON events(event_id)",
+    ):
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass
 
     try:
         yield
@@ -2255,28 +2297,48 @@ def variants(request):
     fp = _parse_filter_params(request)
     leading_object_type = request.query_params.get("leading_type")
 
+    # --- Cache lookup (#72 / #74) ---
+    # The filter params are part of the key: without them a filtered and an
+    # unfiltered run would share one entry and serve each other's results.
+    cache_params = {
+        "leading_type": leading_object_type or "",
+        "extraction": extraction,
+        "iso": iso,
+        "timeout_s": timeout_s,
+    }
+    if fp:
+        cache_params.update({f"f_{k}": str(v) for k, v in sorted(fp.items())})
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file, "variants", cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
+
     try:
         with _with_ocel_db(user_file) as db:
-            obj_types = _object_types(db)
-
-            # Leading type is only needed for the leading_* extractions.
-            # For "connected" we skip the default-to-first-alphabetical
-            # fallback entirely — the param is ignored downstream anyway.
-            if extraction.startswith("leading"):
-                if not leading_object_type or leading_object_type not in obj_types:
-                    if not obj_types:
-                        return Response(
-                            {
-                                "variants": [],
-                                "object_types": [],
-                            },
-                            status=status.HTTP_200_OK,
-                        )
-                    leading_object_type = obj_types[0]
-            else:
-                leading_object_type = None
-
             with _filter_shadow(db, fp):
+                # Resolve the leading type *inside* the shadow: the filter may
+                # have removed the type the client last asked for, and falling
+                # back to a type that no longer exists yields an empty result
+                # instead of a sensible default.
+                obj_types = _object_types(db)
+
+                # Leading type is only needed for the leading_* extractions.
+                # For "connected" we skip the default-to-first-alphabetical
+                # fallback entirely — the param is ignored downstream anyway.
+                if extraction.startswith("leading"):
+                    if not leading_object_type or leading_object_type not in obj_types:
+                        if not obj_types:
+                            return Response(
+                                {
+                                    "variants": [],
+                                    "object_types": [],
+                                },
+                                status=status.HTTP_200_OK,
+                            )
+                        leading_object_type = obj_types[0]
+                else:
+                    leading_object_type = None
+
                 # The default iso strategy ("wl+vf2") is sound and exact.
                 # `find_variants` creates connection-scoped TEMP TABLEs — the
                 # per-file lock from `_with_ocel_db` makes that safe under
@@ -3321,10 +3383,30 @@ def OCDFGViewSet(request):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    # Global filter (time window / activity set). `object_types` is already
+    # handled by the library param above, so the shadow only carries the
+    # event-level predicates — same split as the new-ocdfg endpoint.
+    fp = _parse_filter_params(request)
+    fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
+    # The global filter may also narrow the object types; intersect it with
+    # the per-area selection so the drill-down cannot re-introduce a type the
+    # user filtered out globally.
+    if "object_types" in fp:
+        global_types = set(fp["object_types"])
+        object_type_filter = (
+            (object_type_filter & global_types) if object_type_filter else global_types
+        )
+
     # --- Cache lookup (#72 / #74) ---
+    # Filter params belong in the key: without them a filtered and an
+    # unfiltered run would share one entry and serve each other's results.
     ocdfg_cache_params = {
         "object_types": sorted(object_type_filter) if object_type_filter else [],
     }
+    if fp_non_types:
+        ocdfg_cache_params.update(
+            {f"f_{k}": str(v) for k, v in sorted(fp_non_types.items())}
+        )
     if _should_use_cache(request):
         cached = get_cached_result(user_file, "ocdfg", ocdfg_cache_params)
         if cached is not None:
@@ -3332,65 +3414,66 @@ def OCDFGViewSet(request):
 
     try:
         with _with_ocel_db(user_file) as db:
-            # Full OCDFG (unfiltered) for register.
-            # edges="links" preserves the pre-NetworkX-3.4 key name the
-            # frontend expects.
-            ocdfg_full = OCDFGDb.from_ocel_db(db)
-            dfg_json_full = nx.node_link_data(ocdfg_full, edges="links")
-            all_nodes = [
-                {
-                    "id": n.get("id"),
-                    "types": n.get("types", []),
-                    "role": n.get("role"),
-                    "object_type": n.get("object_type"),
-                }
-                for n in dfg_json_full.get("nodes", [])
-            ]
+            with _filter_shadow(db, fp_non_types):
+                # Full OCDFG (unfiltered) for register.
+                # edges="links" preserves the pre-NetworkX-3.4 key name the
+                # frontend expects.
+                ocdfg_full = OCDFGDb.from_ocel_db(db)
+                dfg_json_full = nx.node_link_data(ocdfg_full, edges="links")
+                all_nodes = [
+                    {
+                        "id": n.get("id"),
+                        "types": n.get("types", []),
+                        "role": n.get("role"),
+                        "object_type": n.get("object_type"),
+                    }
+                    for n in dfg_json_full.get("nodes", [])
+                ]
 
-            # Filtered OCDFG if object types specified. `OCDFGDb.from_ocel_db`
-            # pushes the type filter into SQL itself — no separate OCEL
-            # subsetting step is needed.
-            filter_error = None
-            trace_variants = None
-            if object_type_filter:
-                try:
-                    ocdfg_filtered = OCDFGDb.from_ocel_db(
-                        db, object_types=sorted(object_type_filter)
-                    )
-                    if len(ocdfg_filtered.nodes) == 0:
-                        dfg_json = {
-                            "directed": True,
-                            "multigraph": False,
-                            "graph": {"kind": "ocdfg"},
-                            "nodes": [],
-                            "links": [],
-                        }
-                    else:
-                        dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
-
-                    # Per-object-type trace variants for the filtered types.
-                    trace_variants = NewOCDFGDb.compute_variants(
-                        db, object_types=list(object_type_filter)
-                    )
-                except Exception as e:
-                    # Gracefully fall back to unfiltered graph to avoid
-                    # frontend breakage, but surface warning.
-                    filter_error = f"Failed to compute filtered OCDFG: {e}"
-                    dfg_json = dfg_json_full
-            else:
-                dfg_json = dfg_json_full
-
-            # Always compute trace_variants if not already computed — use
-            # all object types from the OCEL when no filter is specified.
-            if trace_variants is None:
-                try:
-                    all_object_types = _object_types(db)
-                    if all_object_types:
-                        trace_variants = NewOCDFGDb.compute_variants(
-                            db, object_types=all_object_types
+                # Filtered OCDFG if object types specified. `OCDFGDb.from_ocel_db`
+                # pushes the type filter into SQL itself — no separate OCEL
+                # subsetting step is needed.
+                filter_error = None
+                trace_variants = None
+                if object_type_filter:
+                    try:
+                        ocdfg_filtered = OCDFGDb.from_ocel_db(
+                            db, object_types=sorted(object_type_filter)
                         )
-                except Exception as e:
-                    print(f"[OCDFG] Failed to compute trace variants: {e}")
+                        if len(ocdfg_filtered.nodes) == 0:
+                            dfg_json = {
+                                "directed": True,
+                                "multigraph": False,
+                                "graph": {"kind": "ocdfg"},
+                                "nodes": [],
+                                "links": [],
+                            }
+                        else:
+                            dfg_json = nx.node_link_data(ocdfg_filtered, edges="links")
+
+                        # Per-object-type trace variants for the filtered types.
+                        trace_variants = NewOCDFGDb.compute_variants(
+                            db, object_types=list(object_type_filter)
+                        )
+                    except Exception as e:
+                        # Gracefully fall back to unfiltered graph to avoid
+                        # frontend breakage, but surface warning.
+                        filter_error = f"Failed to compute filtered OCDFG: {e}"
+                        dfg_json = dfg_json_full
+                else:
+                    dfg_json = dfg_json_full
+
+                # Always compute trace_variants if not already computed — use
+                # all object types from the OCEL when no filter is specified.
+                if trace_variants is None:
+                    try:
+                        all_object_types = _object_types(db)
+                        if all_object_types:
+                            trace_variants = NewOCDFGDb.compute_variants(
+                                db, object_types=all_object_types
+                            )
+                    except Exception as e:
+                        print(f"[OCDFG] Failed to compute trace variants: {e}")
 
         response_payload = {"dfg": dfg_json, "all_nodes": all_nodes}
         if filter_error:
