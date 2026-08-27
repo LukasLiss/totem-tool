@@ -8,6 +8,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   Background,
   BackgroundVariant,
@@ -56,6 +57,7 @@ export interface OCPNVisualizerProps {
   showControls?: boolean;
   /** Called when the user edits the timeout (e.g. to persist it). */
   onTimeoutSChange?: (timeoutS: number) => void;
+  filterEnabled?: boolean;
 }
 
 /**
@@ -129,7 +131,10 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   defaultTimeoutS = DEFAULT_OCPN_TIMEOUT_S,
   showControls = true,
   onTimeoutSChange,
+  filterEnabled = false,
 }) => {
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const [model, setModel] = useState<OcpnModelFile | null>(null);
   const [objectTypes, setObjectTypes] = useState<OcpnObjectType[]>([]);
   const [nodes, setNodes] = useState<OcpnFlowNode[]>([]);
@@ -161,6 +166,9 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   const timeoutRef = useRef(timeoutS);
   timeoutRef.current = timeoutS;
 
+  const filterEnabledRef = useRef(filterEnabled);
+  filterEnabledRef.current = filterEnabled;
+
   const discover = useCallback(async () => {
     if (!fileId) return;
     const seq = ++requestSeq.current;
@@ -169,7 +177,8 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     try {
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
         params: { timeout_s: timeoutRef.current },
-      });
+        _skipGlobalFilter: !filterEnabledRef.current,
+      } as any);
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
       const flow = modelToFlow(parsed.model);
@@ -200,6 +209,12 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       if (seq === requestSeq.current) setLoading(false);
     }
   }, [fileId]);
+
+  // Re-discover when filter is toggled or version changes.
+  useEffect(() => {
+    if (!fileId || !autoStart) return;
+    discover();
+  }, [filterEnabled, effectiveFilterVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start discovery (once per file).
   useEffect(() => {

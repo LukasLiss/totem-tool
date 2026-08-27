@@ -551,14 +551,23 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            if _should_use_cache(request):
+            fp = _parse_filter_params(request)
+            is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+
+            if _should_use_cache(request) and not is_filtered:
                 cached = get_cached_result(user_file, "discover_totem")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
+            elif _should_use_cache(request) and is_filtered:
+                cached = get_cached_result(user_file, "discover_totem", filter_cache_params)
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                # Run with tau=0.0 so the frontend can filter the full relation set.
-                totem = totemDiscovery_db(db, tau=0.0)
+                with _filter_shadow(db.conn, fp):
+                    # Run with tau=0.0 so the frontend can filter the full relation set.
+                    totem = totemDiscovery_db(db, tau=0.0)
             serialized = totem_to_dict(totem)
             
             # Augment with relations_stats for frontend tau filtering
@@ -594,7 +603,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             
             serialized["relations_stats"] = relations_stats
 
-            set_cached_result(user_file, "discover_totem", serialized)
+            if is_filtered:
+                set_cached_result(user_file, "discover_totem", serialized, filter_cache_params)
+            else:
+                set_cached_result(user_file, "discover_totem", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -1031,6 +1043,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except (TypeError, ValueError):
             timeout_s = 30.0
 
+        fp = _parse_filter_params(request)
+        is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+
         raw_object_types = request.query_params.get("object_types")
         object_type_filter = None
         if raw_object_types:
@@ -1041,19 +1056,24 @@ class EventLogViewSet(viewsets.ModelViewSet):
         # The discovered model only depends on the log and the selected
         # object types, not on the timeout budget — cache accordingly.
         types_key = ",".join(object_type_filter) if object_type_filter else "all"
-        cache_key = f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
+        if is_filtered:
+            filter_suffix = sha1(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:8]
+            cache_key = f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}_{filter_suffix}"
+        else:
+            cache_key = f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
         cached_result = cache.get(cache_key)
         if cached_result:
             return Response(cached_result, status=status.HTTP_200_OK)
 
         try:
             with _with_ocel_db(user_file) as db:
-                model = discover_ocpn_db(
-                    db,
-                    object_types=object_type_filter,
-                    timeout_s=timeout_s,
-                    name=os.path.splitext(os.path.basename(user_file.file.name))[0],
-                )
+                with _filter_shadow(db.conn, fp):
+                    model = discover_ocpn_db(
+                        db,
+                        object_types=object_type_filter,
+                        timeout_s=timeout_s,
+                        name=os.path.splitext(os.path.basename(user_file.file.name))[0],
+                    )
         except TimeoutError as e:
             return Response(
                 {

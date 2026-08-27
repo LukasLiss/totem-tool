@@ -145,7 +145,10 @@ export function AnalysisView() {
           <div className="w-full max-w-7xl">
             <Card>
               <CardHeader>
-                <CardTitle>OC Petri Net</CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle>OC Petri Net</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                </div>
                 <CardDescription>
                   Object-Centric Petri Net discovered from the event log
                 </CardDescription>
@@ -156,6 +159,7 @@ export function AnalysisView() {
                   fileId={selectedFile?.id}
                   autoStart={true}
                   showControls={true}
+                  filterEnabled={filterEnabled}
                 />
               </CardContent>
             </Card>
@@ -165,7 +169,12 @@ export function AnalysisView() {
       case 'totemMiner':
         return (
           <div className="w-full max-w-7xl">
-            <TotemMiner fileId={selectedFile?.id} height={700} />
+            <TotemMiner
+              fileId={selectedFile?.id}
+              height={700}
+              filterEnabled={filterEnabled}
+              onToggleFilter={toggleFilter}
+            />
           </div>
         );
 
