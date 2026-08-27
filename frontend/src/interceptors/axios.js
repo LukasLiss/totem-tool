@@ -35,6 +35,30 @@ function setAuthHeaderFromStorage() {
 }
 setAuthHeaderFromStorage();
 
+/**
+ * Global cache-bypass flag
+ * ------------------------
+ * When the user turns "bypass cache" on in Settings, every request should
+ * carry ``?bypass_cache=1`` so the backend recomputes instead of serving the
+ * disk cache. Rather than threading that param through every call site, we
+ * keep the flag here and a request interceptor appends it automatically.
+ *
+ * The flag is seeded once at app startup from the user's saved setting (see
+ * `setBypassCache` callers) and updated live when the toggle is flipped.
+ */
+let bypassCacheEnabled = false;
+
+export function setBypassCache(enabled) {
+  bypassCacheEnabled = Boolean(enabled);
+}
+
+axios.interceptors.request.use((config) => {
+  if (bypassCacheEnabled) {
+    config.params = { ...(config.params || {}), bypass_cache: 1 };
+  }
+  return config;
+});
+
 // Shared in-flight refresh promise. While non-null, concurrent 401s await
 // it and then retry the original request with the new access token.
 let refreshInFlight = null;

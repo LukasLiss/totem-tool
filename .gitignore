@@ -8,6 +8,9 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
 !docs/MODEL_ASSETS.md
+!docs/OCCN_REPLAY_FITNESS.md
+!docs/EDGE_CASE_TAXONOMY.md
+!totem_lib/test_data/edge_cases/README.md
 !.claude/**/*.md
 *.txt
 
@@ -75,6 +78,7 @@ backend/user_files/*
 .env/
 
 # Django specific
+backend/cache/
 backend/db.sqlite3
 backend/db.sqlite3-journal
 backend/media/

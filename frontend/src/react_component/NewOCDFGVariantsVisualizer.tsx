@@ -20,6 +20,7 @@ import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 
@@ -59,6 +60,7 @@ export type DfgNode = {
   id: string;
   label: string;
   types?: string[];
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type DfgLink = {
@@ -68,6 +70,7 @@ export type DfgLink = {
   objtype?: string;
   weight?: number;
   variant_rank?: number;
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type OcdfgGraph = {
@@ -325,6 +328,48 @@ function NewOCDFGVariantsVisualizer({
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
 
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+
+  const handleNodeMouseEnter = useCallback((event: React.MouseEvent, node: Node) => {
+    const metrics = (node.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: (node.data as any)?.label
+      });
+    }
+  }, []);
+
+  const handleNodeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleNodeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
+
+  const handleEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
+    const metrics = (edge.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: 'Directly-Follows Arc'
+      });
+    }
+  }, []);
+
+  const handleEdgeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleEdgeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
+
   const fitViewOptions = useMemo(() => {
     if (resolvedVariant === 'detail' || hideChrome) {
       return { padding: DETAIL_FIT_PADDING, offset: { x: 0, y: 0 } };
@@ -522,7 +567,7 @@ function NewOCDFGVariantsVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
+    const url = `http://localhost:8000/api/new-ocdfg/?file_id=${fileId}`;
 
     axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
@@ -660,6 +705,7 @@ function NewOCDFGVariantsVisualizer({
         layoutDirection,
         typeIndicatorSize,
         typeIndicatorThickness,
+        metrics: node.metrics ?? null,
       };
       const terminalLabel =
         node.types && node.types.length > 0
@@ -774,6 +820,7 @@ function NewOCDFGVariantsVisualizer({
           frequency: frequencies[index],
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
+          metrics: link.metrics ?? (link.weight != null ? { frequency: link.weight, avg_lead_time: null } : null),
         },
       } as Edge;
     });
@@ -985,6 +1032,12 @@ function NewOCDFGVariantsVisualizer({
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onNodeMouseMove={handleNodeMouseMove}
+        onEdgeMouseEnter={handleEdgeMouseEnter}
+        onEdgeMouseLeave={handleEdgeMouseLeave}
+        onEdgeMouseMove={handleEdgeMouseMove}
         onMoveEnd={resolvedVariant === 'detail' ? updateAutoInteractionLock : undefined}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
@@ -1236,6 +1289,7 @@ function NewOCDFGVariantsVisualizer({
           </div>
         </div>
       )}
+      {tooltipState && <MetricTooltip {...tooltipState} />}
     </div>
   );
 }

@@ -47,6 +47,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
   focusedGroup,
   interactive = true,
   markerTitle,
+  mutedActivities = [],
   onSelectGroup,
   onMergeGroups,
 }: {
@@ -58,12 +59,17 @@ const MarkerOverlay = memo(function MarkerOverlay({
   focusedGroup: GroupRef | null;
   interactive?: boolean;
   markerTitle?: (vis: MarkerVis) => string;
+  mutedActivities?: string[];
   onSelectGroup?: (ref: GroupRef) => void;
   onMergeGroups?: (from: GroupRef, to: GroupRef) => void;
 }) {
   const { markers, lines } = useMemo(
     () => computeMarkerLayout({ nodes, edges, bindings, typeColors, parallelOffset }),
     [nodes, edges, bindings, typeColors, parallelOffset],
+  );
+  const mutedActivitySet = useMemo(
+    () => new Set(mutedActivities),
+    [mutedActivities],
   );
 
   // Markers in crowded stacks never render labels/badges: the markers sit
@@ -211,12 +217,19 @@ const MarkerOverlay = memo(function MarkerOverlay({
         {/* AND-group connector lines (below the markers) */}
         {lines.map((line) => {
           const focused = groupRefEquals(line.ref, focusedGroup);
+          const muted = mutedActivitySet.has(line.ref.activity);
           return (
             <polyline
               key={line.id}
               points={line.points.map((p) => `${p.x},${p.y}`).join(' ')}
               fill="none"
-              stroke={focused ? '#2563EB' : 'rgba(15, 23, 42, 0.7)'}
+              stroke={
+                muted
+                  ? 'rgba(148, 163, 184, 0.45)'
+                  : focused
+                    ? '#2563EB'
+                    : 'rgba(15, 23, 42, 0.7)'
+              }
               strokeWidth={focused ? 2 : 1.2}
             />
           );
@@ -243,6 +256,11 @@ const MarkerOverlay = memo(function MarkerOverlay({
             ? groupRefEquals(vis.ref, drag.target)
             : false;
           const half = MARKER_SIZE / 2;
+          const muted =
+            mutedActivitySet.has(vis.ref.activity) ||
+            mutedActivitySet.has(vis.marker[0]);
+          const markerColor = muted ? '#D1D5DB' : vis.color;
+          const outlineColor = muted ? '#9CA3AF' : OUTLINE;
           // Perpendicular of the tangent — labels sit beside the arc.
           const perpX = -vis.tangent.y;
           const perpY = vis.tangent.x;
@@ -269,8 +287,8 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   cx={vis.pos.x}
                   cy={vis.pos.y}
                   r={half}
-                  fill={vis.color}
-                  stroke={OUTLINE}
+                  fill={markerColor}
+                  stroke={outlineColor}
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
@@ -282,8 +300,8 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   y={vis.pos.y - half}
                   width={MARKER_SIZE}
                   height={MARKER_SIZE}
-                  fill={vis.color}
-                  stroke={OUTLINE}
+                  fill={markerColor}
+                  stroke={outlineColor}
                   strokeWidth={1.5}
                   {...interactionProps(vis)}
                 >
@@ -299,7 +317,7 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   style={{
                     fontSize: 9,
                     fontWeight: 600,
-                    fill: OUTLINE,
+                    fill: outlineColor,
                     paintOrder: 'stroke',
                     stroke: 'rgba(255, 255, 255, 0.8)',
                     strokeWidth: 3,
@@ -314,7 +332,14 @@ const MarkerOverlay = memo(function MarkerOverlay({
                   transform={`translate(${vis.pos.x - perpX * 14}, ${vis.pos.y - perpY * 14})`}
                   style={{ pointerEvents: 'none' }}
                 >
-                  <rect x={-6.5} y={-5.5} width={13} height={11} rx={3} fill={OUTLINE} />
+                  <rect
+                    x={-6.5}
+                    y={-5.5}
+                    width={13}
+                    height={11}
+                    rx={3}
+                    fill={outlineColor}
+                  />
                   <text
                     textAnchor="middle"
                     dominantBaseline="central"
