@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow } from "lucide-react"
+import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -21,6 +21,7 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'ocdfg', label: 'OC-DFG', icon: Network },
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
+  { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
   { id: 'occn', label: 'OCCN', icon: Workflow },
   { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
 ];
