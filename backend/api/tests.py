@@ -2908,3 +2908,129 @@ class ProcessAreaComponentPersistenceTests(TestCase):
             },
             set(layout.data[0]),
         )
+
+
+# ---------------------------------------------------------------------------
+# DuckDB concurrency model tests
+# ---------------------------------------------------------------------------
+#
+# The dashboard fires several endpoints in parallel on first load; all of
+# them funnel into one shared DuckDB connection per file. These tests pin
+# down the model that makes that safe: stored .duckdb logs open read-only,
+# every OcelDuckDB carries a reentrant lock, and the OCCN endpoint (the one
+# that used to run unlocked) holds that lock for its whole discovery.
+
+import threading as _threading
+
+import duckdb as _duckdb
+
+from totem_lib.ocel.ocel_duckdb import create_ocel_schema
+from . import views as _views
+
+
+def _write_minimal_duckdb_log(path: str) -> None:
+    conn = _duckdb.connect(":memory:")
+    create_ocel_schema(conn, [], [])
+    conn.executemany(
+        "INSERT INTO events VALUES (?, ?, ?)",
+        [("e1", "create order", 1), ("e2", "ship order", 2)],
+    )
+    conn.executemany(
+        "INSERT INTO objects VALUES (?, ?)",
+        [("o1", "Order"), ("i1", "Item")],
+    )
+    conn.executemany(
+        "INSERT INTO event_object VALUES (?, ?, NULL)",
+        [("e1", "o1"), ("e1", "i1"), ("e2", "o1")],
+    )
+    db = OcelDuckDB._from_prepared_connection(conn, [], [])
+    db.save(path)
+    db.close()
+
+
+class OcelDbConcurrencyTests(TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="totem-duckdb-tests-")
+        self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
+        self.db_path = os.path.join(self.tmpdir, "log.duckdb")
+        _write_minimal_duckdb_log(self.db_path)
+
+    def test_stored_duckdb_logs_open_read_only(self):
+        """The registry connection must never take the exclusive write lock.
+
+        A read-write open is exclusive per file, so a second opener (another
+        process, or a converter still holding its handle) fails with a lock
+        conflict — the "error when loading many things at once" failure mode.
+        Read-only connections coexist; TEMP tables (which the algorithms
+        rely on) still work on them.
+        """
+        db = _views._build_ocel_db_from_path(self.db_path)
+        self.addCleanup(db.close)
+
+        with self.assertRaises(Exception):
+            db.conn.execute("CREATE TABLE not_allowed (a INTEGER)")
+
+        db.conn.execute("CREATE TEMP TABLE scratch AS SELECT * FROM events")
+        self.assertEqual(
+            db.conn.execute("SELECT COUNT(*) FROM scratch").fetchone()[0], 2
+        )
+
+        # A second concurrent open of the same file must succeed.
+        other = OcelDuckDB.load(self.db_path, read_only=True)
+        other.close()
+
+    def test_every_ocel_db_carries_a_reentrant_lock(self):
+        db = OcelDuckDB.load(self.db_path, read_only=True)
+        self.addCleanup(db.close)
+
+        # Reentrant: a view holding the lock can call helpers that lock again.
+        with db.lock:
+            with db.lock:
+                held_elsewhere = []
+
+                def probe():
+                    held_elsewhere.append(db.lock.acquire(blocking=False))
+
+                t = _threading.Thread(target=probe)
+                t.start()
+                t.join()
+        self.assertEqual(held_elsewhere, [False])
+
+    def test_occn_view_holds_the_file_lock_during_discovery(self):
+        """discover_occn queries the shared connection, so the endpoint must
+        serialise it against the other dashboard endpoints via the file lock."""
+        user = User.objects.create_user(username="occn-lock-user")
+        project = Project.objects.create(name="OCCN Lock Project")
+        project.users.add(user)
+        event_log = EventLog.objects.create(project=project, file="occn-lock.duckdb")
+
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        fake_db = OcelDuckDB.load(self.db_path, read_only=True)
+        self.addCleanup(fake_db.close)
+        lock_was_held = []
+
+        def fake_discover(db, relativeOccuranceThreshold, parameters):
+            holder = []
+
+            def probe():
+                holder.append(db.lock.acquire(blocking=False))
+
+            t = _threading.Thread(target=probe)
+            t.start()
+            t.join()
+            lock_was_held.append(holder == [False])
+            return object()
+
+        with (
+            patch.object(_views, "_get_or_load_ocel_db", return_value=fake_db),
+            patch.object(_views, "discover_occn", side_effect=fake_discover),
+            patch.object(_views, "serialize_occn", return_value={"ok": True}),
+        ):
+            _views._occn_base_cache.clear()
+            response = client.get("/api/occn/", {"file_id": event_log.pk})
+            _views._occn_base_cache.clear()
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(lock_was_held, [True])
