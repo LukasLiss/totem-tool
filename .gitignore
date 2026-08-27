@@ -12,6 +12,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !docs/EDGE_CASE_TAXONOMY.md
 !totem_lib/test_data/edge_cases/README.md
 !.claude/**/*.md
+!backend/assistant/knowledge/*.md
 *.txt
 
 # Reinclude totem_lib tests
@@ -204,6 +205,7 @@ $RECYCLE.BIN/
 # Temporary folders
 tmp/
 temp/
+.mimosa/
 
 # Log files
 *.log
