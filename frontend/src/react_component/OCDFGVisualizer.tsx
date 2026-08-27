@@ -353,7 +353,7 @@ function OCDFGVisualizer({
   const hideChrome = resolvedVariant !== 'full' || showControls === false;
   const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const reactFlow = useReactFlow({ id: reactFlowId } as any);
+  const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
   // Layout reserve for legend on the left
   const LEGEND_WIDTH = 300;

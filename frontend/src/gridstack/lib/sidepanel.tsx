@@ -50,6 +50,15 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
+      ".sidepanel .totem-miner-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{ h: 6, w: 8, content: "TOTeM Miner", component_name: "TotemMinerComponent", order: 0 }]
+    );
+
+    GridStack.setupDragIn(
       ".sidepanel .log-statistics-component",
       {
         helper: "clone",
@@ -229,6 +238,11 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item process-area-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/process-area-preview.png" width="100" height="50"/>
         <div>Process Area</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item totem-miner-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/process-area-preview.png" width="100" height="50"/>
+        <div>TOTeM Miner</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
