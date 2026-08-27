@@ -1,3 +1,5 @@
+"use client"
+
 import { useState, useEffect, useContext } from "react";
 import { BookOpen, ChevronsUpDown, Plus } from "lucide-react"
 import {
@@ -19,7 +21,6 @@ import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
 import { DashboardContext } from "@/contexts/DashboardContext.tsx";
-import { TOUR_IDS } from "@/tour/tourIds";
 
 
 export function Switcher() {
@@ -54,7 +55,6 @@ const displayName = selectedFile?.file
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
-              data-tour-id={TOUR_IDS.PROJECT_SWITCHER}
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >

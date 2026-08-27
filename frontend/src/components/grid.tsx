@@ -18,7 +18,6 @@ import {
   Settings, Save, Minus, Plus
 } from "lucide-react"
 import { toast } from "sonner"
-import { TOUR_IDS } from "@/tour/tourIds"
 import FilterChipStack from "@/components/FilterChipStack";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -63,19 +62,6 @@ const GridContent: React.FC = () => {
     };
     
     loadSelectedDashboard();
-
-    const handleRefreshEvent = (e: any) => {
-      const detail = e.detail;
-      if (!detail?.dashboard_id || detail.dashboard_id === selectedDashboard) {
-        console.log("totem:refresh-dashboard event received, refreshing grid...");
-        loadSelectedDashboard();
-      }
-    };
-
-    window.addEventListener("totem:refresh-dashboard", handleRefreshEvent);
-    return () => {
-      window.removeEventListener("totem:refresh-dashboard", handleRefreshEvent);
-    };
   }, [selectedDashboard, resetGrid]);
 
   const handleSave = async () => {
@@ -149,7 +135,7 @@ const GridContent: React.FC = () => {
           </Button> }
 
       </div>
-      <div className="flex flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
+      <div className="flex flex-row flex-grow overflow-hidden">
         
         <div className="flex-grow overflow-auto">
           <GridContainer>

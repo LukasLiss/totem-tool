@@ -1,3 +1,0 @@
-"""
-Assistant app package.
-"""
