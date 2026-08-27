@@ -278,6 +278,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
           layout_direction: (node as any).layout_direction ?? 'LR',
         };
+      } else if (component_name === "OCPNComponent") {
+        props = {
+          automatic_loading: (node as any).automatic_loading ?? false,
+          timeout_s: (node as any).timeout_s ?? 30.0,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -363,6 +368,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Arc Weight)";
         } else if (item.component_name === "NewOCDFGVariantsComponent") {
           content = "Object-Centric DFG (Variants)";
+        } else if (item.component_name === "OCPNComponent") {
+          content = "OC Petri Net";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else {
