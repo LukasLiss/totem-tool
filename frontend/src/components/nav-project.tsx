@@ -16,6 +16,7 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "@/contexts/DashboardContext"
+import { TOUR_IDS } from "@/tour/tourIds"
 
 const projectItems = [
   { id: "modelAssets", label: "Model Assets", icon: Database },
@@ -33,7 +34,11 @@ export function NavProject() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Project Assets" data-active={isProjectActive}>
+              <SidebarMenuButton
+                tooltip="Project Assets"
+                data-active={isProjectActive}
+                data-tour-id={TOUR_IDS.NAV_PROJECT}
+              >
                 <FolderKanban />
                 <span>Project Assets</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -60,3 +65,4 @@ export function NavProject() {
     </SidebarGroup>
   )
 }
+
