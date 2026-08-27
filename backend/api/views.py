@@ -897,13 +897,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Every parameter is part of the key. `discover_mlpa` keys on the
-            # file alone, which is fine because it takes no parameters; copying
-            # that here would make the UI sliders silently return the first
-            # result for an hour.
+            fp = _parse_filter_params(request)
+            is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+
+            # Every parameter is part of the key. Filter params are included so
+            # filtered and unfiltered results occupy separate cache entries.
             cache_params = _process_area_cache_params(params)
-            use_cache = _should_use_cache(request)
-            if use_cache:
+            if is_filtered:
+                cache_params = {**cache_params, **{f"f_{k}": str(v) for k, v in fp.items()}}
+
+            use_full_cache = _should_use_cache(request)
+            if use_full_cache:
                 cached = get_cached_result(
                     user_file, "discover_process_areas", cache_params
                 )
@@ -914,23 +918,28 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # the weights and alpha/beta only affect scoring and the ILP solve.
             # Caching the two separately turns a slider change into a solve
             # instead of a full rediscovery.
+            # When a filter is active, tier caches hold unfiltered data — skip them.
+            use_tier_cache = use_full_cache and not is_filtered
             aggregates = (
-                get_cached_result(user_file, "process_area_prep") if use_cache else None
+                get_cached_result(user_file, "process_area_prep") if use_tier_cache else None
             )
             totem_data = (
-                get_cached_result(user_file, "discover_totem_raw") if use_cache else None
+                get_cached_result(user_file, "discover_totem_raw") if use_tier_cache else None
             )
 
             if aggregates is None or totem_data is None:
                 with _with_ocel_db(user_file) as db:
-                    if aggregates is None:
-                        aggregates = prepare_db(db)
-                        set_cached_result(user_file, "process_area_prep", aggregates)
-                    if totem_data is None:
-                        totem_data = totem_to_dict(totemDiscovery_db(db))
-                        set_cached_result(
-                            user_file, "discover_totem_raw", totem_data
-                        )
+                    with _filter_shadow(db.conn, fp):
+                        if aggregates is None:
+                            aggregates = prepare_db(db)
+                            if use_tier_cache:
+                                set_cached_result(user_file, "process_area_prep", aggregates)
+                        if totem_data is None:
+                            totem_data = totem_to_dict(totemDiscovery_db(db))
+                            if use_tier_cache:
+                                set_cached_result(
+                                    user_file, "discover_totem_raw", totem_data
+                                )
 
             process_view = process_areas_from_aggregates(
                 aggregates,
