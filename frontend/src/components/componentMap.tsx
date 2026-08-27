@@ -51,6 +51,8 @@ import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
+import SQLQueryComponent from './SQLQueryComponent';
+import PieChartComponent from './PieChartComponent';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -1485,5 +1487,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
   OCPNComponent,
+  SQLQueryComponent,
+  PieChartComponent,
   OCCNComponent,
 };
