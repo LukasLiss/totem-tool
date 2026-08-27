@@ -567,7 +567,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db.conn, fp):
+                with _filter_shadow(db, fp):
                     # Run with tau=0.0 so the frontend can filter the full relation set.
                     totem = totemDiscovery_db(db, tau=0.0)
             serialized = totem_to_dict(totem)
@@ -904,14 +904,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             fp = _parse_filter_params(request)
             is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
-            cache_key = f"mlpa_discovery_{user_file.pk}"
-            if not is_filtered:
-                cached_result = cache.get(cache_key)
-                if cached_result:
-                    return Response(cached_result, status=status.HTTP_200_OK)
+
+            # `discover_mlpa` keys on the file alone — it takes no parameters.
+            # A filtered request bypasses the cache entirely so it never serves
+            # or stores unfiltered results under that key.
+            if not is_filtered and _should_use_cache(request):
+                cached = get_cached_result(user_file, "discover_mlpa")
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
 
             with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db.conn, fp):
+                with _filter_shadow(db, fp):
                     totem = totemDiscovery_db(db)
             # mlpaDiscovery operates on the Totem object (no DB access),
             # so it can run outside the per-file lock.
@@ -919,7 +922,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             serialized = _serialize_mlpa(process_view, totem)
 
             if not is_filtered:
-                cache.set(cache_key, serialized, timeout=3600)
+                set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -984,7 +987,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
             if aggregates is None or totem_data is None:
                 with _with_ocel_db(user_file) as db:
-                    with _filter_shadow(db.conn, fp):
+                    with _filter_shadow(db, fp):
                         if aggregates is None:
                             aggregates = prepare_db(db)
                             if use_tier_cache:
@@ -1069,7 +1072,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db.conn, fp):
+                with _filter_shadow(db, fp):
                     model = discover_ocpn_db(
                         db,
                         object_types=object_type_filter,
@@ -1169,7 +1172,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db.conn, fp_non_time):
+                with _filter_shadow(db, fp_non_time):
                     result = get_oc_dotted_chart_data(
                         db,
                         t_min=effective_t_min,
@@ -1790,7 +1793,7 @@ def _with_ocel_db(user_file):
 
 
 @contextmanager
-def _filter_shadow(conn, fp):
+def _filter_shadow(db, fp):
     """Context manager: temporarily shadow events/event_object/objects with
     filtered subsets so library functions work on filtered data without
     modification.  DuckDB searches the temp schema before main, so any
@@ -1798,11 +1801,17 @@ def _filter_shadow(conn, fp):
 
     The shadow is always torn down on exit — even if an exception occurs —
     because the DuckDB connection is persistent and shared across requests.
+
+    Accepts the ``OcelDuckDB`` (not its connection) and only touches
+    ``db.conn`` once a filter is actually active, so an unfiltered request
+    never needs a live connection.
     """
     has_filter = any(k in fp for k in ("after", "before", "activities", "object_types"))
     if not has_filter:
         yield
         return
+
+    conn = db.conn
 
     conditions, params = [], []
     if "after" in fp:
@@ -2267,7 +2276,7 @@ def variants(request):
             else:
                 leading_object_type = None
 
-            with _filter_shadow(db.conn, fp):
+            with _filter_shadow(db, fp):
                 # The default iso strategy ("wl+vf2") is sound and exact.
                 # `find_variants` creates connection-scoped TEMP TABLEs — the
                 # per-file lock from `_with_ocel_db` makes that safe under
@@ -3444,7 +3453,7 @@ def NewOCDFGViewSet(request):
 
     try:
         with _with_ocel_db(user_file) as db:
-            with _filter_shadow(db.conn, fp_non_types):
+            with _filter_shadow(db, fp_non_types):
                 # Delegate all process-mining logic to totem-lib.
                 # Returns the annotated graph and per-type variant counts for sliders.
                 ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
@@ -3569,7 +3578,7 @@ def OCCNViewSet(request):
             if has_event_filter:
                 # Filter active — skip deduplication and caching, compute fresh each time
                 with _with_ocel_db(user_file) as db:
-                    with _filter_shadow(db.conn, fp_no_types):
+                    with _filter_shadow(db, fp_no_types):
                         ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
                 base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
             else:
