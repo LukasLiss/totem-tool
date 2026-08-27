@@ -46,6 +46,7 @@ import {
   type OccnNode as EditorOccnNode,
 } from '@/editors/occn/types';
 import OccnOverflowBadges from './OccnOverflowBadges';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -641,6 +642,21 @@ function OCCNVisualizer({
             >
               {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
             </Button>
+            {data == null && fileId != null && (
+              <SaveModelAssetButton
+                fileId={fileId}
+                modelType="OCCN"
+                params={{
+                  relative_occurrence_threshold: threshold,
+                  object_types: (objectTypes ?? [])
+                    .map((t) => t.trim())
+                    .filter(Boolean),
+                }}
+                disabled={loading || net == null}
+                iconOnly
+                className="rounded-full h-9 w-9"
+              />
+            )}
           </div>
         </>
       )}

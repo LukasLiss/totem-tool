@@ -3161,3 +3161,175 @@ class OcelDbConcurrencyTests(TestCase):
         self.assertEqual(lock_was_held, [True])
         # discovery ran on the converted data, not the shared connection
         self.assertEqual(discover_inputs, [converted])
+
+
+# ---------------------------------------------------------------------------
+# Save-discovered-model endpoint tests
+# ---------------------------------------------------------------------------
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class SaveDiscoveredModelApiTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        views._occn_base_cache.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"paper-example-save-model-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def _save(self, model_type, name, params=None):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/save_discovered_model/",
+            {"name": name, "model_type": model_type, "params": params or {}},
+            format="json",
+        )
+
+    def test_save_totem_creates_asset(self):
+        response = self._save("TOTEM", "Discovered TOTeM", {"tau": 0.8})
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Discovered TOTeM")
+        self.assertEqual(asset.asset_type, "TOTEM")
+        self.assertEqual(asset.content_json["schema"], "totem")
+        self.assertEqual(asset.metadata["source"], "discovery")
+        self.assertEqual(asset.metadata["event_log_id"], self.log.pk)
+
+    def test_save_occn_creates_asset(self):
+        response = self._save(
+            "OCCN", "Discovered OCCN", {"relative_occurrence_threshold": 0.0}
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Discovered OCCN")
+        self.assertEqual(asset.asset_type, "OCCN")
+        self.assertEqual(asset.content_json["schema"], "occn")
+        self.assertIn("START_order", asset.content_json["activities"])
+
+    def test_save_ocpn_creates_asset(self):
+        response = self._save("OCPN", "Discovered OCPN", {"timeout_s": 30})
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Discovered OCPN")
+        self.assertEqual(asset.asset_type, "OCPN")
+        self.assertEqual(asset.content_json["format"], "ocpn")
+        self.assertTrue(asset.content_json["places"])
+
+    def test_save_ocdfg_creates_asset(self):
+        response = self._save("OCDFG", "Discovered OC-DFG")
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Discovered OC-DFG")
+        self.assertEqual(asset.asset_type, "OCDFG")
+        content = asset.content_json
+        self.assertEqual(content["schema"], "ocdfg")
+        self.assertEqual(
+            content["activities"], ["complete order", "pick item", "place order"]
+        )
+        self.assertEqual(content["object_types"], ["item", "order"])
+        sources = {edge["source"] for edge in content["edges"]}
+        self.assertIn("__start__:order", sources)
+
+    def test_duplicate_name_rejected(self):
+        first = self._save("OCPN", "Same name")
+        self.assertEqual(first.status_code, 201, first.data)
+        second = self._save("OCPN", "Same name")
+        self.assertEqual(second.status_code, 400)
+        self.assertIn("name", second.data)
+
+    def test_unknown_model_type_rejected(self):
+        response = self._save("NOPE", "Whatever")
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_project_membership(self):
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self._save("OCPN", "Sneaky")
+        self.assertEqual(response.status_code, 404)
+
+
+# ---------------------------------------------------------------------------
+# Image asset endpoint tests
+# ---------------------------------------------------------------------------
+
+from .models import ImageAsset
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class ImageAssetApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(self.user)
+
+    def _upload(self, name="Logo", filename="logo.png", content_type="image/png"):
+        return self.client.post(
+            "/api/image-assets/",
+            {
+                "project": self.project.pk,
+                "name": name,
+                "image": SimpleUploadedFile(
+                    filename, b"fake-image-bytes", content_type=content_type
+                ),
+            },
+            format="multipart",
+        )
+
+    def test_upload_list_rename_delete_roundtrip(self):
+        response = self._upload()
+        self.assertEqual(response.status_code, 201, response.data)
+        asset_id = response.data["id"]
+        self.assertTrue(response.data["url"].startswith("/files/"))
+        self.assertEqual(response.data["content_type"], "image/png")
+
+        listed = self.client.get(f"/api/image-assets/?project={self.project.pk}")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual([a["id"] for a in listed.data], [asset_id])
+
+        renamed = self.client.patch(
+            f"/api/image-assets/{asset_id}/", {"name": "Renamed"}, format="json"
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.data)
+        self.assertEqual(renamed.data["name"], "Renamed")
+
+        stored_path = ImageAsset.objects.get(pk=asset_id).image.path
+        self.assertTrue(os.path.exists(stored_path))
+        deleted = self.client.delete(f"/api/image-assets/{asset_id}/")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(ImageAsset.objects.filter(pk=asset_id).exists())
+        self.assertFalse(os.path.exists(stored_path))
+
+    def test_duplicate_name_rejected(self):
+        self.assertEqual(self._upload().status_code, 201)
+        response = self._upload(filename="other.png")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("name", response.data)
+
+    def test_unsupported_extension_rejected(self):
+        response = self._upload(filename="anim.gif", content_type="image/gif")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("image", response.data)
+
+    def test_svg_accepted(self):
+        response = self._upload(filename="icon.svg", content_type="image/svg+xml")
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def test_requires_project_membership(self):
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self._upload()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("project", response.data)
+
+    def test_list_scoped_to_own_projects(self):
+        self.assertEqual(self._upload().status_code, 201)
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        listed = self.client.get("/api/image-assets/")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data, [])

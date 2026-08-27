@@ -11,6 +11,7 @@ import { AnalysisView } from "./components/AnalysisView";
 import { OccnConformanceView } from "./components/occn-conformance/OccnConformanceView";
 import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
+import { ImageAssetsView } from "./components/ImageAssetsView";
 import { EditorView } from "./editors/EditorView";
 import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
@@ -28,6 +29,8 @@ export function ProcessOverview() {
         return <AnalysisView />;
       case 'modelAssets':
         return <ModelAssetsView />;
+      case 'imageAssets':
+        return <ImageAssetsView />;
       case 'conformance':
         return viewMode.component === 'totem'
           ? <TotemConformanceView initialAssetId={viewMode.assetId} />
