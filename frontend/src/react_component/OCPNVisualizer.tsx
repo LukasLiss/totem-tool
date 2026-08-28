@@ -132,7 +132,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   defaultTimeoutS = DEFAULT_OCPN_TIMEOUT_S,
   showControls = true,
   onTimeoutSChange,
-  filterEnabled = false,
+  filterEnabled = true,
 }) => {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
@@ -356,6 +356,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
               fileId={fileId}
               modelType="OCPN"
               params={{ timeout_s: timeoutS }}
+              filterEnabled={filterEnabled}
               disabled={!model}
             />
             {objectTypes.length > 0 && (

@@ -13,7 +13,9 @@ export async function getUserFiles() {
 }
 
 export async function processFile(fileId: string | number) {
-  const { data } = await axios.get(`/api/files/${fileId}/NoE/`, { _skipGlobalFilter: true });
+  // Honors the active global filter (the interceptor appends its params),
+  // so the shown event count matches the rest of the tool.
+  const { data } = await axios.get(`/api/files/${fileId}/NoE/`);
   return data;
 }
 

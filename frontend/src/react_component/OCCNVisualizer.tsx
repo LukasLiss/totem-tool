@@ -100,7 +100,7 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
-  filterEnabled = false,
+  filterEnabled = true,
   onToggleFilter = () => {},
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
@@ -666,6 +666,7 @@ function OCCNVisualizer({
                     .map((t) => t.trim())
                     .filter(Boolean),
                 }}
+                filterEnabled={filterEnabled}
                 disabled={loading || net == null}
                 iconOnly
                 className="rounded-full h-9 w-9"

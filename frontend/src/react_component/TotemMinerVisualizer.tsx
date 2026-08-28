@@ -463,7 +463,7 @@ function TotemMinerVisualizer({
   embedded = false,
   onControlsReady,
   tau = 0.8,
-  filterEnabled = false,
+  filterEnabled = true,
 }: TotemMinerVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;

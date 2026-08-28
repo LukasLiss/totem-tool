@@ -35,7 +35,7 @@ export function useDottedChartData({
   viewport,
   sampleSeed = 0,
   debounceMs = 300,
-  filterEnabled = false,
+  filterEnabled = true,
   effectiveFilterVersion = 0,
 }: UseDottedChartDataArgs) {
   const [data, setData] = useState<DottedChartResponse | null>(null);

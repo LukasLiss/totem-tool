@@ -5023,7 +5023,7 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
-  filterEnabled = false,
+  filterEnabled = true,
   initialAlgorithm,
   initialParams,
   onSettingsChange,

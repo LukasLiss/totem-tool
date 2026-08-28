@@ -3477,9 +3477,9 @@ class SaveDiscoveredModelApiTests(APITestCase):
 
         self.client.force_authenticate(self.user)
 
-    def _save(self, model_type, name, params=None):
+    def _save(self, model_type, name, params=None, query=""):
         return self.client.post(
-            f"/api/files/{self.log.pk}/save_discovered_model/",
+            f"/api/files/{self.log.pk}/save_discovered_model/{query}",
             {"name": name, "model_type": model_type, "params": params or {}},
             format="json",
         )
@@ -3541,6 +3541,116 @@ class SaveDiscoveredModelApiTests(APITestCase):
         self.client.force_authenticate(outsider)
         response = self._save("OCPN", "Sneaky")
         self.assertEqual(response.status_code, 404)
+
+    # -- global filter -----------------------------------------------------
+    #
+    # The frontend appends the active global filter as query params to the
+    # save request (same mechanism as the discovery read endpoints); the
+    # stored model must be mined from the filtered log.
+
+    def test_totem_save_respects_global_object_type_filter(self):
+        response = self._save(
+            "TOTEM", "Filtered TOTeM", {"tau": 0.0}, query="?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered TOTeM")
+        self.assertEqual(asset.content_json["tempgraph"]["nodes"], ["order"])
+        self.assertEqual(asset.metadata["global_filter"], {"object_types": ["order"]})
+
+    def test_ocpn_save_respects_global_object_type_filter(self):
+        response = self._save("OCPN", "Filtered OCPN", query="?object_types=order")
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN")
+        self.assertEqual(
+            [ot["name"] for ot in asset.content_json["objectTypes"]], ["order"]
+        )
+        labels = sorted(
+            t["label"] for t in asset.content_json["transitions"] if not t.get("silent")
+        )
+        self.assertEqual(labels, ["complete order", "place order"])
+
+    def test_ocpn_filtered_save_does_not_reuse_unfiltered_cache(self):
+        # Prime the unfiltered discovery cache, then save with a filter: the
+        # stored model must be the filtered one, not the cached full net.
+        unfiltered = self.client.get(f"/api/files/{self.log.pk}/discover_ocpn/")
+        self.assertEqual(unfiltered.status_code, 200)
+        response = self._save("OCPN", "Filtered OCPN 2", query="?object_types=order")
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN 2")
+        self.assertEqual(
+            [ot["name"] for ot in asset.content_json["objectTypes"]], ["order"]
+        )
+
+    def test_ocdfg_save_respects_global_activity_filter(self):
+        response = self._save(
+            "OCDFG", "Filtered OC-DFG", query="?activities=place%20order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OC-DFG")
+        self.assertEqual(asset.content_json["activities"], ["place order"])
+
+    def test_occn_save_respects_global_activity_filter(self):
+        response = self._save(
+            "OCCN",
+            "Filtered OCCN",
+            {"relative_occurrence_threshold": 0.0},
+            query="?activities=place%20order,pick%20item",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCCN")
+        activities = asset.content_json["activities"]
+        self.assertIn("place order", activities)
+        self.assertNotIn("complete order", activities)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class FilteredCacheKeyTests(APITestCase):
+    """Filtered and unfiltered requests must never share a cache entry."""
+
+    def setUp(self):
+        cache.clear()
+        RESULTS_CACHE.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"paper-example-filter-cache-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def test_statistics_cache_is_filter_aware(self):
+        full = self.client.get(f"/api/files/{self.log.pk}/statistics/")
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.data["num_object_types"], 2)
+
+        filtered = self.client.get(
+            f"/api/files/{self.log.pk}/statistics/", {"object_types": "order"}
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data["num_object_types"], 1)
+
+        # The unfiltered entry must be untouched by the filtered request.
+        full_again = self.client.get(f"/api/files/{self.log.pk}/statistics/")
+        self.assertEqual(full_again.data["num_object_types"], 2)
+
+    def test_noe_cache_is_filter_aware(self):
+        full = self.client.get(f"/api/files/{self.log.pk}/NoE/")
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.data, 4)
+
+        filtered = self.client.get(
+            f"/api/files/{self.log.pk}/NoE/", {"activities": "pick item"}
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data, 2)
+
+        full_again = self.client.get(f"/api/files/{self.log.pk}/NoE/")
+        self.assertEqual(full_again.data, 4)
 
 
 # ---------------------------------------------------------------------------

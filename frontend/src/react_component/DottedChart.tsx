@@ -82,7 +82,7 @@ export default function DottedChart({
   showMinimap = true,
   className,
   onEventClick,
-  filterEnabled = false,
+  filterEnabled = true,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({

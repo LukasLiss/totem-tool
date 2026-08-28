@@ -14,6 +14,7 @@ import {
 import { GridStackNode } from 'gridstack';
 import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
+import { useFilterVersion } from '@/store/filterStore';
 import { Input } from '@/components/ui/input';
 import { API_BASE_URL } from '@/config/api';
 import {
@@ -197,8 +198,9 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
-  
-  
+  // Refetch when the global filter changes so the count follows the filter.
+  const filterVersion = useFilterVersion();
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   
@@ -230,7 +232,7 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
     };
     
     handleProcessFile();
-  }, [selectedFile]); // Only re-run when selectedFile changes
+  }, [selectedFile, filterVersion]); // Re-run when the file or global filter changes
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
@@ -1124,7 +1126,7 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
 
@@ -1210,7 +1212,7 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile,
 }) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
@@ -1305,7 +1307,7 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1407,7 +1409,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1508,7 +1510,7 @@ const OCCNComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
   const [objectTypes, setObjectTypes] = useState(node.object_types ?? '');
   const [showControls, setShowControls] = useState(node.show_controls ?? true);

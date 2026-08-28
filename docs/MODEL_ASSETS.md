@@ -189,6 +189,14 @@ after viewing is cheap), converts the result to the canonical asset JSON, and
 stores it through the regular asset validation. The response is the created
 asset (`201`), or `400` for validation errors such as a duplicate name.
 
+The **global filter** is honored exactly like on the discovery read
+endpoints: when the requesting component has its global-filter toggle on
+(the default), the frontend appends the active filter as query params
+(`after` / `before` / `activities` / `object_types`) and the model is mined
+from the filtered log — so the stored asset matches the filtered view. The
+applied filter is recorded in the asset's `metadata.global_filter` for
+traceability.
+
 ### Image assets
 
 Besides model assets, projects can store images (png, jpeg, jpg, svg) under

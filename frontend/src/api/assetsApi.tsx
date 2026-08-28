@@ -128,6 +128,12 @@ export interface SaveDiscoveredModelParams {
   modelType: AssetType;
   /** Discovery settings of the requesting component (tau, threshold, …). */
   params?: Record<string, unknown>;
+  /**
+   * Whether the requesting component has the global filter enabled. When
+   * true (the default) the axios interceptor appends the active global
+   * filter to the request, so the stored model matches the filtered view.
+   */
+  applyGlobalFilter?: boolean;
 }
 
 /**
@@ -139,6 +145,7 @@ export async function saveDiscoveredModel({
   name,
   modelType,
   params,
+  applyGlobalFilter = true,
 }: SaveDiscoveredModelParams) {
   const { data } = await axios.post<ProjectAsset>(
     `/api/files/${fileId}/save_discovered_model/`,
@@ -146,7 +153,8 @@ export async function saveDiscoveredModel({
       name,
       model_type: modelType,
       params: params ?? {},
-    }
+    },
+    { _skipGlobalFilter: !applyGlobalFilter }
   );
   return data;
 }

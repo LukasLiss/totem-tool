@@ -234,7 +234,7 @@ function NewOCDFGVariantsVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
-  filterEnabled = false,
+  filterEnabled = true,
   onToggleFilter = () => {},
   showTitle = true,
 }: NewOCDFGVariantsVisualizerProps) {
@@ -1291,6 +1291,7 @@ function NewOCDFGVariantsVisualizer({
               <SaveModelAssetButton
                 fileId={fileId}
                 modelType="OCDFG"
+                filterEnabled={filterEnabled}
                 disabled={dfgData == null}
                 iconOnly
                 className="rounded-full h-9 w-9"
