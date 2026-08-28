@@ -6,12 +6,33 @@ import os
 import re
 from collections import defaultdict
 from . import ObjectCentricEventLog, schema_base_filtering, propagate_filtering
+from .ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA
 from .importer_duckdb import (
     import_ocel_from_duckdb,
     load_events_from_duckdb,
     load_objects_from_duckdb,
     load_object_attributes_from_duckdb,
 )
+
+# Shape of the events frame as the raw loaders build it, before the timestamp
+# string is parsed into "_timestampUnix". Declaring the types keeps a log with
+# zero events from being inferred as Null-typed columns, which would make the
+# subsequent .str.to_datetime() raise a SchemaError. Always pass these as
+# `schema_overrides` (matched by name), never as `schema` (matched by position,
+# which would silently relabel columns if a loader reordered its keys).
+_RAW_EVENTS_SCHEMA = {
+    "_eventId": pl.Utf8,
+    "_activity": pl.Utf8,
+    "_timestamp_str": pl.Utf8,
+    "_objects": pl.List(pl.Utf8),
+    "_qualifiers": pl.List(pl.Utf8),
+}
+
+# The events frame as the loaders return it ("_attributes" is added later, only
+# by the importers that carry event attributes).
+_LOADED_EVENTS_SCHEMA = {
+    key: dtype for key, dtype in EVENTS_SCHEMA.items() if key != "_attributes"
+}
 
 
 def import_ocel(file_path: str, file_format: str = None) -> ObjectCentricEventLog:
@@ -337,6 +358,12 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     activities = [row[0] for row in cursor]
     # print(activities)
 
+    # A log with no event types has no per-activity tables to union over, which
+    # would make the query below syntactically invalid. Return the empty frame.
+    if not activities:
+        con.close()
+        return pl.DataFrame(schema=_LOADED_EVENTS_SCHEMA)
+
     # build the union timestamp table query for all activities
     timestamp_union_query = " UNION ".join(
         [f"SELECT ocel_id, ocel_time FROM event_{activity}" for activity in activities]
@@ -498,7 +525,8 @@ def load_events_from_json(json_path: str) -> pl.DataFrame:
             "_qualifiers": [
                 [rel["qualifier"] for rel in e.get("relationships", [])] for e in events
             ],
-        }
+        },
+        schema_overrides=_RAW_EVENTS_SCHEMA,
     )
 
     # Convert the timestamp string to a datetime object and then to epoch seconds
@@ -543,7 +571,8 @@ def load_objects_from_json(json_path: str) -> pl.DataFrame:
                 [rel["qualifier"] for rel in o.get("relationships", [])]
                 for o in objects
             ],
-        }
+        },
+        schema_overrides=OBJECTS_SCHEMA,
     )
     return df
 
@@ -596,7 +625,8 @@ def load_events_from_xml(xml_path: str) -> pl.DataFrame:
             "_timestamp_str": times,
             "_objects": target_obj_ids,
             "_qualifiers": quals,
-        }
+        },
+        schema_overrides=_RAW_EVENTS_SCHEMA,
     )
 
     # convert timestamp to epoch seconds

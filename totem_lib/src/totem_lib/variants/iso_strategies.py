@@ -55,6 +55,34 @@ def _check_cancel(cancel_event) -> None:
         raise TimeoutError("variant grouping cancelled (timeout)")
 
 
+def _wl_hash(g: nx.DiGraph) -> str:
+    """
+    Weisfeiler-Lehman graph hash over node label + edge type, safe for
+    non-ASCII names.
+
+    networkx hashes its intermediate WL labels with `label.encode("ascii")`, so
+    an activity or object type containing anything outside ASCII — an en-dash,
+    CJK, an emoji, all valid OCEL 2.0 — raises UnicodeEncodeError. Escaping the
+    attributes first sidesteps that; the escape is injective, so two graphs hash
+    alike exactly when they did before.
+    """
+    escaped = g.copy()
+    for _, data in escaped.nodes(data=True):
+        if "label" in data:
+            data["label"] = _ascii_escape(data["label"])
+    for _, _, data in escaped.edges(data=True):
+        if "type" in data:
+            data["type"] = _ascii_escape(data["type"])
+    return nx.weisfeiler_lehman_graph_hash(
+        escaped, node_attr="label", edge_attr="type", iterations=3
+    )
+
+
+def _ascii_escape(value) -> str:
+    """Escape a label into pure ASCII, injectively (see `_wl_hash`)."""
+    return str(value).encode("unicode_escape").decode("ascii")
+
+
 def group_signature(
     case_graphs: Dict[str, nx.DiGraph],
     *,
@@ -81,9 +109,7 @@ def group_wl(
     buckets: dict[str, list[str]] = defaultdict(list)
     for cid, g in case_graphs.items():
         _check_cancel(_cancel_event)
-        h = nx.weisfeiler_lehman_graph_hash(
-            g, node_attr="label", edge_attr="type", iterations=3
-        )
+        h = _wl_hash(g)
         buckets[h].append(cid)
         if _progress_bar is not None:
             _progress_bar.update(1)
@@ -100,9 +126,7 @@ def group_wl_vf2(
     wl_buckets: dict[str, list[str]] = defaultdict(list)
     for cid, g in case_graphs.items():
         _check_cancel(_cancel_event)
-        h = nx.weisfeiler_lehman_graph_hash(
-            g, node_attr="label", edge_attr="type", iterations=3
-        )
+        h = _wl_hash(g)
         wl_buckets[h].append(cid)
         if _progress_bar is not None:
             _progress_bar.update(1)

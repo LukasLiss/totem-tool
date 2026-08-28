@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import warnings
 import pandas as pd
 import pm4py
 import networkx as nx
@@ -277,6 +278,74 @@ def _generateEventLogDict(eventLogForMiner: pd.DataFrame) -> dict:
     return eventLogDict
 
 
+def _repairLengthTwoLoops(heu_net, loop_two_threshold: float):
+    """
+    Restores the length-2 loop arcs that pm4py skips on a purely cyclic log.
+
+    pm4py only computes the length-2 loop measure for nodes that already made it
+    into the net via the dependency threshold, and its loop-repair pass iterates
+    over that same node dictionary. On a log whose control flow is *only* a
+    length-2 loop (``A -> B -> A -> B``) the plain dependency measure of both
+    arcs stays below the threshold, so no node qualifies, the repair pass is a
+    no-op, and pm4py falls back to adding every activity as an isolated node.
+    The result is a net with activities but no arcs at all, which leaves
+    downstream binding mining with nothing to work from.
+
+    This runs the same repair afterwards, using pm4py's own loop measure, but
+    only when that fallback was hit — if the net already has a single arc, pm4py
+    did run its repair and the net is returned untouched.
+
+    Parameters
+    -----------
+    heu_net
+        A pm4py HeuristicsNet as returned by ``discover_heuristics_net``.
+    loop_two_threshold
+        Length-2 loop threshold, passed straight through to pm4py.
+
+    Returns
+    --------
+    The same HeuristicsNet, with the length-2 loop arcs added where applicable.
+    """
+    if any(
+        node.output_connections or node.input_connections
+        for node in heu_net.nodes.values()
+    ):
+        return heu_net
+
+    for node in heu_net.nodes.values():
+        node.calculate_loops_length_two(
+            heu_net.dfg_matrix,
+            heu_net.freq_triples_matrix,
+            loops_length_two_thresh=loop_two_threshold,
+        )
+
+    added_loops = set()
+    for act1 in list(heu_net.nodes.keys()):
+        for act2 in heu_net.nodes[act1].loop_length_two:
+            if act2 not in heu_net.nodes:
+                continue
+            count_1_2 = heu_net.dfg_matrix.get(act1, {}).get(act2, 0)
+            count_2_1 = heu_net.dfg_matrix.get(act2, {}).get(act1, 0)
+            # The dependency value is 0 for loop arcs, matching how pm4py adds
+            # them in its own repair pass.
+            for source, target, count in (
+                (act1, act2, count_1_2),
+                (act2, act1, count_2_1),
+            ):
+                if (source, target) in added_loops:
+                    continue
+                added_loops.add((source, target))
+                repr_value = heu_net.performance_matrix.get(source, {}).get(target, 0)
+                heu_net.nodes[source].add_output_connection(
+                    heu_net.nodes[target], 0, count, repr_value=repr_value
+                )
+                heu_net.nodes[target].add_input_connection(
+                    heu_net.nodes[source], 0, count, repr_value=repr_value
+                )
+
+    return heu_net
+
+
 def _mineHeuNets(
     eventLogForMiner: pd.DataFrame,
     objectTypes: list,
@@ -315,7 +384,7 @@ def _mineHeuNets(
             and_threshold,
             loop_two_threshold,
         )
-        heuNets[objType] = heu_net
+        heuNets[objType] = _repairLengthTwoLoops(heu_net, loop_two_threshold)
     return heuNets
 
 
@@ -856,7 +925,10 @@ def _generate_partitions(seq: list, combo_threshold: int, event_id) -> tuple:
     for k in range(len(seq) + 1):
         totalCombinations += scipy.special.stirling2(len(seq), k)
         if totalCombinations > combo_threshold:
-            print("Too many possibilities for bindings. Skipped event " + str(event_id))
+            warnings.warn(
+                "Too many possibilities for bindings. Skipped event "
+                + str(event_id)
+            )
             is_skipped = True
             break
 
@@ -1144,7 +1216,9 @@ def _mineOutputBindings(
             if is_skipped:
                 skippedEvents.append(event)
                 tooManyCombinations = True
-                print(f"[WARNING] Skipping event {event} due to combinatorial explosion.")
+                warnings.warn(
+                    f"Skipping event {event} due to combinatorial explosion."
+                )
                 break
 
             allCombinations[2][objType] = partitions
@@ -1274,7 +1348,9 @@ def _mineInputBindings(
             if is_skipped:
                 skippedEvents.append(event)
                 tooManyCombinations = True
-                print(f"[WARNING] Skipping event {event} due to combinatorial explosion.")
+                warnings.warn(
+                    f"Skipping event {event} due to combinatorial explosion."
+                )
                 break
 
             allCombinations[2][objType] = partitions
@@ -1389,12 +1465,30 @@ class SimpleOCCNet:
             return OCCausalNet.MarkerGroup(markers, support_count=marker_group[1])
 
         dependency_graph = self.dependencyGraph
+        # An activity whose dependencies were all pruned yields a binding with no
+        # markers at all. A MarkerGroup must be non-empty, so drop those rather
+        # than fail the whole discovery: OCCausalNet treats an activity with no
+        # marker groups as valid.
+        unbound_activities = sorted(
+            {act for act, bs in self.inputBindings.items() if any(not b[0] for b in bs)}
+            | {
+                act
+                for act, bs in self.outputBindings.items()
+                if any(not b[0] for b in bs)
+            }
+        )
+        if unbound_activities:
+            warnings.warn(
+                "No dependencies were discovered for the following activities, "
+                "so they get no marker groups: "
+                f"{', '.join(unbound_activities)}."
+            )
         input_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings]
+            act: [_convet_marker_group(binding) for binding in bindings if binding[0]]
             for act, bindings in self.inputBindings.items()
         }
         output_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings]
+            act: [_convet_marker_group(binding) for binding in bindings if binding[0]]
             for act, bindings in self.outputBindings.items()
         }
         return OCCausalNet(
