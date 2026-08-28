@@ -72,6 +72,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ChevronDown } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+
+function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
+  title: string; filterEnabled: boolean; onToggle: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fff', flexShrink: 0 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{title}</span>
+      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
+    </div>
+  );
+}
+
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -576,7 +589,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     const fetchTypes = async () => {
       setLoadingTypes(true);
       try {
-        const { data } = await axios.get<{ name: string; count: number }[]>(`/api/files/${selectedFile.id}/object_types/`);
+        const { data } = await axios.get<{ name: string; count: number }[]>(`/api/files/${selectedFile.id}/object_types/`, { _skipGlobalFilter: true });
         setAvailableTypes(data.map(o => o.name).sort());
       } catch (err) {
         console.error('Failed to fetch object types:', err);
@@ -1111,6 +1124,7 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(false);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
 
@@ -1163,15 +1177,19 @@ const OCDFGComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render OCDFGVisualizer
   return (
-    <div className="w-full h-full bg-white">
-      <ReactFlowProvider>
-        <NewOCDFGVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-        />
-      </ReactFlowProvider>
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="Object-Centric DFG" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
+        <ReactFlowProvider>
+          <NewOCDFGVisualizer
+            height="100%"
+            fileId={selectedFile?.id}
+            showControls={showControls}
+            initialInteractionLocked={initialInteractionLocked}
+            filterEnabled={filterEnabled}
+          />
+        </ReactFlowProvider>
+      </div>
     </div>
   );
 };
@@ -1192,6 +1210,7 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(false);
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
@@ -1230,8 +1249,9 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
   }
 
   return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <CardContent className="h-full p-0">
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <DottedChart
           fileId={effectiveFileId}
           xAxis={config.xAxis}
@@ -1242,10 +1262,11 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
           maxPoints={config.maxPoints}
           showControls={false}
           showMinimap={true}
+          filterEnabled={filterEnabled}
           className="h-full"
         />
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 };
 
@@ -1284,6 +1305,7 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(false);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1360,16 +1382,20 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render NewOCDFGVisualizer
   return (
-    <div className="w-full h-full bg-white">
-      <ReactFlowProvider>
-        <NewOCDFGVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={layoutDirection}
-        />
-      </ReactFlowProvider>
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
+        <ReactFlowProvider>
+          <NewOCDFGVisualizer
+            height="100%"
+            fileId={selectedFile?.id}
+            showControls={showControls}
+            initialInteractionLocked={initialInteractionLocked}
+            layoutDirection={layoutDirection}
+            filterEnabled={filterEnabled}
+          />
+        </ReactFlowProvider>
+      </div>
     </div>
   );
 };
@@ -1381,6 +1407,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(false);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1457,7 +1484,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render NewOCDFGVariantsVisualizer
   return (
-    <div className="w-full h-full bg-white">
+    <div className="w-full h-full">
       <ReactFlowProvider>
         <NewOCDFGVariantsVisualizer
           height="100%"
@@ -1465,6 +1492,8 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
           layoutDirection={layoutDirection}
+          filterEnabled={filterEnabled}
+          onToggleFilter={() => setFilterEnabled(p => !p)}
         />
       </ReactFlowProvider>
     </div>
@@ -1479,6 +1508,7 @@ const OCCNComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(false);
   const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
   const [objectTypes, setObjectTypes] = useState(node.object_types ?? '');
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
@@ -1602,7 +1632,7 @@ const OCCNComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render OCCNVisualizer
   return (
-    <div className="w-full h-full bg-white">
+    <div className="w-full h-full">
       <ReactFlowProvider>
         <OCCNVisualizer
           height="100%"
@@ -1612,6 +1642,8 @@ const OCCNComponent: React.FC<ComponentProps> = ({
           initialLayoutDirection={layoutDirection}
           initialThreshold={threshold}
           objectTypes={objectTypes.split(',').map((t) => t.trim()).filter(Boolean)}
+          filterEnabled={filterEnabled}
+          onToggleFilter={() => setFilterEnabled(p => !p)}
         />
       </ReactFlowProvider>
     </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ import {
   CardAction,
 } from '@/components/ui/card';
 import { RefreshCcw } from 'lucide-react';
+
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
@@ -177,6 +179,7 @@ type TotemVisualizerProps = {
   /** When true, renders only the canvas (no surrounding card/controls). Mirrors VariantsExplorer embedded prop. */
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
+  filterEnabled?: boolean;
   /** Persisted starting values; changes to these re-seed the local state. */
   initialAlgorithm?: ProcessAreaAlgorithm;
   initialParams?: Partial<ProcessAreaParams>;
@@ -5020,10 +5023,13 @@ function TotemVisualizer({
   topInset = 0,
   embedded = false,
   onControlsReady,
+  filterEnabled = false,
   initialAlgorithm,
   initialParams,
   onSettingsChange,
 }: TotemVisualizerProps) {
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -5104,6 +5110,15 @@ function TotemVisualizer({
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
   const [detailError, setDetailError] = useState<Record<string, string | undefined>>({});
   const [allOcdfgNodes, setAllOcdfgNodes] = useState<OcdfgNodeSummary[] | null>(null);
+
+  // The drill-down graphs are cached per area id and only fetched when the
+  // cache misses, so a change to the global filter has to invalidate them —
+  // otherwise an expanded area keeps rendering its pre-filter OCDFG.
+  useEffect(() => {
+    setDetailCache({});
+    setDetailError({});
+    setAllOcdfgNodes(null);
+  }, [filterEnabled, effectiveFilterVersion]);
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -5766,7 +5781,9 @@ function TotemVisualizer({
               beta: String(appliedParams.beta),
             }).toString()
           : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
-      const { data: payload } = await axios.get<TotemApiResponse>(url);
+      const { data: payload } = await axios.get<TotemApiResponse>(url, {
+        _skipGlobalFilter: !filterEnabled,
+      });
       if (!isCurrent()) return;
       setRawTotem(payload);
     } catch (err) {
@@ -5783,7 +5800,7 @@ function TotemVisualizer({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, algorithm, appliedParams]);
+  }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -5807,7 +5824,8 @@ function TotemVisualizer({
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
         const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`
+          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
+          { _skipGlobalFilter: !filterEnabled },
         );
         if (payload?.filter_error || payload?.error) {
           throw new Error(payload.filter_error || payload.error);
@@ -5879,7 +5897,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion],
   );
 
   const toggleAreaDetail = useCallback(
