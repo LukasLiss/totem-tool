@@ -2,12 +2,13 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings
 from . import views_ocel_editor
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
 router.register(r'assets', ProjectAssetViewSet, basename="projectasset")
+router.register(r'image-assets', ImageAssetViewSet, basename="imageasset")
 router.register(r'dashboard', DashboardViewSet, basename="dashboard")
 
 urlpatterns = [

@@ -1,8 +1,8 @@
 # Model Assets
 
 Model assets are project-scoped JSON models that can be reused by later analysis
-and conformance workflows. The first supported asset types are `TOTEM` and
-`OCCN`.
+and conformance workflows. The supported asset types are `TOTEM`, `OCCN`,
+`OCPN`, and `OCDFG`.
 
 This document is grounded in the current implementation:
 
@@ -21,8 +21,16 @@ and stores validated JSON content.
 
 The currently supported asset types are:
 
-- `TOTEM`
-- `OCCN`
+- `TOTEM` — canonical `schema: "totem"` JSON (validated by `totem_lib`)
+- `OCCN` — canonical `schema: "occn"` JSON (validated by `totem_lib`)
+- `OCPN` — the `format: "ocpn"` exchange JSON of the OCPN editor / discovery
+  (structurally validated in `backend/api/asset_formats.py`)
+- `OCDFG` — the canonical `schema: "ocdfg"` JSON of the OC-DFG editor
+  (structurally validated in `backend/api/asset_formats.py`)
+
+`OCPN` and `OCCN` assets can be executed by the playout view; `TOTEM` and
+`OCCN` assets can be used for conformance checking and opened in their
+asset-store-connected editors.
 
 ## Project Scoping
 
@@ -152,6 +160,44 @@ rejected, and sending neither is rejected.
 
 The download endpoint returns the stored `content_json`. The download filename
 is derived from the asset name and always uses a `.json` extension.
+
+### Saving discovered models
+
+The discovery components (TOTeM miner, OCCN, OC-DFG, and OC Petri Net views —
+both the analysis views and the dashboard components) offer a **Save to
+assets** action that stores the model discovered from the currently loaded
+event log:
+
+```text
+POST /api/files/<file_id>/save_discovered_model/
+```
+
+```json
+{
+  "name": "My discovered model",
+  "model_type": "TOTEM",
+  "params": { "tau": 0.8 }
+}
+```
+
+`model_type` is one of the supported asset types; `params` carries the
+discovery settings the component currently uses (`tau` for TOTeM;
+`relative_occurrence_threshold` and `object_types` for OCCN; `timeout_s` and
+`object_types` for OCPN; `object_types` for OC-DFG). The backend re-runs the
+discovery (reusing the same caches as the read endpoints, so saving right
+after viewing is cheap), converts the result to the canonical asset JSON, and
+stores it through the regular asset validation. The response is the created
+asset (`201`), or `400` for validation errors such as a duplicate name.
+
+### Image assets
+
+Besides model assets, projects can store images (png, jpeg, jpg, svg) under
+**Project Assets > Images**. Unlike model assets, images keep their uploaded
+file (served from the media storage). The API lives at `/api/image-assets/`
+(list by `?project=`, multipart `POST` with `project`/`name`/`image`, `PATCH`
+to rename, `DELETE` to remove — deleting also removes the stored file).
+Dashboard image components reference these assets by id and add display
+options (object-fit and alignment).
 
 ### TOTeM conformance endpoint
 

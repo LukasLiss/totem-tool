@@ -6,6 +6,7 @@ from rest_framework import status, viewsets, serializers
 from django.utils.text import slugify
 from .models import (
     EventLog,
+    ImageAsset,
     Project,
     ProjectAsset,
     Dashboard,
@@ -32,6 +33,7 @@ from .serializers import (
     DashboardComponentPolymorphicSerializer,
     DashboardSerializer,
     EventLogSerializer,
+    ImageAssetSerializer,
     OCCNConformanceRequestSerializer,
     OCCNReplayUnitDetailRequestSerializer,
     ProjectAssetSerializer,
@@ -49,6 +51,7 @@ from totem_lib import (
     extract_occn_replay_units,
     occn_from_dict,
     occn_replay_fitness,
+    occn_to_dict,
     serialize_occn,
 )
 from totem_lib.variants import find_variants
@@ -89,6 +92,7 @@ import networkx as nx
 from .cache_utils import get_cached_result, set_cached_result
 from django.core.cache import cache
 
+import copy
 import math
 import os
 from hashlib import sha1
@@ -1062,6 +1066,218 @@ class EventLogViewSet(viewsets.ModelViewSet):
         cache.set(cache_key, result, timeout=3600)
         return Response(result, status=status.HTTP_200_OK)
 
+    @staticmethod
+    def _occn_content_json(occn):
+        """Canonical asset JSON for a (possibly discovered) OCCN.
+
+        Discovered nets may carry markers with ``marker_key == 0`` ("no
+        constraint / assign automatically"), which the canonical schema
+        rejects. Mirror the factory / editor behavior and give those markers
+        fresh unique keys — on a deep copy, because the net may live in the
+        shared discovery cache.
+        """
+        occn = copy.deepcopy(occn)
+        all_groups = [
+            group
+            for groups in (occn.input_marker_groups, occn.output_marker_groups)
+            for group_list in groups.values()
+            for group in group_list
+        ]
+        next_key = 1 + max(
+            (
+                int(marker.marker_key)
+                for group in all_groups
+                for marker in group.markers
+                if isinstance(marker.marker_key, (int, float)) and marker.marker_key > 0
+            ),
+            default=0,
+        )
+        for group in all_groups:
+            for marker in group.markers:
+                if not marker.marker_key or marker.marker_key <= 0:
+                    marker.marker_key = next_key
+                    next_key += 1
+        return occn_to_dict(occn)
+
+    @action(detail=True, methods=["post"])
+    def save_discovered_model(self, request, pk=None):
+        """Discover a model from this event log and store it as a project asset.
+
+        Body: ``{"name": str, "model_type": "TOTEM"|"OCCN"|"OCPN"|"OCDFG",
+        "params": {...}}`` where ``params`` carries the discovery settings the
+        requesting component currently uses:
+
+        - TOTEM: ``tau`` (float in [0, 1], default 0.0)
+        - OCCN:  ``relative_occurrence_threshold`` (float in [0, 1]),
+                 ``object_types`` (list of strings, empty = all)
+        - OCPN:  ``timeout_s`` (float), ``object_types``
+        - OCDFG: ``object_types``
+
+        Discovery reuses the same caches as the corresponding read endpoints,
+        so saving right after viewing a discovered model is cheap. The
+        resulting canonical JSON is validated and stored through the regular
+        project-asset serializer (name uniqueness included).
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        name = request.data.get("name")
+        model_type = request.data.get("model_type")
+        params = request.data.get("params") or {}
+        if not isinstance(params, dict):
+            return Response(
+                {"error": "params must be an object"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if model_type not in ProjectAsset.AssetType.values:
+            return Response(
+                {"error": "Unsupported model_type"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        object_type_filter = None
+        raw_object_types = params.get("object_types")
+        if isinstance(raw_object_types, list):
+            object_type_filter = sorted(
+                t.strip() for t in raw_object_types if isinstance(t, str) and t.strip()
+            ) or None
+        elif isinstance(raw_object_types, str) and raw_object_types.strip():
+            object_type_filter = sorted(
+                t.strip() for t in raw_object_types.split(",") if t.strip()
+            ) or None
+
+        try:
+            if model_type == ProjectAsset.AssetType.TOTEM:
+                try:
+                    tau = float(params.get("tau", 0.0))
+                except (TypeError, ValueError):
+                    tau = 0.0
+                tau = min(1.0, max(0.0, tau))
+                with _with_ocel_db(user_file) as db:
+                    totem = totemDiscovery_db(db, tau=tau)
+                content_json = totem_to_dict(totem)
+
+            elif model_type == ProjectAsset.AssetType.OCCN:
+                try:
+                    threshold = float(params.get("relative_occurrence_threshold", 0.0))
+                except (TypeError, ValueError):
+                    threshold = 0.0
+                threshold = min(1.0, max(0.0, threshold))
+                base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
+                if base_occn is None:
+                    return Response(
+                        {"error": "Failed to discover OCCN"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                occn = (
+                    base_occn.apply_relative_occurrence_threshold(threshold)
+                    if threshold > 0
+                    else base_occn
+                )
+                content_json = self._occn_content_json(occn)
+
+            elif model_type == ProjectAsset.AssetType.OCPN:
+                try:
+                    timeout_s = float(params.get("timeout_s", 30.0))
+                    if timeout_s <= 0:
+                        timeout_s = None
+                except (TypeError, ValueError):
+                    timeout_s = 30.0
+                # Same cache key as discover_ocpn, so a save right after
+                # viewing reuses the already-discovered net.
+                types_key = ",".join(object_type_filter) if object_type_filter else "all"
+                ocpn_cache_key = (
+                    f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
+                )
+                cached_result = cache.get(ocpn_cache_key)
+                if cached_result and cached_result.get("ocpn"):
+                    content_json = cached_result["ocpn"]
+                else:
+                    with _with_ocel_db(user_file) as db:
+                        content_json = discover_ocpn_db(
+                            db,
+                            object_types=object_type_filter,
+                            timeout_s=timeout_s,
+                            name=os.path.splitext(
+                                os.path.basename(user_file.file.name)
+                            )[0],
+                        )
+                    cache.set(ocpn_cache_key, {"ocpn": content_json}, timeout=3600)
+
+            else:  # OCDFG
+                with _with_ocel_db(user_file) as db:
+                    graph = NewOCDFGDb.from_ocel_db(db, object_types=object_type_filter)
+                object_types = set()
+                activities = []
+                for node in graph.nodes:
+                    node_id = str(node)
+                    if node_id.startswith("__start__:") or node_id.startswith("__end__:"):
+                        object_types.add(node_id.split(":", 1)[1])
+                    else:
+                        activities.append(node_id)
+                edges = []
+                seen_edges = set()
+                for source, target, data in graph.edges(data=True):
+                    object_type = data.get("objtype") or data.get("object_type")
+                    if not object_type:
+                        continue
+                    key = (str(source), str(target), str(object_type))
+                    if key in seen_edges:
+                        continue
+                    seen_edges.add(key)
+                    object_types.add(str(object_type))
+                    edges.append(
+                        {
+                            "source": str(source),
+                            "target": str(target),
+                            "object_type": str(object_type),
+                        }
+                    )
+                edges.sort(
+                    key=lambda e: (e["source"], e["target"], e["object_type"])
+                )
+                content_json = {
+                    "schema": "ocdfg",
+                    "version": 1,
+                    "name": name or "Discovered OC-DFG",
+                    "object_types": sorted(object_types),
+                    "activities": sorted(activities),
+                    "edges": edges,
+                }
+        except TimeoutError as e:
+            return Response(
+                {"error": str(e), "code": "timeout"},
+                status=status.HTTP_408_REQUEST_TIMEOUT,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Model discovery failed: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        serializer = ProjectAssetSerializer(
+            data={
+                "project": user_file.project_id,
+                "name": name,
+                "asset_type": model_type,
+                "content_json": content_json,
+                "metadata": {
+                    "source": "discovery",
+                    "event_log_id": user_file.pk,
+                    "params": params,
+                },
+            },
+            context={"request": request},
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=["get"])
     def statistics(self, request, pk=None):
         """Returns basic statistics of the event log."""
@@ -1253,6 +1469,32 @@ class ProjectAssetViewSet(viewsets.ModelViewSet):
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
 
+
+class ImageAssetViewSet(viewsets.ModelViewSet):
+    """Project-scoped image assets: upload, rename (PATCH name), delete."""
+
+    serializer_class = ImageAssetSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        queryset = ImageAsset.objects.filter(
+            project__users=self.request.user,
+        ).select_related("project", "created_by")
+
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+
+        return queryset.order_by("name")
+
+    def perform_destroy(self, instance):
+        stored_file = instance.image
+        super().perform_destroy(instance)
+        if stored_file:
+            stored_file.delete(save=False)
+
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -1376,7 +1618,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color=item.get("color", "blue"),
                 )
             elif component_name == "ImageComponent":
-                # Extract image path, stripping /files/ prefix if present
+                # Legacy image path, stripping /files/ prefix if present
                 image_path = item.get("image", None)
                 if (
                     image_path
@@ -1384,6 +1626,34 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     and image_path.startswith("/files/")
                 ):
                     image_path = image_path[7:]  # Remove '/files/' prefix
+
+                # Image asset reference: only accept assets of this
+                # dashboard's project the user can actually see.
+                image_asset = None
+                image_asset_id = item.get("image_asset")
+                if image_asset_id:
+                    image_asset = ImageAsset.objects.filter(
+                        pk=image_asset_id,
+                        project=dashboard.project,
+                        project__users=request.user,
+                    ).first()
+
+                image_fit = item.get("image_fit") or "contain"
+                if image_fit not in ("contain", "cover", "fill", "none", "scale-down"):
+                    image_fit = "contain"
+                image_alignment = item.get("image_alignment") or "center"
+                if image_alignment not in (
+                    "center",
+                    "top",
+                    "bottom",
+                    "left",
+                    "right",
+                    "top left",
+                    "top right",
+                    "bottom left",
+                    "bottom right",
+                ):
+                    image_alignment = "center"
 
                 ImageComponent.objects.create(
                     dashboard=dashboard,
@@ -1393,6 +1663,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item["h"],
                     component_name=component_name,
                     image=image_path,
+                    image_asset=image_asset,
+                    image_fit=image_fit,
+                    image_alignment=image_alignment,
                 )
             elif component_name == "VariantsComponent":
                 VariantsComponent.objects.create(
@@ -3264,6 +3537,63 @@ _occn_cache_lock = threading.Lock()
 _occn_inflight = {}
 
 
+def _get_or_discover_base_occn(user_file, object_type_filter):
+    """Return the threshold-0 base OCCN for a log, via `_occn_base_cache`.
+
+    Single-flight per cache key: concurrent callers for the same
+    (file, object types) wait on the primary discovery instead of mining the
+    same net twice. Returns None when discovery failed to produce a net.
+    """
+    parameters = (
+        {"object_types": object_type_filter} if object_type_filter else None
+    )
+    cache_key = (
+        user_file.id,
+        tuple(object_type_filter) if object_type_filter else None,
+    )
+
+    with _occn_cache_lock:
+        base_occn = _occn_base_cache.get(cache_key)
+        if base_occn is not None:
+            _occn_base_cache.move_to_end(cache_key)
+
+    if base_occn is None:
+        event = None
+        is_primary = False
+        with _occn_cache_lock:
+            base_occn = _occn_base_cache.get(cache_key)
+            if base_occn is None:
+                event = _occn_inflight.get(cache_key)
+                if event is None:
+                    event = threading.Event()
+                    _occn_inflight[cache_key] = event
+                    is_primary = True
+
+        if not is_primary and base_occn is None and event is not None:
+            event.wait(timeout=120)
+            with _occn_cache_lock:
+                base_occn = _occn_base_cache.get(cache_key)
+
+        if is_primary:
+            try:
+                with _with_ocel_db(user_file) as db:
+                    ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                base_occn = discover_occn(
+                    ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters
+                )
+                with _occn_cache_lock:
+                    _occn_base_cache[cache_key] = base_occn
+                    _occn_base_cache.move_to_end(cache_key)
+                    while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
+                        _occn_base_cache.popitem(last=False)
+            finally:
+                with _occn_cache_lock:
+                    _occn_inflight.pop(cache_key, None)
+                event.set()
+
+    return base_occn
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def OCCNViewSet(request):
@@ -3316,51 +3646,7 @@ def OCCNViewSet(request):
         )
 
     try:
-        parameters = (
-            {"object_types": object_type_filter} if object_type_filter else None
-        )
-        cache_key = (
-            user_file.id,
-            tuple(object_type_filter) if object_type_filter else None,
-        )
-
-        with _occn_cache_lock:
-            base_occn = _occn_base_cache.get(cache_key)
-            if base_occn is not None:
-                _occn_base_cache.move_to_end(cache_key)
-
-        if base_occn is None:
-            # Single-flight deduplication: ensure only one thread mines OCCN for a given cache_key
-            event = None
-            is_primary = False
-            with _occn_cache_lock:
-                base_occn = _occn_base_cache.get(cache_key)
-                if base_occn is None:
-                    event = _occn_inflight.get(cache_key)
-                    if event is None:
-                        event = threading.Event()
-                        _occn_inflight[cache_key] = event
-                        is_primary = True
-
-            if not is_primary and base_occn is None and event is not None:
-                event.wait(timeout=120)
-                with _occn_cache_lock:
-                    base_occn = _occn_base_cache.get(cache_key)
-
-            if is_primary:
-                try:
-                    with _with_ocel_db(user_file) as db:
-                        ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
-                    base_occn = discover_occn(ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters)
-                    with _occn_cache_lock:
-                        _occn_base_cache[cache_key] = base_occn
-                        _occn_base_cache.move_to_end(cache_key)
-                        while len(_occn_base_cache) > _OCCN_CACHE_MAX_ENTRIES:
-                            _occn_base_cache.popitem(last=False)
-                finally:
-                    with _occn_cache_lock:
-                        _occn_inflight.pop(cache_key, None)
-                    event.set()
+        base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
 
         if base_occn is None:
             return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

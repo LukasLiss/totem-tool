@@ -252,7 +252,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       } else if (component_name === "TextBoxComponent") {
         props = { text: (node as any).text || "Enter text here", font_size: 14 };  
       } else if (component_name === "ImageComponent") {
-        props = { image: (node as any).image};
+        props = {
+          image: (node as any).image,
+          image_asset: (node as any).image_asset ?? null,
+          image_fit: (node as any).image_fit ?? "contain",
+          image_alignment: (node as any).image_alignment ?? "center",
+        };
       } else if (component_name === "VariantsComponent") {
         props = {
           automatic_loading: (node as any).automatic_loading ?? false,
@@ -439,6 +444,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color: item.color,
             font_size: item.font_size,
             image: item.image,
+            // ImageComponent (asset-store based) properties
+            image_asset: item.image_asset,
+            image_asset_url: item.image_asset_url,
+            image_fit: item.image_fit,
+            image_alignment: item.image_alignment,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
             // VariantsComponent — persisted advanced settings
@@ -493,7 +503,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
-              (node as any).image = item.image; // For ImageComponent
+              (node as any).image = item.image; // For ImageComponent (legacy upload)
+              (node as any).image_asset = item.image_asset; // For ImageComponent
+              (node as any).image_asset_url = item.image_asset_url; // For ImageComponent
+              (node as any).image_fit = item.image_fit; // For ImageComponent
+              (node as any).image_alignment = item.image_alignment; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
               (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings

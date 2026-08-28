@@ -26,6 +26,7 @@ import { Download, Loader2, Play, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import {
   parseOcpnModelFile,
   type OcpnModelFile,
@@ -276,6 +277,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
         nodesConnectable={false}
         zoomOnDoubleClick={false}
         minZoom={0.1}
+        proOptions={{ hideAttribution: true }}
         // The OCPN node components only define source handles (the editor
         // relies on loose connection mode); without it React Flow drops
         // every edge for lack of a target handle.
@@ -335,6 +337,12 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
             >
               <Download className="mr-1 h-4 w-4" /> JSON
             </Button>
+            <SaveModelAssetButton
+              fileId={fileId}
+              modelType="OCPN"
+              params={{ timeout_s: timeoutS }}
+              disabled={!model}
+            />
             {objectTypes.length > 0 && (
               <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
                 {objectTypes.map((type) => (
