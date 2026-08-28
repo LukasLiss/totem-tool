@@ -18,6 +18,7 @@ import {
 } from "@/contexts/FilterStackContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
+import { useFilterStore } from "@/store/filterStore";
 
 
 const PIPE_BG = "var(--secondary)";
@@ -414,16 +415,17 @@ export default function FilterChipStack() {
   useEffect(() => {
     setStats(DEFAULT_STATS);
     setAppliedKey(JSON.stringify([]));
+    useFilterStore.getState().clear();
     if (!fileId) { setObjectTypes([]); setActivities([]); return; }
-    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`)
+    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
       .catch((err) => { console.error("FilterChipStack: failed to load object_types", err); setObjectTypes([]); });
-    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/activities/`)
+    axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/activities/`, { _skipGlobalFilter: true })
       .then(({ data }) => setActivities(Array.isArray(data) ? data : []))
       .catch((err) => { console.error("FilterChipStack: failed to load activities", err); setActivities([]); });
 
     axios.get<{ num_objects: number; num_events: number }>(
-      `/api/files/${fileId}/statistics/`
+      `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
     ).then(({ data }) => {
       setStats({
         objectPct:    1,
@@ -477,12 +479,11 @@ export default function FilterChipStack() {
     addFilter({ type: activeType, enabled: true, params });
   }
 
-  async function handleApply() {
-    if (!fileId || applying || !dirty) return;
-
+  async function applyFilters() {
+    if (!fileId) return;
     const activeFilters = filters.filter(f => f.enabled);
-
     if (activeFilters.length === 0) {
+      useFilterStore.getState().clear();
       setStats(prev => ({
         ...prev,
         objectPct: 1, eventPct: 1,
@@ -492,7 +493,6 @@ export default function FilterChipStack() {
       setAppliedKey(currentKey);
       return;
     }
-
     setApplying(true);
     try {
       const { data } = await axios.post<{
@@ -502,7 +502,7 @@ export default function FilterChipStack() {
         event_percentage:   number;
         event_count_before: number;
         event_count_after:  number;
-      }>(`/api/files/${fileId}/apply_filters/`, { filters: activeFilters });
+      }>(`/api/files/${fileId}/apply_filters/`, { filters: activeFilters }, { _skipGlobalFilter: true });
       setStats({
         objectPct:    data.object_percentage,
         eventPct:     data.event_percentage,
@@ -511,12 +511,18 @@ export default function FilterChipStack() {
         eventBefore:  data.event_count_before,
         eventAfter:   data.event_count_after,
       });
+      useFilterStore.getState().setApplied(activeFilters);
       setAppliedKey(currentKey);
     } catch (err) {
       console.error("FilterChipStack: failed to apply filters", err);
     } finally {
       setApplying(false);
     }
+  }
+
+  async function handleApply() {
+    if (applying || !dirty) return;
+    await applyFilters();
   }
 
   return (

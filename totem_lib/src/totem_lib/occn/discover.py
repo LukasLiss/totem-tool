@@ -1465,30 +1465,28 @@ class SimpleOCCNet:
             return OCCausalNet.MarkerGroup(markers, support_count=marker_group[1])
 
         dependency_graph = self.dependencyGraph
-        # An activity whose dependencies were all pruned yields a binding with no
-        # markers at all. A MarkerGroup must be non-empty, so drop those rather
-        # than fail the whole discovery: OCCausalNet treats an activity with no
-        # marker groups as valid.
-        unbound_activities = sorted(
-            {act for act, bs in self.inputBindings.items() if any(not b[0] for b in bs)}
-            | {
-                act
-                for act, bs in self.outputBindings.items()
-                if any(not b[0] for b in bs)
-            }
-        )
-        if unbound_activities:
-            warnings.warn(
-                "No dependencies were discovered for the following activities, "
-                "so they get no marker groups: "
-                f"{', '.join(unbound_activities)}."
-            )
+        # A binding with no obligations is legitimate: it means the activity
+        # neither consumes nor produces anything for the object types in
+        # scope. That happens whenever an activity ends up isolated in the
+        # dependency graph — no mined successor/predecessor and no START_/END_
+        # arc — which a filtered log makes common (an object type whose events
+        # no longer form a directly-follows relation above the dependency
+        # threshold). `MarkerGroup` requires at least one marker, and the
+        # absence of obligations is already represented by an empty *list of
+        # groups*, so drop these rather than constructing an invalid group.
+        def _convert_bindings(bindings):
+            return [
+                _convet_marker_group(binding)
+                for binding in bindings
+                if len(binding[0]) > 0
+            ]
+
         input_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings if binding[0]]
+            act: _convert_bindings(bindings)
             for act, bindings in self.inputBindings.items()
         }
         output_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings if binding[0]]
+            act: _convert_bindings(bindings)
             for act, bindings in self.outputBindings.items()
         }
         return OCCausalNet(

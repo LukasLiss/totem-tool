@@ -43,9 +43,11 @@ HTTP and the frontend only collects input and visualizes results.
     400 with `{error}`. All numeric inputs are clamped server-side.
   - `POST /api/playout/export-ocel/` — body `{variants}`; returns the
     OCEL 2.0 JSON document.
-- **Frontend** (`frontend/src/playout/`) — the view (model loading from the
-  editors, JSON files, or built-in examples; object counts; per-activity
-  limits with an "All −/+" bulk stepper; timeout) and result rendering.
+- **Frontend** (`frontend/src/playout/`) — the view (model selection from the
+  project's model asset store — filtered to `OCCN`/`OCPN` assets, the only
+  types playout supports — plus loading from the editors, JSON files, or
+  built-in examples; object counts; per-activity limits with an "All −/+"
+  bulk stepper; timeout) and result rendering.
   Requests run through `frontend/src/api/playoutApi.tsx`; cancelling aborts
   the request (the server still finishes its bounded search).
 

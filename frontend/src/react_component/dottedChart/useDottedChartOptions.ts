@@ -54,6 +54,7 @@ export function useDottedChartOptions(fileId?: number) {
     axios
       .get<DottedChartOptions>(`/api/files/${fileId}/oc_dotted_chart_columns/`, {
         signal: controller.signal,
+        _skipGlobalFilter: true,
       })
       .then((response) => setOptions(response.data))
       .catch((err) => {

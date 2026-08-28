@@ -1070,6 +1070,7 @@ function OcdfgEditorInner() {
               connectionMode={ConnectionMode.Loose}
               connectionRadius={70}
               zoomOnDoubleClick={false}
+              proOptions={{ hideAttribution: true }}
             >
               <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} color="#CBD5E1" />
               <Controls className="ocdfg-controls" showInteractive={false} />

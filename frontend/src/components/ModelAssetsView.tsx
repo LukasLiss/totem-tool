@@ -58,15 +58,22 @@ import { ModelAssetDropzone } from "@/components/model-assets/ModelAssetDropzone
 
 type AssetFilter = "ALL" | AssetType;
 
-const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, string> = {
+// TOTEM/OCCN/OCDFG files carry a "schema" key; OCPN files use "format".
+const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, { key: "schema" | "format"; value: string }> = {
+  TOTEM: { key: "schema", value: "totem" },
+  OCCN: { key: "schema", value: "occn" },
+  OCPN: { key: "format", value: "ocpn" },
+  OCDFG: { key: "schema", value: "ocdfg" },
+};
+
+// Only these types have an asset-store-connected editor today.
+const EDITOR_COMPONENT_BY_TYPE: Partial<Record<AssetType, EditorComponent>> = {
   TOTEM: "totem",
   OCCN: "occn",
 };
 
-const EDITOR_COMPONENT_BY_TYPE: Record<AssetType, EditorComponent> = {
-  TOTEM: "totem",
-  OCCN: "occn",
-};
+// Only these types can run conformance checking.
+const CONFORMANCE_TYPES: AssetType[] = ["TOTEM", "OCCN"];
 
 interface AssetTableFilters {
   type: AssetFilter;
@@ -170,7 +177,7 @@ export function ModelAssetsView() {
           ) : assets.length === 0 ? (
             <EmptyState
               title="No model assets"
-              description="Stored TOTeM and OCCN models will appear here."
+              description="Stored TOTeM, OCCN, OCPN and OC-DFG models will appear here."
             />
           ) : filteredAssets.length === 0 ? (
             <EmptyState
@@ -273,6 +280,8 @@ function AssetFilterMenu({
                 <SelectItem value="ALL">All</SelectItem>
                 <SelectItem value="TOTEM">TOTeM</SelectItem>
                 <SelectItem value="OCCN">OCCN</SelectItem>
+                <SelectItem value="OCPN">OCPN</SelectItem>
+                <SelectItem value="OCDFG">OC-DFG</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -448,6 +457,8 @@ function UploadAssetDialog({
                 <SelectContent>
                   <SelectItem value="TOTEM">TOTeM</SelectItem>
                   <SelectItem value="OCCN">OCCN</SelectItem>
+                  <SelectItem value="OCPN">OCPN</SelectItem>
+                  <SelectItem value="OCDFG">OC-DFG</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -541,28 +552,32 @@ function AssetList({
                 {formatDate(asset.updated_at)}
               </span>
               <div className="flex justify-end gap-0.5">
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  title={`Use ${asset.name} for conformance`}
-                  aria-label={`Use ${asset.name} for conformance`}
-                  onClick={() => onConformanceClick(asset)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <GitCompareArrows />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  title={`Edit ${asset.name}`}
-                  aria-label={`Edit ${asset.name}`}
-                  onClick={() => onOpenInEditorClick(asset)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <Pencil />
-                </Button>
+                {CONFORMANCE_TYPES.includes(asset.asset_type) && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    title={`Use ${asset.name} for conformance`}
+                    aria-label={`Use ${asset.name} for conformance`}
+                    onClick={() => onConformanceClick(asset)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <GitCompareArrows />
+                  </Button>
+                )}
+                {EDITOR_COMPONENT_BY_TYPE[asset.asset_type] && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    title={`Edit ${asset.name}`}
+                    aria-label={`Edit ${asset.name}`}
+                    onClick={() => onOpenInEditorClick(asset)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <Pencil />
+                  </Button>
+                )}
                 <Button
                   type="button"
                   size="icon"
@@ -735,7 +750,16 @@ function ErrorState({
 }
 
 function formatAssetType(assetType: AssetType) {
-  return assetType === "TOTEM" ? "TOTeM" : "OCCN";
+  switch (assetType) {
+    case "TOTEM":
+      return "TOTeM";
+    case "OCCN":
+      return "OCCN";
+    case "OCPN":
+      return "OCPN";
+    case "OCDFG":
+      return "OC-DFG";
+  }
 }
 
 async function validateModelAssetFile(file: File, assetType: AssetType) {
@@ -750,15 +774,14 @@ async function validateModelAssetFile(file: File, assetType: AssetType) {
     throw new Error("Model asset JSON must be an object.");
   }
 
-  const schema = (parsed as Record<string, unknown>).schema;
-  if (typeof schema !== "string") {
-    throw new Error("Model asset JSON must declare a schema.");
+  const expected = EXPECTED_SCHEMA_BY_TYPE[assetType];
+  const actual = (parsed as Record<string, unknown>)[expected.key];
+  if (typeof actual !== "string") {
+    throw new Error(`Model asset JSON must declare a "${expected.key}".`);
   }
-
-  const expectedSchema = EXPECTED_SCHEMA_BY_TYPE[assetType];
-  if (schema !== expectedSchema) {
+  if (actual !== expected.value) {
     throw new Error(
-      `Expected schema "${expectedSchema}" for ${formatAssetType(assetType)} assets.`
+      `Expected "${expected.key}": "${expected.value}" for ${formatAssetType(assetType)} assets.`
     );
   }
 }

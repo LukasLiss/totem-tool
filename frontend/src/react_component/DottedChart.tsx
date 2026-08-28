@@ -16,6 +16,7 @@ import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { Map as MapIcon } from "lucide-react";
+import { useFilterVersion } from "@/store/filterStore";
 import {
   colorGroupKey,
   formatAxisTick,
@@ -50,6 +51,7 @@ interface DottedChartProps {
   showMinimap?: boolean;
   className?: string;
   onEventClick?: (event: OCEvent) => void;
+  filterEnabled?: boolean;
 }
 
 const DEFAULT_X_AXIS: AxisOption = { type: "time" };
@@ -80,6 +82,7 @@ export default function DottedChart({
   showMinimap = true,
   className,
   onEventClick,
+  filterEnabled = false,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({
@@ -109,6 +112,9 @@ export default function DottedChart({
   const [colorKeyState, setColorKeyState] = useState<ColorKeyState>({ colorByKey: "", keys: [] });
   const chartWrapperRef = useRef<HTMLDivElement | null>(null);
   const chartInteractionRef = useRef<HTMLDivElement | null>(null);
+
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const resetZoomFrame = useCallback(() => {
     setRequestedViewport(viewport);
@@ -143,6 +149,8 @@ export default function DottedChart({
     maxPoints: effectiveConfig.maxPoints,
     viewport: requestedViewport,
     sampleSeed,
+    filterEnabled,
+    effectiveFilterVersion,
   });
 
   const events = data?.events ?? EMPTY_EVENTS;
@@ -532,7 +540,9 @@ export default function DottedChart({
             Resample
           </Button>
         </div>
-        <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+        <div className="flex items-center gap-2">
+          <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
+        </div>
       </div>
 
       {showControls && (
@@ -773,9 +783,12 @@ function DottedChartZoomControls({
   const canReset = isZoomed || isDraftZoomed;
 
   useEffect(() => {
+    const lastIdx = Math.max(0, points.length - 1);
+    const safeStart = Math.min(xRange.startIndex, lastIdx);
+    const safeEnd = Math.min(xRange.endIndex, lastIdx);
     setDraftXRange(xRange);
-    setStartDateInput(formatRangeDateInput(points[xRange.startIndex], xAxis));
-    setEndDateInput(formatRangeDateInput(points[xRange.endIndex], xAxis));
+    setStartDateInput(formatRangeDateInput(points[safeStart], xAxis));
+    setEndDateInput(formatRangeDateInput(points[safeEnd], xAxis));
     setDateError(null);
   }, [points, xRange, xAxis]);
 

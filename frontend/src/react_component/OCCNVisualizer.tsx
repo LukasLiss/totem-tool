@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -23,6 +24,7 @@ import {
   ArrowRightIcon,
   LocateFixedIcon,
 } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
   occnNetToEditorGraph,
@@ -46,6 +48,7 @@ import {
   type OccnNode as EditorOccnNode,
 } from '@/editors/occn/types';
 import OccnOverflowBadges from './OccnOverflowBadges';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -64,6 +67,8 @@ interface OCCNVisualizerProps {
   objectTypes?: string[];
   /** Hide the in-canvas title when the surrounding page already renders one. */
   showTitle?: boolean;
+  filterEnabled?: boolean;
+  onToggleFilter?: () => void;
   /** Activity ids to emphasize as OCCN replay stopping points. */
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
   /** Log activities shown only to explain why replay stopped. */
@@ -95,6 +100,8 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
+  filterEnabled = false,
+  onToggleFilter = () => {},
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
   unvisitedActivities = EMPTY_UNVISITED_ACTIVITIES,
@@ -137,6 +144,9 @@ function OCCNVisualizer({
     [],
   );
 
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+
   // Normalized to a string so the fetch effect doesn't re-run on array identity.
   const objectTypesParam = (objectTypes ?? []).map((t) => t.trim()).filter(Boolean).join(',');
 
@@ -159,6 +169,7 @@ function OCCNVisualizer({
         `/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
           objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
         }`,
+        { _skipGlobalFilter: !filterEnabled },
       )
       .then(({ data: payload }) => {
         if (cancelled) return;
@@ -176,7 +187,7 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data, fileId, threshold, objectTypesParam]);
+  }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion]);
 
   const typeColors = useMemo(
     () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),
@@ -373,6 +384,7 @@ function OCCNVisualizer({
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
       className={interactionsDisabled ? 'interactions-disabled' : ''}
     >
+
       {/* The shared editor node renders connection handles; this view is read-only. */}
       <style>{`
         [data-occn-readonly] .react-flow__handle {
@@ -494,8 +506,11 @@ function OCCNVisualizer({
                 minWidth: 240,
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-                Object-Centric Causal Net (OCCN)
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                  Object-Centric Causal Net (OCCN)
+                </div>
+                <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
               </div>
             </div>
           )}
@@ -641,6 +656,21 @@ function OCCNVisualizer({
             >
               {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
             </Button>
+            {data == null && fileId != null && (
+              <SaveModelAssetButton
+                fileId={fileId}
+                modelType="OCCN"
+                params={{
+                  relative_occurrence_threshold: threshold,
+                  object_types: (objectTypes ?? [])
+                    .map((t) => t.trim())
+                    .filter(Boolean),
+                }}
+                disabled={loading || net == null}
+                iconOnly
+                className="rounded-full h-9 w-9"
+              />
+            )}
           </div>
         </>
       )}
