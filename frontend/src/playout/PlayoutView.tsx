@@ -10,7 +10,7 @@
  * resulting OCEL has perfectly disconnected object components.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CircleDot,
@@ -35,6 +35,20 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { SelectedFileContext } from '@/contexts/SelectedFileContext';
+import {
+  extractAssetApiError,
+  listAssets,
+  type ProjectAsset,
+} from '@/api/assetsApi';
+import { assetToOccnModel } from '@/editors/shared/asset-format';
 import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
 import {
   detectModelFormat,
@@ -63,7 +77,16 @@ const MAX_STATES = 5_000_000;
 const MAX_LISTED_VARIANTS = 100;
 const FALLBACK_COLOR = '#64748b';
 
+/** Asset types the playout engine can execute. */
+const PLAYOUT_ASSET_TYPES: ProjectAsset['asset_type'][] = ['OCCN', 'OCPN'];
+
 export function PlayoutView() {
+  const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project as number | undefined;
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [source, setSource] = useState<PlayoutModelSource | null>(null);
   const [objectCounts, setObjectCounts] = useState<Record<string, number>>({});
   const [rowLimits, setRowLimits] = useState<Record<string, number>>({});
@@ -106,6 +129,67 @@ export function PlayoutView() {
     setResult(null);
   };
 
+  // Load the current project's OCCN/OCPN model assets for the model picker.
+  useEffect(() => {
+    setAssets([]);
+    setSelectedAssetId('');
+    setAssetsError(null);
+    if (!projectId) return;
+    let cancelled = false;
+    setAssetsLoading(true);
+    listAssets({ projectId })
+      .then((data) => {
+        if (cancelled) return;
+        setAssets(
+          (Array.isArray(data) ? data : []).filter((asset) =>
+            PLAYOUT_ASSET_TYPES.includes(asset.asset_type),
+          ),
+        );
+      })
+      .catch((error) => {
+        if (!cancelled) setAssetsError(extractAssetApiError(error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setAssetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const loadFromAsset = (assetIdValue: string) => {
+    setSelectedAssetId(assetIdValue);
+    const asset = assets.find((a) => String(a.id) === assetIdValue);
+    if (!asset) return;
+    try {
+      if (asset.asset_type === 'OCPN') {
+        const parsed = parseOcpnModelFile(asset.content_json);
+        if (parsed.ok === false) {
+          toast.error(parsed.error);
+          return;
+        }
+        adoptSource({
+          format: 'ocpn',
+          model: { ...parsed.model, name: asset.name },
+        });
+      } else {
+        // Canonical OCCN asset JSON -> editor model file (markerGroups shape).
+        const model = assetToOccnModel(asset.content_json, asset.name);
+        adoptSource({ format: 'occn', model });
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load the selected model asset.',
+      );
+    }
+  };
+
+  /** Adopt a model that did NOT come from the asset picker (clears its selection). */
+  const adoptExternalSource = (next: PlayoutModelSource) => {
+    setSelectedAssetId('');
+    adoptSource(next);
+  };
+
   const loadFromEditor = (format: 'ocpn' | 'occn') => {
     const cached = loadEditorSession<unknown>(format);
     if (!cached) {
@@ -121,7 +205,7 @@ export function PlayoutView() {
       toast.error(parsed.error);
       return;
     }
-    adoptSource(
+    adoptExternalSource(
       format === 'ocpn'
         ? { format, model: parsed.model as OcpnModelFile }
         : { format, model: parsed.model as OccnModelFile },
@@ -144,14 +228,14 @@ export function PlayoutView() {
         toast.error(parsed.error);
         return;
       }
-      adoptSource({ format: 'ocpn', model: parsed.model });
+      adoptExternalSource({ format: 'ocpn', model: parsed.model });
     } else if (format === 'occn') {
       const parsed = parseOccnModelFile(raw);
       if (parsed.ok === false) {
         toast.error(parsed.error);
         return;
       }
-      adoptSource({ format: 'occn', model: parsed.model });
+      adoptExternalSource({ format: 'occn', model: parsed.model });
     } else if (format === 'totem-model') {
       toast.error(
         'TOTeM models describe type relations, not behavior — playout needs an OC Petri Net or OC Causal Net.',
@@ -245,10 +329,47 @@ export function PlayoutView() {
         <CardHeader>
           <CardTitle className="text-base">Model</CardTitle>
           <CardDescription>
-            Take the model from an editor, load a saved JSON file, or start from an example.
+            Select one of the project's stored models. Playout currently supports OC Causal Net
+            (OCCN) and OC Petri Net (OCPN) models, so only assets of those types are listed.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={selectedAssetId}
+              onValueChange={loadFromAsset}
+              disabled={!projectId || assetsLoading || assets.length === 0}
+            >
+              <SelectTrigger className="w-[320px]" aria-label="Stored model">
+                <SelectValue
+                  placeholder={
+                    !projectId
+                      ? 'Select an event log to see stored models'
+                      : assetsLoading
+                        ? 'Loading model assets…'
+                        : assets.length === 0
+                          ? 'No OCCN/OCPN models in this project yet'
+                          : 'Select a stored model'
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {assets.map((asset) => (
+                  <SelectItem key={asset.id} value={String(asset.id)}>
+                    {asset.name} ({asset.asset_type === 'OCPN' ? 'OC Petri Net' : 'OC Causal Net'})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {assetsError && (
+              <span className="text-sm text-destructive">{assetsError}</span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Discovered models can be added to the store via "Save to assets" in the OCCN / OC
+            Petri Net views; the editors can save there too. Alternatively load a model from
+            another source:
+          </p>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => loadFromEditor('ocpn')}>
               <CircleDot className="w-4 h-4" /> From OC Petri Net editor
@@ -262,14 +383,14 @@ export function PlayoutView() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => adoptSource({ format: 'ocpn', model: ocpnExample() })}
+              onClick={() => adoptExternalSource({ format: 'ocpn', model: ocpnExample() })}
             >
               <FlaskConical className="w-4 h-4" /> Example OCPN
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => adoptSource({ format: 'occn', model: buildOccnExample() })}
+              onClick={() => adoptExternalSource({ format: 'occn', model: buildOccnExample() })}
             >
               <FlaskConical className="w-4 h-4" /> Example OCCN
             </Button>

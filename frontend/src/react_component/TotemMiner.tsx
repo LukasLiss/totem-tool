@@ -11,6 +11,7 @@ import { Slider } from '@/components/ui/slider';
 import { RefreshCcw } from 'lucide-react';
 import TotemMinerVisualizer from './TotemMinerVisualizer';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 export type TotemMinerProps = {
   fileId?: number | string | null;
@@ -105,6 +106,13 @@ export default function TotemMiner({
             <RefreshCcw className="h-4 w-4" />
             Relayout
           </Button>
+
+          <SaveModelAssetButton
+            fileId={fileId ?? undefined}
+            modelType="TOTEM"
+            params={{ tau }}
+            disabled={!fileId}
+          />
         </div>
       </div>
       <CardContent

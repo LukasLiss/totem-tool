@@ -15,7 +15,15 @@ import { GridStackNode } from 'gridstack';
 import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
-import { uploadImageToComponent } from "@/api/componentsApi";
+import { API_BASE_URL } from '@/config/api';
+import {
+  IMAGE_ASSET_ACCEPT,
+  extractImageAssetApiError,
+  imageAssetSrc,
+  listImageAssets,
+  uploadImageAsset,
+  type ImageAsset as ImageAssetInfo,
+} from '@/api/imageAssetsApi';
 import VariantsExplorer, {
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
@@ -87,6 +95,11 @@ interface ComponentProps {
     font_size?: number;
     color?: string;
     image?: string;
+    // ImageComponent properties (asset-store based)
+    image_asset?: number | null;
+    image_asset_url?: string | null;
+    image_fit?: string;
+    image_alignment?: string;
     automatic_loading?: boolean;
     leading_object_type?: string;
     // Persisted advanced settings for the Variants Explorer
@@ -236,70 +249,300 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
 };
 
 
+// ImageComponent: shows an image from the project asset store. In edit mode
+// the user picks a stored image (or uploads a new one, which lands in the
+// asset store) and chooses standard positioning options; in view mode the
+// image is rendered with the chosen object-fit/object-position on a white
+// background.
+const IMAGE_FIT_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'contain', label: 'Scale to fit', hint: 'Whole image visible, aspect ratio kept' },
+  { value: 'cover', label: 'Fill (crop)', hint: 'Fills the box, aspect ratio kept, edges cropped' },
+  { value: 'fill', label: 'Stretch', hint: 'Fills the box, aspect ratio NOT kept' },
+  { value: 'none', label: 'Original size', hint: 'No scaling, may be cropped' },
+  { value: 'scale-down', label: 'Scale down only', hint: 'Like "Scale to fit", but never enlarges' },
+];
+
+const IMAGE_ALIGNMENT_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'center', label: 'Center' },
+  { value: 'top', label: 'Top' },
+  { value: 'bottom', label: 'Bottom' },
+  { value: 'left', label: 'Left' },
+  { value: 'right', label: 'Right' },
+  { value: 'top left', label: 'Top left' },
+  { value: 'top right', label: 'Top right' },
+  { value: 'bottom left', label: 'Bottom left' },
+  { value: 'bottom right', label: 'Bottom right' },
+];
+
 const ImageComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  dashboardId,
+  selectedFile,
 }) => {
+  const projectId = selectedFile?.project as number | undefined;
+  const [assets, setAssets] = useState<ImageAssetInfo[]>([]);
+  const [loadingAssets, setLoadingAssets] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [assetId, setAssetId] = useState<number | null>(node.image_asset ?? null);
+  const [assetUrl, setAssetUrl] = useState<string | null>(node.image_asset_url ?? null);
+  const [fit, setFit] = useState<string>(node.image_fit ?? 'contain');
+  const [alignment, setAlignment] = useState<string>(node.image_alignment ?? 'center');
+
+  useEffect(() => {
+    setAssetId(node.image_asset ?? null);
+    setAssetUrl(node.image_asset_url ?? null);
+    setFit(node.image_fit ?? 'contain');
+    setAlignment(node.image_alignment ?? 'center');
+  }, [node.image_asset, node.image_asset_url, node.image_fit, node.image_alignment]);
+
+  // Load the project's image assets while editing so the user can pick one.
+  useEffect(() => {
+    if (!isEditMode || !projectId) return;
+    let cancelled = false;
+    setLoadingAssets(true);
+    listImageAssets(projectId)
+      .then((data) => {
+        if (!cancelled) setAssets(data);
+      })
+      .catch((err) => console.error('Failed to load image assets:', err))
+      .finally(() => {
+        if (!cancelled) setLoadingAssets(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, projectId]);
+
+  const selectAsset = (asset: ImageAssetInfo | null) => {
+    setAssetId(asset?.id ?? null);
+    setAssetUrl(asset?.url ?? null);
+    onUpdate?.({
+      image_asset: asset?.id ?? null,
+      image_asset_url: asset?.url ?? null,
+    } as any);
+  };
+
+  const handleFitChange = (value: string) => {
+    setFit(value);
+    onUpdate?.({ image_fit: value } as any);
+  };
+
+  const handleAlignmentChange = (value: string) => {
+    setAlignment(value);
+    onUpdate?.({ image_alignment: value } as any);
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    event.target.value = '';
+    if (!file || !projectId) return;
 
     setUploading(true);
-
+    setUploadError(null);
+    const baseName = file.name.replace(/\.[^.]+$/, '') || 'Image';
     try {
-      const data = await uploadImageToComponent(
-        dashboardId,
-        node.component_id,
-        file
-      );
-
-      // Single source of truth
-      onUpdate?.({ image: data.image });
+      let created: ImageAssetInfo;
+      try {
+        created = await uploadImageAsset({ projectId, name: baseName, file });
+      } catch (error) {
+        // Most likely a duplicate name — retry once with a unique suffix.
+        created = await uploadImageAsset({
+          projectId,
+          name: `${baseName} (${new Date().toISOString().slice(0, 19).replace('T', ' ')})`,
+          file,
+        });
+      }
+      setAssets((current) => [...current, created]);
+      selectAsset(created);
     } catch (error) {
-      console.error("Upload error:", error);
+      console.error('Image upload failed:', error);
+      setUploadError(extractImageAssetApiError(error).message);
     } finally {
       setUploading(false);
     }
   };
 
-  return (
-    <Card className="w-full h-full rounded-none">
-      
+  // Resolve what to render: asset-store image first, legacy upload second.
+  const legacySrc = node.image
+    ? node.image.startsWith('http')
+      ? node.image
+      : `${API_BASE_URL}${node.image.startsWith('/') ? '' : '/'}${node.image}`
+    : null;
+  const src = imageAssetSrc(assetUrl) ?? legacySrc;
+  const selectedAsset = assets.find((asset) => asset.id === assetId) ?? null;
 
-      
-        {isEditMode ? (
-          <><CardHeader>
-              <CardTitle>Image Component</CardTitle>
-            </CardHeader>
-            <CardContent>
+  if (isEditMode) {
+    const fitOption = IMAGE_FIT_OPTIONS.find((o) => o.value === fit);
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>Image Settings</CardTitle>
+          <CardDescription>
+            Pick an image from the project's asset store or upload a new one.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Image</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full justify-between font-normal"
+                  disabled={!projectId}
+                >
+                  <span className="truncate">
+                    {selectedAsset?.name ??
+                      (assetId != null ? `Image #${assetId}` : 'Select an image')}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="max-h-72 w-[280px] overflow-y-auto">
+                <DropdownMenuLabel>Project images</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={assetId != null ? String(assetId) : ''}
+                  onValueChange={(value) =>
+                    selectAsset(assets.find((asset) => String(asset.id) === value) ?? null)
+                  }
+                >
+                  <DropdownMenuRadioItem value="">None</DropdownMenuRadioItem>
+                  {assets.map((asset) => (
+                    <DropdownMenuRadioItem key={asset.id} value={String(asset.id)}>
+                      <span className="truncate">{asset.name}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {loadingAssets && (
+              <p className="text-xs text-muted-foreground">Loading images…</p>
+            )}
+            {!projectId && (
+              <p className="text-xs text-muted-foreground">
+                Select an event log to see the project's images.
+              </p>
+            )}
+            {projectId && !loadingAssets && assets.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No images in this project yet — upload one below or in
+                Project Assets &gt; Images.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor={`image-upload-${node.component_id}`}>
+              Upload new image to the asset store
+            </Label>
             <Input
+              id={`image-upload-${node.component_id}`}
               type="file"
-              accept="image/*"
+              accept={IMAGE_ASSET_ACCEPT}
               onChange={handleFileUpload}
-              disabled={uploading}
+              disabled={uploading || !projectId}
             />
-            </CardContent>
+            {uploading && <p className="text-xs text-muted-foreground">Uploading…</p>}
+            {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+          </div>
 
-            {uploading && <p>Uploading...</p>}
-          </>
-        ) : node.image ? (
-          <CardContent>
-          
-          <img
-            src={node.image.startsWith('http') ? node.image : `${import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}${node.image.startsWith('/') ? '' : '/'}${node.image}`}
-            alt="Uploaded"
-            className="w-full h-full object-cover"
-          />
-          </CardContent>) : (<CardContent>
-          <p>No image uploaded</p>
-        </CardContent>)
-          
-        }
-    </Card>
+          <div className="space-y-2">
+            <Label>Positioning</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">{fitOption?.label ?? fit}</span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[280px]">
+                <DropdownMenuLabel>Positioning</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup value={fit} onValueChange={handleFitChange}>
+                  {IMAGE_FIT_OPTIONS.map((option) => (
+                    <DropdownMenuRadioItem
+                      key={option.value}
+                      value={option.value}
+                      className="items-start py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm">{option.label}</span>
+                        <span className="text-xs text-muted-foreground">{option.hint}</span>
+                      </div>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {fitOption && (
+              <p className="text-xs text-muted-foreground">{fitOption.hint}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Alignment</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {IMAGE_ALIGNMENT_OPTIONS.find((o) => o.value === alignment)?.label ??
+                      alignment}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[200px]">
+                <DropdownMenuRadioGroup
+                  value={alignment}
+                  onValueChange={handleAlignmentChange}
+                >
+                  {IMAGE_ALIGNMENT_OPTIONS.map((option) => (
+                    <DropdownMenuRadioItem key={option.value} value={option.value}>
+                      {option.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {src && (
+            <div className="space-y-2">
+              <Label>Preview</Label>
+              <div className="h-32 w-full overflow-hidden rounded-md border bg-white">
+                <img
+                  src={src}
+                  alt="Preview"
+                  className="h-full w-full"
+                  style={{ objectFit: fit as any, objectPosition: alignment }}
+                />
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // VIEW MODE
+  return (
+    <div className="h-full w-full overflow-hidden bg-white">
+      {src ? (
+        <img
+          src={src}
+          alt={selectedAsset?.name ?? 'Dashboard image'}
+          className="h-full w-full"
+          style={{ objectFit: fit as any, objectPosition: alignment }}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
+          No image selected
+        </div>
+      )}
+    </div>
   );
 };
 

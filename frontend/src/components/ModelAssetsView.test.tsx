@@ -258,7 +258,7 @@ describe("ModelAssetsView upload dialog", () => {
     await waitFor(() =>
       expect(
         within(dialog).getByText(
-          'Expected schema "totem" for TOTeM assets.'
+          'Expected "schema": "totem" for TOTeM assets.'
         )
       ).toBeTruthy()
     );
