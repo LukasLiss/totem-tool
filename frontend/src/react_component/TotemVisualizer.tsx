@@ -5110,6 +5110,15 @@ function TotemVisualizer({
   const [detailLoading, setDetailLoading] = useState<Record<string, boolean>>({});
   const [detailError, setDetailError] = useState<Record<string, string | undefined>>({});
   const [allOcdfgNodes, setAllOcdfgNodes] = useState<OcdfgNodeSummary[] | null>(null);
+
+  // The drill-down graphs are cached per area id and only fetched when the
+  // cache misses, so a change to the global filter has to invalidate them —
+  // otherwise an expanded area keeps rendering its pre-filter OCDFG.
+  useEffect(() => {
+    setDetailCache({});
+    setDetailError({});
+    setAllOcdfgNodes(null);
+  }, [filterEnabled, effectiveFilterVersion]);
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -5815,7 +5824,8 @@ function TotemVisualizer({
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
         const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`
+          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
+          { _skipGlobalFilter: !filterEnabled },
         );
         if (payload?.filter_error || payload?.error) {
           throw new Error(payload.filter_error || payload.error);
@@ -5887,7 +5897,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion],
   );
 
   const toggleAreaDetail = useCallback(

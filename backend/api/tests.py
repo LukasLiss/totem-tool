@@ -3161,3 +3161,295 @@ class OcelDbConcurrencyTests(TestCase):
         self.assertEqual(lock_was_held, [True])
         # discovery ran on the converted data, not the shared connection
         self.assertEqual(discover_inputs, [converted])
+
+
+# ---------------------------------------------------------------------------
+# Global filter shadow (#232)
+# ---------------------------------------------------------------------------
+#
+# `_filter_shadow` swaps in filtered TEMP copies of events/objects/event_object
+# so the totem_lib algorithms operate on filtered data unchanged. The subtle
+# part is the *direction* of the derivation: objects must be filtered by type
+# first and the events derived from them. Deriving objects from events instead
+# re-admits a removed type whenever one of its objects shares an event with a
+# kept type — which in an OCEL is the normal case, not the corner case.
+
+
+def _shadow_fixture_conn():
+    """order/item/worker log where every type co-occurs with another type."""
+    conn = duckdb.connect(":memory:")
+    create_ocel_schema(conn, [], [])
+    conn.executemany(
+        "INSERT INTO events VALUES (?, ?, ?)",
+        [
+            ("e1", "place order", 1),   # order + item  (co-occurrence)
+            ("e2", "pick item", 2),     # item only
+            ("e3", "assist", 3),        # worker only
+            ("e4", "complete order", 4),  # order + worker (co-occurrence)
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO objects VALUES (?, ?)",
+        [("o1", "order"), ("i1", "item"), ("w1", "worker")],
+    )
+    conn.executemany(
+        "INSERT INTO event_object VALUES (?, ?, NULL)",
+        [
+            ("e1", "o1"), ("e1", "i1"),
+            ("e2", "i1"),
+            ("e3", "w1"),
+            ("e4", "o1"), ("e4", "w1"),
+        ],
+    )
+    return conn
+
+
+class FilterShadowTests(SimpleTestCase):
+    def setUp(self):
+        self.conn = _shadow_fixture_conn()
+        self.db = type("_DbShim", (), {})()
+        self.db.conn = self.conn
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _types(self):
+        return sorted(
+            r[0] for r in self.conn.execute(
+                "SELECT DISTINCT obj_type FROM objects"
+            ).fetchall()
+        )
+
+    def _events(self):
+        return sorted(
+            r[0] for r in self.conn.execute("SELECT event_id FROM events").fetchall()
+        )
+
+    def test_removed_object_type_disappears_despite_co_occurrence(self):
+        # `worker` shares e4 with the kept `order`. The old shadow kept it.
+        with views._filter_shadow(self.db, {"object_types": ["order", "item"]}):
+            self.assertEqual(self._types(), ["item", "order"])
+            # e3 was worker-only -> no surviving relation -> event gone.
+            self.assertEqual(self._events(), ["e1", "e2", "e4"])
+            # ...and no relation may still point at the removed object.
+            rel_objs = {
+                r[0] for r in self.conn.execute(
+                    "SELECT DISTINCT obj_id FROM event_object"
+                ).fetchall()
+            }
+            self.assertEqual(rel_objs, {"o1", "i1"})
+
+    def test_kept_type_is_not_dropped_when_it_never_co_occurs(self):
+        # `worker` only ever appears with `order` (e4) or alone (e3). Keeping
+        # it must not depend on any other type surviving.
+        with views._filter_shadow(self.db, {"object_types": ["worker"]}):
+            self.assertEqual(self._types(), ["worker"])
+            self.assertEqual(self._events(), ["e3", "e4"])
+
+    def test_activity_filter_drops_orphaned_objects(self):
+        with views._filter_shadow(self.db, {"activities": ["pick item"]}):
+            self.assertEqual(self._events(), ["e2"])
+            self.assertEqual(self._types(), ["item"])
+
+    def test_time_filter(self):
+        with views._filter_shadow(self.db, {"after": 2, "before": 3}):
+            self.assertEqual(self._events(), ["e2", "e3"])
+            self.assertEqual(self._types(), ["item", "worker"])
+
+    def test_combined_type_and_activity_filter(self):
+        with views._filter_shadow(
+            self.db, {"object_types": ["order"], "activities": ["place order"]}
+        ):
+            self.assertEqual(self._types(), ["order"])
+            self.assertEqual(self._events(), ["e1"])
+
+    def test_shadow_is_torn_down_on_exit(self):
+        with views._filter_shadow(self.db, {"object_types": ["order"]}):
+            self.assertEqual(self._types(), ["order"])
+        self.assertEqual(self._types(), ["item", "order", "worker"])
+        self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+    def test_shadow_is_torn_down_when_body_raises(self):
+        with self.assertRaises(RuntimeError):
+            with views._filter_shadow(self.db, {"object_types": ["order"]}):
+                raise RuntimeError("boom")
+        self.assertEqual(self._types(), ["item", "order", "worker"])
+
+    def test_empty_filter_is_a_noop(self):
+        with views._filter_shadow(self.db, {}):
+            self.assertEqual(self._types(), ["item", "order", "worker"])
+            self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class FilteredEndpointRegressionTests(APITestCase):
+    """End-to-end checks that the global filter reaches the algorithms.
+
+    The `variants` view in particular used to reference `cache_params` after
+    the cache-lookup block that defined it had been removed, so every
+    successful computation died with `NameError` on the way out (HTTP 500).
+    """
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"paper-example-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def test_variants_unfiltered_returns_200(self):
+        response = self.client.get("/api/variants/", {"file_id": self.log.pk})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn("variants", response.json())
+
+    def test_variants_with_object_type_filter_returns_200(self):
+        response = self.client.get(
+            "/api/variants/", {"file_id": self.log.pk, "object_types": "order"}
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.json()["object_types"], ["order"])
+
+    def test_variants_filtered_and_unfiltered_do_not_share_a_cache_entry(self):
+        unfiltered = self.client.get("/api/variants/", {"file_id": self.log.pk})
+        filtered = self.client.get(
+            "/api/variants/", {"file_id": self.log.pk, "object_types": "order"}
+        )
+        self.assertEqual(unfiltered.status_code, 200)
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(unfiltered.json()["object_types"], ["item", "order"])
+        self.assertEqual(filtered.json()["object_types"], ["order"])
+
+    def test_variants_leading_type_filtered_out_falls_back(self):
+        # Client still asks for the type it had selected before the filter
+        # removed it; the view must fall back to a surviving type, not 500.
+        response = self.client.get(
+            "/api/variants/",
+            {"file_id": self.log.pk, "object_types": "order", "leading_type": "item"},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.json()["object_types"], ["order"])
+
+    def test_mlpa_respects_object_type_filter(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_mlpa/", {"object_types": "order"}
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        seen = {
+            t
+            for layer in response.json()["layers"]
+            for area in layer["areas"]
+            for t in area["objectTypes"]
+        }
+        self.assertNotIn("item", seen)
+
+    def test_process_areas_respects_object_type_filter(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_process_areas/",
+            {"object_types": "order"},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        seen = {
+            t
+            for layer in response.json()["layers"]
+            for area in layer["areas"]
+            for t in area["objectTypes"]
+        }
+        self.assertNotIn("item", seen)
+
+
+    def test_mlpa_respects_activity_filter(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_mlpa/", {"activities": "place order"}
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        body = response.json()
+        self.assertEqual(body["all_event_types"], ["place order"])
+        for events in body["object_type_to_event_types"].values():
+            self.assertEqual(events, ["place order"])
+
+    def test_process_areas_respects_activity_filter(self):
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_process_areas/",
+            {"activities": "place order"},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.json()["all_event_types"], ["place order"])
+
+    def test_process_areas_respects_time_filter(self):
+        # Only e1 ("place order") falls inside [1, 1].
+        response = self.client.get(
+            f"/api/files/{self.log.pk}/discover_process_areas/",
+            {"after": 1, "before": 1},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.json()["all_event_types"], ["place order"])
+
+    def test_ocdfg_drilldown_respects_activity_filter(self):
+        """The process-area drill-down calls /api/ocdfg/, which had no
+        filter support at all — it returned the whole log regardless."""
+        response = self.client.get(
+            "/api/ocdfg/",
+            {
+                "file_id": self.log.pk,
+                "object_types": "order,item",
+                "activities": "place order",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        labels = {
+            n.get("label") or n.get("id")
+            for n in response.json()["dfg"]["nodes"]
+            if not (n.get("role") or "").strip()
+        }
+        self.assertEqual(labels, {"place order"})
+
+    def test_ocdfg_drilldown_respects_time_filter(self):
+        response = self.client.get(
+            "/api/ocdfg/",
+            {"file_id": self.log.pk, "object_types": "order,item", "after": 1, "before": 1},
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        labels = {
+            n.get("label") or n.get("id")
+            for n in response.json()["dfg"]["nodes"]
+            if not (n.get("role") or "").strip()
+        }
+        self.assertEqual(labels, {"place order"})
+
+    def test_ocdfg_filtered_and_unfiltered_do_not_share_a_cache_entry(self):
+        unfiltered = self.client.get(
+            "/api/ocdfg/", {"file_id": self.log.pk, "object_types": "order,item"}
+        )
+        filtered = self.client.get(
+            "/api/ocdfg/",
+            {
+                "file_id": self.log.pk,
+                "object_types": "order,item",
+                "activities": "place order",
+            },
+        )
+        self.assertEqual(unfiltered.status_code, 200)
+        self.assertEqual(filtered.status_code, 200)
+        self.assertNotEqual(
+            len(unfiltered.json()["dfg"]["nodes"]),
+            len(filtered.json()["dfg"]["nodes"]),
+        )
+
+    def test_ocdfg_global_object_type_filter_intersects_area_selection(self):
+        # Area asks for order+item; the global filter allows only order.
+        response = self.client.get(
+            "/api/ocdfg/",
+            {
+                "file_id": self.log.pk,
+                "object_types": "order,item",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
