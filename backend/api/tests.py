@@ -1226,6 +1226,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_not_called()
 
@@ -1447,6 +1449,8 @@ class OCCNConformanceApiTests(TestCase):
                 "asset_id": self.occn_asset.pk,
                 "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                 "leading_object_type": None,
+                "execution_column": None,
+                "restrict_to_model_object_types": False,
                 "max_states": 5_000,
                 **result.to_dict(),
             },
@@ -1457,6 +1461,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_called_once()
         deserialized_occn, called_units = fitness.call_args.args
@@ -1670,6 +1676,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             db,
             strategy=LEADING_OBJECT_REPLAY_STRATEGY,
             leading_object_type="Order",
+            execution_column=None,
+            object_types=None,
         )
 
     def test_extraction_failure_returns_server_error(self):
@@ -1763,6 +1771,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
                 {
                     "strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                     "leading_object_type": None,
+                    "execution_column": None,
+                    "object_types": None,
                 },
             )
 

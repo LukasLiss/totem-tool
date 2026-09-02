@@ -55,7 +55,15 @@ from totem_lib import (
     serialize_occn,
 )
 from totem_lib.variants import find_variants
-from totem_lib.variants.ocvariants import calculate_layout
+from totem_lib.ocel.event_columns import EventColumnError, list_event_columns
+from .variant_params import (
+    VariantParamError,
+    parse_extraction_params,
+    parse_iso,
+    parse_timeout,
+    resolve_extraction_params,
+    serialize_variants,
+)
 from totem_lib.totem import (
     Totem,
     conformance_of_totem,
@@ -687,6 +695,79 @@ class EventLogViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @staticmethod
+    def _resolve_occn_asset(request, user_file, asset_id):
+        """Load an OCCN asset the user may use with ``user_file``.
+
+        Returns ``(asset, occn, None)`` or ``(None, None, error_response)``.
+        """
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return None, None, Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return None, None, Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCCN:
+            return None, None, Response(
+                {"asset_id": "Model asset must have type OCCN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            occn = occn_from_dict(asset.content_json)
+        except (AssertionError, TypeError, ValueError) as exc:
+            return None, None, Response(
+                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return asset, occn, None
+
+    @staticmethod
+    def _replay_unit_request_error(db, validated):
+        """Validate strategy options against the loaded log (400 response or None)."""
+        leading_object_type = validated.get("leading_object_type")
+        if leading_object_type is not None and leading_object_type not in _object_types(db):
+            return Response(
+                {"leading_object_type": "Object type does not exist in the event log."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        execution_column = validated.get("execution_column")
+        if execution_column is not None and execution_column not in list_event_columns(db.conn):
+            return Response(
+                {
+                    "execution_column": (
+                        "Column does not exist on the events table of the event log."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return None
+
+    @staticmethod
+    def _extract_replay_units(db, validated, occn):
+        """Run replay-unit extraction with the validated strategy options."""
+        return extract_occn_replay_units(
+            db,
+            strategy=validated["replay_unit_strategy"],
+            leading_object_type=validated.get("leading_object_type"),
+            execution_column=validated.get("execution_column"),
+            object_types=(
+                sorted(occn.object_types)
+                if validated.get("restrict_to_model_object_types")
+                else None
+            ),
+        )
+
     @action(detail=True, methods=["post"])
     def occn_conformance(self, request, pk=None):
         """Check one stored OCCN asset against this event log."""
@@ -705,61 +786,23 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        asset_id = request_serializer.validated_data["asset_id"]
-        try:
-            asset = ProjectAsset.objects.get(
-                pk=asset_id,
-                project__users=request.user,
-            )
-        except ProjectAsset.DoesNotExist:
-            return Response(
-                {"asset_id": "Model asset not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if asset.project_id != user_file.project_id:
-            return Response(
-                {"asset_id": "Model asset must belong to the event log project."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if asset.asset_type != ProjectAsset.AssetType.OCCN:
-            return Response(
-                {"asset_id": "Model asset must have type OCCN."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            occn = occn_from_dict(asset.content_json)
-        except (AssertionError, TypeError, ValueError) as exc:
-            return Response(
-                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
+        validated = request_serializer.validated_data
+        asset, occn, error = self._resolve_occn_asset(
+            request, user_file, validated["asset_id"]
         )
-        max_states = request_serializer.validated_data["max_states"]
+        if error is not None:
+            return error
+
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        execution_column = validated.get("execution_column")
+        max_states = validated["max_states"]
         try:
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
+                error = self._replay_unit_request_error(db, validated)
+                if error is not None:
+                    return error
+                replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
@@ -784,6 +827,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": execution_column,
+                "restrict_to_model_object_types": bool(
+                    validated.get("restrict_to_model_object_types")
+                ),
                 "max_states": max_states,
                 **result.to_dict(),
             },
@@ -810,36 +857,31 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
-        )
+        validated = request_serializer.validated_data
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        occn = None
+        if validated.get("restrict_to_model_object_types"):
+            # The projection needs the model; the serializer guarantees the
+            # asset id is present in that case.
+            _asset, occn, error = self._resolve_occn_asset(
+                request, user_file, validated["asset_id"]
+            )
+            if error is not None:
+                return error
         try:
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
+                error = self._replay_unit_request_error(db, validated)
+                if error is not None:
+                    return error
+                replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        unit_id = request_serializer.validated_data["unit_id"]
+        unit_id = validated["unit_id"]
         replay_unit = next(
             (unit for unit in replay_units if unit.unit_id == unit_id),
             None,
@@ -867,6 +909,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "unit_id": replay_unit.unit_id,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": validated.get("execution_column"),
                 "event_count": total_count,
                 "object_types": list(replay_unit.object_types),
                 "pagination": {
@@ -1717,6 +1760,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     extraction=item.get("extraction") or "leading_1hop",
                     iso=item.get("iso") or "wl+vf2",
                     timeout_s=item.get("timeout_s", 10.0),
+                    business_object_types=_string_list_field(item, "business_object_types"),
+                    business_activities=_string_list_field(item, "business_activities"),
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
@@ -1986,6 +2031,27 @@ from contextlib import contextmanager
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
+# Per-file locks that outlive the connection objects. `_with_ocel_db` takes
+# this lock *before* looking the connection up, so a writer that has to close
+# and reopen the file (`_rewrite_ocel_db_file`) can swap the registry entry
+# without a reader ending up on a closed connection.
+_OCEL_DB_LOCKS: dict[int, threading.RLock] = {}
+
+
+def _ocel_file_lock(pk: int) -> threading.RLock:
+    with _OCEL_DB_REGISTRY_LOCK:
+        lock = _OCEL_DB_LOCKS.get(pk)
+        if lock is None:
+            lock = _OCEL_DB_LOCKS[pk] = threading.RLock()
+    return lock
+
+
+def _string_list_field(item, key: str) -> list:
+    """A JSON list of strings from a layout item; anything else becomes []."""
+    value = item.get(key)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [v for v in value if isinstance(v, str) and v]
 
 
 def _open_ocel_db_with_retry(path: str) -> OcelDuckDB:
@@ -2063,9 +2129,44 @@ def _with_ocel_db(user_file):
         with _with_ocel_db(user_file) as db:
             totem = totemDiscovery_db(db)
     """
-    db = _get_or_load_ocel_db(user_file)
-    with db.lock:
-        yield db
+    with _ocel_file_lock(int(user_file.pk)):
+        db = _get_or_load_ocel_db(user_file)
+        with db.lock:
+            yield db
+
+
+def _rewrite_ocel_db_file(user_file, mutate):
+    """
+    Let ``mutate(path)`` write to the event log's DuckDB file.
+
+    The registry only ever holds read-only connections, and DuckDB refuses a
+    read-write open while a read-only handle on the same file exists in the
+    process. So: take the per-file lock, drop and close the registry
+    connection, run the mutation, and reopen. Readers queued on the lock pick
+    up the fresh connection afterwards; the results cache misses by itself
+    because its keys include the file's mtime and size.
+
+    Reentrant with ``_with_ocel_db`` (same RLock), so a view can compute with
+    the old connection and then rewrite the file in one critical section.
+    """
+    pk = int(user_file.pk)
+    with _ocel_file_lock(pk):
+        with _OCEL_DB_REGISTRY_LOCK:
+            old_db = _OCEL_DB_REGISTRY.pop(pk, None)
+        if old_db is not None:
+            try:
+                old_db.close()
+            except Exception:
+                pass
+        try:
+            return mutate(user_file.file.path)
+        finally:
+            # Reopen eagerly so a failed mutation still leaves a usable
+            # connection behind and the next reader does not pay for the open.
+            try:
+                _get_or_load_ocel_db(user_file)
+            except Exception:
+                pass
 
 
 @contextmanager
@@ -2518,9 +2619,6 @@ def discover_totem_mock(request, pk: int):
 
 # Accepted enums for the advanced-settings query params on the variants
 # endpoint. Keep in sync with totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}.
-_VALID_EXTRACTIONS = {"leading_1hop", "leading_bfs", "connected"}
-_VALID_ISOS = {"db_signature", "trace", "signature", "wl", "wl+vf2", "exact"}
-
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -2548,40 +2646,20 @@ def variants(request):
         )
 
     # --- Advanced settings (query params, all optional with sane defaults) ---
-    extraction = request.query_params.get("extraction") or "leading_1hop"
-    iso = request.query_params.get("iso") or "wl+vf2"
-    if extraction not in _VALID_EXTRACTIONS:
-        return Response(
-            {
-                "error": f"Invalid extraction '{extraction}'. "
-                f"Allowed: {sorted(_VALID_EXTRACTIONS)}"
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    if iso not in _VALID_ISOS:
-        return Response(
-            {"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    # Parsing is shared with the process-execution endpoint (variant_params).
     try:
-        timeout_s = float(request.query_params.get("timeout_s", "10.0"))
-        if timeout_s <= 0:
-            timeout_s = None  # disable
-    except (TypeError, ValueError):
-        timeout_s = 10.0
+        params = parse_extraction_params(request.query_params)
+        iso = parse_iso(request.query_params)
+    except VariantParamError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    timeout_s = parse_timeout(request.query_params)
 
     fp = _parse_filter_params(request)
-    leading_object_type = request.query_params.get("leading_type")
 
     # --- Cache lookup (#72 / #74) ---
     # The filter params are part of the key: without them a filtered and an
     # unfiltered run would share one entry and serve each other's results.
-    cache_params = {
-        "leading_type": leading_object_type or "",
-        "extraction": extraction,
-        "iso": iso,
-        "timeout_s": timeout_s,
-    }
+    cache_params = {**params.cache_params(), "iso": iso, "timeout_s": timeout_s}
     if fp:
         cache_params.update({f"f_{k}": str(v) for k, v in sorted(fp.items())})
     if _should_use_cache(request):
@@ -2592,28 +2670,21 @@ def variants(request):
     try:
         with _with_ocel_db(user_file) as db:
             with _filter_shadow(db, fp):
-                # Resolve the leading type *inside* the shadow: the filter may
+                # Resolve the parameters *inside* the shadow: the filter may
                 # have removed the type the client last asked for, and falling
                 # back to a type that no longer exists yields an empty result
                 # instead of a sensible default.
                 obj_types = _object_types(db)
-
-                # Leading type is only needed for the leading_* extractions.
-                # For "connected" we skip the default-to-first-alphabetical
-                # fallback entirely — the param is ignored downstream anyway.
-                if extraction.startswith("leading"):
-                    if not leading_object_type or leading_object_type not in obj_types:
-                        if not obj_types:
-                            return Response(
-                                {
-                                    "variants": [],
-                                    "object_types": [],
-                                },
-                                status=status.HTTP_200_OK,
-                            )
-                        leading_object_type = obj_types[0]
-                else:
-                    leading_object_type = None
+                activities = [a["name"] for a in _activities_with_counts(db)]
+                try:
+                    resolved = resolve_extraction_params(params, obj_types, activities)
+                except VariantParamError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                if resolved is None:
+                    return Response(
+                        {"variants": [], "object_types": []},
+                        status=status.HTTP_200_OK,
+                    )
 
                 # The default iso strategy ("wl+vf2") is sound and exact.
                 # `find_variants` creates connection-scoped TEMP TABLEs — the
@@ -2622,8 +2693,7 @@ def variants(request):
                 # interrupts long SQL and raises TimeoutError.
                 mined = find_variants(
                     db,
-                    extraction=extraction,
-                    leading_type=leading_object_type,
+                    **resolved.library_kwargs(),
                     iso=iso,
                     timeout_s=timeout_s,
                     verbose=False,
@@ -2652,52 +2722,17 @@ def variants(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    out = []
-    for var in mined:
-        layout_data = calculate_layout(var, layout_ocel)
-
-        signature = " → ".join(
-            node_data["label"]
-            for _, node_data in sorted(
-                var.graph.nodes(data=True), key=lambda x: x[1]["timestamp"]
-            )
-        )
-        signature_hash = sha1(signature.encode("utf-8")).hexdigest()[:8]
-
-        final_nodes = []
-        for node in layout_data["nodes"]:
-            final_nodes.append(
-                {
-                    "id": node["id"],
-                    "activity": node["activity"],
-                    "x": node["x"],
-                    "y_lane": node["y_lane"],
-                    "y_lanes": node["y_lanes"],
-                    "objectIds": [f"type::{t}" for t in node["types"]],
-                    "types": node["types"],
-                }
-            )
-
-        out.append(
-            {
-                "id": str(var.id),
-                "support": int(var.support),
-                "signature": signature_hash,
-                "signature_hash": signature_hash,
-                "graph": {
-                    "nodes": final_nodes,
-                    "edges": layout_data["edges"],
-                    "objects": layout_data["objects"],
-                },
-            }
-        )
-
     result = {
-        "variants": out,
+        "variants": serialize_variants(mined, layout_ocel),
         "object_types": obj_types,
+        "extraction": resolved.extraction,
+        "leading_type": resolved.leading_type,
+        "business_object_types": list(resolved.business_object_types),
+        "business_activities": (
+            None if resolved.business_activities is None
+            else list(resolved.business_activities)
+        ),
     }
-    # Update cache_params with the resolved leading_type
-    cache_params["leading_type"] = leading_object_type or ""
     set_cached_result(user_file, "variants", result, cache_params)
     return Response(result, status=status.HTTP_200_OK)
 

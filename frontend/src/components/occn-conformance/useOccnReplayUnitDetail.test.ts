@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  STORED_COLUMN_REPLAY_STRATEGY,
   DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
   getOCCNReplayUnitDetail,
   type OCCNReplayUnitDetailResponse,
@@ -258,6 +259,29 @@ describe("useOccnReplayUnitDetail", () => {
       await firstRequest.promise;
     });
     expect(result.current.detail?.unit_id).toBe(secondUnit.unit_id);
+  });
+
+  it("passes stored-column and projection options through to the request", async () => {
+    const unit = replayUnit("stored_column:i3");
+    getDetailMock.mockResolvedValue(detailPage(unit.unit_id, 0));
+
+    const { result } = renderHook(() =>
+      useOccnReplayUnitDetail(12, unit, STORED_COLUMN_REPLAY_STRATEGY, null, {
+        executionColumn: "process execution",
+        restrictToModelObjectTypes: true,
+        assetId: 42,
+      })
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(getDetailMock).toHaveBeenCalledWith(12, unit.unit_id, {
+      replayUnitStrategy: STORED_COLUMN_REPLAY_STRATEGY,
+      offset: 0,
+      limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+      executionColumn: "process execution",
+      restrictToModelObjectTypes: true,
+      assetId: 42,
+    });
   });
 
   it("does not load without both an event log and a selected unit", () => {

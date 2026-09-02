@@ -7,6 +7,8 @@ import type { ProjectAsset } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   LEADING_OBJECT_REPLAY_STRATEGY,
+  STORED_COLUMN_REPLAY_STRATEGY,
+  getEventLogEventColumns,
   getEventLogObjectTypes,
   runOCCNConformance,
   type OCCNConformanceResponse,
@@ -24,6 +26,7 @@ vi.mock("@/api/occnConformanceApi", async () => {
   >("@/api/occnConformanceApi");
   return {
     ...actual,
+    getEventLogEventColumns: vi.fn(),
     getEventLogObjectTypes: vi.fn(),
     runOCCNConformance: vi.fn(),
   };
@@ -35,6 +38,12 @@ vi.mock("./useOccnAssetSelection", () => ({
 
 const runOCCNConformanceMock = vi.mocked(runOCCNConformance);
 const getEventLogObjectTypesMock = vi.mocked(getEventLogObjectTypes);
+const getEventLogEventColumnsMock = vi.mocked(getEventLogEventColumns);
+
+const defaultOptions = {
+  executionColumn: null,
+  restrictToModelObjectTypes: false,
+};
 const useOccnAssetSelectionMock = vi.mocked(useOccnAssetSelection);
 
 const model: ProjectAsset = {
@@ -130,6 +139,11 @@ describe("useOccnConformanceWorkflow", () => {
     runOCCNConformanceMock.mockReset();
     getEventLogObjectTypesMock.mockReset();
     getEventLogObjectTypesMock.mockResolvedValue(["Order", "Item"]);
+    getEventLogEventColumnsMock.mockReset();
+    getEventLogEventColumnsMock.mockResolvedValue([
+      { name: "variant", non_null_count: 20, distinct_count: 2 },
+      { name: "process execution", non_null_count: 20, distinct_count: 3 },
+    ]);
   });
 
   afterEach(() => {
@@ -166,7 +180,8 @@ describe("useOccnConformanceWorkflow", () => {
       model.id,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY,
       null,
-      1_000
+      1_000,
+      defaultOptions
     );
     expect(result.current.running).toBe(false);
     expect(result.current.result).toEqual(response);
@@ -216,7 +231,8 @@ describe("useOccnConformanceWorkflow", () => {
       model.id,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY,
       null,
-      10_000
+      10_000,
+      defaultOptions
     );
   });
 
@@ -250,8 +266,74 @@ describe("useOccnConformanceWorkflow", () => {
       model.id,
       LEADING_OBJECT_REPLAY_STRATEGY,
       "Order",
-      1_000
+      1_000,
+      defaultOptions
     );
+  });
+
+  it("requires a stored execution column and submits it with the projection flag", async () => {
+    runOCCNConformanceMock.mockResolvedValue({
+      ...response,
+      replay_unit_strategy: STORED_COLUMN_REPLAY_STRATEGY,
+      execution_column: "process execution",
+    });
+    const { result } = renderHook(() => useOccnConformanceWorkflow(12, 7));
+
+    act(() => {
+      result.current.setReplayUnitStrategy(STORED_COLUMN_REPLAY_STRATEGY);
+    });
+    await waitFor(() => expect(result.current.eventColumnsLoading).toBe(false));
+
+    expect(getEventLogEventColumnsMock).toHaveBeenCalledWith(12);
+    expect(
+      result.current.availableEventColumns.map((column) => column.name)
+    ).toEqual(["process execution", "variant"]);
+    // Two candidate columns: nothing is preselected.
+    expect(result.current.executionColumn).toBeNull();
+    expect(result.current.canRun).toBe(false);
+
+    act(() => {
+      result.current.setExecutionColumn("process execution");
+      result.current.setRestrictToModelObjectTypes(true);
+    });
+    expect(result.current.canRun).toBe(true);
+
+    await act(async () => {
+      await result.current.run();
+    });
+    expect(runOCCNConformanceMock).toHaveBeenCalledWith(
+      12,
+      model.id,
+      STORED_COLUMN_REPLAY_STRATEGY,
+      null,
+      1_000,
+      { executionColumn: "process execution", restrictToModelObjectTypes: true }
+    );
+
+    // Switching back to the standard strategy drops the column selection.
+    act(() => {
+      result.current.setReplayUnitStrategy(CONNECTED_COMPONENTS_REPLAY_STRATEGY);
+    });
+    expect(result.current.executionColumn).toBeNull();
+    expect(result.current.replayOptions).toEqual({
+      executionColumn: null,
+      restrictToModelObjectTypes: true,
+    });
+  });
+
+  it("preselects the only stored column of a log", async () => {
+    getEventLogEventColumnsMock.mockResolvedValue([
+      { name: "process execution", non_null_count: 20, distinct_count: 3 },
+    ]);
+    const { result } = renderHook(() => useOccnConformanceWorkflow(12, 7));
+
+    act(() => {
+      result.current.setReplayUnitStrategy(STORED_COLUMN_REPLAY_STRATEGY);
+    });
+    await waitFor(() =>
+      expect(result.current.executionColumn).toBe("process execution")
+    );
+    expect(result.current.canRun).toBe(true);
   });
 
   it("exposes request failures and leaves the workflow runnable", async () => {
@@ -345,13 +427,21 @@ describe("useOccnConformanceWorkflow", () => {
       expect(await result.current.run()).toEqual(alternativeResponse);
     });
     expect(runOCCNConformanceMock.mock.calls).toEqual([
-      [12, model.id, CONNECTED_COMPONENTS_REPLAY_STRATEGY, null, 1_000],
+      [
+        12,
+        model.id,
+        CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+        null,
+        1_000,
+        defaultOptions,
+      ],
       [
         12,
         alternativeModel.id,
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
         null,
         1_000,
+        defaultOptions,
       ],
     ]);
   });

@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass
 from numbers import Real
-from typing import TYPE_CHECKING, Any, Dict, FrozenSet, Iterable, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    FrozenSet,
+    Iterable,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import networkx as nx
 
@@ -17,6 +28,12 @@ if TYPE_CHECKING:
 
 CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components"
 LEADING_OBJECT_REPLAY_STRATEGY = "leading_object"
+STORED_COLUMN_REPLAY_STRATEGY = "stored_column"
+REPLAY_UNIT_STRATEGIES = (
+    CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    LEADING_OBJECT_REPLAY_STRATEGY,
+    STORED_COLUMN_REPLAY_STRATEGY,
+)
 
 ObjectGroup = Tuple[str, Tuple[str, ...]]
 ObjectsByType = Tuple[ObjectGroup, ...]
@@ -528,19 +545,192 @@ def build_leading_object_replay_units(
     )
 
 
+def project_replay_events(
+    events: Iterable[OCCNReplayEvent],
+    object_types: Iterable[str],
+) -> Tuple[OCCNReplayEvent, ...]:
+    """Keep only objects of the given types; drop events left without objects.
+
+    Replay matches events against bindings with *exactly* the observed
+    objects, so an object whose type the model does not know makes every
+    event it touches non-fitting. Projecting the log onto the model's object
+    types lets a model that deliberately leaves out, say, a shared worker
+    resource be checked against a log that still records the worker.
+    """
+    try:
+        replay_events = tuple(events)
+    except TypeError as exc:
+        raise ValueError("events must be an iterable") from exc
+    if not all(isinstance(event, OCCNReplayEvent) for event in replay_events):
+        raise ValueError("events must contain OCCNReplayEvent values")
+    if isinstance(object_types, (str, bytes)):
+        raise ValueError("object_types must be an iterable of strings")
+    kept_types = frozenset(object_types)
+    if not kept_types:
+        raise ValueError("object_types must contain at least one object type")
+
+    projected = []
+    for event in replay_events:
+        groups = tuple(
+            (object_type, object_ids)
+            for object_type, object_ids in event.objects_by_type
+            if object_type in kept_types
+        )
+        if not groups:
+            continue
+        if len(groups) == len(event.objects_by_type):
+            projected.append(event)
+            continue
+        projected.append(
+            OCCNReplayEvent(
+                event_id=event.event_id,
+                activity=event.activity,
+                timestamp_unix=event.timestamp_unix,
+                objects_by_type=groups,
+            )
+        )
+    return tuple(projected)
+
+
+def build_stored_column_replay_units(
+    events: Iterable[OCCNReplayEvent],
+    execution_ids: Mapping[str, Optional[str]],
+) -> Tuple[OCCNReplayUnit, ...]:
+    """Group events by a precomputed execution id.
+
+    ``execution_ids`` maps event ids to the execution id stored for them; an
+    event mapped to ``None`` or missing from the mapping belongs to no
+    execution and is skipped. Every event therefore occurs in at most one
+    unit, and unit ids are ``stored_column:<execution id>``.
+    """
+    try:
+        replay_events = tuple(events)
+    except TypeError as exc:
+        raise ValueError("events must be an iterable") from exc
+    if not all(isinstance(event, OCCNReplayEvent) for event in replay_events):
+        raise ValueError("events must contain OCCNReplayEvent values")
+    event_ids = [event.event_id for event in replay_events]
+    if len(event_ids) != len(set(event_ids)):
+        raise ValueError("event ids must be unique across replay units")
+
+    grouped: Dict[str, list[OCCNReplayEvent]] = defaultdict(list)
+    for event in replay_events:
+        execution_id = execution_ids.get(event.event_id)
+        if execution_id is None:
+            continue
+        if not isinstance(execution_id, str) or not execution_id:
+            raise ValueError(
+                f"execution id for event {event.event_id!r} must be a non-empty string"
+            )
+        grouped[execution_id].append(event)
+
+    units = [
+        OCCNReplayUnit(
+            unit_id=f"{STORED_COLUMN_REPLAY_STRATEGY}:{execution_id}",
+            strategy=STORED_COLUMN_REPLAY_STRATEGY,
+            events=tuple(unit_events),
+        )
+        for execution_id, unit_events in grouped.items()
+    ]
+    units.sort(
+        key=lambda unit: (
+            tuple((event.timestamp_unix, event.event_id) for event in unit.events),
+            unit.unit_id,
+        )
+    )
+    return tuple(units)
+
+
+def stored_execution_ids_from_duckdb(
+    ocel: "OcelDuckDB", column: str
+) -> Dict[str, str]:
+    """Read ``event_id -> execution id`` from an events column of a DuckDB log."""
+    from ..ocel.event_columns import EventColumnError, list_event_columns
+
+    if column not in list_event_columns(ocel.conn):
+        raise EventColumnError(
+            f"Column {column!r} does not exist on the events table."
+        )
+    quoted = '"' + column.replace('"', '""') + '"'
+    rows = ocel.conn.execute(
+        f"SELECT event_id, {quoted} FROM events WHERE {quoted} IS NOT NULL"
+    ).fetchall()
+    return {event_id: str(value) for event_id, value in rows if str(value) != ""}
+
+
+def stored_execution_ids_from_ocel(
+    ocel: "ObjectCentricEventLog", column: str
+) -> Dict[str, str]:
+    """Read ``event_id -> execution id`` from the JSON event attributes."""
+    if "_attributes" not in ocel.events.columns:
+        raise ValueError(f"Column {column!r} does not exist on the events table.")
+    execution_ids: Dict[str, str] = {}
+    seen = False
+    for event_id, attributes_json in ocel.events.select(
+        ["_eventId", "_attributes"]
+    ).iter_rows():
+        if not attributes_json:
+            continue
+        try:
+            attributes = json.loads(attributes_json)
+        except json.JSONDecodeError:
+            continue
+        if column in attributes:
+            seen = True
+            value = attributes[column]
+            if value is not None and str(value) != "":
+                execution_ids[event_id] = str(value)
+    if not seen:
+        raise ValueError(f"Column {column!r} does not exist on the events table.")
+    return execution_ids
+
+
+def stored_execution_ids(
+    source: Union["ObjectCentricEventLog", "OcelDuckDB"], column: str
+) -> Dict[str, str]:
+    """Dispatch :func:`stored_execution_ids_from_*` on the source type."""
+    from ..ocel.ocel import ObjectCentricEventLog
+    from ..ocel.ocel_duckdb import OcelDuckDB
+
+    if isinstance(source, OcelDuckDB):
+        return stored_execution_ids_from_duckdb(source, column)
+    if isinstance(source, ObjectCentricEventLog):
+        return stored_execution_ids_from_ocel(source, column)
+    raise TypeError("source must be an ObjectCentricEventLog or OcelDuckDB")
+
+
 def extract_occn_replay_units(
     source: Union["ObjectCentricEventLog", "OcelDuckDB"],
     strategy: str = CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     leading_object_type: str | None = None,
+    execution_column: str | None = None,
+    object_types: Iterable[str] | None = None,
 ) -> Tuple[OCCNReplayUnit, ...]:
-    """Extract deterministic replay units using the selected strategy."""
+    """Extract deterministic replay units using the selected strategy.
+
+    ``object_types`` optionally projects every event onto the given object
+    types first (see :func:`project_replay_events`); it applies to every
+    strategy. ``execution_column`` names the events column holding
+    precomputed execution ids and is required by -- and only valid for -- the
+    stored-column strategy.
+    """
+    if strategy not in REPLAY_UNIT_STRATEGIES:
+        raise ValueError(f"unsupported OCCN replay unit strategy: {strategy!r}")
+    if leading_object_type is not None and strategy != LEADING_OBJECT_REPLAY_STRATEGY:
+        raise ValueError(
+            "leading_object_type is only supported by the leading-object "
+            "replay strategy"
+        )
+    if execution_column is not None and strategy != STORED_COLUMN_REPLAY_STRATEGY:
+        raise ValueError(
+            "execution_column is only supported by the stored-column replay strategy"
+        )
+
     events = extract_occn_replay_events(source)
+    if object_types is not None:
+        events = project_replay_events(events, object_types)
+
     if strategy == CONNECTED_COMPONENTS_REPLAY_STRATEGY:
-        if leading_object_type is not None:
-            raise ValueError(
-                "leading_object_type is only supported by the leading-object "
-                "replay strategy"
-            )
         return build_connected_component_replay_units(events)
     if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
         if leading_object_type is None:
@@ -549,4 +739,10 @@ def extract_occn_replay_units(
                 "replay strategy"
             )
         return build_leading_object_replay_units(events, leading_object_type)
-    raise ValueError(f"unsupported OCCN replay unit strategy: {strategy!r}")
+    if execution_column is None:
+        raise ValueError(
+            "execution_column is required by the stored-column replay strategy"
+        )
+    return build_stored_column_replay_units(
+        events, stored_execution_ids(source, execution_column)
+    )

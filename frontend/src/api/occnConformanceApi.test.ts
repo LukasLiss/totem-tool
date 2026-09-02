@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+  getEventLogEventColumns,
   getEventLogObjectTypes,
   getOCCNReplayUnitDetail,
   LEADING_OBJECT_REPLAY_STRATEGY,
+  STORED_COLUMN_REPLAY_STRATEGY,
   runOCCNConformance,
   type OCCNConformanceResponse,
   type OCCNReplayUnitDetailResponse,
@@ -179,6 +181,68 @@ describe("occnConformanceApi", () => {
         replay_unit_strategy: "leading_object",
         leading_object_type: "Order",
         max_states: 10_000,
+      }
+    );
+  });
+
+  it("posts the stored column and the projection flag", async () => {
+    post.mockResolvedValue({ data: response });
+
+    await runOCCNConformance(
+      12,
+      34,
+      STORED_COLUMN_REPLAY_STRATEGY,
+      null,
+      1_000,
+      { executionColumn: "process execution", restrictToModelObjectTypes: true }
+    );
+
+    expect(post).toHaveBeenCalledWith(
+      "/api/files/12/occn_conformance/",
+      {
+        asset_id: 34,
+        replay_unit_strategy: "stored_column",
+        execution_column: "process execution",
+        restrict_to_model_object_types: true,
+        max_states: 1_000,
+      }
+    );
+  });
+
+  it("loads the stored event columns of the selected event log", async () => {
+    const columns = [
+      { name: "process execution", non_null_count: 20, distinct_count: 3 },
+    ];
+    get.mockResolvedValue({ data: columns });
+
+    await expect(getEventLogEventColumns(12)).resolves.toEqual(columns);
+    expect(get).toHaveBeenCalledWith("/api/files/12/event_columns/", {
+      _skipGlobalFilter: true,
+    });
+  });
+
+  it("sends the stored column, projection flag and asset when loading detail", async () => {
+    get.mockResolvedValue({ data: detailResponse });
+
+    await getOCCNReplayUnitDetail(12, "stored_column:i3", {
+      replayUnitStrategy: STORED_COLUMN_REPLAY_STRATEGY,
+      executionColumn: "process execution",
+      restrictToModelObjectTypes: true,
+      assetId: 34,
+    });
+
+    expect(get).toHaveBeenCalledWith(
+      "/api/files/12/occn_replay_unit_detail/",
+      {
+        params: {
+          unit_id: "stored_column:i3",
+          replay_unit_strategy: "stored_column",
+          execution_column: "process execution",
+          restrict_to_model_object_types: "true",
+          asset_id: 34,
+          offset: 0,
+          limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+        },
       }
     );
   });

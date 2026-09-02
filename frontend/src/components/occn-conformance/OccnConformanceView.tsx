@@ -14,12 +14,15 @@ import {
   DEFAULT_OCCN_MAX_STATES,
   LEADING_OBJECT_REPLAY_STRATEGY,
   MAX_OCCN_MAX_STATES,
+  STORED_COLUMN_REPLAY_STRATEGY,
+  type EventColumnInfo,
   type OCCNConformanceResponse,
   type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -49,7 +52,21 @@ type SelectedEventLog = {
 const REPLAY_UNIT_STRATEGY_LABELS: Record<OCCNReplayUnitStrategy, string> = {
   [CONNECTED_COMPONENTS_REPLAY_STRATEGY]: "Standard",
   [LEADING_OBJECT_REPLAY_STRATEGY]: "Leading object type",
+  [STORED_COLUMN_REPLAY_STRATEGY]: "Stored process executions",
 };
+
+const REPLAY_UNIT_STRATEGY_HINTS: Record<OCCNReplayUnitStrategy, string> = {
+  [CONNECTED_COMPONENTS_REPLAY_STRATEGY]:
+    "One replay unit per group of events connected through shared objects.",
+  [LEADING_OBJECT_REPLAY_STRATEGY]:
+    "One replay unit per object of the selected type.",
+  [STORED_COLUMN_REPLAY_STRATEGY]:
+    "One replay unit per process execution id stored in an events column, e.g. by the Variants Explorer.",
+};
+
+function eventColumnLabel(column: EventColumnInfo): string {
+  return `${column.name} (${column.distinct_count.toLocaleString()} executions, ${column.non_null_count.toLocaleString()} events)`;
+}
 
 interface ReplayUnitSelection {
   contextKey: string;
@@ -77,7 +94,15 @@ export function OccnConformanceView({
     useState<ReplayUnitSelection | null>(null);
   const replayUnitContextKey =
     eventLogId && projectId && assetSelection.selectedAssetId
-      ? `${eventLogId}:${projectId}:${assetSelection.selectedAssetId}:${workflow.replayUnitStrategy}:${workflow.leadingObjectType ?? ""}`
+      ? [
+          eventLogId,
+          projectId,
+          assetSelection.selectedAssetId,
+          workflow.replayUnitStrategy,
+          workflow.leadingObjectType ?? "",
+          workflow.replayOptions.executionColumn ?? "",
+          workflow.replayOptions.restrictToModelObjectTypes ? "model-types" : "",
+        ].join(":")
       : null;
   const selectedReplayUnit = resolveSelectedReplayUnit(
     replayUnitSelection,
@@ -93,8 +118,15 @@ export function OccnConformanceView({
     eventLogId,
     selectedReplayUnit,
     workflow.replayUnitStrategy,
-    workflow.leadingObjectType
+    workflow.leadingObjectType,
+    {
+      ...workflow.replayOptions,
+      assetId: assetSelection.selectedAssetId,
+    }
   );
+  const needsExtraStrategyInput =
+    workflow.replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY ||
+    workflow.replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY;
 
   function selectReplayUnit(unit: OCCNReplayUnitResult) {
     if (!replayUnitContextKey || !workflow.result) return;
@@ -117,10 +149,8 @@ export function OccnConformanceView({
           </header>
 
           <section
-            className={`grid items-end gap-4 border-b pb-6 md:grid-cols-2 ${
-              workflow.replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY
-                ? "xl:grid-cols-5"
-                : "xl:grid-cols-4"
+            className={`grid items-start gap-4 border-b pb-6 md:grid-cols-2 ${
+              needsExtraStrategyInput ? "xl:grid-cols-5" : "xl:grid-cols-4"
             }`}
           >
             <div className="space-y-2">
@@ -176,7 +206,69 @@ export function OccnConformanceView({
                   )}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                {REPLAY_UNIT_STRATEGY_HINTS[workflow.replayUnitStrategy]}
+              </p>
             </div>
+
+            {workflow.replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY ? (
+              <div className="space-y-2">
+                <Label>Process execution column</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={workflow.executionColumn ?? undefined}
+                    onValueChange={workflow.setExecutionColumn}
+                    disabled={
+                      workflow.running ||
+                      workflow.eventColumnsLoading ||
+                      workflow.eventColumnsError !== null ||
+                      workflow.availableEventColumns.length === 0
+                    }
+                  >
+                    <SelectTrigger aria-label="Process execution column">
+                      <SelectValue
+                        placeholder={
+                          workflow.eventColumnsLoading
+                            ? "Loading event columns"
+                            : workflow.availableEventColumns.length === 0
+                              ? "No stored columns in this log"
+                              : "Select column"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {workflow.availableEventColumns.map((column) => (
+                        <SelectItem key={column.name} value={column.name}>
+                          {eventColumnLabel(column)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {workflow.eventColumnsError ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      title="Retry loading event columns"
+                      aria-label="Retry loading event columns"
+                      onClick={workflow.retryEventColumns}
+                    >
+                      <RefreshCw />
+                    </Button>
+                  ) : null}
+                </div>
+                {workflow.eventColumnsError ? (
+                  <p className="text-xs text-destructive">
+                    {workflow.eventColumnsError}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Events without an id in this column are not replayed. Store
+                    executions with the Variants Explorer first.
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             {workflow.replayUnitStrategy ===
             LEADING_OBJECT_REPLAY_STRATEGY ? (
@@ -233,19 +325,46 @@ export function OccnConformanceView({
               </div>
             ) : null}
 
-            <Button
-              type="button"
-              className="w-full"
-              disabled={!workflow.canRun}
-              onClick={() => void workflow.run()}
-            >
-              {workflow.running ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Play />
-              )}
-              {workflow.running ? "Running" : "Run conformance"}
-            </Button>
+            <div className="space-y-2">
+              {/* Invisible label keeps the button level with the selects. */}
+              <Label aria-hidden className="invisible">
+                Run
+              </Label>
+              <Button
+                type="button"
+                className="w-full"
+                disabled={!workflow.canRun}
+                onClick={() => void workflow.run()}
+              >
+                {workflow.running ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Play />
+                )}
+                {workflow.running ? "Running" : "Run conformance"}
+              </Button>
+            </div>
+
+            <div className="flex items-start gap-3 border-t pt-4 md:col-span-2 xl:col-span-full">
+              <Switch
+                id="occn-restrict-object-types"
+                aria-label="Ignore object types missing from the model"
+                checked={workflow.restrictToModelObjectTypes}
+                disabled={workflow.running}
+                onCheckedChange={workflow.setRestrictToModelObjectTypes}
+              />
+              <div className="space-y-1">
+                <Label htmlFor="occn-restrict-object-types">
+                  Ignore object types missing from the model
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Objects whose type the model does not contain (for example a
+                  shared worker resource that was left out on purpose) are
+                  removed from the events before replay. Without this, every
+                  event that touches such an object is non-fitting.
+                </p>
+              </div>
+            </div>
 
             <div className="space-y-3 border-t pt-4 md:col-span-2 xl:col-span-full">
               <div className="flex items-center justify-between gap-4">

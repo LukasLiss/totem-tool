@@ -30,6 +30,8 @@ import VariantsExplorer, {
   type Extraction,
   type IsoStrategy,
 } from '@/react_component/VariantsExplorer';
+import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
+import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
   clampProcessAreaParams,
@@ -103,9 +105,11 @@ interface ComponentProps {
     automatic_loading?: boolean;
     leading_object_type?: string;
     // Persisted advanced settings for the Variants Explorer
-    extraction?: "leading_1hop" | "leading_bfs" | "connected";
-    iso?: "db_signature" | "trace" | "signature" | "wl" | "wl+vf2" | "exact";
+    extraction?: Extraction;
+    iso?: IsoStrategy;
     timeout_s?: number;
+    business_object_types?: string[];
+    business_activities?: string[];
     // LogStatisticsComponent properties
     show_num_events?: boolean;
     show_num_activities?: boolean;
@@ -564,40 +568,57 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     (node.iso as IsoStrategy) ?? 'wl+vf2'
   );
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 10);
+  const [businessObjectTypes, setBusinessObjectTypes] = useState<string[]>(
+    node.business_object_types ?? []
+  );
+  const [businessActivities, setBusinessActivities] = useState<string[]>(
+    node.business_activities ?? []
+  );
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [availableActivities, setAvailableActivities] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
+  const nodeBusinessObjectTypes = JSON.stringify(node.business_object_types ?? []);
+  const nodeBusinessActivities = JSON.stringify(node.business_activities ?? []);
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
     setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
     setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
     setTimeoutS(node.timeout_s ?? 10);
+    setBusinessObjectTypes(JSON.parse(nodeBusinessObjectTypes));
+    setBusinessActivities(JSON.parse(nodeBusinessActivities));
   }, [
     node.automatic_loading,
     node.leading_object_type,
     node.extraction,
     node.iso,
     node.timeout_s,
+    nodeBusinessObjectTypes,
+    nodeBusinessActivities,
   ]);
 
-  // Fetch object types when file changes (for edit mode dropdown)
+  // Fetch object types and activities when file changes (for edit mode dropdowns)
   useEffect(() => {
     if (!selectedFile?.id || !isEditMode) return;
 
-    const fetchTypes = async () => {
+    const fetchOptions = async () => {
       setLoadingTypes(true);
       try {
-        const { data } = await axios.get<{ name: string; count: number }[]>(`/api/files/${selectedFile.id}/object_types/`, { _skipGlobalFilter: true });
-        setAvailableTypes(data.map(o => o.name).sort());
+        const [types, activities] = await Promise.all([
+          fetchObjectTypes(selectedFile.id),
+          fetchActivities(selectedFile.id),
+        ]);
+        setAvailableTypes(types);
+        setAvailableActivities(activities);
       } catch (err) {
         console.error('Failed to fetch object types:', err);
       } finally {
         setLoadingTypes(false);
       }
     };
-    fetchTypes();
+    fetchOptions();
   }, [selectedFile?.id, isEditMode]);
 
   // Handlers for form changes
@@ -630,11 +651,22 @@ const VariantsComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ timeout_s: safe } as any);
   };
 
+  const handleBusinessObjectTypesChange = (value: string[]) => {
+    setBusinessObjectTypes(value);
+    onUpdate?.({ business_object_types: value } as any);
+  };
+
+  const handleBusinessActivitiesChange = (value: string[]) => {
+    setBusinessActivities(value);
+    onUpdate?.({ business_activities: value } as any);
+  };
+
   if (isEditMode) {
     // EDIT MODE: Configuration form
     const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
     const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
-    const leadingTypeIgnored = extraction === 'connected';
+    const leadingTypeIgnored = extraction === 'connected' || extraction === 'resource_aware';
+    const resourceAware = extraction === 'resource_aware';
 
     return (
       <Card className="w-full h-full rounded-none">
@@ -668,7 +700,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
                   }
                 >
                   {leadingTypeIgnored
-                    ? '— (ignored for Connected components)'
+                    ? `— (ignored for ${extractionOpt?.label ?? extraction})`
                     : (leadingType || 'Select object type (optional)')}
                 </Button>
               </DropdownMenuTrigger>
@@ -719,6 +751,43 @@ const VariantsComponent: React.FC<ComponentProps> = ({
               <p className="text-xs text-muted-foreground">{extractionOpt.hint}</p>
             )}
           </div>
+
+          {resourceAware && (
+            <>
+              <div className="space-y-2">
+                <Label>Business object types</Label>
+                <MultiSelectPopover
+                  label="Business object types"
+                  options={availableTypes}
+                  selected={businessObjectTypes}
+                  onChange={handleBusinessObjectTypesChange}
+                  placeholder="Select object types"
+                  allLabel="All object types"
+                  loading={loadingTypes}
+                  disabled={!selectedFile?.id}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Object types left out are treated as resources.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Business activities</Label>
+                <MultiSelectPopover
+                  label="Business activities"
+                  options={availableActivities}
+                  selected={businessActivities}
+                  onChange={handleBusinessActivitiesChange}
+                  placeholder="All activities"
+                  allLabel="All activities"
+                  loading={loadingTypes}
+                  disabled={!selectedFile?.id}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Leave empty to connect business objects through every activity.
+                </p>
+              </div>
+            </>
+          )}
 
           {/* Isomorphism strategy */}
           <div className="space-y-2">
@@ -788,16 +857,24 @@ const VariantsComponent: React.FC<ComponentProps> = ({
           defaultExtraction={extraction}
           defaultIso={iso}
           defaultTimeoutS={timeoutS}
+          defaultBusinessObjectTypes={businessObjectTypes}
+          defaultBusinessActivities={businessActivities}
           onAdvancedChange={(s) => {
             // Mirror the explorer's choices into our local state so this
             // wrapper stays in sync with what the user sees inside.
             setExtraction(s.extraction);
             setIso(s.iso);
             setTimeoutS(s.timeout_s);
+            setLeadingType(s.leading_type);
+            setBusinessObjectTypes(s.business_object_types);
+            setBusinessActivities(s.business_activities);
             onUpdate?.({
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,
+              leading_object_type: s.leading_type,
+              business_object_types: s.business_object_types,
+              business_activities: s.business_activities,
             } as any);
           }}
         />

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectAsset } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+  STORED_COLUMN_REPLAY_STRATEGY,
   type OCCNConformanceResponse,
 } from "@/api/occnConformanceApi";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -95,6 +96,15 @@ function workflowState(overrides: Record<string, unknown> = {}) {
     objectTypesLoading: false,
     objectTypesError: null,
     retryObjectTypes: vi.fn(),
+    executionColumn: null,
+    setExecutionColumn: vi.fn(),
+    availableEventColumns: [],
+    eventColumnsLoading: false,
+    eventColumnsError: null,
+    retryEventColumns: vi.fn(),
+    restrictToModelObjectTypes: false,
+    setRestrictToModelObjectTypes: vi.fn(),
+    replayOptions: { executionColumn: null, restrictToModelObjectTypes: false },
     maxStates: 1_000,
     setMaxStates: vi.fn(),
     canRun: true,
@@ -103,7 +113,7 @@ function workflowState(overrides: Record<string, unknown> = {}) {
     error: null,
     run: vi.fn(),
     ...overrides,
-  } as ReturnType<typeof useOccnConformanceWorkflow>;
+  } as unknown as ReturnType<typeof useOccnConformanceWorkflow>;
 }
 
 function renderView(
@@ -133,6 +143,12 @@ function viewElement(
     </SelectedFileContext.Provider>
   );
 }
+
+const detailOptions = {
+  executionColumn: null,
+  restrictToModelObjectTypes: false,
+  assetId: asset.id,
+};
 
 function replayUnitDetailState(): OccnReplayUnitDetailState {
   return {
@@ -201,6 +217,51 @@ describe("OccnConformanceView", () => {
     );
   });
 
+  it("offers the stored execution columns and the projection switch", () => {
+    const setExecutionColumn = vi.fn();
+    const setRestrictToModelObjectTypes = vi.fn();
+    useWorkflowMock.mockReturnValue(
+      workflowState({
+        replayUnitStrategy: STORED_COLUMN_REPLAY_STRATEGY,
+        executionColumn: "process execution",
+        availableEventColumns: [
+          { name: "process execution", non_null_count: 20, distinct_count: 3 },
+        ],
+        setExecutionColumn,
+        setRestrictToModelObjectTypes,
+        replayOptions: {
+          executionColumn: "process execution",
+          restrictToModelObjectTypes: false,
+        },
+      })
+    );
+    renderView();
+
+    expect(screen.getByText("Stored process executions")).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Process execution column" })
+        .textContent
+    ).toContain("process execution (3 executions, 20 events)");
+    expect(useReplayUnitDetailMock).toHaveBeenLastCalledWith(
+      12,
+      null,
+      STORED_COLUMN_REPLAY_STRATEGY,
+      null,
+      {
+        executionColumn: "process execution",
+        restrictToModelObjectTypes: false,
+        assetId: asset.id,
+      }
+    );
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Ignore object types missing from the model",
+      })
+    );
+    expect(setRestrictToModelObjectTypes).toHaveBeenCalledWith(true);
+  });
+
   it("passes a Model Assets row selection into the workflow", () => {
     renderView(42);
 
@@ -241,7 +302,8 @@ describe("OccnConformanceView", () => {
       12,
       null,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-      null
+      null,
+      detailOptions
     );
 
     fireEvent.click(
@@ -255,7 +317,8 @@ describe("OccnConformanceView", () => {
         12,
         response.unit_results[0],
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
     expect(
@@ -278,7 +341,8 @@ describe("OccnConformanceView", () => {
         12,
         response.unit_results[0],
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
 
@@ -294,7 +358,8 @@ describe("OccnConformanceView", () => {
         12,
         null,
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
     expect(
@@ -313,7 +378,8 @@ describe("OccnConformanceView", () => {
         12,
         nextResult.unit_results[0],
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
 
@@ -329,7 +395,8 @@ describe("OccnConformanceView", () => {
         13,
         null,
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
   });
@@ -347,7 +414,8 @@ describe("OccnConformanceView", () => {
         12,
         response.unit_results[0],
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        detailOptions
       )
     );
 
@@ -374,7 +442,8 @@ describe("OccnConformanceView", () => {
         12,
         null,
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-        null
+        null,
+        { ...detailOptions, assetId: replacementAsset.id }
       )
     );
     expect(

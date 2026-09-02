@@ -1,159 +1,80 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import axios from "axios";
-import { useFilterVersion } from "@/store/filterStore";
-import {
-  ChevronDown, ChevronRight, ZoomIn, ZoomOut,
-  MinusCircle, PlusCircle, Settings,
-} from "lucide-react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Play, Settings, ZoomIn, ZoomOut } from "lucide-react";
+import { toast } from "sonner";
+
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Slider } from "@/components/ui/slider";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { useFilterVersion } from "@/store/filterStore";
+import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
+
+import { ProcessExecutionStoreSummary } from "./variants/ProcessExecutionStoreSummary";
+import { VariantRow } from "./variants/VariantRow";
+import { VariantsSettingsPanel } from "./variants/VariantsSettingsPanel";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  isLeadingExtraction,
+  settingsBlocker,
+  summarizeSettings,
+  toAdvancedSettings,
+} from "./variants/settings";
+import {
+  describeRequestError,
+  fetchActivities,
+  fetchObjectTypes,
+  fetchProcessAreas,
+  fetchVariants,
+  storeProcessExecutions,
+} from "./variants/variantsApi";
+import {
+  DEFAULT_STORE_SETTINGS,
+  type AdvancedSettings,
+  type ExecutionSettings,
+  type Extraction,
+  type GroupingSettings,
+  type IsoStrategy,
+  type StoredExecutionsResponse,
+  type StoreSettings,
+  type Variant,
+} from "./variants/types";
 
-
-/* ============================
-   Advanced-settings type aliases
-   Must mirror totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}
-   and backend api.views._VALID_EXTRACTIONS / _VALID_ISOS.
-   ============================ */
-export type Extraction = "leading_1hop" | "leading_bfs" | "connected";
-export type IsoStrategy =
-  | "db_signature" | "trace" | "signature" | "wl" | "wl+vf2" | "exact";
-
-export type AdvancedSettings = {
-  extraction: Extraction;
-  iso: IsoStrategy;
-  timeout_s: number;
-};
-
-export const EXTRACTION_OPTIONS: { value: Extraction; label: string; hint: string }[] = [
-  { value: "leading_1hop", label: "Leading type — 1-hop", hint: "Fast. Default." },
-  { value: "leading_bfs",  label: "Leading type — BFS",   hint: "Paper-faithful. Slower." },
-  { value: "connected",    label: "Connected components", hint: "No leading type required." },
-];
-
-export const ISO_OPTIONS: { value: IsoStrategy; label: string; hint: string }[] = [
-  { value: "db_signature", label: "SQL signature",      hint: "Cheapest. May over-merge." },
-  { value: "trace",        label: "Trace",              hint: "Linearisation-sensitive." },
-  { value: "signature",    label: "Python signature",   hint: "Topology-blind multiset." },
-  { value: "wl",           label: "WL hash",            hint: "Sound on real OCEL data." },
-  { value: "wl+vf2",       label: "WL + VF2",           hint: "Recommended default." },
-  { value: "exact",        label: "Exact (slow)",       hint: "Full pairwise VF2." },
-];
-
-/* =========================
-   Types shared with callers
-   ========================= */
-export type VariantObject = {
-  id: string;
-  type: string;
-  label?: string;
-};
-
-// MODIFIED: Added new properties from the backend layout calculation
-export type VariantEventNode = {
-  id: string;
-  activity: string;
-  objectIds: string[];
-  types: string[];      
-  x: number;            
-  y_lane: number;       
-  y_lanes: number[];    
-};
-
-export type VariantGraph = {
-  nodes: VariantEventNode[];
-  edges: { from: string; to: string }[];
-  objects: VariantObject[];
-};
-
-export type Variant = {
-  id: string | number;
-  support: number;
-  signature: string;
-  signature_hash: string;
-  graph: VariantGraph;
-};
-
-/* ========== colors/tokens ========== */
-const ACTOR_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#8B5CF6", "#F43F5E"];
-const EXTENDED_PALETTE = ["#06B6D4", "#84CC16", "#F97316", "#EC4899", "#6366F1"];
-const TYPE_PALETTE = [...ACTOR_COLORS, ...EXTENDED_PALETTE];
-
-const UI = {
-  primary: "#2563EB",
-  textPrimary: "#0F172A",
-  textSecondary: "#64748B",
-  border: "#E2E8F0",
-  mutedBG: "#F8FAFC",
-};
-
-/* ========== utils ========== */
-function shade(hex: string, factor: number): string {
-  const c = hex.replace("#", "");
-  const r = parseInt(c.slice(0, 2), 16);
-  const g = parseInt(c.slice(2, 4), 16);
-  const b = parseInt(c.slice(4, 6), 16);
-  const mix = (x: number) => Math.round(x + (255 - x) * factor);
-  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
-}
-function mapTypesToColors(types: string[], overrides?: Record<string, string>): Record<string, string> {
-  const map: Record<string, string> = {};
-  let i = 0;
-  for (const t of types) {
-    map[t] = (overrides && overrides[t]) || TYPE_PALETTE[i % TYPE_PALETTE.length];
-    i++;
-  }
-  return map;
-}
-function abbreviateFirstLetters(label?: string): string | undefined {
-  if (!label) return label;
-  const words = label.trim().split(/\s+/);
-  if (words.length === 1) return words[0].slice(0, 12);
-  return words.map((w) => w[0]).join("");
-}
-
-/* ========== shapes ========== */
-/** Returns a CSS polygon that clips a rectangle into a chevron.
- * tipPx controls how pointy the right tip is (12–20 looks good). */
-const chevronClip = (tipPx: number = 16): string =>
-  `polygon(0 0,
-           calc(100% - ${tipPx}px) 0,
-           100% 50%,
-           calc(100% - ${tipPx}px) 100%,
-           0 100%,
-           ${tipPx}px 50%)`;
-
+// Re-exported for the dashboard wrapper and other callers that used to
+// import these from this file.
+export { EXTRACTION_OPTIONS, ISO_OPTIONS } from "./variants/types";
+export type {
+  AdvancedSettings,
+  Extraction,
+  IsoStrategy,
+  Variant,
+  VariantEventNode,
+  VariantGraph,
+  VariantObject,
+} from "./variants/types";
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
   fileId?: number;                                // Event log file ID
-  automaticLoading?: boolean;                     // Auto-load variants (default: false)
+  automaticLoading?: boolean;                     // Compute on load and after every settings change
   onVariantsLoad?: (variants: Variant[]) => void; // Optional callback when variants load
   typeColors?: Record<string, string>;            // UI customization
   colWidth?: number;                              // Column width (default: 120)
   embedded?: boolean;                             // When true, removes outer Card wrapper
   defaultLeadingType?: string;                    // Pre-select this type if provided and valid
-  defaultExtraction?: Extraction;                 // Persisted advanced settings
+  defaultExtraction?: Extraction;                 // Persisted settings (dashboard)
   defaultIso?: IsoStrategy;
   defaultTimeoutS?: number;
-  /** Called when the user clicks Apply in the advanced-settings popover so
-   * the parent dashboard can persist the choices on the VariantsComponent. */
+  defaultBusinessObjectTypes?: string[];
+  defaultBusinessActivities?: string[];
+  /** Fired whenever a persisted setting changes so a dashboard can store it. */
   onAdvancedChange?: (s: AdvancedSettings) => void;
   /** When provided, overrides internal filter state (controlled mode). */
   filterEnabled?: boolean;
 };
+
+type Status = "idle" | "loading" | "ready" | "empty" | "stored" | "error";
+
+const AUTO_RUN_DEBOUNCE_MS = 400;
 
 export default function VariantsExplorer({
   fileId,
@@ -166,6 +87,8 @@ export default function VariantsExplorer({
   defaultExtraction = "leading_1hop",
   defaultIso = "wl+vf2",
   defaultTimeoutS = 10,
+  defaultBusinessObjectTypes,
+  defaultBusinessActivities,
   onAdvancedChange,
   filterEnabled: filterEnabledProp,
 }: VariantsExplorerProps) {
@@ -173,369 +96,262 @@ export default function VariantsExplorer({
   const filterEnabled = filterEnabledProp ?? false;
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
-  // Component state
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
-  const [leadingType, setLeadingType] = useState<string>("");
-  const [hasStartedLoading, setHasStartedLoading] = useState<boolean>(false);
+  // ---- settings -----------------------------------------------------------
+  const [execution, setExecution] = useState<ExecutionSettings>(() => ({
+    extraction: defaultExtraction,
+    leadingType: defaultLeadingType ?? "",
+    businessObjectTypes: defaultBusinessObjectTypes ?? [],
+    businessActivities: defaultBusinessActivities ?? [],
+  }));
+  const [grouping, setGrouping] = useState<GroupingSettings>({
+    iso: defaultIso,
+    timeoutS: defaultTimeoutS,
+  });
+  const [store, setStore] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
+  const [settingsOpen, setSettingsOpen] = useState(!automaticLoading);
 
-  // UI state
-  const [zoom, setZoom] = useState<number>(1);
-  const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
+  // Re-seed from the persisted defaults when they change (a dashboard
+  // finishing its load). Compared by value so the echo of our own
+  // `onAdvancedChange` does not reset anything.
+  const defaultsKey = JSON.stringify([
+    defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType ?? "",
+    defaultBusinessObjectTypes ?? [], defaultBusinessActivities ?? [],
+  ]);
+  const seededKeyRef = useRef(defaultsKey);
+  useEffect(() => {
+    if (seededKeyRef.current === defaultsKey) return;
+    seededKeyRef.current = defaultsKey;
+    setExecution((prev) => ({
+      extraction: defaultExtraction,
+      leadingType: defaultLeadingType ?? prev.leadingType,
+      businessObjectTypes: defaultBusinessObjectTypes ?? [],
+      businessActivities: defaultBusinessActivities ?? [],
+    }));
+    setGrouping({ iso: defaultIso, timeoutS: defaultTimeoutS });
+  }, [defaultsKey, defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType,
+      defaultBusinessObjectTypes, defaultBusinessActivities]);
 
-  // Advanced settings: now displayed inline in the header row. Each change
-  // commits immediately and triggers a refetch + persists to the dashboard,
-  // matching how the Perspective dropdown already behaves. The 10s default
-  // timeout protects against an accidental click on `exact` triggering a
-  // runaway computation.
-  const [extraction, setExtraction] = useState<Extraction>(defaultExtraction);
-  const [iso, setIso]               = useState<IsoStrategy>(defaultIso);
-  const [timeoutS, setTimeoutS]     = useState<number>(defaultTimeoutS);
-
-  // Persist whenever any advanced setting changes. Skipped on the initial
-  // mount so we don't echo back the values the parent just gave us.
+  // Persist whenever a setting changes. Skipped on the initial mount so we
+  // don't echo back the values the parent just gave us.
   const isFirstAdvSync = useRef(true);
   useEffect(() => {
     if (isFirstAdvSync.current) {
       isFirstAdvSync.current = false;
       return;
     }
-    onAdvancedChange?.({ extraction, iso, timeout_s: timeoutS });
-  }, [extraction, iso, timeoutS, onAdvancedChange]);
+    onAdvancedChange?.(toAdvancedSettings(execution, grouping.iso, grouping.timeoutS));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [execution, grouping]);
 
-  // Track current fileId to detect stale closures
+  // ---- log metadata ---------------------------------------------------------
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [availableActivities, setAvailableActivities] = useState<string[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(false);
   const fileIdRef = useRef<number | undefined>(fileId);
-
-  // Update ref whenever fileId changes
   useEffect(() => {
     fileIdRef.current = fileId;
   }, [fileId]);
 
-  const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
+  // ---- results --------------------------------------------------------------
+  const [variants, setVariants] = useState<Variant[]>([]);
+  const [storeResult, setStoreResult] = useState<StoredExecutionsResponse | null>(null);
+  const [status, setStatus] = useState<Status>("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [lastRunKey, setLastRunKey] = useState<string | null>(null);
+  const runIdRef = useRef(0);
 
-  // Fetch object types when fileId changes
+  // ---- UI -------------------------------------------------------------------
+  const [zoom, setZoom] = useState(1);
+  const [labelMode, setLabelMode] = useState<"compact" | "full">("compact");
+
+  // ---- process areas (shared with the Process Area component) --------------
+  const processAreas = useProcessAreasForFile(fileId);
+  const [processAreasLoading, setProcessAreasLoading] = useState(false);
+  const [processAreasError, setProcessAreasError] = useState<string | null>(null);
+
+  const resetResults = useCallback(() => {
+    runIdRef.current += 1;
+    setVariants([]);
+    setStoreResult(null);
+    setStatus("idle");
+    setErrorMsg("");
+    setLastRunKey(null);
+  }, []);
+
+  // Load object types and activities when the file changes.
   useEffect(() => {
-    if (!fileId) {
-      setAvailableTypes([]);
-      setLeadingType("");
-      setHasStartedLoading(false);
-      setStatus("idle");
-      setVariants([]);
-      setErrorMsg("");
-      return;
-    }
+    resetResults();
+    setAvailableTypes([]);
+    setAvailableActivities([]);
+    if (!fileId) return;
 
-    // SYNCHRONOUS state reset BEFORE async work
-    setHasStartedLoading(false);  // Reset loading flag immediately
-    setStatus("idle");            // Reset status immediately
-    setLeadingType("");           // Clear old leading type immediately
-    setVariants([]);              // Clear old variants immediately
-    setErrorMsg("");              // Clear old errors immediately
-
-    const currentFileId = fileId;  // Capture fileId in closure
+    const currentFileId = fileId;
     let cancelled = false;
-
+    setOptionsLoading(true);
     (async () => {
       try {
-        // Check if we're still on the same file before proceeding
-        if (fileIdRef.current !== currentFileId) {
-          return;  // File changed, abort this stale closure
-        }
+        const [types, activities] = await Promise.all([
+          fetchObjectTypes(currentFileId),
+          fetchActivities(currentFileId),
+        ]);
+        if (cancelled || fileIdRef.current !== currentFileId) return;
+        setAvailableTypes(types);
+        setAvailableActivities(activities);
+        setExecution((prev) => {
+          if (prev.leadingType && types.includes(prev.leadingType)) return prev;
+          const fallback =
+            defaultLeadingType && types.includes(defaultLeadingType)
+              ? defaultLeadingType
+              : types[0] ?? "";
+          return fallback === prev.leadingType ? prev : { ...prev, leadingType: fallback };
+        });
+      } catch (e: unknown) {
+        if (cancelled || fileIdRef.current !== currentFileId) return;
+        console.error("Failed to load event log metadata:", e);
+        setErrorMsg(describeRequestError(e, "Failed to load object types"));
+        setStatus("error");
+      } finally {
+        if (!cancelled && fileIdRef.current === currentFileId) setOptionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `defaultLeadingType` only seeds the first selection for a file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, resetResults]);
 
-        const { data: objectTypesRaw }: { data: { name: string; count: number }[] } = await axios.get(
-          `/api/files/${currentFileId}/object_types/`,
-          { _skipGlobalFilter: true },
+  const blocker = useMemo(() => settingsBlocker(execution, store), [execution, store]);
+  const runKey = useMemo(
+    () => JSON.stringify({ fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion }),
+    [fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion],
+  );
+  const stale = lastRunKey !== null && lastRunKey !== runKey;
+  const optionsReady = !optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction));
+  const canRun = Boolean(fileId) && status !== "loading" && blocker === null && optionsReady;
+
+  const run = useCallback(async () => {
+    const currentFileId = fileId;
+    if (!currentFileId || blocker !== null) return;
+    const runId = ++runIdRef.current;
+    const key = runKey;
+    const isCurrent = () => runId === runIdRef.current && fileIdRef.current === currentFileId;
+
+    setStatus("loading");
+    setErrorMsg("");
+    try {
+      if (store.enabled) {
+        const result = await storeProcessExecutions(currentFileId, execution, grouping, store, filterEnabled);
+        if (!isCurrent()) return;
+        const list = result.variants ?? [];
+        setStoreResult(result);
+        setVariants(list);
+        setStatus(result.variants === null ? "stored" : list.length ? "ready" : "empty");
+        onVariantsLoad?.(list);
+        toast.success(
+          `Stored ${result.execution_count} process execution${result.execution_count === 1 ? "" : "s"} in column "${result.execution_column}".`,
         );
-
-        // Check again after async operation
-        if (fileIdRef.current !== currentFileId) {
-          return;  // File changed during fetch, abort
-        }
-
-        const objectTypes = objectTypesRaw.map(o => o.name);
-        if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
-          setAvailableTypes(objectTypes);
-
-          // Use defaultLeadingType if provided and valid, otherwise auto-select first type alphabetically
-          if (defaultLeadingType && objectTypes.includes(defaultLeadingType)) {
-            setLeadingType(defaultLeadingType);
-          } else {
-            const sortedTypes = [...objectTypes].sort();
-            setLeadingType(sortedTypes[0]);
-          }
-        }
-      } catch (e: any) {
-        // Check again before setting error
-        if (fileIdRef.current !== currentFileId) {
-          return;  // File changed, don't show error from old file
-        }
-
-        if (!cancelled) {
-          console.error("Failed to load object types:", e);
-          setErrorMsg(e?.message || "Failed to load object types");
-          setStatus("error");
-        }
+      } else {
+        const result = await fetchVariants(currentFileId, execution, grouping, filterEnabled);
+        if (!isCurrent()) return;
+        setStoreResult(null);
+        setVariants(result.variants);
+        setStatus(result.variants.length ? "ready" : "empty");
+        onVariantsLoad?.(result.variants);
       }
-    })();
+      setLastRunKey(key);
+    } catch (e: unknown) {
+      if (!isCurrent()) return;
+      setStatus("error");
+      setErrorMsg(
+        describeRequestError(
+          e,
+          store.enabled ? "Storing process executions failed." : "Unknown error while loading variants.",
+        ),
+      );
+    }
+  }, [fileId, blocker, runKey, store, execution, grouping, filterEnabled, onVariantsLoad]);
 
-    return () => { cancelled = true; };
-  }, [fileId]);
-
-  // Fetch variants when fileId or leadingType changes
+  // Automatic mode: (re)compute after every settings change, debounced so a
+  // multi-select does not fire one request per click. Storing into the log
+  // is always an explicit action.
+  const runRef = useRef(run);
   useEffect(() => {
-    if (!fileId) {
-      setVariants([]);
-      setStatus("idle");
-      setErrorMsg("");
-      return;
+    runRef.current = run;
+  }, [run]);
+  useEffect(() => {
+    if (!automaticLoading || store.enabled || !fileId || blocker !== null || !optionsReady) return;
+    if (lastRunKey === runKey) return;
+    const timer = setTimeout(() => void runRef.current(), AUTO_RUN_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [automaticLoading, store.enabled, fileId, blocker, optionsReady, runKey, lastRunKey]);
+
+  const computeProcessAreas = useCallback(async () => {
+    if (!fileId) return;
+    const currentFileId = fileId;
+    setProcessAreasLoading(true);
+    setProcessAreasError(null);
+    try {
+      const snapshot = await fetchProcessAreas(currentFileId, filterEnabled);
+      if (fileIdRef.current !== currentFileId) return;
+      useProcessAreaStore.getState().publish(snapshot);
+    } catch (e: unknown) {
+      if (fileIdRef.current !== currentFileId) return;
+      setProcessAreasError(describeRequestError(e, "Could not compute process areas."));
+    } finally {
+      if (fileIdRef.current === currentFileId) setProcessAreasLoading(false);
     }
+  }, [fileId, filterEnabled]);
 
-    // Wait for object types to be loaded and leadingType to be selected
-    if (!leadingType) {
-      return;
-    }
+  const sortedVariants = useMemo(
+    () => [...variants].sort((a, b) => b.support - a.support),
+    [variants],
+  );
+  const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
+  const summary = summarizeSettings(execution, grouping.iso, store);
 
-    // Only fetch if automaticLoading is true OR user has manually started loading
-    if (!automaticLoading && !hasStartedLoading) {
-      return;
-    }
+  const runLabel = store.enabled
+    ? store.computeVariants
+      ? "Compute & store"
+      : "Store executions"
+    : lastRunKey !== null && stale
+      ? "Recompute variants"
+      : "Compute variants";
 
-    const currentFileId = fileId;  // Capture fileId in closure
-    const currentLeadingType = leadingType;  // Capture leadingType in closure
-    let cancelled = false;
-
-    (async () => {
-      // CRITICAL: Check if we're still on the same file before setting status="loading"
-      if (fileIdRef.current !== currentFileId) {
-        return;  // File changed, abort this stale closure
-      }
-
-      // Build the query string with the advanced-settings params. For
-      // `extraction="connected"` the leading_type is ignored by the backend
-      // — omit it to keep URLs clean.
-      const params: Record<string, string> = {
-        file_id: String(currentFileId),
-        extraction,
-        iso,
-        timeout_s: String(timeoutS),
-      };
-      if (extraction.startsWith("leading")) {
-        params.leading_type = currentLeadingType;
-      }
-      const qs = "?" + new URLSearchParams(params).toString();
-
-      setStatus("loading");
-      setErrorMsg("");
-
-      try {
-        const { data: rawData } = await axios.get(`/api/variants/${qs}`, { _skipGlobalFilter: !filterEnabled });
-        const arr: Variant[] = Array.isArray(rawData) ? rawData : rawData.variants;
-
-        // Check again after async operation
-        if (fileIdRef.current !== currentFileId) {
-          return;  // File changed during fetch, abort
-        }
-
-        if (!cancelled) {
-          setVariants(arr ?? []);
-          setStatus(arr && arr.length ? "ready" : "empty");
-          onVariantsLoad?.(arr ?? []);
-        }
-      } catch (e: any) {
-        // Check again before setting error
-        if (fileIdRef.current !== currentFileId) {
-          return;  // File changed, don't show error from old file
-        }
-
-        if (!cancelled) {
-          setStatus("error");
-          // Backend returns HTTP 408 + {code: "timeout", timeout_s, hint}
-          // when find_variants tripped its watchdog. Surface a specific
-          // message so the user knows what to change instead of seeing a
-          // generic error.
-          const d = e?.response?.data;
-          if (e?.response?.status === 408 && d?.code === "timeout") {
-            setErrorMsg(
-              `Computation timed out after ${d.timeout_s}s. ${d.hint ?? ""}`
-            );
-          } else {
-            setErrorMsg(e?.message || "Unknown error while loading variants.");
-          }
-        }
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad, filterEnabled, effectiveFilterVersion]);
-
-  const filtered = useMemo(() => {
-    return [...variants].sort((a, b) => b.support - a.support);
-  }, [variants]);
-
-  //console.log("Status: " + status + " automaticLoading: " + automaticLoading + " hasStartedLoading: " + hasStartedLoading);
-
-  const Wrapper = embedded ? 'div' : Card;
+  const Wrapper = embedded ? "div" : Card;
 
   return (
-    <Wrapper className="w-full">
+    <Wrapper className="w-full min-w-0">
       <CardHeader className="pb-2">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold">Perspective:</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="min-w-[150px] justify-between"
-                  disabled={extraction === "connected"}
-                  title={
-                    extraction === "connected"
-                      ? "Leading type is ignored for Connected components extraction"
-                      : undefined
-                  }
-                >
-                  {extraction === "connected"
-                    ? "— (connected)"
-                    : (leadingType || "Select type")}
-                  <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[200px]">
-                <DropdownMenuLabel>Select Object Type</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={leadingType} onValueChange={setLeadingType}>
-                  {availableTypes.length > 0 ? (
-                    availableTypes.map((type) => (
-                      <DropdownMenuRadioItem key={type} value={type}>
-                        {type}
-                      </DropdownMenuRadioItem>
-                    ))
-                  ) : (
-                    <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading types...</div>
-                  )}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+        {/* Toolbar: wraps on narrow widths instead of overflowing. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setSettingsOpen((open) => !open)}
+            aria-expanded={settingsOpen}
+            aria-controls="variants-settings-panel"
+            className="shrink-0"
+          >
+            <Settings className="h-4 w-4" />
+            Settings
+            {settingsOpen ? <ChevronUp className="h-4 w-4 opacity-60" /> : <ChevronDown className="h-4 w-4 opacity-60" />}
+          </Button>
+          <p
+            className="min-w-0 flex-1 basis-[220px] truncate text-sm text-muted-foreground"
+            title={summary}
+          >
+            {summary}
+            {stale && status !== "loading" ? (
+              <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                settings changed
+              </span>
+            ) : null}
+          </p>
 
-            {/* Inline advanced settings — gear icon plus three compact
-                controls living in the same row as the Perspective dropdown.
-                Each change commits immediately and triggers a refetch;
-                onAdvancedChange persists the choice to the dashboard. */}
-            <Settings
-              className="ml-1 h-4 w-4 text-muted-foreground shrink-0"
-              aria-label="Advanced settings"
-            />
-
-            {/* Extraction picker */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="min-w-[180px] justify-between font-normal"
-                  title="Process-execution extraction strategy"
-                >
-                  <span className="truncate">
-                    {EXTRACTION_OPTIONS.find((o) => o.value === extraction)?.label
-                      ?? extraction}
-                  </span>
-                  <ChevronDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-[320px]">
-                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup
-                  value={extraction}
-                  onValueChange={(v) => setExtraction(v as Extraction)}
-                >
-                  {EXTRACTION_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {opt.hint}
-                        </span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Isomorphism picker */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="min-w-[150px] justify-between font-normal"
-                  title="Graph-isomorphism strategy"
-                >
-                  <span className="truncate">
-                    {ISO_OPTIONS.find((o) => o.value === iso)?.label ?? iso}
-                  </span>
-                  <ChevronDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-[300px]">
-                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup
-                  value={iso}
-                  onValueChange={(v) => setIso(v as IsoStrategy)}
-                >
-                  {ISO_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {opt.hint}
-                        </span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Timeout (seconds) */}
-            <div className="flex items-center gap-1">
-              <Label
-                htmlFor="adv-timeout"
-                className="text-xs text-muted-foreground"
-                title="Per-request wall-clock budget in seconds"
-              >
-                Timeout
-              </Label>
-              <Input
-                id="adv-timeout"
-                type="number"
-                min={1}
-                max={120}
-                step={1}
-                value={timeoutS}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  setTimeoutS(Number.isFinite(n) && n > 0 ? n : 10);
-                }}
-                className="w-[72px]"
-                title="Per-request wall-clock budget in seconds"
-              />
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            {/* Zoom */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2" title="Zoom">
               <ZoomOut size={16} className="text-muted-foreground" />
               <Slider
                 value={[zoom]}
@@ -543,15 +359,14 @@ export default function VariantsExplorer({
                 max={2}
                 step={0.1}
                 onValueChange={(v) => setZoom(v[0])}
-                className="w-40"
+                className="w-28 sm:w-36"
+                aria-label="Zoom"
               />
               <ZoomIn size={16} className="text-muted-foreground" />
             </div>
-
-            {/* Label mode toggle - Switch */}
             <div className="flex items-center gap-2">
-              <Label htmlFor="label-mode" className="text-sm font-medium">
-                Compact Labels
+              <Label htmlFor="label-mode" className="whitespace-nowrap text-sm font-medium">
+                Compact labels
               </Label>
               <Switch
                 id="label-mode"
@@ -559,93 +374,117 @@ export default function VariantsExplorer({
                 onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
               />
             </div>
-
-          </div>
-        </div>
-      </CardHeader>
-
-      {/* Idle state - no file selected */}
-      {status === "idle" && !fileId && (
-        <CardContent className="pt-2">
-          <div className="text-sm text-muted-foreground">
-            Select a file to view variants
-          </div>
-        </CardContent>
-      )}
-
-      {/* Manual loading state - waiting for user to start */}
-      {!automaticLoading && !hasStartedLoading && fileId && leadingType && status === "idle" && (
-        <CardContent className="pt-2">
-          <div className="flex flex-col gap-3 items-center py-4">
-            <div className="text-sm text-muted-foreground text-center">
-              Variant computation can take some time for large event logs.
-              <br />
-              Click below when ready to start the analysis.
-            </div>
             <Button
-              onClick={() => setHasStartedLoading(true)}
-              className="min-w-[200px]"
+              type="button"
+              size="sm"
+              onClick={() => void run()}
+              disabled={!canRun}
+              title={blocker ?? undefined}
+              className="shrink-0"
             >
-              Start Variant Computation
+              <Play className="h-4 w-4" />
+              {runLabel}
             </Button>
           </div>
-        </CardContent>
-      )}
+        </div>
 
-      {/* Loading state */}
-      {status === "loading" && (
-        <CardContent className="pt-2">
-          <div className="flex items-center gap-2">
-            <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-            <span className="text-sm">Loading variants...</span>
+        {settingsOpen ? (
+          <div id="variants-settings-panel">
+            <VariantsSettingsPanel
+              execution={execution}
+              onExecutionChange={setExecution}
+              grouping={grouping}
+              onGroupingChange={setGrouping}
+              store={store}
+              onStoreChange={setStore}
+              availableTypes={availableTypes}
+              availableActivities={availableActivities}
+              optionsLoading={optionsLoading}
+              processAreas={processAreas}
+              processAreasLoading={processAreasLoading}
+              processAreasError={processAreasError}
+              onComputeProcessAreas={() => void computeProcessAreas()}
+              disabled={status === "loading"}
+            />
+            {blocker ? (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" role="status">
+                {blocker}
+              </p>
+            ) : null}
           </div>
-        </CardContent>
-      )}
+        ) : null}
+      </CardHeader>
 
-      {/* Error state */}
-      {status === "error" && (
-        <CardContent className="pt-2">
-          <div className="flex flex-col gap-2">
-            <div className="text-sm text-red-600 font-semibold">
-              Failed to load variants
+      <CardContent className="pt-2">
+        {!fileId ? (
+          <div className="text-sm text-muted-foreground">Select a file to view variants</div>
+        ) : null}
+
+        {fileId && status === "idle" ? (
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="text-center text-sm text-muted-foreground">
+              {store.enabled
+                ? "Computing process executions and writing them into the event log is an explicit step."
+                : automaticLoading && blocker
+                  ? "Complete the settings above to start the computation."
+                  : "Variant computation can take some time for large event logs."}
+              <br />
+              Click below when ready to start.
             </div>
-            {errorMsg && (
-              <div className="text-xs text-red-500">{errorMsg}</div>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLeadingType("")}
-              className="w-fit"
-            >
+            <Button onClick={() => void run()} disabled={!canRun} className="min-w-[200px]" title={blocker ?? undefined}>
+              <Play className="h-4 w-4" />
+              {runLabel}
+            </Button>
+          </div>
+        ) : null}
+
+        {status === "loading" ? (
+          <div className="flex items-center gap-2">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <span className="text-sm">
+              {store.enabled ? "Computing and storing process executions…" : "Loading variants…"}
+            </span>
+          </div>
+        ) : null}
+
+        {status === "error" ? (
+          <div className="flex flex-col gap-2" role="alert">
+            <div className="text-sm font-semibold text-red-600">
+              {store.enabled ? "Storing process executions failed" : "Failed to load variants"}
+            </div>
+            {errorMsg ? <div className="text-xs text-red-500">{errorMsg}</div> : null}
+            <Button variant="outline" size="sm" onClick={() => void run()} className="w-fit" disabled={!canRun}>
               Retry
             </Button>
           </div>
-        </CardContent>
-      )}
+        ) : null}
 
-      {/* Empty state */}
-      {status === "empty" && (
-        <CardContent className="pt-2">
-          <div className="text-sm text-muted-foreground">
-            No variants found for this file
+        {storeResult && status !== "loading" && status !== "error" ? (
+          <div className="mb-3">
+            <ProcessExecutionStoreSummary result={storeResult} />
           </div>
-        </CardContent>
-      )}
+        ) : null}
 
-      {/* Ready state - show variants */}
-      {status === "ready" && (
-        <CardContent className="pt-2">
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {/* Variant count summary — left-aligned, muted, above the list. */}
-            <div
-              className="text-sm text-muted-foreground"
-              aria-live="polite"
-            >
-              Found <span className="font-medium text-foreground">{filtered.length}</span>{" "}
-              variant{filtered.length === 1 ? "" : "s"}
+        {status === "stored" ? (
+          <div className="text-sm text-muted-foreground">
+            Variants were not computed. Enable "Also compute variants" in the settings to group the
+            stored executions.
+          </div>
+        ) : null}
+
+        {status === "empty" ? (
+          <div className="text-sm text-muted-foreground">No variants found for this file</div>
+        ) : null}
+
+        {status === "ready" ? (
+          <div className="flex flex-col gap-3">
+            <div className="text-sm text-muted-foreground" aria-live="polite">
+              Found <span className="font-medium text-foreground">{sortedVariants.length}</span>{" "}
+              variant{sortedVariants.length === 1 ? "" : "s"} across{" "}
+              <span className="font-medium text-foreground">{totalSupport}</span> process execution
+              {totalSupport === 1 ? "" : "s"}
             </div>
-            {filtered.map((v) => (
+            {sortedVariants.map((v) => (
               <VariantRow
                 key={v.signature_hash}
                 v={v}
@@ -657,410 +496,8 @@ export default function VariantsExplorer({
               />
             ))}
           </div>
-        </CardContent>
-      )}
+        ) : null}
+      </CardContent>
     </Wrapper>
   );
-}
-
-// This type is needed for compatibility with the existing rendering logic
-type PositionedEvent = {
-  id: string;
-  activity: string;
-  objectIds: string[];
-  xStart: number;
-  xEnd: number;
-};
-
-/* ========== Variant row ========== */
-type VariantRowProps = {
-  v: Variant;
-  totalSupport: number;
-  zoom: number;
-  labelMode: "compact" | "full";
-  colWidth: number;
-  typeColorsOverride?: Record<string, string>;
-};
-
-function VariantRow({
-  v, totalSupport, zoom, labelMode, colWidth, typeColorsOverride
-}: VariantRowProps) {
-  const [expanded, setExpanded] = useState<boolean>(false);
-  const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
-
-  const GUTTER = 16;
-
-  // MODIFIED: This now creates a compatible 'pos' object from the pre-calculated node data.
-  const pos = useMemo(() => {
-    const positionedEvents: Record<string, PositionedEvent> = {};
-    for (const node of v.graph.nodes) {
-      positionedEvents[node.id] = {
-        id: node.id,
-        activity: node.activity,
-        objectIds: node.objectIds,
-        xStart: node.x,
-        // Set end to start for a consistent 1-column width. This could be enhanced later.
-        xEnd: node.x, 
-      };
-    }
-    return positionedEvents;
-  }, [v.graph.nodes]);
-  
-  const objects = v.graph.objects;
-
-  const objectTypes = useMemo(
-    () => Array.from(new Set(objects.map((o) => o.type))),
-    [objects]
-  );
-  const typeColor = useMemo(
-    () => mapTypesToColors(objectTypes, typeColorsOverride),
-    [objectTypes, typeColorsOverride]
-  );
-
-  // Create ordered list of lanes (one per object, preserving backend's lane order)
-  const lanes = useMemo(() => {
-    return objects.map((obj, idx) => ({
-      index: idx,
-      object: obj,
-      type: obj.type,
-    }));
-  }, [objects]);
-
-  // Group lanes by type for legend display (preserves order, tracks lane count per type)
-  const typeGroups = useMemo(() => {
-    const groups: { type: string; laneCount: number; startIndex: number }[] = [];
-    let currentType = '';
-    let count = 0;
-    let startIndex = 0;
-    for (let i = 0; i < lanes.length; i++) {
-      const lane = lanes[i];
-      if (lane.type !== currentType) {
-        if (currentType) groups.push({ type: currentType, laneCount: count, startIndex });
-        currentType = lane.type;
-        count = 1;
-        startIndex = i;
-      } else {
-        count++;
-      }
-    }
-    if (currentType) groups.push({ type: currentType, laneCount: count, startIndex });
-    return groups;
-  }, [lanes]);
-
-  const maxCol = useMemo(
-    () => Math.max(0, ...Object.values(pos).map((p) => Math.max(p.xStart, p.xEnd))),
-    [pos]
-  );
-  const cols = maxCol + 1;
-  const gridTemplateCols = `repeat(${cols}, ${Math.round(colWidth * zoom)}px)`;
-
-  // Map lane index -> events in that lane (using y_lanes from node data)
-  const laneEvents = useMemo(() => {
-    const map = new Map<number, PositionedEvent[]>();
-    for (const node of v.graph.nodes) {
-      for (const laneIdx of node.y_lanes) {
-        if (!map.has(laneIdx)) map.set(laneIdx, []);
-        map.get(laneIdx)!.push({
-          id: node.id,
-          activity: node.activity,
-          objectIds: node.objectIds,
-          xStart: node.x,
-          xEnd: node.x,
-        });
-      }
-    }
-    // Sort events in each lane by x position
-    for (const [, arr] of map) {
-      arr.sort((a, b) => a.xStart - b.xStart);
-    }
-    return map;
-  }, [v.graph.nodes]);
-
-  const supportPct = totalSupport ? (v.support / totalSupport) : 0;
-  const toggleType = (t: string) => setCollapsedTypes(prev => {
-    const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n;
-  });
-
-  // Fixed height for each type lane to match legend boxes
-  const typeLaneHeight = 48;
-
-  // Calculate legend height based on actual type groups (including collapsed ones)
-  const legendHeight = useMemo(() => {
-    let height = 32; // padding (16 top + 16 bottom)
-    typeGroups.forEach(({ type, laneCount }, idx) => {
-      const collapsed = collapsedTypes.has(type);
-      height += collapsed ? typeLaneHeight : laneCount * typeLaneHeight + (laneCount - 1) * 12;
-      if (idx < typeGroups.length - 1) height += 12; // gap between groups
-    });
-    return height;
-  }, [typeGroups, collapsedTypes, typeLaneHeight]);
-
-  // Calculate the grid row for a lane, accounting for collapsed type groups
-  const getRowForLane = (laneIdx: number): number => {
-    const lane = lanes[laneIdx];
-    let row = 1;
-
-    for (const group of typeGroups) {
-      if (group.type === lane.type) {
-        // Found our type group - add position within group
-        const posInGroup = laneIdx - group.startIndex;
-        return row + posInGroup;
-      }
-      // Add rows for this type group
-      const collapsed = collapsedTypes.has(group.type);
-      row += collapsed ? 1 : group.laneCount;
-    }
-    return row;
-  };
-
-
-  return (
-    <div style={{ border: `1px solid ${UI.border}`, borderRadius: 8 }}>
-      <CardHeader className="py-2">
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setExpanded(e => !e)}
-            title={expanded ? "Collapse variant" : "Expand variant"}
-          >
-            {expanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-          </Button>
-
-          {/* support bar */}
-          <div
-            style={{
-              position: "relative", height: 12, width: 160, border: `1px solid ${UI.border}`,
-              background: UI.mutedBG, borderRadius: 6, overflow: "hidden"
-            }}
-            aria-label={`Support: ${v.support} (${(supportPct * 100).toFixed(1)}%)`}
-          >
-            <div style={{ position: "absolute", inset: "0 0 0 0", width: `${Math.round(supportPct * 100)}%`, background: UI.primary }} />
-          </div>
-          <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, color: UI.textPrimary }}>
-            {v.support}
-          </div>
-
-          <div style={{ color: UI.textPrimary, fontFamily: "ui-monospace, monospace", marginLeft: 42 }}>
-            {String(v.id)}
-          </div>
-
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              style={{
-                fontSize: 12, color: UI.textSecondary, maxWidth: 350,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-              }}
-              title={v.signature}
-            >
-              signature: {v.signature}
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-
-      {expanded && (
-        <CardContent className="pt-0 pb-6">
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 24 }}>
-            {/* legend */}
-            <div style={{ width: 256, flexShrink: 0 }}>
-              <div
-                style={{
-                  border: `1px solid ${UI.border}`,
-                  borderRadius: 8,
-                  height: legendHeight,
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 16, paddingBottom: 16, paddingLeft: 16, paddingRight: 16 }}>
-                  {typeGroups.map(({ type, laneCount }) => {
-                    const collapsed = collapsedTypes.has(type);
-                    const tColor = typeColor[type];
-                    // Height matches the lanes in the grid: laneCount * laneHeight + (laneCount - 1) * gap
-                    const groupHeight = collapsed
-                      ? typeLaneHeight
-                      : laneCount * typeLaneHeight + (laneCount - 1) * 12;
-                    return (
-                      <div
-                        key={type}
-                        style={{
-                          border: `1px solid ${UI.border}`,
-                          borderRadius: 8,
-                          padding: 8,
-                          height: `${groupHeight}px`,
-                          display: "flex",
-                          alignItems: collapsed ? "center" : "flex-start"
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div style={{
-                              height: 12,
-                              width: 12,
-                              borderRadius: 3,
-                              background: collapsed ? UI.textSecondary : tColor,
-                              opacity: collapsed ? 0.5 : 1
-                            }} />
-                            <div style={{
-                              fontSize: 14,
-                              fontWeight: 600,
-                              color: collapsed ? UI.textSecondary : UI.textPrimary,
-                              opacity: collapsed ? 0.5 : 1
-                            }}>
-                              {type} {laneCount > 1 && `(${laneCount})`}
-                            </div>
-                          </div>
-                          <Button
-                            size="sm" variant="ghost" onClick={() => toggleType(type)}
-                            title={collapsed ? `Expand ${type} lanes` : `Collapse ${type} lanes`}
-                          >
-                            {collapsed ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* canvas */}
-            <div
-              style={{
-                  position: "relative",
-                  border: `1px solid ${UI.border}`,
-                  borderRadius: 8,
-                  overflow: "auto",
-                  width: "100%",
-              }}
-              aria-label={`Variant ${v.id} visualization`}
-            >
-              <div style={{ minWidth: "100%", height: legendHeight, paddingTop: 16, paddingBottom: 16 }}>
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 16,
-                    left: GUTTER,
-                    right: 0,
-                    bottom: 16,
-                    display: "grid",
-                    gridTemplateColumns: gridTemplateCols,
-                    gridAutoRows: `${typeLaneHeight}px`,
-                    columnGap: "12px",
-                    rowGap: "12px",
-                  }}
-                >
-                  {/* events - one lane per object instance */}
-                  {lanes.map((lane, laneIdx) => {
-                    if (collapsedTypes.has(lane.type)) return null;
-
-                    // Get events for this specific lane
-                    const events = laneEvents.get(lane.index) || [];
-
-                    // Calculate grid row accounting for collapsed type groups
-                    const gridRow = getRowForLane(laneIdx);
-
-                    return events.map((ev, i) => {
-                      const colStart = ev.xStart + 1;
-                      const span = Math.max(1, ev.xEnd - ev.xStart + 1);
-                      const isShared = ev.objectIds.length > 1;
-                      const label = labelMode === "compact" ? abbreviateFirstLetters(ev.activity)! : ev.activity;
-                      const background = gradientFor(objects, typeColor, ev.objectIds);
-                      const title = `${ev.activity}\nEvent: ${ev.id}\nObjects: ${ev.objectIds.join(", ")}\nLane: ${lane.index} (${lane.type})\nPos: [${ev.xStart}..${ev.xEnd}]`;
-                      const tipPx = Math.max(12, Math.min(20, Math.round(colWidth * zoom * 0.18)));
-
-                      return (
-                        <div
-                          key={`lane-${lane.index}-${ev.id}-${i}`}
-                          title={title}
-                          style={{
-                            gridColumn: `${colStart} / span ${span}`,
-                            gridRow: `${gridRow}`,
-                            background,
-                            color: "#fff",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            position: "relative",
-                            userSelect: "none",
-                            fontSize: 12,
-                            clipPath: chevronClip(tipPx),
-                            WebkitClipPath: chevronClip(tipPx),
-                            overflow: "hidden",
-                            paddingLeft: tipPx,
-                            paddingRight: tipPx,
-                          }}
-                          aria-label={`${label} (${lane.type})${isShared ? " (shared)" : ""}`}
-                        >
-                          {isShared && (
-                            <div
-                              aria-hidden
-                              style={{
-                                position: "absolute",
-                                inset: 0,
-                                opacity: 0.25,
-                                backgroundImage: "repeating-linear-gradient(45deg, #000 0 2px, transparent 2px 6px)",
-                                clipPath: chevronClip(tipPx),
-                                WebkitClipPath: chevronClip(tipPx),
-                                zIndex: 0,
-                              }}
-                            />
-                          )}
-
-                          <span
-                            style={{
-                              padding: "2px 8px",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              position: "relative",
-                              zIndex: 1,
-                            }}
-                          >
-                            {label}
-                          </span>
-
-                          {isShared && (
-                            <div
-                              style={{
-                                position: "absolute",
-                                right: Math.max(4, Math.round(tipPx * 0.8)),
-                                top: 4,
-                                fontSize: 10,
-                                opacity: 0.8,
-                              }}
-                              aria-hidden
-                            >
-                              ⇄
-                            </div>
-                          )}
-                        </div>
-                      );
-                    });
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      )}
-    </div>
-  );
-}
-
-function gradientFor(
-  objects: VariantObject[],
-  typeColor: Record<string, string>,
-  objectIds: string[]
-): string {
-  const colors = objectIds.map((oid) => {
-    // Extract type from objectId (format: "type::item" -> "item")
-    const typeFromId = oid.startsWith("type::") ? oid.slice(6) : oid;
-    // Find object by type instead of ID (IDs may have different formats)
-    const obj = objects.find((o) => o.type === typeFromId);
-    const base = obj ? typeColor[obj.type] : UI.textSecondary;
-    return shade(base, 0);
-  });
-  if (colors.length <= 1) return colors[0] || UI.textSecondary;
-  const step = 100 / (colors.length - 1);
-  return `linear-gradient(90deg, ${colors.map((c, i) => `${c} ${i * step}%`).join(", ")})`;
 }
