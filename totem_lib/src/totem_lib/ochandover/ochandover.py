@@ -873,6 +873,50 @@ class OCHANDOVER(nx.MultiDiGraph):
                 canonical[key] = gap
         return p1, canonical
 
+    _HANDOVER_SCHEMA = {
+        "source":              pl.Utf8,
+        "target":              pl.Utf8,
+        "businessobject_type": pl.Utf8,
+        "businessobject_ids":  pl.List(pl.Utf8),
+        "time_delta":          pl.Int64,
+        "start_unix":          pl.Int64,
+    }
+
+    @classmethod
+    def _collapse_p1(
+        cls,
+        p1: dict,
+        bo_type_map: dict[str, str],
+        event_ts_dict: dict[str, int],
+    ) -> pl.DataFrame:
+        """
+        Collapse the filtered 5-tuple set p1 into a handover-instances DataFrame.
+
+        Groups entries sharing the same (src_event, tgt_event, src_resource,
+        tgt_resource, bo_type) key, accumulating their business-object ids.
+        """
+        pair_rows: dict[tuple, dict] = {}
+        for (src_eid, src_res, tgt_res, bid), (tgt_eid, _) in p1.items():
+            btype  = bo_type_map[bid]
+            src_ts = event_ts_dict.get(src_eid, 0)
+            tgt_ts = event_ts_dict.get(tgt_eid, 0)
+            key    = (src_eid, tgt_eid, src_res, tgt_res, btype)
+            if key not in pair_rows:
+                pair_rows[key] = {
+                    "source":              src_res,
+                    "target":              tgt_res,
+                    "businessobject_type": btype,
+                    "businessobject_ids":  [bid],
+                    "time_delta":          tgt_ts - src_ts,
+                    "start_unix":          src_ts,
+                }
+            else:
+                pair_rows[key]["businessobject_ids"].append(bid)
+        rows = list(pair_rows.values())
+        if rows:
+            return pl.DataFrame(rows, schema=cls._HANDOVER_SCHEMA)
+        return pl.DataFrame(schema=cls._HANDOVER_SCHEMA)
+
     @classmethod
     def _resource_pairs_from_eog(
         cls,
@@ -890,7 +934,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         Only pairs with gap <= max_gap are kept (all pairs if max_gap is None).
 
         Returns a DataFrame with columns:
-            source, target, businessobject_type, time_delta
+            source, target, businessobject_type, businessobject_ids, time_delta, start_unix
         """
         _resource_event_set: set[str] = set(event_resources.get_column("_eventId").to_list())
         _event_resources_dict: dict[str, list] = {
@@ -899,49 +943,9 @@ class OCHANDOVER(nx.MultiDiGraph):
         _event_ts_dict: dict[str, int] = {
             r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()
         }
-
         _bo_type_map, _raw = cls._bfs_bridges(eog_arcs, _resource_event_set, max_gap)
         _p1, _ = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
-
-        # Expand p1 (the exact 5-tuple handovers per Definition 4.8) into rows.
-        # Each entry already encodes the unique (src_res, tgt_res) assignment for
-        # its bid — no Cartesian re-expansion needed.
-        _pair_rows: dict[tuple[str, str, str, str, str], dict] = {}
-        for (_src_eid, _src_res, _tgt_res, _bid), (_tgt_eid, _) in _p1.items():
-            _btype = _bo_type_map[_bid]
-            _src_ts = _event_ts_dict.get(_src_eid, 0)
-            _tgt_ts = _event_ts_dict.get(_tgt_eid, 0)
-            _pair_key = (_src_eid, _tgt_eid, _src_res, _tgt_res, _btype)
-            if _pair_key not in _pair_rows:
-                _pair_rows[_pair_key] = {
-                    "source": _src_res,
-                    "target": _tgt_res,
-                    "businessobject_type": _btype,
-                    "businessobject_ids": [_bid],
-                    "time_delta": _tgt_ts - _src_ts,
-                    "start_unix": _src_ts,
-                }
-            else:
-                _pair_rows[_pair_key]["businessobject_ids"].append(_bid)
-        _rows = list(_pair_rows.values())
-
-        if _rows:
-            return pl.DataFrame(_rows, schema={
-                "source": pl.Utf8,
-                "target": pl.Utf8,
-                "businessobject_type": pl.Utf8,
-                "businessobject_ids": pl.List(pl.Utf8),
-                "time_delta": pl.Int64,
-                "start_unix": pl.Int64,
-            })
-        return pl.DataFrame(schema={
-            "source": pl.Utf8,
-            "target": pl.Utf8,
-            "businessobject_type": pl.Utf8,
-            "businessobject_ids": pl.List(pl.Utf8),
-            "time_delta": pl.Int64,
-            "start_unix": pl.Int64,
-        })
+        return cls._collapse_p1(_p1, _bo_type_map, _event_ts_dict)
 
 
     @classmethod
