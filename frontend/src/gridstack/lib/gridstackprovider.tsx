@@ -283,6 +283,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           automatic_loading: (node as any).automatic_loading ?? false,
           timeout_s: (node as any).timeout_s ?? 30.0,
         };
+      } else if (component_name === "SqlQueryComponent") {
+        props = {
+          name: (node as any).name ?? "",
+          query: (node as any).query ?? "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+          expected_result: (node as any).expected_result ?? null,
+          row_limit: (node as any).row_limit ?? 25,
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -372,6 +379,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "OC Petri Net";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
+        } else if (item.component_name === "SqlQueryComponent") {
+          content = "SQL Editor";
         } else {
           content = "Unknown";
         }
@@ -427,6 +436,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w_divergence: item.w_divergence,
             alpha: item.alpha,
             beta: item.beta,
+            // SqlQueryComponent properties
+            name: item.name,
+            query: item.query,
+            expected_result: item.expected_result,
+            row_limit: item.row_limit,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -472,6 +486,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).w_divergence = item.w_divergence;
               (node as any).alpha = item.alpha;
               (node as any).beta = item.beta;
+              // SqlQueryComponent properties
+              (node as any).name = item.name;
+              (node as any).query = item.query;
+              (node as any).expected_result = item.expected_result;
+              (node as any).row_limit = item.row_limit;
             }
           }
           // Set data attribute for persistence

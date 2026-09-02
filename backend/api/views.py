@@ -25,6 +25,7 @@ from .models import (
     OCPNComponent,
     TotemMinerComponent,
     FilterStackComponent,
+    SqlQueryComponent,
 )
 from .serializers import (
     DashboardComponentPolymorphicSerializer,
@@ -1287,6 +1288,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 components.append(OCPNComponent.objects.get(id=comp.id))
             elif comp.component_name == "OCCNComponent":
                 components.append(OCCNComponent.objects.get(id=comp.id))
+            elif comp.component_name == "SqlQueryComponent":
+                components.append(SqlQueryComponent.objects.get(id=comp.id))
             else:
                 components.append(comp)
         print(f"Dashboard {pk} has {len(components)} components")
@@ -1494,6 +1497,19 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item['h'],
                     component_name=component_name,
                     filter_stack_json=item.get('filter_stack_json', []),
+                )
+            elif component_name == 'SqlQueryComponent':
+                SqlQueryComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    name=item.get('name', ''),
+                    query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                    expected_result=item.get('expected_result'),
+                    row_limit=item.get('row_limit', 25),
                 )
             # Add more as needed
 

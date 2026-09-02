@@ -260,3 +260,9 @@ totem_lib/test_data/large/*
 !totem_lib/test_data/large/.gitkeep
 
 backend/cache/*
+
+# ====================
+# Claude Code
+# ====================
+
+Claude_design

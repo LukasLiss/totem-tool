@@ -21,6 +21,7 @@ from api.models import (
     OCDottedChartComponent,
     ProcessAreaComponent,
     Project,
+    SqlQueryComponent,
     TextBoxComponent,
     VariantsComponent,
 )
@@ -61,6 +62,9 @@ class DashboardService:
         "dotted_chart": (OCDottedChartComponent, "OCDottedChartComponent"),
         "occncomponent": (OCCNComponent, "OCCNComponent"),
         "occn": (OCCNComponent, "OCCNComponent"),
+        "sqlquerycomponent": (SqlQueryComponent, "SqlQueryComponent"),
+        "sqlquery": (SqlQueryComponent, "SqlQueryComponent"),
+        "sql_query": (SqlQueryComponent, "SqlQueryComponent"),
     }
 
     @staticmethod
@@ -93,6 +97,7 @@ class DashboardService:
             OCDottedChartComponent,
             NewOCDFGComponent,
             OCCNComponent,
+            SqlQueryComponent,
         ):
             if (
                 model_cls.__name__.lower() == name.lower()
@@ -446,6 +451,20 @@ class DashboardService:
                 layout_direction=str(cfg.get("layout_direction", "LR")),
                 object_types=str(obj_types or ""),
             )
+        elif model_cls == SqlQueryComponent:
+            comp = SqlQueryComponent.objects.create(
+                dashboard=dashboard,
+                x=x,
+                y=y,
+                w=w,
+                h=h,
+                component_name=canonical_name,
+                order=order,
+                name=str(cfg.get("name", "")),
+                query=str(cfg.get("query") or "SELECT activity, count(*) AS n FROM events GROUP BY activity"),
+                expected_result=cfg.get("expected_result"),
+                row_limit=int(cfg.get("row_limit", 25)),
+            )
         else:
             comp = TextBoxComponent.objects.create(
                 dashboard=dashboard,
@@ -579,6 +598,15 @@ class DashboardService:
                     if isinstance(ot, list):
                         ot = ",".join(ot)
                     comp.object_types = str(ot or "")
+            elif isinstance(comp, SqlQueryComponent):
+                if "name" in config:
+                    comp.name = str(config["name"] or "")
+                if "query" in config:
+                    comp.query = str(config["query"] or "")
+                if "expected_result" in config:
+                    comp.expected_result = config["expected_result"]
+                if "row_limit" in config:
+                    comp.row_limit = int(config["row_limit"])
 
         comp.save()
         return DashboardComponentPolymorphicSerializer(comp).data

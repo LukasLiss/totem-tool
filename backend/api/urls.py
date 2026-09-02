@@ -4,6 +4,7 @@ from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from .views import EventLogViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings
 from . import views_ocel_editor
+from . import views_query
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -35,5 +36,8 @@ urlpatterns = [
     path("cache/stats/", cache_stats, name="cache-stats"),
     path("cache/clear/", cache_clear, name="cache-clear"),
     path("settings/", user_settings, name="user-settings"),
+    # SQL Editor widget (see views_query.py)
+    path("query/columns/", views_query.query_columns, name="query-columns"),
+    path("query/execute/", views_query.query_execute, name="query-execute"),
 ]
 

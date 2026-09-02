@@ -189,6 +189,24 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .sql-query-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 8,
+        w: 10,
+        content: "SQL Editor",
+        component_name: "SqlQueryComponent",
+        name: "",
+        query: "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+        row_limit: 25,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -307,6 +325,24 @@ const SidePanel: React.FC = () => {
           <line x1="60" y1="26" x2="79" y2="26" stroke="#475569" strokeWidth="2" />
         </svg>
         <div>OC Petri Net</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item sql-query-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="SQL Editor preview"
+          className="rounded-md bg-white"
+        >
+          <rect x="6" y="6" width="88" height="38" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
+          <line x1="6" y1="18" x2="94" y2="18" stroke="#475569" strokeWidth="2" />
+          <text x="12" y="15" fontSize="7" fill="#7c3aed" fontFamily="monospace">SELECT</text>
+          <text x="12" y="28" fontSize="6" fill="#334155" fontFamily="monospace">activity, count(*)</text>
+          <text x="12" y="38" fontSize="6" fill="#334155" fontFamily="monospace">FROM events</text>
+        </svg>
+        <div>SQL Editor</div>
       </div>
     </div>
   );
