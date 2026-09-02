@@ -1326,13 +1326,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
-        if _should_use_cache(request):
-            cached = get_cached_result(user_file, "statistics")
-            if cached is not None:
-                return Response(cached, status=status.HTTP_200_OK)
-
         try:
             fp = _parse_filter_params(request)
+            is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+
+            if _should_use_cache(request):
+                cached = get_cached_result(user_file, "statistics", filter_cache_params)
+                if cached is not None:
+                    return Response(cached, status=status.HTTP_200_OK)
+
             with _with_ocel_db(user_file) as db:
                 num_events, num_unique_activities = _filtered_event_counts(fp, db)
                 num_objects, num_object_types = _filtered_object_counts(fp, db)
@@ -1346,7 +1349,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
             }
-            set_cached_result(user_file, "statistics", result)
+            set_cached_result(user_file, "statistics", result, filter_cache_params)
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
