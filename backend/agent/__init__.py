@@ -1,3 +1,0 @@
-"""
-Agent WebSocket app package.
-"""

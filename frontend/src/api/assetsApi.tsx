@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 
-export type AssetType = "TOTEM" | "OCCN";
+export type AssetType = "TOTEM" | "OCCN" | "OCPN" | "OCDFG";
 
 export type ProjectAssetMetadata = Record<string, unknown>;
 
@@ -57,7 +57,7 @@ export interface AssetApiError {
   status?: number;
 }
 
-const ASSETS_URL = "http://localhost:8000/api/assets/";
+const ASSETS_URL = "/api/assets/";
 
 export async function listAssets(params: ListAssetsParams = {}) {
   const queryParams = new URLSearchParams();
@@ -120,6 +120,35 @@ export async function updateAsset(params: UpdateAssetParams) {
 export async function deleteAsset(assetId: number) {
   await axios.delete(`${ASSETS_URL}${assetId}/`);
   return true;
+}
+
+export interface SaveDiscoveredModelParams {
+  fileId: number | string;
+  name: string;
+  modelType: AssetType;
+  /** Discovery settings of the requesting component (tau, threshold, …). */
+  params?: Record<string, unknown>;
+}
+
+/**
+ * Discover a model from the given event log on the backend and store it as a
+ * project asset (`POST /api/files/<id>/save_discovered_model/`).
+ */
+export async function saveDiscoveredModel({
+  fileId,
+  name,
+  modelType,
+  params,
+}: SaveDiscoveredModelParams) {
+  const { data } = await axios.post<ProjectAsset>(
+    `/api/files/${fileId}/save_discovered_model/`,
+    {
+      name,
+      model_type: modelType,
+      params: params ?? {},
+    }
+  );
+  return data;
 }
 
 export async function downloadAsset(assetId: number): Promise<DownloadedAsset> {

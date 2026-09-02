@@ -19,6 +19,7 @@ import {
   useState,
 } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -109,11 +110,16 @@ type TotemMinerVisualizerProps = {
   embedded?: boolean;
   onControlsReady?: (controls: TotemMinerVisualizerControls) => void;
   tau?: number;
+  filterEnabled?: boolean;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DEFAULT_BACKEND = 'http://localhost:8000';
+const DEFAULT_BACKEND = (
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+  'http://localhost:8000'
+).replace(/\/$/, '');
 
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',
@@ -457,7 +463,10 @@ function TotemMinerVisualizer({
   embedded = false,
   onControlsReady,
   tau = 0.8,
+  filterEnabled = false,
 }: TotemMinerVisualizerProps) {
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawData, setRawData] = useState<TotemApiResponse | null>(null);
@@ -506,6 +515,7 @@ function TotemMinerVisualizer({
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
+        { _skipGlobalFilter: !filterEnabled } as any,
       );
       setRawData(data);
     } catch (err) {
@@ -514,7 +524,7 @@ function TotemMinerVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId]);
+  }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion]);
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
 

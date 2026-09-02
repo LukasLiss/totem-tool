@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
-  LEADING_OBJECT_REPLAY_STRATEGY,
   getEventLogObjectTypes,
   getOCCNReplayUnitDetail,
+  LEADING_OBJECT_REPLAY_STRATEGY,
   runOCCNConformance,
   type OCCNConformanceResponse,
   type OCCNReplayUnitDetailResponse,
@@ -27,82 +27,102 @@ const response: OCCNConformanceResponse = {
   asset_id: 34,
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
-  max_states: 1_000,
-  fitness: 0.5,
-  coverage: 2 / 3,
-  total_units: 3,
-  fitting_units: 1,
-  non_fitting_units: 1,
-  inconclusive_units: 1,
-  unit_results: [
-    {
-      unit_id: "connected_components:000001",
-      status: "fitting",
-      replayable: true,
-      event_count: 2,
-      explored_state_count: 4,
-      object_types: ["Order"],
-      failure_event_index: null,
-      failure_event_id: null,
-      limit_reason: null,
+  overall_metrics: {
+    fitness: 0.92,
+    precision: null,
+  },
+  object_type_metrics: {
+    Order: {
+      fitness: 0.95,
+      precision: null,
+      consumed_tokens: 100,
+      produced_tokens: 100,
+      missing_tokens: 5,
+      remaining_tokens: 5,
+      num_units: 10,
+      fitted_units: 9,
     },
+  },
+  type_pair_metrics: [
     {
-      unit_id: "connected_components:000002",
-      status: "non_fitting",
-      replayable: false,
-      event_count: 1,
-      explored_state_count: 2,
-      object_types: ["Item", "Order"],
-      failure_event_index: 0,
-      failure_event_id: "e3",
-      limit_reason: null,
-    },
-    {
-      unit_id: "connected_components:000003",
-      status: "inconclusive",
-      replayable: null,
-      event_count: 3,
-      explored_state_count: 10_000,
-      object_types: ["Order"],
-      failure_event_index: null,
-      failure_event_id: null,
-      limit_reason: "max_states",
+      source_type: "Order",
+      target_type: "Item",
+      fitness: 0.9,
+      precision: null,
+      consumed_tokens: 50,
+      produced_tokens: 50,
+      missing_tokens: 5,
+      remaining_tokens: 5,
+      num_units: 10,
+      fitted_units: 8,
     },
   ],
+  replay_units: [
+    {
+      unit_id: "connected_components:000001",
+      label: "Unit 1",
+      fitness: 1,
+      is_fitted: true,
+      num_events: 12,
+      num_objects: 3,
+      missing_tokens: 0,
+      remaining_tokens: 0,
+      consumed_tokens: 12,
+      produced_tokens: 12,
+      object_types: ["Order", "Item"],
+      object_ids: ["o1", "i1", "i2"],
+    },
+  ],
+  histograms: {
+    replay_unit_fitness: [
+      {
+        bin_start: 0.9,
+        bin_end: 1,
+        count: 1,
+        is_fitted_bucket: true,
+      },
+    ],
+  },
+  summary: {
+    num_units: 1,
+    fitted_units: 1,
+    non_fitted_units: 0,
+    partially_fitted_units: 0,
+    min_fitness: 1,
+    max_fitness: 1,
+    avg_fitness: 1,
+  },
+  computation_time_ms: 123,
 };
 
 const detailResponse: OCCNReplayUnitDetailResponse = {
   file_id: 12,
+  asset_id: 34,
   unit_id: "connected_components:000002",
   replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leading_object_type: null,
-  event_count: 75,
-  object_types: ["Item", "Order"],
-  pagination: {
-    offset: 50,
-    limit: 25,
-    returned_count: 25,
-    total_count: 75,
-    has_previous: true,
-    has_next: false,
-    previous_offset: 25,
-    next_offset: null,
+  total_units: 100,
+  offset: 0,
+  limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+  unit: {
+    unit_id: "connected_components:000002",
+    label: "Unit 2",
+    fitness: 0.75,
+    is_fitted: false,
+    num_events: 8,
+    num_objects: 2,
+    missing_tokens: 2,
+    remaining_tokens: 2,
+    consumed_tokens: 8,
+    produced_tokens: 8,
+    object_types: ["Order"],
+    object_ids: ["o2", "o3"],
   },
-  events: [
-    {
-      event_index: 50,
-      event_id: "event-50",
-      activity: "Ship Order",
-      timestamp_unix: 1_735_689_600,
-      objects_by_type: {
-        Item: ["item-1"],
-        Order: ["order-1"],
-      },
-    },
-  ],
+  replay_history: [],
+  token_diagnostics: [],
 };
 
-describe("OCCN conformance API", () => {
+describe("occnConformanceApi", () => {
   beforeEach(() => {
     get.mockReset();
     post.mockReset();
@@ -113,7 +133,7 @@ describe("OCCN conformance API", () => {
 
     await expect(runOCCNConformance(12, 34)).resolves.toEqual(response);
     expect(post).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_conformance/",
+      "/api/files/12/occn_conformance/",
       {
         asset_id: 34,
         max_states: 1_000,
@@ -132,7 +152,7 @@ describe("OCCN conformance API", () => {
     );
 
     expect(post).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_conformance/",
+      "/api/files/12/occn_conformance/",
       {
         asset_id: 34,
         max_states: 1_000,
@@ -153,7 +173,7 @@ describe("OCCN conformance API", () => {
     );
 
     expect(post).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_conformance/",
+      "/api/files/12/occn_conformance/",
       {
         asset_id: 34,
         replay_unit_strategy: "leading_object",
@@ -171,7 +191,7 @@ describe("OCCN conformance API", () => {
       "Item",
     ]);
     expect(get).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/object_types/"
+      "/api/files/12/object_types/"
     );
   });
 
@@ -188,7 +208,7 @@ describe("OCCN conformance API", () => {
       getOCCNReplayUnitDetail(12, "connected_components:000002")
     ).resolves.toEqual(detailResponse);
     expect(get).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_replay_unit_detail/",
+      "/api/files/12/occn_replay_unit_detail/",
       {
         params: {
           unit_id: "connected_components:000002",
@@ -210,7 +230,7 @@ describe("OCCN conformance API", () => {
     });
 
     expect(get).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_replay_unit_detail/",
+      "/api/files/12/occn_replay_unit_detail/",
       {
         params: {
           unit_id: "connected_components:000002",
@@ -231,7 +251,7 @@ describe("OCCN conformance API", () => {
     });
 
     expect(get).toHaveBeenCalledWith(
-      "http://localhost:8000/api/files/12/occn_replay_unit_detail/",
+      "/api/files/12/occn_replay_unit_detail/",
       {
         params: {
           unit_id: "leading_object:order-1",

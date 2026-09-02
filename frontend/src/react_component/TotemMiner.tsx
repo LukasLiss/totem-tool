@@ -10,19 +10,27 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { RefreshCcw } from 'lucide-react';
 import TotemMinerVisualizer from './TotemMinerVisualizer';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 export type TotemMinerProps = {
   fileId?: number | string | null;
   embedded?: boolean;
   backendBaseUrl?: string;
   height?: string | number;
+  filterEnabled?: boolean;
+  onToggleFilter?: () => void;
 };
+
+import { API_BASE_URL } from '../config/api';
 
 export default function TotemMiner({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
+  filterEnabled = false,
+  onToggleFilter,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
   const [tau, setTau] = useState(0.8);
@@ -43,6 +51,7 @@ export default function TotemMiner({
       relayoutSignal={relayoutSignal}
       embedded={true}
       tau={tau}
+      filterEnabled={filterEnabled}
     />
   );
 
@@ -60,9 +69,14 @@ export default function TotemMiner({
     >
       {/* Custom inline header matching thesis layout */}
       <div className="flex flex-row items-center justify-between relative z-10 flex-shrink-0 w-full px-6 py-3 border-b bg-white">
-        <h3 className="text-base font-semibold leading-none tracking-tight text-slate-900">
-          TOTeM Model
-        </h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-base font-semibold leading-none tracking-tight text-slate-900">
+            TOTeM Model
+          </h3>
+          {onToggleFilter && (
+            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
+          )}
+        </div>
         <div className="flex items-center gap-5">
           {/* τ slider */}
           <div className="flex items-center gap-3">
@@ -92,6 +106,13 @@ export default function TotemMiner({
             <RefreshCcw className="h-4 w-4" />
             Relayout
           </Button>
+
+          <SaveModelAssetButton
+            fileId={fileId ?? undefined}
+            modelType="TOTEM"
+            params={{ tau }}
+            disabled={!fileId}
+          />
         </div>
       </div>
       <CardContent

@@ -8,6 +8,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   Background,
   BackgroundVariant,
@@ -26,6 +27,7 @@ import { Download, Loader2, Play, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import {
   parseOcpnModelFile,
   type OcpnModelFile,
@@ -56,6 +58,7 @@ export interface OCPNVisualizerProps {
   showControls?: boolean;
   /** Called when the user edits the timeout (e.g. to persist it). */
   onTimeoutSChange?: (timeoutS: number) => void;
+  filterEnabled?: boolean;
 }
 
 /**
@@ -129,7 +132,10 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   defaultTimeoutS = DEFAULT_OCPN_TIMEOUT_S,
   showControls = true,
   onTimeoutSChange,
+  filterEnabled = false,
 }) => {
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const [model, setModel] = useState<OcpnModelFile | null>(null);
   const [objectTypes, setObjectTypes] = useState<OcpnObjectType[]>([]);
   const [nodes, setNodes] = useState<OcpnFlowNode[]>([]);
@@ -161,6 +167,9 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   const timeoutRef = useRef(timeoutS);
   timeoutRef.current = timeoutS;
 
+  const filterEnabledRef = useRef(filterEnabled);
+  filterEnabledRef.current = filterEnabled;
+
   const discover = useCallback(async () => {
     if (!fileId) return;
     const seq = ++requestSeq.current;
@@ -169,7 +178,8 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     try {
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
         params: { timeout_s: timeoutRef.current },
-      });
+        _skipGlobalFilter: !filterEnabledRef.current,
+      } as any);
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
       const flow = modelToFlow(parsed.model);
@@ -200,6 +210,12 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       if (seq === requestSeq.current) setLoading(false);
     }
   }, [fileId]);
+
+  // Re-discover when filter is toggled or version changes.
+  useEffect(() => {
+    if (!fileId || !autoStart) return;
+    discover();
+  }, [filterEnabled, effectiveFilterVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start discovery (once per file).
   useEffect(() => {
@@ -276,6 +292,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
         nodesConnectable={false}
         zoomOnDoubleClick={false}
         minZoom={0.1}
+        proOptions={{ hideAttribution: true }}
         // The OCPN node components only define source handles (the editor
         // relies on loose connection mode); without it React Flow drops
         // every edge for lack of a target handle.
@@ -335,6 +352,12 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
             >
               <Download className="mr-1 h-4 w-4" /> JSON
             </Button>
+            <SaveModelAssetButton
+              fileId={fileId}
+              modelType="OCPN"
+              params={{ timeout_s: timeoutS }}
+              disabled={!model}
+            />
             {objectTypes.length > 0 && (
               <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
                 {objectTypes.map((type) => (

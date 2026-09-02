@@ -86,6 +86,8 @@ class ProjectAsset(models.Model):
     class AssetType(models.TextChoices):
         TOTEM = "TOTEM", "TOTeM"
         OCCN = "OCCN", "OCCN"
+        OCPN = "OCPN", "OCPN"
+        OCDFG = "OCDFG", "OC-DFG"
 
     project = models.ForeignKey(
         Project,
@@ -118,6 +120,48 @@ class ProjectAsset(models.Model):
 
     def __str__(self):
         return f"{self.project.name} - {self.name} ({self.asset_type})"
+
+
+def image_asset_directory_path(instance, filename):
+    return os.path.join("image_assets", str(instance.project_id), filename)
+
+
+class ImageAsset(models.Model):
+    """A project-scoped image (png/jpeg/jpg/svg) managed in the asset store.
+
+    Unlike model assets (which store parsed JSON), images keep their uploaded
+    file. Dashboard image components reference an ImageAsset instead of owning
+    a private upload, so the same image can be reused across dashboards and is
+    managed (upload / rename / delete) in one place.
+    """
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="image_assets",
+    )
+    name = models.CharField(max_length=100)
+    image = models.FileField(upload_to=image_asset_directory_path)
+    content_type = models.CharField(max_length=100, blank=True, default="")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="unique_project_image_asset_name",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.project.name} - {self.name} (image)"
 
 
 class Dashboard(models.Model):
@@ -159,7 +203,20 @@ class TextBoxComponent(DashboardComponent):
     font_size = models.IntegerField(default=14)
 
 class ImageComponent(DashboardComponent):
-    image = models.ImageField(upload_to=project_directory_path)
+    # Legacy per-component upload, kept so old dashboards still render.
+    image = models.ImageField(upload_to=project_directory_path, null=True, blank=True)
+    # New source of truth: a shared image from the project asset store.
+    image_asset = models.ForeignKey(
+        "ImageAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dashboard_components",
+    )
+    # CSS object-fit keyword: contain / cover / fill / none / scale-down.
+    image_fit = models.CharField(max_length=20, default="contain")
+    # CSS object-position keyword pair, e.g. "center", "top left".
+    image_alignment = models.CharField(max_length=30, default="center")
 
 
 class VariantsComponent(DashboardComponent):
@@ -253,6 +310,16 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+
+class PieChartComponent(DashboardComponent):
+    query = models.TextField(default="SELECT * FROM events LIMIT 10")
+    ring_text = models.CharField(max_length=200, blank=True, default="")
+    chart_type = models.CharField(max_length=20, default="donut")
+    title = models.CharField(max_length=200, blank=True, default="")
+    label_column = models.CharField(max_length=100, blank=True, default="")
+    value_column = models.CharField(max_length=100, blank=True, default="")
+    show_legend = models.BooleanField(default=True)
+    show_tooltip = models.BooleanField(default=True)
 
 
 class OCPNComponent(DashboardComponent):

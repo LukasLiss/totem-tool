@@ -207,6 +207,29 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .pie-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 4,
+        content: "Pie Chart",
+        component_name: "PieChartComponent",
+        query: '',
+        ring_text: '',
+        chart_type: 'donut',
+        title: '',
+        label_column: '',
+        value_column: '',
+        show_legend: true,
+        show_tooltip: true,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -343,6 +366,11 @@ const SidePanel: React.FC = () => {
           <text x="12" y="38" fontSize="6" fill="#334155" fontFamily="monospace">FROM events</text>
         </svg>
         <div>SQL Editor</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
+        <div>Pie Chart</div>
       </div>
     </div>
   );

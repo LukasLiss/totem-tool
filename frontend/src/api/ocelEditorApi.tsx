@@ -7,7 +7,7 @@ import axios from "axios";
  * frontend only fetches paginated slices of the log and sends edits back.
  */
 
-const BASE = "http://localhost:8000/api/ocel-editor";
+const BASE = "/api/ocel-editor";
 
 export type EditorObjectRef = {
   object_id: string;

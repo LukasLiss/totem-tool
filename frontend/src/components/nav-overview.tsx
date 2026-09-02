@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "@/contexts/DashboardContext"
 import { useContext } from "react"
-import { TOUR_IDS } from "@/tour/tourIds"
 
 export function NavOverview() {
   const { viewMode, setViewMode } = useContext(DashboardContext);
@@ -21,7 +20,6 @@ export function NavOverview() {
             tooltip="Overview - See all components"
             onClick={() => setViewMode({ type: 'overview' })}
             data-active={isActive}
-            data-tour-id={TOUR_IDS.NAV_OVERVIEW}
           >
             <LayoutDashboard />
             <span>Overview</span>
@@ -32,4 +30,3 @@ export function NavOverview() {
     </SidebarGroup>
   )
 }
-

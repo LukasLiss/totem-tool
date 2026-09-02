@@ -10,6 +10,28 @@ import ReactDOM from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
 import { componentMap } from "../../components/componentMap";
 
+// Minimum grid cell size (w, h) per component type. Falls back to DEFAULT_MIN_SIZE
+// for any component_name not listed here. Enforced by GridStack itself, so users
+// cannot drag/resize a widget smaller than this.
+const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
+  TextBoxComponent: { minW: 2, minH: 2 },
+  NumberOfEventsComponent: { minW: 2, minH: 2 },
+  ImageComponent: { minW: 2, minH: 2 },
+  VariantsComponent: { minW: 4, minH: 4 },
+  ProcessAreaComponent: { minW: 4, minH: 4 },
+  LogStatisticsComponent: { minW: 3, minH: 2 },
+  OCDFGComponent: { minW: 4, minH: 4 },
+  OCDottedChartComponent: { minW: 4, minH: 3 },
+  NewOCDFGComponent: { minW: 4, minH: 4 },
+  NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
+  SqlQueryComponent: { minW: 4, minH: 5 },
+  PieChartComponent: { minW: 2, minH: 6 },
+};
+const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
+
+const getMinSize = (componentName?: string) =>
+  (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
+
 interface GridContextValue {
   grid: GridStack | null;
   addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
@@ -119,6 +141,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const node = (contentEl as any).gridstackNode;
         const component_name = (node as any)?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
+        // Self-heal widgets whose node predates the min-size feature (e.g. loaded
+        // from an older saved layout) — grows them up to the minimum if needed.
+        if (node) {
+          const { minW, minH } = getMinSize(component_name);
+          gridRef.current?.update(item as HTMLElement, { minW, minH });
+        }
         const Component = componentMap[component_name];
         if (root && Component && node) {
           console.log(`Re-rendering component for item ${index}`);
@@ -147,11 +175,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
     if (!grid) return;
     const newId = generateComponentId();
+    const { minW, minH } = getMinSize(componentName);
     const widgetEl = grid.addWidget({
       x: 0,
       y: 0,
-      w: 2,
-      h: 2,
+      w: Math.max(2, minW),
+      h: Math.max(2, minH),
+      minW,
+      minH,
       content,
       component_name: componentName,
       component_id: newId,
@@ -221,7 +252,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       } else if (component_name === "TextBoxComponent") {
         props = { text: (node as any).text || "Enter text here", font_size: 14 };  
       } else if (component_name === "ImageComponent") {
-        props = { image: (node as any).image};
+        props = {
+          image: (node as any).image,
+          image_asset: (node as any).image_asset ?? null,
+          image_fit: (node as any).image_fit ?? "contain",
+          image_alignment: (node as any).image_alignment ?? "center",
+        };
       } else if (component_name === "VariantsComponent") {
         props = {
           automatic_loading: (node as any).automatic_loading ?? false,
@@ -289,6 +325,17 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           query: (node as any).query ?? "SELECT activity, count(*) AS n FROM events GROUP BY activity",
           expected_result: (node as any).expected_result ?? null,
           row_limit: (node as any).row_limit ?? 25,
+        };
+      } else if (component_name === "PieChartComponent") {
+        props = {
+          query: (node as any).query ?? '',
+          ring_text: (node as any).ring_text ?? '',
+          chart_type: (node as any).chart_type ?? 'donut',
+          title: (node as any).title ?? '',
+          label_column: (node as any).label_column ?? '',
+          value_column: (node as any).value_column ?? '',
+          show_legend: (node as any).show_legend ?? true,
+          show_tooltip: (node as any).show_tooltip ?? true,
         };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
@@ -381,19 +428,24 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric Causal Net (OCCN)";
         } else if (item.component_name === "SqlQueryComponent") {
           content = "SQL Editor";
+        } else if (item.component_name === "PieChartComponent") {
+          content = "Pie Chart";
         } else {
           content = "Unknown";
         }
         
         // Ensure component_id is set (generate if missing from layout)
         const component_id = item.id || item.component_id || generateComponentId();
-        
+        const { minW, minH } = getMinSize(item.component_name);
+
         try {
           const widgetEl = gridRef.current?.addWidget({
             x: item.x,
             y: item.y,
-            w: item.w,
-            h: item.h,
+            w: Math.max(item.w, minW),
+            h: Math.max(item.h, minH),
+            minW,
+            minH,
             content,  // Keep for GridStack compatibility
             text: item.text,
             component_name: item.component_name,
@@ -401,6 +453,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color: item.color,
             font_size: item.font_size,
             image: item.image,
+            // ImageComponent (asset-store based) properties
+            image_asset: item.image_asset,
+            image_asset_url: item.image_asset_url,
+            image_fit: item.image_fit,
+            image_alignment: item.image_alignment,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
             // VariantsComponent — persisted advanced settings
@@ -426,6 +483,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             row_order: item.row_order,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
+            // PieChartComponent properties
+            query: item.query,
+            ring_text: item.ring_text,
+            chart_type: item.chart_type,
+            title: item.title,
+            label_column: item.label_column,
+            value_column: item.value_column,
+            show_legend: item.show_legend,
+            show_tooltip: item.show_tooltip,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -451,7 +517,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
-              (node as any).image = item.image; // For ImageComponent
+              (node as any).image = item.image; // For ImageComponent (legacy upload)
+              (node as any).image_asset = item.image_asset; // For ImageComponent
+              (node as any).image_asset_url = item.image_asset_url; // For ImageComponent
+              (node as any).image_fit = item.image_fit; // For ImageComponent
+              (node as any).image_alignment = item.image_alignment; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
               (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
@@ -466,6 +536,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).show_newest_timestamp = item.show_newest_timestamp;
               (node as any).show_duration = item.show_duration;
               // OCDFGComponent properties
+              // PieChartComponent properties
+              (node as any).query = item.query;
+              (node as any).ring_text = item.ring_text;
+              (node as any).chart_type = item.chart_type;
+              (node as any).title = item.title;
+              (node as any).label_column = item.label_column;
+              (node as any).value_column = item.value_column;
+              (node as any).show_legend = item.show_legend;
+              (node as any).show_tooltip = item.show_tooltip;
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
               // OCDottedChartComponent properties

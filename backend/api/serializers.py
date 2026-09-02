@@ -1,4 +1,5 @@
 import json
+import os
 
 from rest_framework import serializers
 from rest_polymorphic.serializers import PolymorphicSerializer
@@ -8,9 +9,10 @@ from totem_lib import (
     validate_occn_dict,
     validate_totem_dict,
 )
-from .models import EventLog, Project, ProjectAsset
+from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
+from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent
 from django.db.models import Max
 
 
@@ -216,6 +218,8 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
         schema_validators = {
             ProjectAsset.AssetType.TOTEM: validate_totem_dict,
             ProjectAsset.AssetType.OCCN: validate_occn_dict,
+            ProjectAsset.AssetType.OCPN: validate_ocpn_asset_dict,
+            ProjectAsset.AssetType.OCDFG: validate_ocdfg_asset_dict,
         }
         validator = schema_validators.get(asset_type)
         if validator is None:
@@ -228,6 +232,112 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
                 {"content_json": str(exc)}
             )
         return content
+
+
+IMAGE_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg"}
+IMAGE_ASSET_CONTENT_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/svg+xml",
+}
+IMAGE_ASSET_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+class ImageAssetSerializer(serializers.ModelSerializer):
+    image = serializers.FileField(write_only=True, required=False)
+    project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
+    created_by = serializers.PrimaryKeyRelatedField(read_only=True)
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImageAsset
+        fields = [
+            "id",
+            "project",
+            "name",
+            "image",
+            "url",
+            "content_type",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "url",
+            "content_type",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+        validators = []
+
+    def get_url(self, obj):
+        try:
+            return obj.image.url if obj.image else None
+        except ValueError:
+            return None
+
+    def validate_name(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError("Image name must not be empty.")
+        return name
+
+    def validate_project(self, value):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authenticated request context is required.")
+        if not value.users.filter(pk=user.pk).exists():
+            raise serializers.ValidationError("You do not have access to this project.")
+        return value
+
+    def validate_image(self, value):
+        extension = os.path.splitext(value.name or "")[1].lower()
+        if extension not in IMAGE_ASSET_EXTENSIONS:
+            raise serializers.ValidationError(
+                "Unsupported image type. Allowed: png, jpg, jpeg, svg."
+            )
+        content_type = (getattr(value, "content_type", "") or "").lower()
+        if content_type and content_type not in IMAGE_ASSET_CONTENT_TYPES:
+            raise serializers.ValidationError(
+                "Unsupported image content type. Allowed: png, jpeg, svg."
+            )
+        if value.size and value.size > IMAGE_ASSET_MAX_BYTES:
+            raise serializers.ValidationError("Image must be 10 MB or smaller.")
+        return value
+
+    def validate(self, attrs):
+        project = attrs.get("project")
+        if project is None and self.instance is not None:
+            project = self.instance.project
+        name = attrs.get("name")
+        if name is None and self.instance is not None:
+            name = self.instance.name
+        if project and name:
+            existing = ImageAsset.objects.filter(project=project, name=name)
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError(
+                    {"name": "An image with this name already exists in this project."}
+                )
+
+        if self.instance is None and attrs.get("image") is None:
+            raise serializers.ValidationError({"image": "Choose an image file."})
+
+        image = attrs.get("image")
+        if image is not None:
+            attrs["content_type"] = (getattr(image, "content_type", "") or "").lower()
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated:
+            validated_data["created_by"] = user
+        return super().create(validated_data)
 
 
 class DashboardSerializer(serializers.ModelSerializer):
@@ -268,10 +378,23 @@ class TextBoxComponentSerializer(DashboardComponentSerializer):
 
 class ImageComponentSerializer(DashboardComponentSerializer):
     image = serializers.ImageField(read_only=True)
+    image_asset = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Resolved URL of the linked asset so the dashboard can render without an
+    # extra per-component request.
+    image_asset_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ImageComponent
         fields = "__all__"
+
+    def get_image_asset_url(self, obj):
+        asset = obj.image_asset
+        if asset is None:
+            return None
+        try:
+            return asset.image.url if asset.image else None
+        except ValueError:
+            return None
 
 class VariantsComponentSerializer(DashboardComponentSerializer):
     class Meta:
@@ -323,15 +446,23 @@ class OCCNComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 #Fill in new Component Serializers here and then edit the mapping below
 
+class PieChartComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = PieChartComponent
+        fields = "__all__"
+
+
 class FilterStackComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = FilterStackComponent
         fields = "__all__"
 
+
 class SqlQueryComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = SqlQueryComponent
         fields = "__all__"
+
 
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
@@ -348,6 +479,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCPNComponent: OCPNComponentSerializer,
+        PieChartComponent: PieChartComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
         SqlQueryComponent: SqlQueryComponentSerializer,
     }

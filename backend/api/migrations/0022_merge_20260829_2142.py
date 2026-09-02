@@ -7,7 +7,6 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('api', '0021_merge_20260827_0735'),
-        ('api', '0021_merge_20260827_0738'),
     ]
 
     operations = [

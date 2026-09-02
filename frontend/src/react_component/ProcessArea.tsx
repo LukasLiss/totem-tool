@@ -8,6 +8,8 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -67,10 +69,12 @@ export type ProcessAreaProps = {
   }) => void;
 };
 
+import { API_BASE_URL } from '../config/api';
+
 export default function ProcessArea({
   fileId,
   embedded = false,
-  backendBaseUrl = 'http://localhost:8000',
+  backendBaseUrl = API_BASE_URL,
   height = 600,
   initialAlgorithm,
   initialParams,
@@ -78,6 +82,7 @@ export default function ProcessArea({
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
+  const [filterEnabled, setFilterEnabled] = useState(false);
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -100,6 +105,7 @@ export default function ProcessArea({
         title="Totem Visualizer"
         embedded={true}
         onControlsReady={handleControlsReady}
+        filterEnabled={filterEnabled}
         initialAlgorithm={initialAlgorithm}
         initialParams={initialParams}
         onSettingsChange={onSettingsChange}
@@ -120,7 +126,10 @@ export default function ProcessArea({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <CardTitle>Process Area Visualizer</CardTitle>
+        <div className="flex items-center gap-2">
+          <CardTitle>Process Area Visualizer</CardTitle>
+          <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
+        </div>
         <CardAction className="flex items-center gap-2">
           {totemControls && (
             <>

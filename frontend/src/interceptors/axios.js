@@ -1,4 +1,11 @@
 import axios from "axios";
+import { useFilterStore, buildFilterParams } from "@/store/filterStore";
+import { API_BASE_URL, getApiUrl } from "../config/api";
+
+/**
+ * Configure default Axios base URL from environment / config
+ */
+axios.defaults.baseURL = API_BASE_URL;
 
 /**
  * Token refresh strategy
@@ -72,7 +79,7 @@ async function performRefresh() {
     throw new Error("No refresh token available");
   }
   const response = await axios.post(
-    "http://localhost:8000/token/refresh/",
+    getApiUrl("/token/refresh/"),
     { refresh: refreshToken },
     {
       headers: { "Content-Type": "application/json" },
@@ -94,7 +101,7 @@ async function performRefresh() {
 
 async function guestReAuth() {
   const resp = await axios.post(
-    "http://localhost:8000/token/",
+    getApiUrl("/token/"),
     { username: "Guest", password: "guest" },
     { headers: { "Content-Type": "application/json" } }
   );
@@ -104,6 +111,26 @@ async function guestReAuth() {
   if (newRefresh) localStorage.setItem("refresh_token", newRefresh);
   return access;
 }
+
+axios.interceptors.request.use((config) => {
+  if (config._skipGlobalFilter) return config;
+  const { appliedRules, isApplied } = useFilterStore.getState();
+  const url = config.url ?? "";
+  // NOTE: check "/api/ocdfg/" as well as "/api/new-ocdfg/" — they are two
+  // distinct routes, and the process-area drill-down uses the former.
+  const isDataEndpoint =
+    url.includes("/api/files/") ||
+    url.includes("/api/ocdfg/") ||
+    url.includes("/api/new-ocdfg/") ||
+    url.includes("/api/variants/") ||
+    url.includes("/api/occn/") ||
+    url.includes("/api/ocpn/");
+  if (isApplied && isDataEndpoint) {
+    const filterParams = buildFilterParams(appliedRules);
+    config.params = { ...config.params, ...filterParams };
+  }
+  return config;
+});
 
 axios.interceptors.response.use(
   (resp) => resp,

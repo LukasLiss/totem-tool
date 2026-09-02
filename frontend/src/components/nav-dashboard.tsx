@@ -1,6 +1,5 @@
 import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
 import { useContext,  useState } from 'react'
-import { TOUR_IDS } from "@/tour/tourIds"
 import {
   Collapsible,
   CollapsibleContent,
@@ -144,7 +143,6 @@ export function NavDashboard({
                 <SidebarMenuButton
                   tooltip="Dashboards"
                   data-active={viewMode.type === 'dashboard'}
-                  data-tour-id={TOUR_IDS.NAV_DASHBOARD}
                 >
                   <FileStack />
                   <span>Dashboards</span>

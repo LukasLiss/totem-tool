@@ -106,11 +106,9 @@ XFAIL_OCPN_POLARS = {
 
 XFAIL_OCCN = {
     "empty": _EMPTY_POLARS,
-    "cyclic": (
-        "discover_occn raises TypeError on cyclic control flow (empty marker list). "
-        "Follow-up under Epic #200.",
-        TypeError,
-    ),
+    # "cyclic" used to crash discover_occn with a TypeError (empty marker list).
+    # Fixed: bindings with no obligations are now dropped instead of being handed
+    # to OCCausalNet.MarkerGroup, so the cyclic fixture discovers cleanly.
     "duplicate_event_ids": (
         "discover_occn raises on duplicate event ids ('Invalid marker groups ... "
         "max() empty'). Follow-up under Epic #200.",

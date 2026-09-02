@@ -777,8 +777,17 @@ def mlpaDiscovery(totem: Totem):
     levels_dict = dict()
     for type in tempGraph["nodes"]:
         # print(f"{level[type].name}: {level[type].value()}")
-        levels_dict.setdefault(level[type].value(), set())
-        levels_dict[level[type].value()].add(type)
+        # A type that appears in no temporal relation at all shows up in
+        # neither a constraint nor the objective, so the solver never assigns
+        # it a value and PuLP reports None. That is not an error — the type is
+        # simply unconstrained — so it belongs on the bottom layer. Reachable
+        # whenever the log has a single object type, or a filter has left an
+        # object type isolated.
+        level_value = level[type].value()
+        if level_value is None:
+            level_value = 0.0
+        levels_dict.setdefault(level_value, set())
+        levels_dict[level_value].add(type)
 
     resulting_process_view = {}
     print("Assignment of object types to layers:")

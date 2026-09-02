@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -21,6 +22,7 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -103,6 +105,7 @@ interface NewOCDFGVisualizerProps {
   onSizeChange?: (size: { width: number; height: number }) => void;
   showControls?: boolean;
   initialInteractionLocked?: boolean;
+  filterEnabled?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -238,11 +241,15 @@ function NewOCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
+  filterEnabled = false,
 }: NewOCDFGVisualizerProps) {
   console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
+
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -573,9 +580,9 @@ function NewOCDFGVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://localhost:8000/api/new-ocdfg/?file_id=${fileId}`;
+    const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url)
+    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -590,7 +597,7 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
-  }, [data, fileId]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   const handleWeightLimitChange = useCallback(
     (otype: string, value: number) => {
@@ -1018,6 +1025,7 @@ function NewOCDFGVisualizer({
       className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
@@ -1296,6 +1304,15 @@ function NewOCDFGVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
+            {data == null && fileId != null && (
+              <SaveModelAssetButton
+                fileId={fileId}
+                modelType="OCDFG"
+                disabled={dfgData == null}
+                iconOnly
+                className="rounded-full h-9 w-9"
+              />
+            )}
           </div>
         </div>
       )}

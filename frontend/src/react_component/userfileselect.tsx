@@ -25,7 +25,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
-import { TOUR_IDS } from "@/tour/tourIds";
 
 
 function UserFileSelect() {
@@ -69,7 +68,6 @@ function UserFileSelect() {
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button
-              data-tour-id={TOUR_IDS.FILE_SELECTOR}
               variant="outline"
               role="combobox"
               aria-expanded={open}
