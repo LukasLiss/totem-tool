@@ -1,15 +1,22 @@
 import { memo, useMemo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
+import type { CSSProperties } from 'react';
 
 type NodeVariant = 'center' | 'start' | 'end';
 
 type DefaultNodeData = {
   label?: string;
+  colors?: Record<string, string>;
+  types?: string[];
+  typeOrder?: string[];
   nodeVariant?: NodeVariant;
   layoutDirection?: 'TB' | 'LR';
   typeIndicatorSize?: number;
   typeIndicatorThickness?: number;
 };
+
+type DefaultNode = Node<DefaultNodeData, 'ocdfgDefault'>;
+type DefaultNodeProps = NodeProps<DefaultNode> & { style?: CSSProperties };
 
 const handleStyle = {
   opacity: 0,
@@ -26,7 +33,7 @@ const handleStyle = {
 const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
   data,
   style,
-}: NodeProps<DefaultNodeData>) {
+}: DefaultNodeProps) {
   const label = useMemo(() => (data?.label ?? '').trim(), [data?.label]);
   const colors = useMemo(
     () => ((data?.colors as Record<string, string> | undefined) ?? {}),
@@ -64,6 +71,10 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
       textAlign: 'center' as const,
       flexDirection: 'column' as const,
       gap: 6,
+      overflow: 'hidden',
+      boxSizing: 'border-box' as const,
+      minWidth: 0,
+      pointerEvents: 'all' as const,
     }),
     [style],
   );
@@ -85,9 +96,16 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
           position: 'relative',
           zIndex: 1,
           overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          width: '100%',
+          minWidth: 0,
+          boxSizing: 'border-box',
+          display: 'block',
           textAlign: 'center',
           lineHeight: 1.25,
         }}
+        title={label}
       >
         {label}
       </span>

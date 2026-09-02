@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import duckdb
 import polars as pl
 from typing import List, Tuple
@@ -92,10 +93,18 @@ class OcelDuckDB:
     Construct via:
     - OcelDuckDB(ocel)              — from an ObjectCentricEventLog in memory
     - import_ocel_db(path)          — streaming direct importer (no Polars intermediate)
+
+    Concurrency: a DuckDB connection executes one query at a time, and the
+    algorithms in this library create connection-scoped TEMP tables, so two
+    threads must never run queries on the same instance concurrently. Every
+    instance therefore carries a reentrant ``lock``; any multi-threaded
+    consumer must hold ``db.lock`` for the full duration of its query or
+    algorithm work on ``db.conn``.
     """
 
     def __init__(self, ocel: ObjectCentricEventLog, path: str = ":memory:"):
         self.conn = duckdb.connect(path)
+        self.lock = threading.RLock()
         self._event_attr_cols, self._obj_attr_cols = self._discover_attributes(ocel)
         create_ocel_schema(self.conn, self._event_attr_cols, self._obj_attr_cols)
         self._populate(ocel)
@@ -114,6 +123,7 @@ class OcelDuckDB:
         """
         instance = cls.__new__(cls)
         instance.conn = conn
+        instance.lock = threading.RLock()
         instance._event_attr_cols = event_attr_cols
         instance._obj_attr_cols = obj_attr_cols
         return instance
@@ -186,10 +196,14 @@ class OcelDuckDB:
             for obj_id, qualifier in zip(objects, qualifiers):
                 event_object_rows.append((row["_eventId"], obj_id, qualifier or None))
 
-        self.conn.executemany(f"INSERT INTO events VALUES ({event_ph})", event_rows)
-        self.conn.executemany(
-            "INSERT INTO event_object VALUES (?, ?, ?)", event_object_rows
-        )
+        if event_rows:
+            self.conn.executemany(
+                f"INSERT INTO events VALUES ({event_ph})", event_rows
+            )
+        if event_object_rows:
+            self.conn.executemany(
+                "INSERT INTO event_object VALUES (?, ?, ?)", event_object_rows
+            )
 
     def _insert_objects(self, ocel: ObjectCentricEventLog) -> None:
         obj_snapshots: dict[str, list[tuple[int, dict]]] = {}
@@ -222,7 +236,10 @@ class OcelDuckDB:
                 obj_row.append(str(val) if val is not None else None)
             obj_rows.append(tuple(obj_row))
 
-        self.conn.executemany(f"INSERT INTO objects VALUES ({obj_ph})", obj_rows)
+        if obj_rows:
+            self.conn.executemany(
+                f"INSERT INTO objects VALUES ({obj_ph})", obj_rows
+            )
 
         if self._obj_attr_cols:
             n_hist_cols = 2 + len(self._obj_attr_cols)
@@ -337,6 +354,13 @@ class OcelDuckDB:
             ORDER BY e.timestamp_unix
         """).pl()
 
+    @property
+    def object_types(self) -> list:
+        """Returns a list of all unique object types present in the log."""
+        return [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT obj_type FROM objects ORDER BY obj_type"
+        ).fetchall()]
+
     def query(self, sql: str) -> pl.DataFrame:
         """Execute an arbitrary SQL query and return a Polars DataFrame."""
         return self.conn.execute(sql).pl()
@@ -382,7 +406,7 @@ class OcelDuckDB:
         self.conn.execute("DETACH _save_dest")
 
     @classmethod
-    def load(cls, db_path: str) -> "OcelDuckDB":
+    def load(cls, db_path: str, read_only: bool = False) -> "OcelDuckDB":
         """
         Load a previously saved OcelDuckDB from a native DuckDB file.
 
@@ -403,11 +427,18 @@ class OcelDuckDB:
         Args:
             db_path: Path to a .duckdb file previously created by save() or by
                      passing db_path= to import_ocel_db().
+            read_only: Open the file read-only. Multiple read-only
+                       connections (even from different processes) can share
+                       one file, while a read-write open is exclusive —
+                       long-lived query handles on stored logs should use
+                       read_only=True so they never block or conflict with
+                       other openers. TEMP tables still work on read-only
+                       connections.
 
         Returns:
             OcelDuckDB instance backed by the on-disk database.
         """
-        conn = duckdb.connect(db_path)
+        conn = duckdb.connect(db_path, read_only=read_only)
         fixed_event = {"event_id", "activity", "timestamp_unix"}
         fixed_obj   = {"obj_id", "obj_type"}
         event_cols = [
@@ -433,6 +464,17 @@ class OcelDuckDB:
     def close(self) -> None:
         """Close the DuckDB connection."""
         self.conn.close()
+
+    def __del__(self):
+        # Native DuckDBPyConnection holds OS resources (file handles, memory
+        # arenas). Release them eagerly when the OcelDuckDB is GC'd — e.g.
+        # when the Django views.py registry entry is evicted. Wrapped in
+        # try/except because __del__ runs during interpreter teardown when
+        # half the runtime may already be gone.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def __enter__(self) -> "OcelDuckDB":
         return self

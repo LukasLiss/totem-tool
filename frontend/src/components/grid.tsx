@@ -5,7 +5,7 @@ import SidePanel from "../gridstack/lib/sidepanel";
 import "../styles/grid_demo.css";
 import {
   SidebarInset,
-  SidebarTrigger
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
 import GridContainer from "../gridstack/lib/grid_container";
@@ -18,6 +18,7 @@ import {
   Settings, Save, Minus, Plus
 } from "lucide-react"
 import { toast } from "sonner"
+import FilterChipStack from "@/components/FilterChipStack";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -43,15 +44,9 @@ const GridContent: React.FC = () => {
         return;
       }
       
-      const token = localStorage.getItem("access_token");
-      if (!token) {
-        console.log("No token found");
-        return;
-      }
-      
       try {
         console.log("Fetching layout for dashboard:", selectedDashboard);
-        const response = await getLayout(selectedDashboard, token);
+        const response = await getLayout(selectedDashboard);
         console.log("Layout response:", response);
         
         if (Array.isArray(response) && response.length > 0) {
@@ -75,11 +70,9 @@ const GridContent: React.FC = () => {
       return;
     }
     const layout = getGridLayout();
-    console.log('Layout to save:', layout); // Debug: Check what's being saved
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
+    console.log('Layout to save:', layout);
     try {
-      const response = await saveLayout(selectedDashboard, layout, token);
+      const response = await saveLayout(selectedDashboard, layout);
       console.log('Save response:', response); // Debug: Check API response
       toast.success("Layout saved!");
     } catch (error) {
@@ -93,9 +86,7 @@ const GridContent: React.FC = () => {
       toast.error("No dashboard selected!");
       return;
     }
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
-    const response = await getLayout(selectedDashboard, token);
+    const response = await getLayout(selectedDashboard);
     // Small delay to ensure any pending operations complete
     setTimeout(() => loadLayout(response), 50);
   };
@@ -107,9 +98,12 @@ const GridContent: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen  overflow-hidden">
-      <div className="flex justify-end p-2 space-x-2">
-        <SidebarTrigger className="mr-auto"/>
-        
+      <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
+        <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
+        <div className="w-px h-7 bg-border shrink-0" />
+        <div className="flex-1 overflow-x-auto">
+          <FilterChipStack />
+        </div>
         {isEditMode ?
           <Button
             variant="ghost"
@@ -119,7 +113,7 @@ const GridContent: React.FC = () => {
             <Save />
             <span className="sr-only">Toggle Sidebar</span>
           </Button>
-          
+
           : null}
         {isEditMode ?<Button
             variant="ghost"
@@ -139,7 +133,7 @@ const GridContent: React.FC = () => {
             <Plus />
             <span className="sr-only">Toggle Sidebar</span>
           </Button> }
-        
+
       </div>
       <div className="flex flex-row flex-grow overflow-hidden">
         
@@ -156,7 +150,8 @@ const GridContent: React.FC = () => {
 
 const Grid: React.FC = () => {
   const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
-  const { selectedDashboard: dashboardId } = useContext(DashboardContext);
+  const { viewMode } = useContext(DashboardContext);
+  const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
   console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>

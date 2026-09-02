@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import axios from "axios";
+import { useFilterVersion } from "@/store/filterStore";
 
 // Helper function to format duration from seconds
 export const formatDuration = (seconds: number): string => {
@@ -56,7 +58,8 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch statistics when fileId changes
+  const filterVersion = useFilterVersion();
+
   useEffect(() => {
     if (!fileId) {
       setStats(null);
@@ -66,18 +69,9 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
     const fetchStats = async () => {
       setLoading(true);
       setError(null);
-      const token = localStorage.getItem('access_token');
       try {
-        const res = await fetch(`/api/files/${fileId}/statistics/`, {
-          headers: { Authorization: `Bearer ${token}` },
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setStats(data);
-        } else {
-          setError('Failed to load statistics');
-        }
+        const { data } = await axios.get(`/api/files/${fileId}/statistics/`);
+        setStats(data);
       } catch (err) {
         console.error('Failed to fetch statistics:', err);
         setError('Failed to load statistics');
@@ -86,7 +80,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       }
     };
     fetchStats();
-  }, [fileId]);
+  }, [fileId, filterVersion]);
 
   // Loading state
   if (loading) {

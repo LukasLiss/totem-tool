@@ -11,8 +11,9 @@ export interface DfgLink {
   source: string;
   target: string;
   weight?: number;
-  owners?: string[];
-  ownerTypes?: string[];
+  objtypes?: string[];
+  key?: string;
+  objtype?: string;
   weights?: Record<string, number>;
 }
 
@@ -88,11 +89,12 @@ export function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
   ranks: Map<string, number>,
-) {
-  // Configure ELK for a layered, top-to-bottom layout
+  layoutDirection: 'TB' | 'LR' = 'TB',
+): Promise<{ nodes: Node[]; edges: Edge[] }> {
+  // Configure ELK for a layered layout
   const elkOptions = {
     'elk.algorithm': 'layered',
-    'elk.direction': 'DOWN',
+    'elk.direction': layoutDirection === 'LR' ? 'RIGHT' : 'DOWN',
     'elk.layered.spacing.nodeNodeBetweenLayers': '120',
     'elk.spacing.nodeNode': '100',
   };
@@ -101,21 +103,40 @@ export function getLayoutedElements(
     id: 'root',
     layoutOptions: elkOptions,
     children: nodes.map(node => ({
-      ...node,
-      width: 150,
-      height: 50,
-      // This is the key: assign each node to a horizontal "partition" based on its rank
-      'elk.partition': ranks.get(node.id) || 0,
+      id: node.id,
+      width: node.width ?? 150,
+      height: node.height ?? 50,
     })),
-    edges,
+    edges: edges.map(edge => ({
+      id: edge.id,
+      sources: [edge.source],
+      targets: [edge.target],
+    })),
   };
 
   return elk
     .layout(graph)
-    .then(g => ({
-      nodes: g.children!.map(n => ({ ...n, position: { x: n.x, y: n.y } })),
-      edges: g.edges || [],
-    }))
+    .then(g => {
+      const sectionsByEdgeId = new Map((g.edges ?? []).map(edge => [
+        edge.id,
+        (edge as { sections?: unknown }).sections,
+      ]));
+      const nodeMap = new Map(nodes.map(node => [node.id, node]));
+      return {
+        nodes: (g.children ?? []).flatMap((layoutedNode) => {
+          const originalNode = nodeMap.get(layoutedNode.id);
+          if (!originalNode) return [];
+          return [{
+            ...originalNode,
+            position: { x: layoutedNode.x ?? 0, y: layoutedNode.y ?? 0 },
+          }];
+        }),
+        // ELK only supplies routing information. Keep React Flow edge data intact.
+        edges: edges.map(edge => Object.assign({}, edge, {
+          sections: sectionsByEdgeId.get(edge.id),
+        })),
+      };
+    })
     .catch(error => {
       console.error(error);
       throw error;

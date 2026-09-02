@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react';
 import { BaseEdge, useReactFlow } from '@xyflow/react';
-import type { EdgeProps, Node } from '@xyflow/react';
+import type { Edge, EdgeProps, Node } from '@xyflow/react';
 import {
   pointAlongPolylineFromEnd,
   smoothPolyline,
@@ -14,8 +14,7 @@ type NodeVariant = 'start' | 'end' | 'center';
 
 type EdgeData = {
   polyline?: Point[];
-  owners?: string[];
-  ownerTypes?: string[];
+  objtypes?: string[];
   colors?: Record<string, string>;
   parallelIndex?: number;
   parallelCount?: number;
@@ -264,7 +263,7 @@ function resolveNodeGeometry(node: Node | undefined) {
   if (!node) return null;
   const width = node.width ?? DEFAULT_NODE_WIDTH;
   const height = node.height ?? DEFAULT_NODE_HEIGHT;
-  const position = node.positionAbsolute ?? node.position;
+  const position = (node as { positionAbsolute?: { x: number; y: number } }).positionAbsolute ?? node.position;
   const x = position?.x ?? 0;
   const y = position?.y ?? 0;
   return {
@@ -442,8 +441,8 @@ const OcdfgEdge = memo(function OcdfgEdge({
   targetY,
   target,
   style,
-}: EdgeProps<EdgeData>) {
-  const owners = data?.owners && data.owners.length > 0 ? data.owners : ['default'];
+}: EdgeProps<Edge<EdgeData>>) {
+  const objtypes = data?.objtypes && data.objtypes.length > 0 ? data.objtypes : ['default'];
   const colorMap = data?.colors ?? {};
   const reactFlow = useReactFlow();
   const sourceGeometry = resolveNodeGeometry(reactFlow.getNode(source));
@@ -634,8 +633,8 @@ const OcdfgEdge = memo(function OcdfgEdge({
   const thicknessFactorRaw = 2;
   const baseStroke = 6; // Fixed base stroke
   const strokeBase = baseStroke * thicknessFactorRaw; // = 12px
-  const tailOwner = owners[0];
-  const headOwner = owners[owners.length - 1];
+  const tailOwner = objtypes[0];
+  const headOwner = objtypes[objtypes.length - 1];
   const tailColor = tailOwner && tailOwner !== 'default'
     ? (colorMap[tailOwner] ?? '#2563EB')
     : '#2563EB';
@@ -723,16 +722,16 @@ const OcdfgEdge = memo(function OcdfgEdge({
         interactionWidth={Math.max(selectionStrokeWidth, 36)}
       />
 
-      {owners.map((owner, index) => {
-        const color = owner === 'default'
-          ? (index === owners.length - 1 ? headColor : tailColor)
-          : (colorMap[owner] ?? headColor);
-        const width = Math.max(minOwnerWidth, strokeBase / owners.length);
-        const dash = owners.length > 1 ? '10 7' : undefined;
-        const dashOffset = owners.length > 1 ? index * 6 : undefined;
+      {objtypes.map((objtype, index) => {
+        const color = objtype === 'default'
+          ? (index === objtypes.length - 1 ? headColor : tailColor)
+          : (colorMap[objtype] ?? headColor);
+        const width = Math.max(minOwnerWidth, strokeBase / objtypes.length);
+        const dash = objtypes.length > 1 ? '10 7' : undefined;
+        const dashOffset = objtypes.length > 1 ? index * 6 : undefined;
         return (
           <path
-            key={`${id}-${owner}-${index}`}
+            key={`${id}-${objtype}-${index}`}
             d={path}
             fill="none"
             strokeWidth={width}

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import pandas as pd
 import pm4py
 import networkx as nx
@@ -9,10 +10,12 @@ from collections import Counter
 from tqdm.auto import tqdm
 from . import OCCausalNet
 from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, filter_dead_objects
+from totem_lib.ocel.ocel_duckdb import OcelDuckDB
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 
 
 def discover_occn(
-    ocel: ObjectCentricEventLog,
+    ocel: ObjectCentricEventLog | OcelDuckDB,
     relativeOccuranceThreshold: float,
     parameters: dict = None,
 ) -> OCCausalNet:
@@ -67,7 +70,16 @@ def discover_occn(
     if parameters is None:
         parameters = {}
 
-    objectTypes = parameters.get("object_types", ocel.object_types)
+    # Pre-process OCEL
+    eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
+
+    objectTypes = parameters.get("object_types")
+    if objectTypes is None:
+        if hasattr(ocel, "object_types"):
+            objectTypes = ocel.object_types
+        else:
+            objectTypes = sorted(list(eventLogForMiner["object_type"].unique()))
+
     dependency_threshold = parameters.get("dependency_threshold", 0.5)
     and_threshold = parameters.get("and_threshold", 0.65)
     loop_two_threshold = parameters.get("loop_two_threshold", 0.5)
@@ -75,8 +87,13 @@ def discover_occn(
     inconsumableObjects = parameters.get("inconsumableObjects", [])
     inconsumableThreshold = parameters.get("inconsumableThreshold", 1)
 
-    # Pre-process OCEL
-    eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
+    # If object_types was specified, filter both DataFrames to only those types.
+    if "object_types" in parameters:
+        eventLogForMiner = eventLogForMiner[
+            eventLogForMiner["object_type"].isin(objectTypes)
+        ].copy()
+        valid_event_ids = set(eventLogForMiner["event_id"])
+        eventLog = eventLog[eventLog["event_id"].isin(valid_event_ids)].copy()
 
     # Pre-process data
     objectSet = set(eventLogForMiner["object"])
@@ -162,13 +179,41 @@ def _prepare_ocel_for_discovery(ocel):
     Prepares the OCEL and returns two DataFrames:
     1. event_log: A log of unique events.
     2. event_log_for_miner: A flattened log of event-to-object relationships.
+
+    Accepts an ObjectCentricEventLog (Polars-backed), an OcelDuckDB, or a pm4py OCEL.
     """
-    # Pre-process OCEL
+    if isinstance(ocel, OcelDuckDB):
+        return _prepare_ocel_duckdb_for_discovery(ocel)
+    if hasattr(ocel, "events") and hasattr(ocel, "relations"):
+        return _extract_dataframes_from_pm4py(ocel)
+    return _prepare_ocel_polars_for_discovery(ocel)
+
+
+def _prepare_ocel_polars_for_discovery(ocel: ObjectCentricEventLog):
+    """Polars path: filters dead objects, converts to pm4py, then extracts the two DataFrames."""
     ocel = filter_dead_objects(ocel)
-    
-    # Convert to PM4Py event log
     ocel_pm4py = convert_ocel_polars_to_pm4py(ocel)
-    
+    return _extract_dataframes_from_pm4py(ocel_pm4py)
+
+
+def _prepare_ocel_duckdb_for_discovery(ocel_db: OcelDuckDB):
+    """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames.
+
+    The conversion queries the shared connection, so it runs under the
+    instance's reentrant lock. Callers that already hold ``ocel_db.lock``
+    (e.g. a backend view serialising all work on the log) simply re-enter it.
+    """
+    lock = getattr(ocel_db, "lock", None)
+    if lock is None:
+        lock = nullcontext()
+    with lock:
+        ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+
+    return _extract_dataframes_from_pm4py(ocel_pm4py)
+
+
+def _extract_dataframes_from_pm4py(ocel_pm4py):
+    """Shared logic: extracts event_log and event_log_for_miner from a pm4py OCEL."""
     # Create the unique event log
     event_log = ocel_pm4py.events.rename(
         columns={
@@ -1341,21 +1386,38 @@ class SimpleOCCNet:
                         marker[0], marker[1], (marker[3][0], marker[3][1]), marker[2]
                     )
                 )
-            return OCCausalNet.MarkerGroup(markers)
+            return OCCausalNet.MarkerGroup(markers, support_count=marker_group[1])
 
         dependency_graph = self.dependencyGraph
+        # A binding with no obligations is legitimate: it means the activity
+        # neither consumes nor produces anything for the object types in
+        # scope. That happens whenever an activity ends up isolated in the
+        # dependency graph — no mined successor/predecessor and no START_/END_
+        # arc — which a filtered log makes common (an object type whose events
+        # no longer form a directly-follows relation above the dependency
+        # threshold). `MarkerGroup` requires at least one marker, and the
+        # absence of obligations is already represented by an empty *list of
+        # groups*, so drop these rather than constructing an invalid group.
+        def _convert_bindings(bindings):
+            return [
+                _convet_marker_group(binding)
+                for binding in bindings
+                if len(binding[0]) > 0
+            ]
+
         input_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings]
+            act: _convert_bindings(bindings)
             for act, bindings in self.inputBindings.items()
         }
         output_bindings = {
-            act: [_convet_marker_group(binding) for binding in bindings]
+            act: _convert_bindings(bindings)
             for act, bindings in self.outputBindings.items()
         }
         return OCCausalNet(
             dependency_graph,
             output_bindings,
             input_bindings,
+            activity_count=dict(self.activityCount),
             relative_occurrence_threshold=relativeOccurenceThreshold,
         )
 

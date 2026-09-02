@@ -1,7 +1,7 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useId } from 'react';
 
-import OCDFGVisualizer, { type OcdfgGraph } from './OCDFGVisualizer';
+import NewOCDFGVisualizer, { type OcdfgGraph } from './NewOCDFGVisualizer';
 
 type OCDFGDetailVisualizerProps = {
   height?: string | number;
@@ -26,8 +26,8 @@ function OCDFGDetailVisualizer({
   const providerId = instanceId ?? `detail-flow-${generatedId}`;
 
   return (
-    <ReactFlowProvider id={providerId}>
-      <OCDFGVisualizer
+    <ReactFlowProvider>
+      <NewOCDFGVisualizer
         height={height}
         data={data}
         variant="detail"

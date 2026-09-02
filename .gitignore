@@ -7,10 +7,14 @@ totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
-!.claude/**/*.md
+!docs/MODEL_ASSETS.md
+!docs/OCCN_REPLAY_FITNESS.md
+!docs/EDGE_CASE_TAXONOMY.md
+!totem_lib/test_data/edge_cases/README.md
 *.txt
-
-# Reinclude totem_lib tests
+!*requirements*.txt
+!backend/requirements.txt
+!totem_lib/requirements.txt
 !totem_lib/tests/
 
 
@@ -74,6 +78,7 @@ backend/user_files/*
 .env/
 
 # Django specific
+backend/cache/
 backend/db.sqlite3
 backend/db.sqlite3-journal
 backend/media/
@@ -251,3 +256,5 @@ highwayimplementation.md
 # Large OCEL test/evaluation files — place manually, never commit to git
 totem_lib/test_data/large/*
 !totem_lib/test_data/large/.gitkeep
+
+backend/cache/*

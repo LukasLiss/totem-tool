@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/collapsible"
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -42,6 +41,10 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { useNavigate } from "react-router-dom";
 
 
+function isUnauthorizedError(error: unknown) {
+  return error instanceof Error && error.message === "UNAUTHORIZED";
+}
+
 
 
 export function NavDashboard({
@@ -51,7 +54,7 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
-  const { setViewMode } = useContext(DashboardContext);
+  const { viewMode, setViewMode } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
@@ -65,15 +68,14 @@ export function NavDashboard({
   const { selectedFile } = useContext(SelectedFileContext);
   console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
-    const token = localStorage.getItem("access_token");
     if (!selectedFile?.project) return;
     try {
-      await addDashboard(dashboardname, selectedFile.project, token);
+      await addDashboard(dashboardname, selectedFile.project);
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
+    } catch (error: unknown) {
+              if (isUnauthorizedError(error)) {
                 navigate("/login", {
                   replace: true,
                   state: { from: location.pathname },
@@ -86,17 +88,16 @@ export function NavDashboard({
 };
 
   const handleChangeName = async () => {
-  if (!dashboardToRename) return; // nothing selected
+  if (!dashboardToRename) return;
 
-  const token = localStorage.getItem("access_token");
   try {
-    await renameDashboard(dashboardToRename.id, dashboardname, token);  // ✅ pass ID here
+    await renameDashboard(dashboardToRename.id, dashboardname);
     await refreshDashboards();
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
+  } catch (error: unknown) {
+              if (isUnauthorizedError(error)) {
                 navigate("/login", {
                   replace: true,
                   state: { from: location.pathname },
@@ -109,38 +110,40 @@ export function NavDashboard({
 };
 
   const handleDeleteDashboard = async () => {
+    if (!dashboardToDelete) return;
 
-  const token = localStorage.getItem("access_token");
-  try {
-    await deleteDashboard(dashboardToDelete.id, token);  
-    await refreshDashboards();
-    setOpenDelete(false);
-    setDashboardToDelete(null); // reset
-  } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                navigate("/login", {
-                  replace: true,
-                  state: { from: location.pathname },
-                });
-              } else {
-      console.error("Delete failed:", error);
-      toast.error("Dashboard could not be deleted");
+    try {
+      await deleteDashboard(dashboardToDelete.id);
+      await refreshDashboards();
+      setOpenDelete(false);
+      setDashboardToDelete(null); // reset
+    } catch (error: unknown) {
+      if (isUnauthorizedError(error)) {
+        navigate("/login", {
+          replace: true,
+          state: { from: location.pathname },
+        });
+      } else {
+        console.error("Delete failed:", error);
+        toast.error("Dashboard could not be deleted");
+      }
     }
   };
-};
 
 
 
   return (
     <div>
       <SidebarGroup>
-        <SidebarGroupLabel>Dashboards</SidebarGroupLabel>
         <SidebarMenu>
           <Collapsible asChild className="group/collapsible">
             <SidebarMenuItem>
               {/* Main permanent button */}
               <CollapsibleTrigger asChild>
-                <SidebarMenuButton tooltip="Dashboards">
+                <SidebarMenuButton
+                  tooltip="Dashboards"
+                  data-active={viewMode.type === 'dashboard'}
+                >
                   <FileStack />
                   <span>Dashboards</span>
                   <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -195,13 +198,14 @@ export function NavDashboard({
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <SidebarMenuSubButton className="flex w-full items-center justify-between">
-                      <Dialog open={open} onOpenChange={setOpen}>
-                        <DialogTrigger className="pr-9 hover:bg-accent rounded flex w-full items-center justify-between">
-                          <Plus className="w-4 h-4"/>
-                          <span >Add Dashboard</span>
+                    <Dialog open={open} onOpenChange={setOpen}>
+                      <SidebarMenuSubButton asChild className="cursor-pointer">
+                        <DialogTrigger>
+                          <Plus className="w-4 h-4 shrink-0" />
+                          <span className="truncate">Add Dashboard</span>
                         </DialogTrigger>
-                        <DialogContent className="sm:max-w-[425px]">
+                      </SidebarMenuSubButton>
+                      <DialogContent className="sm:max-w-[425px]">
                           <form
                             onSubmit={async (e) => {
                               e.preventDefault();
@@ -240,7 +244,6 @@ export function NavDashboard({
                           </form>
                         </DialogContent>
                       </Dialog>
-                    </SidebarMenuSubButton>
                   </SidebarMenuSubItem>
                 </SidebarMenuSub>
               </CollapsibleContent>

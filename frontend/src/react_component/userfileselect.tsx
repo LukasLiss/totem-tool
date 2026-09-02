@@ -35,34 +35,18 @@ function UserFileSelect() {
 
     useEffect(() => {
         const fetchFiles = async () => {
-            const token = localStorage.getItem("access_token");
             try {
-            if (!token) {
-                    console.error("No token found!");
-                  }
-            const response = await getUserFiles(token);
-            console.log("Fetched files:", response);
-            setFiles(response);
-            console.log("files",files)
+                const response = await getUserFiles();
+                console.log("Fetched files:", response);
+                setFiles(response);
+                console.log("files",files)
             } catch (error: any) {
-              if (error.message === "UNAUTHORIZED") {
-                navigate("/login", {
-                  replace: true,
-                  state: { from: location.pathname },
-                });
-              } else {
                 console.error(error);
-              }
             }
-          
         };
 
-        fetchFiles(); 
+        fetchFiles();
         }, [selectedFile]);
-    
-
-
-    
 
     const handleSubmit = () => {
         const file = files.find((f) => f.id === Number(selectedFile.id));
@@ -72,12 +56,12 @@ function UserFileSelect() {
         navigate("/overview");
         }
     };
-    
+
     return(
     <Card className="flex-col w-full max-w-sm m-6">
       <CardHeader>
         <CardTitle>
-          Select File to work on  
+          Select File to work on
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col justify-end">
@@ -126,14 +110,14 @@ function UserFileSelect() {
             </Command>
           </PopoverContent>
         </Popover>
-      
+
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
           <Button className="w-full flex md:flex-row cursor-pointer transition hover:shadow-lg" onClick={handleSubmit}>
               Open File
           </Button>
         </CardFooter>
       </CardContent>
-    </Card>    
+    </Card>
     )
 }
 

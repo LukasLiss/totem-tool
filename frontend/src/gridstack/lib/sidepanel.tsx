@@ -50,6 +50,15 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
+      ".sidepanel .totem-miner-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{ h: 6, w: 8, content: "TOTeM Miner", component_name: "TotemMinerComponent", order: 0 }]
+    );
+
+    GridStack.setupDragIn(
       ".sidepanel .log-statistics-component",
       {
         helper: "clone",
@@ -88,6 +97,136 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .oc-dotted-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 7,
+        w: 10,
+        content: "OC Dotted Chart",
+        component_name: "OCDottedChartComponent",
+        x_axis: "time",
+        y_axis: "activity",
+        color_by: "activity",
+        shape_by: "none",
+        row_order: "first_occurrence",
+        max_points: 10000,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Arc Weight)",
+        component_name: "NewOCDFGComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .new-ocdfg-variants-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric DFG (Variants)",
+        component_name: "NewOCDFGVariantsComponent",
+        show_controls: true,
+        initial_interaction_locked: true,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .occn-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "Object-Centric Causal Net (OCCN)",
+        component_name: "OCCNComponent",
+        relative_occurrence_threshold: 0,
+        object_types: "",
+        show_controls: true,
+        initial_interaction_locked: true,
+        layout_direction: "LR",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .ocpn-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 8,
+        content: "OC Petri Net",
+        component_name: "OCPNComponent",
+        automatic_loading: false,
+        timeout_s: 30,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .sqlquery-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 6,
+        content: "SQL Query",
+        component_name: "SQLQueryComponent",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .pie-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 6,
+        w: 4,
+        content: "Pie Chart",
+        component_name: "PieChartComponent",
+        query: '',
+        ring_text: '',
+        chart_type: 'donut',
+        title: '',
+        label_column: '',
+        value_column: '',
+        show_legend: true,
+        show_tooltip: true,
+        order: 0
+      }]
+    );
+
     console.log("Drag-in setup complete");
   }, [grid]);
 
@@ -118,6 +257,11 @@ const SidePanel: React.FC = () => {
         <div>Process Area</div>
       </div>
 
+      <div className="grid-stack-item sidepanel-item totem-miner-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/process-area-preview.png" width="100" height="50"/>
+        <div>TOTeM Miner</div>
+      </div>
+
       <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/log-statistics-preview.png" width="100" height="70"/>
         <div>Log Statistics</div>
@@ -126,6 +270,91 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
         <div>OCDFG</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item oc-dotted-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OC Dotted Chart preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="14" y1="8" x2="14" y2="40" stroke="#475569" strokeWidth="2" />
+          <line x1="14" y1="40" x2="90" y2="40" stroke="#475569" strokeWidth="2" />
+          <circle cx="25" cy="33" r="3" fill="#2563eb" />
+          <circle cx="39" cy="29" r="3" fill="#16a34a" />
+          <circle cx="52" cy="24" r="3" fill="#dc2626" />
+          <circle cx="67" cy="18" r="3" fill="#ca8a04" />
+          <circle cx="80" cy="13" r="3" fill="#9333ea" />
+          <circle cx="31" cy="21" r="2.5" fill="#0891b2" />
+          <circle cx="58" cy="34" r="2.5" fill="#db2777" />
+          <circle cx="75" cy="28" r="2.5" fill="#65a30d" />
+        </svg>
+        <div>OC Dotted Chart</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Arc Weight)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+        <div>Object-Centric DFG (Variants)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item occn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OCCN preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="26" y1="25" x2="42" y2="25" stroke="#475569" strokeWidth="2" />
+          <line x1="58" y1="25" x2="74" y2="25" stroke="#475569" strokeWidth="2" />
+          <rect x="8" y="17" width="18" height="16" rx="3" fill="#2563eb" />
+          <rect x="42" y="17" width="18" height="16" rx="3" fill="#16a34a" />
+          <rect x="74" y="17" width="18" height="16" rx="3" fill="#ca8a04" />
+          <circle cx="38" cy="12" r="3" fill="#dc2626" />
+          <circle cx="64" cy="12" r="3" fill="#9333ea" />
+          <circle cx="38" cy="38" r="3" fill="#0891b2" />
+          <circle cx="64" cy="38" r="3" fill="#db2777" />
+        </svg>
+        <div>Object-Centric Causal Net (OCCN)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item ocpn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="OC Petri Net preview"
+          className="rounded-md bg-white"
+        >
+          <circle cx="14" cy="18" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
+          <circle cx="14" cy="38" r="7" fill="none" stroke="#10b981" strokeWidth="2" />
+          <rect x="40" y="18" width="20" height="16" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
+          <circle cx="86" cy="26" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
+          <line x1="21" y1="18" x2="40" y2="24" stroke="#2563eb" strokeWidth="2" />
+          <line x1="21" y1="38" x2="40" y2="30" stroke="#10b981" strokeWidth="2" />
+          <line x1="60" y1="26" x2="79" y2="26" stroke="#475569" strokeWidth="2" />
+        </svg>
+        <div>OC Petri Net</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/sql_query_icon.png" width="100" height="50"/>
+        <div>SQL Query</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
+        <div>Pie Chart</div>
       </div>
     </div>
   );

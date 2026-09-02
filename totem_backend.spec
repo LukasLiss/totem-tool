@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_submodules
 simplejwt_hidden_imports = collect_submodules('rest_framework_simplejwt')
 
 a = Analysis(
-    ['backend\\manage.py'],
+    ['backend/manage.py'],
     pathex=[],
     binaries=[],
     datas=[('backend/initial_user.json', '.')],

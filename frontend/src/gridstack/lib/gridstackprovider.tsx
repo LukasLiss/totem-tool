@@ -10,9 +10,30 @@ import ReactDOM from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
 import { componentMap } from "../../components/componentMap";
 
+// Minimum grid cell size (w, h) per component type. Falls back to DEFAULT_MIN_SIZE
+// for any component_name not listed here. Enforced by GridStack itself, so users
+// cannot drag/resize a widget smaller than this.
+const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
+  TextBoxComponent: { minW: 2, minH: 2 },
+  NumberOfEventsComponent: { minW: 2, minH: 2 },
+  ImageComponent: { minW: 2, minH: 2 },
+  VariantsComponent: { minW: 4, minH: 4 },
+  ProcessAreaComponent: { minW: 4, minH: 4 },
+  LogStatisticsComponent: { minW: 3, minH: 2 },
+  OCDFGComponent: { minW: 4, minH: 4 },
+  OCDottedChartComponent: { minW: 4, minH: 3 },
+  NewOCDFGComponent: { minW: 4, minH: 4 },
+  NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
+  SQLQueryComponent: { minW: 3, minH: 3 },
+  PieChartComponent: { minW: 2, minH: 6 },
+};
+const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
+
+const getMinSize = (componentName?: string) =>
+  (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
+
 interface GridContextValue {
   grid: GridStack | null;
-  gridRef: React.RefObject<HTMLDivElement>;
   addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
   getLayout: () => any[];
   loadLayout: (layout: any[]) => void;
@@ -28,7 +49,7 @@ interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
   selectedFile?: any;  // Made optional
-  dashboardId: number;  // Added
+  dashboardId?: number;
 }
 
 export const useGridMode = () => useContext(GridModeContext);
@@ -41,16 +62,11 @@ export const useGrid = () => {
   return ctx;
 };
 
-interface GridProviderProps {
-  children: ReactNode;
-  options?: GridStackOptions;
-}
-
 export const GridProvider: React.FC<GridProviderProps> = ({
   children,
   options,
   selectedFile,
-  dashboardId,
+  dashboardId = 0,
 }) => {
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
@@ -77,7 +93,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     gridRef.current = instance;
     setGrid(instance);
 
-    return () => instance.destroy(false);
+    return () => {
+      instance.destroy(false);
+    };
   }, []); // Empty dependency: run once on mount
 
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
@@ -93,7 +111,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const root = ReactDOM.createRoot(el);
         root.render(
           <Component
-            node={w}
+            node={w as any}
             isEditMode={isEditMode}
             selectedFile={selectedFile}
             dashboardId={dashboardId}  // Pass dashboardId
@@ -118,10 +136,17 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       console.log('Found grid items to re-render:', items.length);
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
-        const root = (item as any)._reactRoot;
-        const node = (item as any).gridstackNode;
-        const component_name = (node as any)?.component_name || item.dataset.componentName;
+        const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
+        const root = (contentEl as any)._reactRoot;
+        const node = (contentEl as any).gridstackNode;
+        const component_name = (node as any)?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
+        // Self-heal widgets whose node predates the min-size feature (e.g. loaded
+        // from an older saved layout) — grows them up to the minimum if needed.
+        if (node) {
+          const { minW, minH } = getMinSize(component_name);
+          gridRef.current?.update(item as HTMLElement, { minW, minH });
+        }
         const Component = componentMap[component_name];
         if (root && Component && node) {
           console.log(`Re-rendering component for item ${index}`);
@@ -150,17 +175,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
     if (!grid) return;
     const newId = generateComponentId();
+    const { minW, minH } = getMinSize(componentName);
     const widgetEl = grid.addWidget({
       x: 0,
       y: 0,
-      w: 2,
-      h: 2,
+      w: Math.max(2, minW),
+      h: Math.max(2, minH),
+      minW,
+      minH,
       content,
       component_name: componentName,
       component_id: newId,
     });
     if (widgetEl) {
-      const node = grid.getGridItems().find(item => item.el === widgetEl)?.gridstackNode;
+      const node = grid.getGridItems().find(item => item === widgetEl)?.gridstackNode;
       if (node) {
         (node as any).component_name = componentName;
         (node as any).component_id = newId;
@@ -180,7 +208,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         // Clear the DOM manually to ensure clean state
         if (gridRef.current) {
           console.log("Clearing DOM");
-          gridRef.current.innerHTML = '';
+          grid.el.innerHTML = '';
         }
         
         console.log("Grid reset complete - kept instance");
@@ -192,8 +220,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       // If reset fails, try to recreate the grid
       try {
         if (gridRef.current) {
-          gridRef.current.innerHTML = '';
-          const newGrid = GridStack.init(gridOptions, gridRef.current);
+          grid.el.innerHTML = '';
+          const newGrid = GridStack.init(gridOptions, grid.el);
           setGrid(newGrid);
           console.log("Grid recreated after reset failure");
         }
@@ -224,11 +252,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       } else if (component_name === "TextBoxComponent") {
         props = { text: (node as any).text || "Enter text here", font_size: 14 };  
       } else if (component_name === "ImageComponent") {
-        props = { image: (node as any).image};
+        props = {
+          image: (node as any).image,
+          image_asset: (node as any).image_asset ?? null,
+          image_fit: (node as any).image_fit ?? "contain",
+          image_alignment: (node as any).image_alignment ?? "center",
+        };
       } else if (component_name === "VariantsComponent") {
         props = {
           automatic_loading: (node as any).automatic_loading ?? false,
           leading_object_type: (node as any).leading_object_type ?? '',
+          // Persisted advanced settings — see VariantsExplorer.tsx for semantics.
+          extraction: (node as any).extraction ?? 'leading_1hop',
+          iso: (node as any).iso ?? 'wl+vf2',
+          timeout_s: (node as any).timeout_s ?? 10.0,
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -244,6 +281,54 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           show_controls: (node as any).show_controls ?? true,
           initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+        };
+      } else if (component_name === "OCDottedChartComponent") {
+        props = {
+          x_axis: (node as any).x_axis ?? "time",
+          y_axis: (node as any).y_axis ?? "activity",
+          color_by: (node as any).color_by ?? "activity",
+          shape_by: (node as any).shape_by ?? "none",
+          row_order: (node as any).row_order ?? "first_occurrence",
+          max_points: (node as any).max_points ?? 10000,
+        };
+      } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
+        props = {
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'TB',
+        };
+      } else if (component_name === "ProcessAreaComponent") {
+        props = {
+          algorithm: (node as any).algorithm ?? "advanced",
+          w_temporal: (node as any).w_temporal ?? 1,
+          w_cardinality: (node as any).w_cardinality ?? 1,
+          w_divergence: (node as any).w_divergence ?? 1,
+          alpha: (node as any).alpha ?? 1,
+          beta: (node as any).beta ?? 1,
+        };
+      } else if (component_name === "OCCNComponent") {
+        props = {
+          relative_occurrence_threshold: (node as any).relative_occurrence_threshold ?? 0,
+          object_types: (node as any).object_types ?? "",
+          show_controls: (node as any).show_controls ?? true,
+          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          layout_direction: (node as any).layout_direction ?? 'LR',
+        };
+      } else if (component_name === "OCPNComponent") {
+        props = {
+          automatic_loading: (node as any).automatic_loading ?? false,
+          timeout_s: (node as any).timeout_s ?? 30.0,
+        };
+      } else if (component_name === "PieChartComponent") {
+        props = {
+          query: (node as any).query ?? '',
+          ring_text: (node as any).ring_text ?? '',
+          chart_type: (node as any).chart_type ?? 'donut',
+          title: (node as any).title ?? '',
+          label_column: (node as any).label_column ?? '',
+          value_column: (node as any).value_column ?? '',
+          show_legend: (node as any).show_legend ?? true,
+          show_tooltip: (node as any).show_tooltip ?? true,
         };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
@@ -284,7 +369,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     
     console.log("Clearing grid before loading new layout");
     try {
-      gridRef.current.removeAll(true);
+      grid.removeAll(true);
     } catch (error) {
       console.warn("Error clearing grid, resetting:", error);
       resetGrid();
@@ -318,23 +403,40 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Variants Explorer";
         } else if (item.component_name === "ProcessAreaComponent") {
           content = "Process Area";
+        } else if (item.component_name === "TotemMinerComponent") {
+          content = "TOTeM Miner";
         } else if (item.component_name === "LogStatisticsComponent") {
           content = "Log Statistics";
         } else if (item.component_name === "OCDFGComponent") {
           content = "OCDFG";
+        } else if (item.component_name === "OCDottedChartComponent") {
+          content = "OC Dotted Chart";
+        } else if (item.component_name === "NewOCDFGComponent") {
+          content = "Object-Centric DFG (Arc Weight)";
+        } else if (item.component_name === "NewOCDFGVariantsComponent") {
+          content = "Object-Centric DFG (Variants)";
+        } else if (item.component_name === "OCPNComponent") {
+          content = "OC Petri Net";
+        } else if (item.component_name === "OCCNComponent") {
+          content = "Object-Centric Causal Net (OCCN)";
+        } else if (item.component_name === "PieChartComponent") {
+          content = "Pie Chart";
         } else {
           content = "Unknown";
         }
         
         // Ensure component_id is set (generate if missing from layout)
         const component_id = item.id || item.component_id || generateComponentId();
-        
+        const { minW, minH } = getMinSize(item.component_name);
+
         try {
           const widgetEl = gridRef.current?.addWidget({
             x: item.x,
             y: item.y,
-            w: item.w,
-            h: item.h,
+            w: Math.max(item.w, minW),
+            h: Math.max(item.h, minH),
+            minW,
+            minH,
             content,  // Keep for GridStack compatibility
             text: item.text,
             component_name: item.component_name,
@@ -342,8 +444,17 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color: item.color,
             font_size: item.font_size,
             image: item.image,
+            // ImageComponent (asset-store based) properties
+            image_asset: item.image_asset,
+            image_asset_url: item.image_asset_url,
+            image_fit: item.image_fit,
+            image_alignment: item.image_alignment,
             automatic_loading: item.automatic_loading,
             leading_object_type: item.leading_object_type,
+            // VariantsComponent — persisted advanced settings
+            extraction: item.extraction,
+            iso: item.iso,
+            timeout_s: item.timeout_s,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -355,19 +466,53 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // OCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
+            // OCDottedChartComponent properties
+            x_axis: item.x_axis,
+            y_axis: item.y_axis,
+            color_by: item.color_by,
+            shape_by: item.shape_by,
+            row_order: item.row_order,
+            max_points: item.max_points,
+            layout_direction: item.layout_direction,
+            // PieChartComponent properties
+            query: item.query,
+            ring_text: item.ring_text,
+            chart_type: item.chart_type,
+            title: item.title,
+            label_column: item.label_column,
+            value_column: item.value_column,
+            show_legend: item.show_legend,
+            show_tooltip: item.show_tooltip,
+            // OCCNComponent properties
+            relative_occurrence_threshold: item.relative_occurrence_threshold,
+            object_types: item.object_types,
+            // ProcessAreaComponent properties
+            algorithm: item.algorithm,
+            w_temporal: item.w_temporal,
+            w_cardinality: item.w_cardinality,
+            w_divergence: item.w_divergence,
+            alpha: item.alpha,
+            beta: item.beta,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
-            const node = gridRef.current?.getGridItems().find(gridItem => gridItem.el === widgetEl)?.gridstackNode;
+            const node = grid.getGridItems().find(gridItem => gridItem === widgetEl)?.gridstackNode;
             if (node) {
               (node as any).component_name = item.component_name;
               (node as any).component_id = component_id;  // Ensure it's set
               (node as any).text = item.text;
               (node as any).color = item.color; // For NumberOfEventsComponent
               (node as any).font_size = item.font_size;
-              (node as any).image = item.image; // For ImageComponent
+              (node as any).image = item.image; // For ImageComponent (legacy upload)
+              (node as any).image_asset = item.image_asset; // For ImageComponent
+              (node as any).image_asset_url = item.image_asset_url; // For ImageComponent
+              (node as any).image_fit = item.image_fit; // For ImageComponent
+              (node as any).image_alignment = item.image_alignment; // For ImageComponent
               (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
               (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
+              (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
+              (node as any).iso = item.iso;                 // For VariantsComponent advanced settings
+              (node as any).timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               // LogStatisticsComponent properties
               (node as any).show_num_events = item.show_num_events;
               (node as any).show_num_activities = item.show_num_activities;
@@ -377,8 +522,35 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).show_newest_timestamp = item.show_newest_timestamp;
               (node as any).show_duration = item.show_duration;
               // OCDFGComponent properties
+              // PieChartComponent properties
+              (node as any).query = item.query;
+              (node as any).ring_text = item.ring_text;
+              (node as any).chart_type = item.chart_type;
+              (node as any).title = item.title;
+              (node as any).label_column = item.label_column;
+              (node as any).value_column = item.value_column;
+              (node as any).show_legend = item.show_legend;
+              (node as any).show_tooltip = item.show_tooltip;
               (node as any).show_controls = item.show_controls;
               (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              // OCDottedChartComponent properties
+              (node as any).x_axis = item.x_axis;
+              (node as any).y_axis = item.y_axis;
+              (node as any).color_by = item.color_by;
+              (node as any).shape_by = item.shape_by;
+              (node as any).row_order = item.row_order;
+              (node as any).max_points = item.max_points;
+              (node as any).layout_direction = item.layout_direction;
+              // OCCNComponent properties
+              (node as any).relative_occurrence_threshold = item.relative_occurrence_threshold;
+              (node as any).object_types = item.object_types;
+              // ProcessAreaComponent properties
+              (node as any).algorithm = item.algorithm;
+              (node as any).w_temporal = item.w_temporal;
+              (node as any).w_cardinality = item.w_cardinality;
+              (node as any).w_divergence = item.w_divergence;
+              (node as any).alpha = item.alpha;
+              (node as any).beta = item.beta;
             }
           }
           // Set data attribute for persistence
@@ -400,7 +572,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
   return (
     <GridModeContext.Provider value={{ isEditMode, setIsEditMode }}>
-      <GridContext.Provider value={{ grid, gridRef, addWidget, getLayout, loadLayout, resetGrid }}>
+      <GridContext.Provider value={{ grid, addWidget, getLayout, loadLayout, resetGrid }}>
         {children}
       </GridContext.Provider>
     </GridModeContext.Provider>

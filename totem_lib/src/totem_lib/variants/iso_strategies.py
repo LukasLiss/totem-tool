@@ -45,14 +45,26 @@ VariantGroup = Tuple[str, List[str], nx.DiGraph]
 # In-memory strategies (operate on pre-built per-case nx.DiGraph instances)
 # ---------------------------------------------------------------------------
 
+def _check_cancel(cancel_event) -> None:
+    """
+    Polled once per case by the in-Python iso loops. When the watchdog in
+    `find_variants` trips, the event is set and we raise `TimeoutError` so
+    the outer function can re-raise it cleanly.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise TimeoutError("variant grouping cancelled (timeout)")
+
+
 def group_signature(
     case_graphs: Dict[str, nx.DiGraph],
     *,
     _progress_bar=None,
+    _cancel_event=None,
 ) -> List[VariantGroup]:
     """Sorted multiset of (node labels, edges with types). Topology-blind."""
     buckets: dict[str, list[str]] = defaultdict(list)
     for cid, g in case_graphs.items():
+        _check_cancel(_cancel_event)
         buckets[_struct_signature(g)].append(cid)
         if _progress_bar is not None:
             _progress_bar.update(1)
@@ -63,10 +75,12 @@ def group_wl(
     case_graphs: Dict[str, nx.DiGraph],
     *,
     _progress_bar=None,
+    _cancel_event=None,
 ) -> List[VariantGroup]:
     """Bucket by Weisfeiler-Lehman graph hash with node label + edge type."""
     buckets: dict[str, list[str]] = defaultdict(list)
     for cid, g in case_graphs.items():
+        _check_cancel(_cancel_event)
         h = nx.weisfeiler_lehman_graph_hash(
             g, node_attr="label", edge_attr="type", iterations=3
         )
@@ -80,10 +94,12 @@ def group_wl_vf2(
     case_graphs: Dict[str, nx.DiGraph],
     *,
     _progress_bar=None,
+    _cancel_event=None,
 ) -> List[VariantGroup]:
     """WL bucketing + VF2 refinement within each bucket. Sound and exact."""
     wl_buckets: dict[str, list[str]] = defaultdict(list)
     for cid, g in case_graphs.items():
+        _check_cancel(_cancel_event)
         h = nx.weisfeiler_lehman_graph_hash(
             g, node_attr="label", edge_attr="type", iterations=3
         )
@@ -100,6 +116,7 @@ def group_wl_vf2(
         # Refine: each member is matched against existing reps in this bucket.
         bucket_groups: list[VariantGroup] = []
         for cid in members:
+            _check_cancel(_cancel_event)
             g = case_graphs[cid]
             matched = False
             for i, (rep_id, rep_members, rep_g) in enumerate(bucket_groups):
@@ -117,10 +134,12 @@ def group_exact(
     case_graphs: Dict[str, nx.DiGraph],
     *,
     _progress_bar=None,
+    _cancel_event=None,
 ) -> List[VariantGroup]:
     """Full pairwise VF2. No bucketing. O(n²) iso checks."""
     groups: list[VariantGroup] = []
     for cid, g in case_graphs.items():
+        _check_cancel(_cancel_event)
         matched = False
         for i, (rep_id, rep_members, rep_g) in enumerate(groups):
             if _vf2_match(g, rep_g):
