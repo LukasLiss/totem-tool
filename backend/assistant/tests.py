@@ -1130,11 +1130,11 @@ class ValidateApiKeyEndpointTests(TestCase):
         self.assertTrue(res.data.get("valid"))
         self.assertEqual(res.data.get("provider"), "openai")
 
-    @patch("requests.post")
-    def test_anthropic_key_validation_success(self, mock_post):
+    @patch("requests.get")
+    def test_anthropic_key_validation_success(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_post.return_value = mock_resp
+        mock_get.return_value = mock_resp
 
         res = self.client.post(self.url, {"provider": "anthropic", "api_key": "sk-ant-test"}, format="json")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
