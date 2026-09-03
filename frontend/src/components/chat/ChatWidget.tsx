@@ -390,12 +390,25 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   // Optional TourController integration
   const tourController = useOptionalTourController();
 
-  // Persist mode changes
+  // Persist mode changes & reset conversation history when switching modes
   const handleModeChange = (newMode: ChatMode) => {
+    if (newMode === mode) return;
+
+    if (isStreaming && abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+
+    // Reset and delete the whole chat conversation
+    setMessages([]);
+    setIsStreaming(false);
+    setInputValue("");
     setMode(newMode);
+
     try {
       if (typeof localStorage !== "undefined") {
         localStorage.setItem(STORAGE_MODE_KEY, newMode);
+        localStorage.removeItem(STORAGE_MESSAGES_KEY);
       }
     } catch {
       // Ignore storage error
