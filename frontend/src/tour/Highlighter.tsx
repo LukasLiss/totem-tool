@@ -141,19 +141,37 @@ export function Highlighter({
       data-testid="tour-highlighter"
       className="fixed inset-0 z-50 pointer-events-none transition-all duration-200"
     >
-      {/* Dimmed backdrop */}
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] pointer-events-auto" onClick={onSkip} />
+      {/* Dimmed backdrop - NO blur filter, does NOT dismiss tour on click */}
+      <div
+        className="absolute inset-0 bg-black/35 pointer-events-auto"
+        onClick={(e) => {
+          e.stopPropagation();
+          // Intentionally do not dismiss the tour on backdrop click to prevent accidental exits
+        }}
+      />
 
-      {/* Target element spotlight frame */}
+      {/* Target element spotlight frame & interactive click trigger */}
       {targetRect && (
         <div
           data-testid="tour-spotlight"
-          className="absolute z-10 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background transition-all duration-300 animate-pulse pointer-events-none"
+          className="absolute z-20 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background transition-all duration-300 animate-pulse pointer-events-auto cursor-pointer hover:ring-primary/80"
           style={{
             top: `${Math.max(0, targetRect.top - 4)}px`,
             left: `${Math.max(0, targetRect.left - 4)}px`,
             width: `${targetRect.width + 8}px`,
             height: `${targetRect.height + 8}px`,
+          }}
+          title="Click to activate and advance guide"
+          onClick={(e) => {
+            e.stopPropagation();
+            const el = findTourElement(tourId);
+            if (el) {
+              el.focus?.();
+              el.click();
+            }
+            setTimeout(() => {
+              onNext();
+            }, 250);
           }}
         />
       )}
