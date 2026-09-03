@@ -67,16 +67,16 @@ export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string
       prompt: "How do I discover and visualize a process model from my event log?",
     },
     {
+      label: "Where do I select event logs?",
+      prompt: "Show me where to select or switch projects and event logs in the top left.",
+    },
+    {
       label: "Explain conformance checking",
       prompt: "Explain how conformance checking works in Totem and what alignments mean.",
     },
     {
       label: "Guide me through dashboard creation",
       prompt: "Walk me through creating and configuring a custom analytics dashboard.",
-    },
-    {
-      label: "What are process variants?",
-      prompt: "What are process variants and how can I analyze variant frequencies?",
     },
   ],
   act: [
@@ -566,7 +566,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
               case "error":
                 return {
                   ...msg,
-                  error: event.error,
+                  error: (event as any).error || (event as any).message || "An error occurred during generation",
                 };
 
               case "done":
@@ -837,6 +837,14 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                               <Loader2 className="size-3.5 animate-spin" />
                               <span>Thinking...</span>
                             </div>
+                          ) : msg.pendingActions && msg.pendingActions.length > 0 ? (
+                            <p className="text-xs text-muted-foreground">
+                              Action prepared. Please review and confirm the action chip below:
+                            </p>
+                          ) : !msg.error ? (
+                            <p className="text-xs text-muted-foreground italic">
+                              Process mining co-pilot ready.
+                            </p>
                           ) : null}
 
                           {/* Error Banner */}

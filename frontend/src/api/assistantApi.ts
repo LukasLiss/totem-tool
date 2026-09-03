@@ -1,7 +1,7 @@
 import axios from "axios";
+import { getApiUrl } from "@/config/api";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-const ASSISTANT_URL = `${API_BASE}/api/assistant`;
+const ASSISTANT_URL = getApiUrl("/api/assistant");
 
 export interface AssistantContext {
   selected_file_id?: number;
@@ -43,7 +43,7 @@ export type SSEEvent =
   | { type: "pending_action"; id: string; name: string; description: string; arguments: Record<string, unknown> }
   | { type: "tour_path"; steps: TourStep[] }
   | { type: "done"; usage: Record<string, unknown> }
-  | { type: "error"; error: string };
+  | { type: "error"; error?: string; message?: string };
 
 /**
  * Send a chat message and return an async generator of SSE events.

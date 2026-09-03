@@ -114,6 +114,7 @@ def build_system_prompt(
     prompt_lines.extend([
         "### VALID TOUR IDENTIFIERS (data-tour-id)",
         "When referencing UI elements or calling `highlight_element`, use ONLY these tour IDs:",
+        "NOTE ON EVENT LOGS: In TOTeM, each project is a database event log file. The active event log selector is `project-switcher` in the top-left sidebar. Use `project-switcher` whenever asking or guiding the user to select or switch event logs.",
     ])
     for key, tour_id in TOUR_IDS.items():
         prompt_lines.append(f"- `{tour_id}`")
