@@ -15,6 +15,8 @@ import {
   Code,
   Copy,
   Check,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import {
   Sheet,
@@ -60,6 +62,10 @@ export interface ChatMessage {
 
 export const STORAGE_MODE_KEY = "totem_chat_mode";
 export const STORAGE_MESSAGES_KEY = "totem_chat_messages";
+export const STORAGE_DRAWER_WIDTH_KEY = "totem_chat_drawer_width";
+export const DEFAULT_DRAWER_WIDTH = 580;
+export const WIDE_DRAWER_WIDTH = 840;
+export const MIN_DRAWER_WIDTH = 420;
 
 export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string }[]> = {
   teach: [
@@ -673,6 +679,68 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   // Optional TourController integration
   const tourController = useOptionalTourController();
 
+  // Resizable drawer width (persisted in localStorage)
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        const saved = localStorage.getItem(STORAGE_DRAWER_WIDTH_KEY);
+        if (saved) {
+          const num = parseInt(saved, 10);
+          if (!isNaN(num) && num >= MIN_DRAWER_WIDTH && num <= 1600) {
+            return num;
+          }
+        }
+      }
+    } catch {}
+    return DEFAULT_DRAWER_WIDTH;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const isWide = drawerWidth >= 750;
+
+  const toggleWideMode = () => {
+    const nextWidth = isWide ? DEFAULT_DRAWER_WIDTH : WIDE_DRAWER_WIDTH;
+    setDrawerWidth(nextWidth);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORAGE_DRAWER_WIDTH_KEY, String(nextWidth));
+      }
+    } catch {}
+  };
+
+  const handleMouseDownResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Drawer is anchored to the right viewport edge
+      const calculatedWidth = window.innerWidth - e.clientX;
+      const maxWidth = Math.floor(window.innerWidth * 0.94);
+      const clamped = Math.max(MIN_DRAWER_WIDTH, Math.min(calculatedWidth, maxWidth));
+      setDrawerWidth(clamped);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(STORAGE_DRAWER_WIDTH_KEY, String(drawerWidth));
+        }
+      } catch {}
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing, drawerWidth]);
+
   // Persist mode changes & reset conversation history when switching modes
   const handleModeChange = (newMode: ChatMode) => {
     if (newMode === mode) return;
@@ -947,8 +1015,26 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
           side="right"
           hideOverlay
           data-tour-id={TOUR_IDS.CHAT_DRAWER}
-          className="flex flex-col w-full sm:max-w-md md:max-w-lg p-0 gap-0 h-full border-l shadow-2xl bg-background"
+          className={cn(
+            "flex flex-col p-0 gap-0 h-full border-l shadow-2xl bg-background w-full max-w-none sm:max-w-none relative transition-none",
+            isResizing && "select-none"
+          )}
+          style={{ width: `${drawerWidth}px`, maxWidth: "94vw" }}
         >
+          {/* Draggable resize handle on the left edge */}
+          <div
+            onMouseDown={handleMouseDownResize}
+            className="absolute -left-2 top-0 bottom-0 w-4 cursor-ew-resize group z-50 flex items-center justify-center select-none"
+            title="Drag to resize chat drawer (or click expand button in header)"
+          >
+            <div
+              className={cn(
+                "w-1 h-16 rounded-full bg-border/80 transition-all group-hover:bg-primary group-hover:w-1.5 group-hover:h-24",
+                isResizing && "bg-primary w-1.5 h-28 shadow-sm"
+              )}
+            />
+          </div>
+
           {/* Header */}
           <SheetHeader className="p-4 border-b bg-muted/20 flex flex-col gap-3">
             <div className="flex items-center justify-between">
@@ -968,6 +1054,15 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-1 pr-6">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 text-muted-foreground hover:text-foreground"
+                  title={isWide ? "Restore compact width (580px)" : "Expand width (840px)"}
+                  onClick={toggleWideMode}
+                >
+                  {isWide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+                </Button>
                 {messages.length > 0 && (
                   <Button
                     size="icon"
@@ -1061,7 +1156,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
               messages.map((msg) => (
                 <div
                   key={msg.id}
-                  className={`flex gap-3 text-sm ${
+                  className={`flex gap-3 text-sm min-w-0 w-full ${
                     msg.role === "user" ? "flex-row-reverse" : "flex-row"
                   }`}
                 >
@@ -1082,15 +1177,15 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
                   {/* Message Bubble */}
                   <div
-                    className={`flex flex-col max-w-[85%] space-y-2 ${
-                      msg.role === "user" ? "items-end" : "items-start"
+                    className={`flex flex-col min-w-0 space-y-2 ${
+                      msg.role === "user" ? "max-w-[85%] items-end" : "w-full min-w-0 items-start"
                     }`}
                   >
                     <div
-                      className={`rounded-2xl px-4 py-2.5 shadow-xs ${
+                      className={`rounded-2xl px-4 py-2.5 shadow-xs min-w-0 ${
                         msg.role === "user"
                           ? "bg-primary text-primary-foreground rounded-tr-xs"
-                          : "bg-muted/70 text-foreground border rounded-tl-xs"
+                          : "w-full bg-muted/70 text-foreground border rounded-tl-xs overflow-hidden"
                       }`}
                     >
                       {msg.role === "user" ? (

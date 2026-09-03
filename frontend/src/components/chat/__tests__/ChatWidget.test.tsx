@@ -6,6 +6,10 @@ import {
   ToolExecution,
   STORAGE_MODE_KEY,
   STORAGE_MESSAGES_KEY,
+  STORAGE_DRAWER_WIDTH_KEY,
+  DEFAULT_DRAWER_WIDTH,
+  WIDE_DRAWER_WIDTH,
+  MIN_DRAWER_WIDTH,
   QUICK_SUGGESTIONS,
   parseMarkdownBlocks,
   formatInline,
@@ -624,6 +628,23 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       const sanitized = parsed.map((m: any) => ({ ...m, isStreaming: false }));
 
       expect(sanitized[0].isStreaming).toBe(false);
+    });
+
+    it("verifies drawer width constants and boundaries", () => {
+      expect(STORAGE_DRAWER_WIDTH_KEY).toBe("totem_chat_drawer_width");
+      expect(DEFAULT_DRAWER_WIDTH).toBe(580);
+      expect(WIDE_DRAWER_WIDTH).toBe(840);
+      expect(MIN_DRAWER_WIDTH).toBe(420);
+      expect(WIDE_DRAWER_WIDTH).toBeGreaterThan(DEFAULT_DRAWER_WIDTH);
+      expect(DEFAULT_DRAWER_WIDTH).toBeGreaterThan(MIN_DRAWER_WIDTH);
+    });
+
+    it("persists custom drawer width to localStorage", () => {
+      mockStorage[STORAGE_DRAWER_WIDTH_KEY] = "720";
+      const saved = localStorage.getItem(STORAGE_DRAWER_WIDTH_KEY);
+      expect(saved).toBe("720");
+      const parsed = parseInt(saved!, 10);
+      expect(parsed).toBe(720);
     });
   });
 });
