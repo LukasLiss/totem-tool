@@ -62,6 +62,8 @@ export interface ChatMessage {
 
 export const STORAGE_MODE_KEY = "totem_chat_mode";
 export const STORAGE_MESSAGES_KEY = "totem_chat_messages";
+export const STORAGE_MESSAGES_KEY_TEACH = "totem_chat_messages_teach";
+export const STORAGE_MESSAGES_KEY_ACT = "totem_chat_messages_act";
 export const STORAGE_DRAWER_WIDTH_KEY = "totem_chat_drawer_width";
 export const DEFAULT_DRAWER_WIDTH = 580;
 export const WIDE_DRAWER_WIDTH = 840;
@@ -634,6 +636,27 @@ export interface ChatWidgetProps {
   defaultOpen?: boolean;
 }
 
+function loadStoredMessages(key: string, fallbackKey?: string): ChatMessage[] {
+  try {
+    if (typeof localStorage !== "undefined") {
+      let saved = localStorage.getItem(key);
+      if (!saved && fallbackKey) {
+        saved = localStorage.getItem(fallbackKey);
+      }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((m: ChatMessage) => ({
+            ...m,
+            isStreaming: false,
+          }));
+        }
+      }
+    }
+  } catch {}
+  return [];
+}
+
 export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [mode, setMode] = useState<ChatMode>(() => {
@@ -648,26 +671,30 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     }
   });
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    try {
-      if (typeof localStorage !== "undefined") {
-        const saved = localStorage.getItem(STORAGE_MESSAGES_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            // Clear any stale isStreaming flags on page reload so it never stays stuck in "Thinking..."
-            return parsed.map((m: ChatMessage) => ({
-              ...m,
-              isStreaming: false,
-            }));
-          }
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
+  // Persistent conversation history per mode (Teach and Act kept separate)
+  const [messagesByMode, setMessagesByMode] = useState<Record<ChatMode, ChatMessage[]>>(() => {
+    return {
+      teach: loadStoredMessages(STORAGE_MESSAGES_KEY_TEACH, STORAGE_MESSAGES_KEY),
+      act: loadStoredMessages(STORAGE_MESSAGES_KEY_ACT),
+    };
   });
+
+  // Active mode messages
+  const messages = messagesByMode[mode] || [];
+
+  // Active mode updater helper
+  const setMessages = (
+    updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
+  ) => {
+    setMessagesByMode((prev) => {
+      const currentList = prev[mode] || [];
+      const updatedList = typeof updater === "function" ? updater(currentList) : updater;
+      return {
+        ...prev,
+        [mode]: updatedList,
+      };
+    });
+  };
 
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -741,7 +768,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     };
   }, [isResizing, drawerWidth]);
 
-  // Persist mode changes & reset conversation history when switching modes
+  // Switch mode while preserving both conversation histories
   const handleModeChange = (newMode: ChatMode) => {
     if (newMode === mode) return;
 
@@ -750,8 +777,14 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
       setAbortController(null);
     }
 
-    // Reset and delete the whole chat conversation
-    setMessages([]);
+    // Ensure any active streaming message in the previous mode is cleanly finalized
+    setMessagesByMode((prev) => ({
+      ...prev,
+      [mode]: (prev[mode] || []).map((msg) =>
+        msg.isStreaming ? { ...msg, isStreaming: false } : msg
+      ),
+    }));
+
     setIsStreaming(false);
     setInputValue("");
     setMode(newMode);
@@ -759,24 +792,37 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     try {
       if (typeof localStorage !== "undefined") {
         localStorage.setItem(STORAGE_MODE_KEY, newMode);
-        localStorage.removeItem(STORAGE_MESSAGES_KEY);
       }
     } catch {
       // Ignore storage error
     }
   };
 
-  // Persist message history (sanitizing isStreaming)
+  // Persist message history per mode (sanitizing isStreaming)
   useEffect(() => {
     try {
       if (typeof localStorage !== "undefined") {
-        const sanitized = messages.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
-        localStorage.setItem(STORAGE_MESSAGES_KEY, JSON.stringify(sanitized));
+        const sanitize = (list: ChatMessage[]) =>
+          (list || []).map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY_TEACH,
+          JSON.stringify(sanitize(messagesByMode.teach))
+        );
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY_ACT,
+          JSON.stringify(sanitize(messagesByMode.act))
+        );
+        // Keep legacy STORAGE_MESSAGES_KEY in sync with active mode
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY,
+          JSON.stringify(sanitize(messagesByMode[mode]))
+        );
       }
     } catch {
       // Ignore storage error
     }
-  }, [messages]);
+  }, [messagesByMode, mode]);
 
   // Auto-scroll to bottom on new messages or streaming tokens
   useEffect(() => {
@@ -797,12 +843,16 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   const handleClearConversation = () => {
     if (isStreaming && abortController) {
       abortController.abort();
+      setAbortController(null);
     }
-    setMessages([]);
+    // Clear both conversation histories (the whole chat history)
+    setMessagesByMode({ teach: [], act: [] });
     setIsStreaming(false);
     try {
       if (typeof localStorage !== "undefined") {
         localStorage.removeItem(STORAGE_MESSAGES_KEY);
+        localStorage.removeItem(STORAGE_MESSAGES_KEY_TEACH);
+        localStorage.removeItem(STORAGE_MESSAGES_KEY_ACT);
       }
     } catch {
       // Ignore
@@ -1063,7 +1113,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                 >
                   {isWide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
                 </Button>
-                {messages.length > 0 && (
+                {(messagesByMode.teach.length > 0 || messagesByMode.act.length > 0) && (
                   <Button
                     size="icon"
                     variant="ghost"
