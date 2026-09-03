@@ -63,20 +63,36 @@ export const STORAGE_MESSAGES_KEY = "totem_chat_messages";
 export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string }[]> = {
   teach: [
     {
-      label: "How to discover process model?",
-      prompt: "How do I discover and visualize a process model from my event log?",
+      label: "Create new dashboard",
+      prompt: "Guide me through creating a new dashboard step by step.",
     },
     {
       label: "Where do I select event logs?",
       prompt: "Show me where to select or switch projects and event logs in the top left.",
     },
     {
+      label: "Where to run conformance?",
+      prompt: "Show me where to navigate and run conformance checking in the interface.",
+    },
+    {
+      label: "How to upload event logs?",
+      prompt: "Where do I upload new event log files in Totem?",
+    },
+    {
+      label: "How to discover process model?",
+      prompt: "How do I discover and visualize a process model from my event log in the UI?",
+    },
+    {
       label: "Explain conformance checking",
       prompt: "Explain how conformance checking works in Totem and what alignments mean.",
     },
     {
-      label: "Create new dashboard",
-      prompt: "Guide me through creating a new dashboard step by step.",
+      label: "What is OCPM?",
+      prompt: "What is Object-Centric Process Mining (OCPM) and how does it differ from traditional process mining?",
+    },
+    {
+      label: "Explain process variants",
+      prompt: "What are process execution variants and trace frequency distributions, and why are they important?",
     },
   ],
   act: [
@@ -95,6 +111,22 @@ export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string
     {
       label: "Calculate case durations",
       prompt: "Calculate the average, median, minimum, and maximum case durations for this log.",
+    },
+    {
+      label: "Summarize log metrics",
+      prompt: "Extract and summarize total events, activities, objects, and object types for this log.",
+    },
+    {
+      label: "Discover causal net (OCCN)",
+      prompt: "Discover the Object-Centric Causal Net (OCCN) model for the active event log.",
+    },
+    {
+      label: "Inspect object type breakdown",
+      prompt: "Analyze the object types and their entity counts across all recorded events.",
+    },
+    {
+      label: "Throughput dotted chart",
+      prompt: "Analyze event throughput and activity time distribution using the dotted chart.",
     },
   ],
 };

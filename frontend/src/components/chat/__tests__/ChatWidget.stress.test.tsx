@@ -417,8 +417,8 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
     });
 
     it("verifies suggestion catalogs match mode expectations and contain valid prompts", () => {
-      expect(QUICK_SUGGESTIONS.teach.length).toBe(4);
-      expect(QUICK_SUGGESTIONS.act.length).toBe(4);
+      expect(QUICK_SUGGESTIONS.teach.length).toBe(8);
+      expect(QUICK_SUGGESTIONS.act.length).toBe(8);
 
       for (const item of QUICK_SUGGESTIONS.teach) {
         expect(item.label).toBeTruthy();

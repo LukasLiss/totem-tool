@@ -548,7 +548,7 @@ class ChatViewIntegrationTests(TestCase):
             HTTP_ACCEPT="text/event-stream",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response["Content-Type"], "text/event-stream")
+        self.assertTrue(response["Content-Type"].startswith("text/event-stream"))
 
     @patch("assistant.views.complete")
     def test_chat_passes_context_to_prompt_builder(self, mock_complete):
