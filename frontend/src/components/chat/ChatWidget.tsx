@@ -1016,8 +1016,8 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
           hideOverlay
           data-tour-id={TOUR_IDS.CHAT_DRAWER}
           className={cn(
-            "flex flex-col p-0 gap-0 h-full border-l shadow-2xl bg-background w-full max-w-none sm:max-w-none relative transition-none",
-            isResizing && "select-none"
+            "fixed inset-y-0 right-0 z-50 flex flex-col p-0 gap-0 h-full border-l shadow-2xl bg-background w-full max-w-none sm:max-w-none",
+            isResizing && "select-none transition-none"
           )}
           style={{ width: `${drawerWidth}px`, maxWidth: "94vw" }}
         >
