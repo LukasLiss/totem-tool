@@ -60,16 +60,18 @@ export async function validateApiKey(
   provider: string,
   apiKey: string
 ): Promise<ValidateKeyResponse> {
-  const token = localStorage.getItem("access_token");
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("access_token") : null;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token && token !== "null" && token !== "undefined") {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   try {
     const res = await axios.post<ValidateKeyResponse>(
       `${ASSISTANT_URL}/validate-key/`,
       { provider, api_key: apiKey },
       {
-        headers: {
-          Authorization: token ? `Bearer ${token}` : undefined,
-          "Content-Type": "application/json",
-        },
+        headers,
         validateStatus: () => true, // resolve promise for 400s
       }
     );
@@ -94,17 +96,21 @@ export async function* streamChat(
   apiKey?: string,
   provider?: string
 ): AsyncGenerator<SSEEvent> {
-  const token = localStorage.getItem("access_token");
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("access_token") : null;
   const storedKey = apiKey ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") || "" : "");
   const storedProvider = provider ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_provider") || "gemini" : "gemini");
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  if (token && token !== "null" && token !== "undefined") {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${ASSISTANT_URL}/chat/`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      Accept: "text/event-stream",
-    },
+    headers,
     body: JSON.stringify({
       message,
       context: { ...context, mode, api_key: storedKey, provider: storedProvider },
@@ -193,14 +199,20 @@ export async function sendChat(
   return data;
 }
 
+export interface ConfirmActionResponse {
+  status: "executed" | "cancelled" | string;
+  pending_action_id?: string;
+  result?: any;
+}
+
 /**
  * Confirm or reject a pending action.
  */
 export async function confirmAction(
   pendingActionId: string,
   approved: boolean
-): Promise<{ status: string }> {
-  const { data } = await axios.post<{ status: string }>(
+): Promise<ConfirmActionResponse> {
+  const { data } = await axios.post<ConfirmActionResponse>(
     `${ASSISTANT_URL}/confirm/`,
     { pending_action_id: pendingActionId, approved }
   );

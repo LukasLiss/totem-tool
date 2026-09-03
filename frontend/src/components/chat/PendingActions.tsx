@@ -44,7 +44,7 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
       if (approved) {
         // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh & auto-selection
         if (DASHBOARD_MUTATING_TOOLS.has(name)) {
-          const targetId = (res as any)?.result?.id ?? actionArgs?.dashboard_id;
+          const targetId = res.result?.id ?? actionArgs?.dashboard_id;
           window.dispatchEvent(
             new CustomEvent("totem:refresh-dashboard", {
               detail: { dashboard_id: targetId },

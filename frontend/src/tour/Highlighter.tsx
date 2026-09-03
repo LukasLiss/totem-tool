@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import type { TourId } from "./tourIds";
 
 export interface HighlighterProps {
@@ -22,10 +22,18 @@ interface TargetRect {
   right: number;
 }
 
+function escapeSelectorAttr(val: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(val);
+  }
+  return val.replace(/["\\]/g, "\\$&");
+}
+
 export function findTourElement(tourId: TourId | string | null): HTMLElement | null {
-  if (!tourId) return null;
+  if (!tourId || typeof document === "undefined") return null;
+  const escaped = escapeSelectorAttr(tourId);
   // 1. Direct data-tour-id lookup
-  let el = document.querySelector<HTMLElement>(`[data-tour-id="${tourId}"]`);
+  let el = document.querySelector<HTMLElement>(`[data-tour-id="${escaped}"]`);
   if (el) return el;
 
   // 2. Alias: 'file-selector' -> top-left project switcher
@@ -111,6 +119,12 @@ export function Highlighter({
   showNav,
 }: HighlighterProps) {
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
+  const hasScrolledRef = useRef(false);
+
+  // Reset scroll flag when step or tour target changes
+  useEffect(() => {
+    hasScrolledRef.current = false;
+  }, [tourId, currentIndex]);
 
   // 1. Position tracking
   useEffect(() => {
@@ -131,7 +145,12 @@ export function Highlighter({
           bottom: rect.bottom,
           right: rect.right,
         });
-        el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+
+        // Scroll the target into view once when step starts, without looping on subsequent scroll events
+        if (!hasScrolledRef.current) {
+          hasScrolledRef.current = true;
+          el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+        }
       } else {
         setTargetRect(null);
       }

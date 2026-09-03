@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { TOUR_IDS } from "../tourIds";
 
 describe("Tour Controller & Highlighting System", () => {

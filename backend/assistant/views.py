@@ -469,7 +469,7 @@ class ChatView(APIView):
             "text": text,
             "tool_calls": results,
             "pending_actions": pending_actions,
-            "tour_path": {"steps": tour_steps} if tour_steps else None,
+            "tour_path": tour_steps if tour_steps else None,
         }, status=status.HTTP_200_OK)
 
 
