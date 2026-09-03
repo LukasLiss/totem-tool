@@ -100,8 +100,8 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
   });
 
   describe("3. Quick suggestions catalog validation", () => {
-    it("provides 4 structured quick suggestions for Teach Mode", () => {
-      expect(QUICK_SUGGESTIONS.teach).toHaveLength(4);
+    it("provides 8 structured quick suggestions for Teach Mode", () => {
+      expect(QUICK_SUGGESTIONS.teach).toHaveLength(8);
       for (const item of QUICK_SUGGESTIONS.teach) {
         expect(item.label).toBeTypeOf("string");
         expect(item.prompt).toBeTypeOf("string");
@@ -110,8 +110,8 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       }
     });
 
-    it("provides 4 structured quick suggestions for Act Mode", () => {
-      expect(QUICK_SUGGESTIONS.act).toHaveLength(4);
+    it("provides 8 structured quick suggestions for Act Mode", () => {
+      expect(QUICK_SUGGESTIONS.act).toHaveLength(8);
       for (const item of QUICK_SUGGESTIONS.act) {
         expect(item.label).toBeTypeOf("string");
         expect(item.prompt).toBeTypeOf("string");

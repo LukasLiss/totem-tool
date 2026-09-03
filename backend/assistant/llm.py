@@ -78,6 +78,18 @@ class BaseLLMProvider(abc.ABC):
         raise NotImplementedError
 
 
+def repair_mojibake(text: str) -> str:
+    """Repair Latin-1 / Windows-1252 mojibake where UTF-8 bytes were misdecoded."""
+    if not text or not isinstance(text, str):
+        return text
+    if "ð" in text or "â€" in text or "Ã" in text:
+        try:
+            return text.encode("latin1").decode("utf-8")
+        except Exception:
+            pass
+    return text
+
+
 class GeminiProvider(BaseLLMProvider):
     """
     Direct REST SSE & JSON provider for Google Gemini API (v1beta).
