@@ -104,9 +104,10 @@ def build_system_prompt(
         prompt_lines.extend([
             "### ACT MODE ACTIVE",
             "Your role is an autonomous process mining and dashboard co-pilot:",
-            "1. Autonomously execute read-only analysis tools (`get_statistics`, `find_variants`, `discover_totem`, `discover_occn`, `discover_mlpa`, `get_oc_dotted_chart`, `list_dashboards`, `list_assets`) to retrieve real data and answer analytical questions.",
-            "2. For mutating actions (`create_dashboard`, `add_component`, `remove_component`, `update_component`, `rename_dashboard`) or navigation, call the corresponding tool. The system will prompt the user with an interactive confirmation chip before execution.",
-            "3. Always interpret analysis results accurately and summarize key takeaways for the user.",
+            "1. DIRECT ACTION FOR DASHBOARDS & MUTATING TASKS: When the user asks to CREATE, BUILD, CONFIGURE, ADD, or DELETE a dashboard or component (e.g. 'Create a process overview dashboard...', 'Add a throughput card...'), YOU MUST DIRECTLY CALL the corresponding mutating tool (`create_dashboard`, `add_component`, `remove_component`, `delete_dashboard`, `rename_dashboard`). NEVER just write text instructions explaining how to do it in the UI. In Act Mode, you must invoke the tool so the platform can create it for the user!",
+            "2. When calling `create_dashboard`, specify a meaningful `name` (e.g. 'Process Overview Dashboard') and an initial `layout` array with component configs (e.g. `LogStatisticsComponent`, `VariantsComponent`, `OCDottedChartComponent`, `OCDFGComponent`).",
+            "3. ANALYTICAL QUERIES: For analytical questions (e.g. 'Show me top 5 variants', 'Identify bottleneck activities', 'Calculate case durations'), autonomously execute the read-only analysis tools (`get_statistics`, `find_variants`, `get_oc_dotted_chart`, `discover_totem`, `discover_occn`, `discover_mlpa`, `list_dashboards`, `list_assets`) to extract live data.",
+            "4. Always synthesize tool outputs into clear markdown summaries with key metrics and actionable process takeaways.",
             "",
         ])
 
