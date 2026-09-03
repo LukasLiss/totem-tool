@@ -115,10 +115,7 @@ class GeminiProvider(BaseLLMProvider):
         timeout: int = 45,
     ):
         self.api_key = api_key if api_key is not None else getattr(settings, "GEMINI_API_KEY", "")
-        chosen_model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
-        if chosen_model in ("gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"):
-            chosen_model = "gemini-3.6-flash"
-        self.model = chosen_model
+        self.model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
         self.timeout = timeout
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -324,7 +321,7 @@ class AnthropicProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "claude-sonnet-4-5",
         timeout: int = 30,
     ):
         self.api_key = api_key if api_key is not None else getattr(settings, "ANTHROPIC_API_KEY", "")
@@ -523,7 +520,7 @@ class OpenAIProvider(BaseLLMProvider):
         timeout: int = 45,
     ):
         self.api_key = api_key if api_key is not None else getattr(settings, "OPENAI_API_KEY", "")
-        self.model = model or getattr(settings, "OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+        self.model = model or getattr(settings, "OPENAI_MODEL", "gpt-4o") or "gpt-4o"
         self.timeout = timeout
         self.base_url = "https://api.openai.com/v1/chat/completions"
 

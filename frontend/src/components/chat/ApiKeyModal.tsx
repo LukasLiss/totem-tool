@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +47,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "gemini",
     name: "Google Gemini",
-    tagline: "Free tier available on Google AI Studio",
+    tagline: "Gemini 2.5 Flash · Free tier on Google AI Studio",
     placeholder: "AIzaSy...",
     linkText: "Get Gemini Key",
     linkUrl: "https://aistudio.google.com/app/apikey",
@@ -57,7 +57,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "openai",
     name: "OpenAI",
-    tagline: "GPT-4o & GPT-4o-mini",
+    tagline: "GPT-4o · Latest flagship model",
     placeholder: "sk-proj-...",
     linkText: "Get OpenAI Key",
     linkUrl: "https://platform.openai.com/api-keys",
@@ -67,7 +67,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "anthropic",
     name: "Anthropic Claude",
-    tagline: "Claude 3.5 Sonnet",
+    tagline: "Claude Sonnet 4.5 · Latest Sonnet",
     placeholder: "sk-ant-api03-...",
     linkText: "Get Claude Key",
     linkUrl: "https://console.anthropic.com/settings/keys",
