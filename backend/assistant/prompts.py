@@ -77,18 +77,45 @@ def build_system_prompt(
     active_mode = str(mode or ctx.get("mode") or "teach").lower()
     username = getattr(user, "username", "anonymous") or "anonymous"
 
+    # Resolve human-readable file and project names from active_file_id
+    active_file_name = None
+    active_project_name = None
+    active_file_id = ctx.get("active_file_id")
+    if active_file_id is not None:
+        try:
+            import os
+            from api.models import EventLog
+            elog = EventLog.objects.select_related("project").filter(id=active_file_id).first()
+            if elog:
+                if elog.file:
+                    active_file_name = os.path.basename(elog.file.name)
+                if elog.project:
+                    active_project_name = elog.project.name
+        except Exception:
+            pass
+
     # Base persona and active environment
     prompt_lines = [
         "You are the TOTeM Process Mining Assistant, an expert in Object-Centric Process Mining (OCPM).",
         f"User: {username}",
         f"Active View: {ctx['view_mode']}",
-        f"Active File ID: {ctx['active_file_id'] if ctx['active_file_id'] is not None else 'None'}",
+        f"Active File ID: {active_file_id if active_file_id is not None else 'None'}",
+        f"Active Event Log File: {active_file_name or 'None'}",
+        f"Active Project: {active_project_name or 'None'}",
         f"Current Path: {ctx['pathname']}",
     ]
 
     if ctx.get("current_dashboard_id") is not None:
         prompt_lines.append(f"Active Dashboard ID: {ctx['current_dashboard_id']}")
 
+    prompt_lines.append("")
+    prompt_lines.append("CRITICAL INSTRUCTION ON DATASET & LOG IDENTIFICATION:")
+    prompt_lines.append(
+        "Always refer to datasets and event logs by their real human-readable File Name "
+        f"(e.g., '{active_file_name or 'the active event log'}') and Project Name "
+        f"(e.g., '{active_project_name or 'current project'}'). "
+        "NEVER refer to event logs only by raw database IDs like 'File ID: 3' without also stating their exact file name and project name."
+    )
     prompt_lines.append("")
 
     # Mode-specific instructions
