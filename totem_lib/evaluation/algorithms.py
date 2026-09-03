@@ -28,6 +28,9 @@ _TOTEM_LIB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_TOTEM_LIB / "src"))
 sys.path.insert(0, str(_TOTEM_LIB))
 
+import shutil
+import tempfile
+
 import polars as pl
 
 from evaluation.datasets import EvaluationLog, import_args
@@ -40,6 +43,7 @@ from totem_lib import (
     mlpaDiscovery,
     totemDiscovery,
 )
+from totem_lib.ocel.importer_db import import_ocel_db
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 from totem_lib.totem import totemDiscovery_db
 from totem_lib.variants import find_variants
@@ -69,6 +73,7 @@ class LogContext:
         self.log = log
         self._ocel = None
         self._ocel_db = None
+        self._db_dir = None
         self._totem = None
         self._base_df = None
 
@@ -81,13 +86,22 @@ class LogContext:
 
     @property
     def ocel_db(self) -> OcelDuckDB:
-        """The DuckDB copy of the log, for the `_db` algorithms."""
+        """
+        The log loaded into DuckDB, for the `_db` algorithms.
+
+        Built from the same OCEL file the Polars side reads, so both families measure
+        the same data. The `.duckdb` files in test_data are not used: they were built
+        once from a normalised copy of the logs, with spaces stripped from object types
+        and activities, so they hold different labels and slightly different rows.
+
+        It is written to a temporary directory, not next to the log, because DuckDB
+        leaves scratch files beside its database.
+        """
         if self._ocel_db is None:
-            if not self.log.has_duckdb:
-                raise MissingInput(
-                    f"{self.log.name} has no DuckDB copy at {self.log.duckdb_path}"
-                )
-            self._ocel_db = OcelDuckDB.load(str(self.log.duckdb_path))
+            if self._db_dir is None:
+                self._db_dir = tempfile.mkdtemp(prefix="totem-eval-")
+            db_path = Path(self._db_dir) / f"{self.log.name}.duckdb"
+            self._ocel_db = import_ocel_db(str(self.log.path), db_path=str(db_path))
         return self._ocel_db
 
     @property
@@ -128,6 +142,9 @@ class LogContext:
         if self._ocel_db is not None:
             self._ocel_db.close()
             self._ocel_db = None
+        if self._db_dir is not None:
+            shutil.rmtree(self._db_dir, ignore_errors=True)
+            self._db_dir = None
 
 
 # ---------------------------------------------------------------------------

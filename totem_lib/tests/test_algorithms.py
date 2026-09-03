@@ -104,16 +104,46 @@ def test_the_totem_is_discovered_once_and_reused(monkeypatch):
     assert calls == ["an-ocel"]  # discovered once, from the imported log
 
 
-def test_a_log_without_a_duckdb_copy_says_so():
-    context = LogContext(_log(duckdb_path=None))
-    with pytest.raises(MissingInput, match="no DuckDB copy"):
-        _ = context.ocel_db
+def test_the_duckdb_copy_is_built_from_the_log_file(monkeypatch):
+    """
+    Both families must read the same file. The bundled .duckdb copies were built from a
+    normalised log, with spaces stripped from labels, so loading those would benchmark
+    different data - and did hide a real bug before this was fixed.
+    """
+    seen = []
+    monkeypatch.setattr("evaluation.algorithms.import_ocel_db",
+                        lambda path, db_path: seen.append((path, db_path)) or "a-db")
+    log = _log()
+    context = LogContext(log)
+    assert context.ocel_db == "a-db"
+    assert seen[0][0] == str(log.path)          # built from the log's own file
+    assert seen[0][1].endswith(".duckdb")
 
 
-def test_a_missing_duckdb_file_says_so():
-    context = LogContext(_log(duckdb_path=Path("does-not-exist.duckdb")))
-    with pytest.raises(MissingInput, match="no DuckDB copy"):
-        _ = context.ocel_db
+def test_the_duckdb_copy_is_built_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr("evaluation.algorithms.import_ocel_db",
+                        lambda path, db_path: calls.append(path) or "a-db")
+    context = LogContext(_log())
+    _ = context.ocel_db
+    _ = context.ocel_db
+    assert len(calls) == 1
+
+
+def test_closing_removes_the_temporary_database(monkeypatch):
+    monkeypatch.setattr("evaluation.algorithms.import_ocel_db",
+                        lambda path, db_path: _FakeDb())
+    context = LogContext(_log())
+    _ = context.ocel_db
+    scratch = Path(context._db_dir)
+    assert scratch.exists()
+    context.close()
+    assert not scratch.exists()
+
+
+class _FakeDb:
+    def close(self):
+        pass
 
 
 def test_a_log_without_a_leading_object_type_says_so():
@@ -136,9 +166,8 @@ def test_closing_a_context_without_a_database_is_harmless():
 # ---------------------------------------------------------------------------
 
 def test_every_log_can_supply_what_the_db_algorithms_need():
-    """totemDiscovery_db and find_variants are unusable without these."""
+    """CCDFG and find_variants are unusable without a leading object type."""
     for log in LOGS:
-        assert log.duckdb_path is not None, log.name
         assert log.leading_object_type, log.name
 
 
