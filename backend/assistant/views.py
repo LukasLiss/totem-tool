@@ -334,7 +334,7 @@ class ChatView(APIView):
 
         response = StreamingHttpResponse(
             event_stream(),
-            content_type="text/event-stream; charset=utf-8",
+            content_type="text/event-stream",
         )
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
