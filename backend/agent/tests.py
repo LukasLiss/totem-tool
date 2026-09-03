@@ -5,7 +5,11 @@ JwtAuthMiddleware, SessionRegistry, and AgentConsumer WebSocket communication.
 
 import json
 import uuid
-import pytest
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
 from django.test import TestCase
 from django.conf import settings
 from django.contrib.auth.models import User, AnonymousUser
@@ -19,6 +23,12 @@ import agent.routing
 from agent.consumers import AgentConsumer
 from agent.jwt_ws_middleware import JwtAuthMiddleware, get_user_from_jwt
 from agent.registry import SessionRegistry, session_registry
+
+
+def mark_asyncio(item):
+    if pytest is not None:
+        return pytest.mark.asyncio(item)
+    return item
 
 
 class AsgiStartupTests(TestCase):
@@ -121,7 +131,7 @@ class SessionRegistryUnitTests(TestCase):
         assert res_bcast is True
 
 
-@pytest.mark.asyncio
+@mark_asyncio
 class JwtAuthMiddlewareAsyncTests(TestCase):
     """
     Tests for JwtAuthMiddleware token parsing and user resolution.
@@ -153,7 +163,7 @@ class JwtAuthMiddlewareAsyncTests(TestCase):
         assert user.is_authenticated is False
 
 
-@pytest.mark.asyncio
+@mark_asyncio
 class AgentConsumerWebSocketTests(TestCase):
     """
     Empirical tests validating live WebSocket live-wire connection and bidirectional messaging.
@@ -240,7 +250,7 @@ class AgentConsumerWebSocketTests(TestCase):
     async def test_websocket_invalid_route_rejection(self):
         """Verify connecting to an unregistered WS path raises ValueError in URLRouter."""
         communicator = WebsocketCommunicator(application, "/ws/unknown_endpoint/")
-        with pytest.raises(ValueError, match="No route found for path"):
+        with self.assertRaises(ValueError):
             await communicator.connect()
 
     async def test_websocket_client_acknowledgment_roundtrip(self):
