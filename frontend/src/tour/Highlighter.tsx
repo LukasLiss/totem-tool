@@ -45,6 +45,60 @@ export function findTourElement(tourId: TourId | string | null): HTMLElement | n
   return null;
 }
 
+export function getCalloutPosition(targetRect: TargetRect | null): React.CSSProperties {
+  if (!targetRect || typeof window === "undefined") {
+    return {
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+    };
+  }
+
+  const CARD_WIDTH = 360;
+  const CARD_HEIGHT = 220;
+  const OFFSET = 24;
+
+  // 1. Sidebar / Left elements (e.g. project-switcher, nav items):
+  // Position to the RIGHT of the element so the button and any menu opening below it are completely unobstructed
+  if (targetRect.left < 340 && window.innerWidth - targetRect.right > CARD_WIDTH + OFFSET) {
+    return {
+      top: `${Math.max(OFFSET, Math.min(window.innerHeight - CARD_HEIGHT - OFFSET, targetRect.top))}px`,
+      left: `${targetRect.right + OFFSET}px`,
+    };
+  }
+
+  // 2. Right-side elements (e.g. chat toggle button):
+  // Position to the LEFT of the element
+  if (window.innerWidth - targetRect.right < 340 && targetRect.left > CARD_WIDTH + OFFSET) {
+    return {
+      top: `${Math.max(OFFSET, Math.min(window.innerHeight - CARD_HEIGHT - OFFSET, targetRect.top))}px`,
+      left: `${targetRect.left - CARD_WIDTH - OFFSET}px`,
+    };
+  }
+
+  // 3. If there is sufficient room to the right
+  if (window.innerWidth - targetRect.right >= CARD_WIDTH + OFFSET) {
+    return {
+      top: `${Math.max(OFFSET, Math.min(window.innerHeight - CARD_HEIGHT - OFFSET, targetRect.top))}px`,
+      left: `${targetRect.right + OFFSET}px`,
+    };
+  }
+
+  // 4. If there is sufficient room above the element
+  if (targetRect.top > CARD_HEIGHT + OFFSET) {
+    return {
+      top: `${targetRect.top - CARD_HEIGHT - OFFSET}px`,
+      left: `${Math.max(OFFSET, Math.min(window.innerWidth - CARD_WIDTH - OFFSET, targetRect.left))}px`,
+    };
+  }
+
+  // 5. Default fallback: position below with generous offset
+  return {
+    top: `${Math.min(window.innerHeight - CARD_HEIGHT - OFFSET, targetRect.bottom + OFFSET)}px`,
+    left: `${Math.max(OFFSET, Math.min(window.innerWidth - CARD_WIDTH - OFFSET, targetRect.left))}px`,
+  };
+}
+
 export function Highlighter({
   tourId,
   label,
@@ -145,19 +199,8 @@ export function Highlighter({
 
       {/* Tour Callout Card */}
       <div
-        className="fixed z-20 pointer-events-auto flex items-center justify-center p-4"
-        style={
-          targetRect
-            ? {
-                top: `${Math.min(window.innerHeight - 180, Math.max(20, targetRect.bottom + 16))}px`,
-                left: `${Math.min(window.innerWidth - 360, Math.max(20, targetRect.left))}px`,
-              }
-            : {
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-              }
-        }
+        className="fixed z-50 pointer-events-auto flex items-center justify-center p-2 transition-all duration-300"
+        style={getCalloutPosition(targetRect)}
       >
         <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-88 bg-background/95 backdrop-blur-md">
           <div className="flex items-center justify-between mb-2">
