@@ -59,6 +59,13 @@ export function setBypassCache(enabled) {
 }
 
 axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("access_token");
+  if (token && token !== "null" && token !== "undefined") {
+    config.headers = config.headers || {};
+    if (!config.headers["Authorization"]) {
+      config.headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
   if (bypassCacheEnabled) {
     config.params = { ...(config.params || {}), bypass_cache: 1 };
   }

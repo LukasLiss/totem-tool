@@ -96,6 +96,7 @@ export function DevDashboard() {
             <Button
               type="button"
               variant="outline"
+              data-tour-id="open-dotted-chart"
               onClick={() => setViewMode({ type: "analysis", component: "dottedChart" })}
               disabled={!selectedFile?.id}
             >

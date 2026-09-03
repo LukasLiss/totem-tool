@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useState } from "react";
+import React, { createContext, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export type AnalysisComponent =
@@ -50,6 +50,22 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
     },
     [navigate]
   );
+
+  // Auto-switch to dashboard when created or selected via Assistant
+  useEffect(() => {
+    const handleSelect = (e: Event) => {
+      const customEvt = e as CustomEvent<{ dashboard_id?: number }>;
+      const id = customEvt.detail?.dashboard_id;
+      if (typeof id === "number") {
+        setViewMode({ type: "dashboard", id });
+      }
+    };
+
+    window.addEventListener("totem:select-dashboard", handleSelect);
+    return () => {
+      window.removeEventListener("totem:select-dashboard", handleSelect);
+    };
+  }, [setViewMode]);
 
   return (
     <DashboardContext.Provider value={{ viewMode, setViewMode }}>
