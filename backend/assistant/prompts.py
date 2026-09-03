@@ -28,6 +28,7 @@ TOUR_IDS: Dict[str, str] = {
     "FILE_SELECTOR": "file-selector",
     "PROJECT_SWITCHER": "project-switcher",
     "VIEW_MODE_SELECTOR": "view-mode-selector",
+    "OPEN_DOTTED_CHART": "open-dotted-chart",
 }
 
 VALID_TOUR_IDS: List[str] = list(TOUR_IDS.values())
@@ -160,7 +161,10 @@ def build_system_prompt(
             "   - `OCDottedChartComponent`: Time-Series Throughput & Latency (x: 6, y: 2, w: 6, h: 6)",
             "   - `NewOCDFGComponent`: Object-Centric Directed Follows Graph (x: 0, y: 8, w: 6, h: 6)",
             "   - `OCCNComponent`: Object-Centric Causal Net (x: 6, y: 8, w: 6, h: 6)",
-            "3. ANALYTICAL QUERIES: Autonomously execute the read-only analysis tools (`get_statistics`, `find_variants`, `get_oc_dotted_chart`, `discover_totem`, `discover_occn`, `discover_mlpa`, `list_dashboards`, `list_assets`) to extract live data:",
+            "3. VIEW TRANSITIONS & OPENING CHARTS IN UI: When the user asks to OPEN, RUN, SWITCH TO, or VIEW an on-screen chart or analysis (e.g. 'run the dotted chart', 'open dotted chart', 'show variants view', 'open process model in analysis'):",
+            "   - YOU MUST call `set_view_mode` with the target mode and component (`mode='analysis'`, `component='dottedChart'` for dotted chart, `component='variants'` for variants, `component='ocdfg'` for process model, or `mode='overview'`, `mode='conformance'`, `mode='playout'`).",
+            "   - You can also call the analytical query (`get_oc_dotted_chart`) to provide analytical summary text alongside the view switch!",
+            "4. ANALYTICAL QUERIES: Autonomously execute the read-only analysis tools (`get_statistics`, `find_variants`, `get_oc_dotted_chart`, `discover_totem`, `discover_occn`, `discover_mlpa`, `list_dashboards`, `list_assets`) to extract live data:",
             "   - 'Show top 5 process variants' -> call `find_variants` with top_k=5",
             "   - 'Analyze bottleneck activities' -> call `get_statistics` or `get_oc_dotted_chart`",
             "   - 'Calculate case durations' -> call `get_statistics` or `find_variants`",
@@ -168,7 +172,7 @@ def build_system_prompt(
             "   - 'Discover causal net (OCCN)' -> call `discover_occn`",
             "   - 'Inspect object type breakdown' -> call `get_statistics`",
             "   - 'Throughput dotted chart' -> call `get_oc_dotted_chart`",
-            "4. Always synthesize tool outputs into clear markdown summaries with key metrics and actionable process takeaways.",
+            "5. Always synthesize tool outputs into clear markdown summaries with key metrics and actionable process takeaways.",
             "",
         ])
 

@@ -23,6 +23,7 @@ export const TOUR_IDS = {
   FILE_SELECTOR: "file-selector",
   PROJECT_SWITCHER: "project-switcher",
   VIEW_MODE_SELECTOR: "view-mode-selector",
+  OPEN_DOTTED_CHART: "open-dotted-chart",
 } as const;
 
 export type TourId = (typeof TOUR_IDS)[keyof typeof TOUR_IDS] | string;
