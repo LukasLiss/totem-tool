@@ -43,7 +43,45 @@ export type SSEEvent =
   | { type: "pending_action"; id: string; name: string; description: string; arguments: Record<string, unknown> }
   | { type: "tour_path"; steps: TourStep[] }
   | { type: "done"; usage: Record<string, unknown> }
+  | { type: "key_error"; provider?: string; message?: string }
   | { type: "error"; error?: string; message?: string };
+
+export interface ValidateKeyResponse {
+  valid: boolean;
+  provider: string;
+  message?: string;
+  error?: string;
+}
+
+/**
+ * Validate an LLM API key against the backend validation probe.
+ */
+export async function validateApiKey(
+  provider: string,
+  apiKey: string
+): Promise<ValidateKeyResponse> {
+  const token = localStorage.getItem("access_token");
+  try {
+    const res = await axios.post<ValidateKeyResponse>(
+      `${ASSISTANT_URL}/validate-key/`,
+      { provider, api_key: apiKey },
+      {
+        headers: {
+          Authorization: token ? `Bearer ${token}` : undefined,
+          "Content-Type": "application/json",
+        },
+        validateStatus: () => true, // resolve promise for 400s
+      }
+    );
+    return res.data;
+  } catch (err: any) {
+    return {
+      valid: false,
+      provider,
+      error: err?.response?.data?.error || err?.message || "Failed to validate API key.",
+    };
+  }
+}
 
 /**
  * Send a chat message and return an async generator of SSE events.
@@ -52,9 +90,13 @@ export type SSEEvent =
 export async function* streamChat(
   message: string,
   context: AssistantContext,
-  mode: string = "teach"
+  mode: string = "teach",
+  apiKey?: string,
+  provider?: string
 ): AsyncGenerator<SSEEvent> {
   const token = localStorage.getItem("access_token");
+  const storedKey = apiKey ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") || "" : "");
+  const storedProvider = provider ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_provider") || "gemini" : "gemini");
 
   const response = await fetch(`${ASSISTANT_URL}/chat/`, {
     method: "POST",
@@ -62,8 +104,16 @@ export async function* streamChat(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
       Accept: "text/event-stream",
+      ...(storedKey ? { "X-LLM-Key": storedKey } : {}),
+      ...(storedProvider ? { "X-LLM-Provider": storedProvider } : {}),
     },
-    body: JSON.stringify({ message, context: { ...context, mode }, mode }),
+    body: JSON.stringify({
+      message,
+      context: { ...context, mode, api_key: storedKey, provider: storedProvider },
+      mode,
+      api_key: storedKey,
+      provider: storedProvider,
+    }),
   });
 
   if (!response.ok) {
