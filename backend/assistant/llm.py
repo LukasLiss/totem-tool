@@ -176,7 +176,7 @@ class GeminiProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         if not self.api_key:
             return {
-                "text": "Google Gemini API key is missing. Please configure your API key.",
+                "text": "LLM API key is not configured.",
                 "tool_calls": [],
                 "usage": {},
                 "error_type": "key_error",
@@ -188,13 +188,6 @@ class GeminiProvider(BaseLLMProvider):
         try:
             resp = requests.post(url, json=payload, timeout=self.timeout)
             resp.encoding = "utf-8"
-            if resp.status_code in (400, 401, 403):
-                return {
-                    "text": f"Google Gemini API error ({resp.status_code}): Invalid API key or quota exceeded.",
-                    "tool_calls": [],
-                    "usage": {},
-                    "error_type": "key_error",
-                }
             if resp.status_code != 200:
                 # Attempt fallback model if 404 or unsupported
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
@@ -205,6 +198,7 @@ class GeminiProvider(BaseLLMProvider):
                     "text": f"Error communicating with Gemini API ({resp.status_code}): {resp.text}",
                     "tool_calls": [],
                     "usage": {},
+                    "error_type": "key_error" if resp.status_code in (400, 401, 403) else None,
                 }
 
             data = resp.json()
@@ -253,7 +247,7 @@ class GeminiProvider(BaseLLMProvider):
         history: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.api_key:
-            yield {"type": "key_error", "provider": "gemini", "message": "Google Gemini API key is missing. Please configure your API key."}
+            yield {"type": "text", "content": "LLM API key is not configured."}
             yield {"type": "done", "usage": {}}
             return
 
@@ -263,17 +257,6 @@ class GeminiProvider(BaseLLMProvider):
         try:
             resp = requests.post(url, json=payload, stream=True, timeout=self.timeout)
             resp.encoding = "utf-8"
-            if resp.status_code in (400, 401, 403):
-                err_msg = f"Google Gemini API error ({resp.status_code}): Invalid API key or quota exceeded."
-                try:
-                    err_json = resp.json()
-                    if "error" in err_json and "message" in err_json["error"]:
-                        err_msg = err_json["error"]["message"]
-                except Exception:
-                    pass
-                yield {"type": "key_error", "provider": "gemini", "message": err_msg}
-                yield {"type": "done", "usage": {}}
-                return
             if resp.status_code != 200:
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
@@ -358,7 +341,7 @@ class AnthropicProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         if not self.api_key:
             return {
-                "text": "Anthropic Claude API key is missing. Please configure your API key.",
+                "text": "LLM API key is not configured.",
                 "tool_calls": [],
                 "usage": {},
                 "error_type": "key_error",
@@ -394,18 +377,12 @@ class AnthropicProvider(BaseLLMProvider):
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, timeout=self.timeout)
             resp.encoding = "utf-8"
-            if resp.status_code in (401, 403):
-                return {
-                    "text": f"Anthropic API key error ({resp.status_code}): Invalid key or unauthorized.",
-                    "tool_calls": [],
-                    "usage": {},
-                    "error_type": "key_error",
-                }
             if resp.status_code != 200:
                 return {
                     "text": f"Anthropic error ({resp.status_code}): {resp.text}",
                     "tool_calls": [],
                     "usage": {},
+                    "error_type": "key_error" if resp.status_code in (401, 403) else None,
                 }
             data = resp.json()
             text_parts = []
@@ -441,7 +418,7 @@ class AnthropicProvider(BaseLLMProvider):
         history: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.api_key:
-            yield {"type": "key_error", "provider": "anthropic", "message": "Anthropic Claude API key is missing. Please configure your API key."}
+            yield {"type": "text", "content": "LLM API key is not configured."}
             yield {"type": "done", "usage": {}}
             return
 
@@ -475,10 +452,6 @@ class AnthropicProvider(BaseLLMProvider):
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, stream=True, timeout=self.timeout)
             resp.encoding = "utf-8"
-            if resp.status_code in (401, 403):
-                yield {"type": "key_error", "provider": "anthropic", "message": f"Anthropic API key error ({resp.status_code}): Invalid key or unauthorized."}
-                yield {"type": "done", "usage": {}}
-                return
             if resp.status_code != 200:
                 yield {"type": "error", "message": f"Anthropic stream error: {resp.text}"}
                 yield {"type": "done", "usage": {}}
@@ -872,6 +845,9 @@ def get_llm_provider(
     p_name = (provider_name or "").strip().lower()
     key = (api_key or "").strip()
 
+    if p_name == "mock":
+        return MockProvider()
+
     # Auto-detect provider if missing but key supplied
     if not p_name and key:
         if key.startswith("AIza"):
@@ -890,6 +866,8 @@ def get_llm_provider(
     elif p_name == "anthropic":
         resolved_key = key or getattr(settings, "ANTHROPIC_API_KEY", "")
         return AnthropicProvider(api_key=resolved_key, model=model)
+    elif p_name and p_name not in ("gemini", "openai", "anthropic"):
+        return MockProvider()
 
     # Fallback to configured settings in environment
     if getattr(settings, "GEMINI_API_KEY", ""):
