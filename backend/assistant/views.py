@@ -17,13 +17,14 @@ from rest_framework.renderers import BaseRenderer, BrowsableAPIRenderer, JSONRen
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.conf import settings
 from .action_registry import (
     cancel_action,
     get_action,
     register_action,
     update_action_status,
 )
-from .llm import complete, stream_chat
+from .llm import complete, stream_chat, validate_provider_key
 from .prompts import build_system_prompt, normalize_context
 from mcp_server.policy import ToolCategory, get_category
 from mcp_server.server import call_tool, get_tool_specs
@@ -96,14 +97,15 @@ class ChatView(APIView):
         mode = request.data.get("mode") or context.get("mode") or "teach"
         raw_history = request.data.get("history", [])
         history = raw_history if isinstance(raw_history, list) else []
-        provider = request.data.get("provider")
+        provider = request.data.get("provider") or request.META.get("HTTP_X_LLM_PROVIDER") or context.get("provider")
+        api_key = request.data.get("api_key") or request.META.get("HTTP_X_LLM_KEY") or context.get("api_key")
         user = request.user
 
         accept = request.META.get("HTTP_ACCEPT", "")
         if "text/event-stream" in accept:
-            return self._run_streaming(user, message, context, mode, history, provider)
+            return self._run_streaming(user, message, context, mode, history, provider, api_key)
 
-        return self._run_non_streaming(user, message, context, mode, history, provider)
+        return self._run_non_streaming(user, message, context, mode, history, provider, api_key)
 
     # ------------------------------------------------------------------
     # SSE streaming path
@@ -117,6 +119,7 @@ class ChatView(APIView):
         mode: str,
         history: List[Dict[str, Any]],
         provider: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
         """Run the agentic loop and yield SSE frames."""
         system_prompt = build_system_prompt(user, context=context, mode=mode, query=message)
@@ -132,8 +135,13 @@ class ChatView(APIView):
                 tools=tool_specs,
                 history=history,
                 provider_name=provider,
+                api_key=api_key,
             ):
                 event_type = event.get("type")
+
+                if event_type == "key_error":
+                    yield _sse_frame(event)
+                    return
 
                 if event_type == "text":
                     total_text_emitted = True
@@ -352,6 +360,7 @@ class ChatView(APIView):
         mode: str,
         history: List[Dict[str, Any]],
         provider: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
         """Run the agentic loop without streaming. Returns JSON."""
         system_prompt = build_system_prompt(user, context=context, mode=mode, query=message)
@@ -363,7 +372,14 @@ class ChatView(APIView):
             tools=tool_specs,
             history=history,
             provider_name=provider,
+            api_key=api_key,
         )
+
+        if response.get("error_type") == "key_error":
+            return Response(
+                {"error": response.get("text"), "error_type": "key_error"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         text = response.get("text", "")
         tool_calls = response.get("tool_calls", [])
@@ -549,3 +565,33 @@ def confirm_action(request):
         {"status": "executed", "pending_action_id": pending_action_id, "result": result},
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def validate_api_key(request):
+    """
+    Probe the validity of a user-supplied LLM API key for Gemini, OpenAI, or Anthropic.
+    Body: {"provider": "gemini" | "openai" | "anthropic", "api_key": "..."}
+    """
+    if not isinstance(request.data, dict):
+        return Response(
+            {"valid": False, "error": "Request body must be a JSON object."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    provider = (request.data.get("provider") or "").strip().lower()
+    api_key = (request.data.get("api_key") or "").strip()
+
+    if not api_key:
+        return Response(
+            {"valid": False, "provider": provider or "unknown", "error": "API key cannot be empty."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    result = validate_provider_key(provider=provider, api_key=api_key)
+    return Response(
+        result,
+        status=status.HTTP_200_OK if result.get("valid") else status.HTTP_400_BAD_REQUEST,
+    )
+

@@ -17,6 +17,7 @@ import {
   Check,
   Maximize2,
   Minimize2,
+  Key,
 } from "lucide-react";
 import {
   Sheet,
@@ -30,9 +31,11 @@ import { Button } from "@/components/ui/button";
 import { PendingActions, PendingActionItem } from "./PendingActions";
 import {
   streamChat,
+  validateApiKey,
   AssistantContext,
   TourStep,
 } from "@/api/assistantApi";
+import { ApiKeyModal } from "./ApiKeyModal";
 import { useOptionalTourController } from "@/tour/TourController";
 import { TOUR_IDS } from "@/tour/tourIds";
 import { cn } from "@/lib/utils";
@@ -831,6 +834,37 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     }
   }, [messages, isStreaming, isOpen]);
 
+  // Check API key whenever chat drawer opens
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (typeof localStorage !== "undefined") {
+        const savedKey = localStorage.getItem("totem_llm_api_key");
+        const savedProvider = localStorage.getItem("totem_llm_provider") || "gemini";
+        if (!savedKey) {
+          setIsApiKeyModalOpen(true);
+        } else {
+          // Probe key validity in background
+          validateApiKey(savedProvider, savedKey)
+            .then((res) => {
+              if (!res.valid) {
+                setApiKeyError(
+                  res.error ||
+                    `The saved ${savedProvider.toUpperCase()} API key failed authentication. Please update it.`
+                );
+                setIsApiKeyModalOpen(true);
+              }
+            })
+            .catch(() => {
+              // Ignore background network check failure
+            });
+        }
+      }
+    }
+  }, [isOpen]);
+
   // Auto-resize textarea
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputValue(e.target.value);
@@ -873,6 +907,13 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   const handleSendMessage = async (promptToSend?: string) => {
     const text = (promptToSend ?? inputValue).trim();
     if (!text || isStreaming) return;
+
+    // Verify user has an API key configured before starting request
+    const savedKey = typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") : null;
+    if (!savedKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
 
     if (!promptToSend) {
       setInputValue("");
@@ -976,6 +1017,17 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                 return {
                   ...msg,
                   tourPath: event.steps,
+                };
+              }
+
+              case "key_error": {
+                const keyErrMsg = (event as any).message || "Invalid or missing API key. Please configure your credentials.";
+                setApiKeyError(keyErrMsg);
+                setIsApiKeyModalOpen(true);
+                return {
+                  ...msg,
+                  error: keyErrMsg,
+                  isStreaming: false,
                 };
               }
 
@@ -1104,6 +1156,18 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-1 pr-6">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 text-muted-foreground hover:text-primary"
+                  title="Configure LLM API Key (Gemini, OpenAI, Anthropic)"
+                  onClick={() => {
+                    setApiKeyError(undefined);
+                    setIsApiKeyModalOpen(true);
+                  }}
+                >
+                  <Key className="size-3.5" />
+                </Button>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -1377,6 +1441,13 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
           </div>
         </SheetContent>
       </Sheet>
+
+      <ApiKeyModal
+        open={isApiKeyModalOpen}
+        onOpenChange={setIsApiKeyModalOpen}
+        initialError={apiKeyError}
+        onSuccess={() => setApiKeyError(undefined)}
+      />
     </>
   );
 }

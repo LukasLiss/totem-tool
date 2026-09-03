@@ -25,12 +25,15 @@ from assistant.llm import (
     BaseLLMProvider,
     GeminiProvider,
     MockProvider,
+    OpenAIProvider,
     complete,
     convert_schema_to_gemini,
     format_tool_for_anthropic,
     format_tool_for_gemini,
+    format_tool_for_openai,
     get_llm_provider,
     stream_chat,
+    validate_provider_key,
 )
 from assistant.prompts import (
     TOUR_IDS,
@@ -982,4 +985,160 @@ class M3ResilienceRegressionTests(TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["type"], "done")
         self.assertEqual(events[0]["usage"]["total_tokens"], 12)
+
+
+# ===========================================================================
+# 8. OpenAIProvider and Key Validation Endpoint Tests
+# ===========================================================================
+
+class OpenAIProviderTests(TestCase):
+    def test_format_tool_for_openai(self):
+        tool_spec = {
+            "name": "get_stats",
+            "description": "Get statistics",
+            "parameters": {
+                "type": "object",
+                "properties": {"file_id": {"type": "integer"}},
+                "required": ["file_id"],
+            },
+        }
+        res = format_tool_for_openai(tool_spec)
+        self.assertEqual(res["type"], "function")
+        self.assertEqual(res["function"]["name"], "get_stats")
+        self.assertEqual(res["function"]["description"], "Get statistics")
+        self.assertIn("file_id", res["function"]["parameters"]["properties"])
+
+    def test_missing_api_key_complete(self):
+        provider = OpenAIProvider(api_key="")
+        res = provider.complete("system", "hello")
+        self.assertEqual(res.get("error_type"), "key_error")
+        self.assertIn("missing", res.get("text", "").lower())
+
+    def test_missing_api_key_stream(self):
+        provider = OpenAIProvider(api_key="")
+        events = list(provider.stream_chat("system", "hello"))
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["type"], "key_error")
+        self.assertEqual(events[0]["provider"], "openai")
+
+    @patch("requests.post")
+    def test_openai_provider_complete_success(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello from OpenAI!",
+                        "tool_calls": [
+                            {
+                                "id": "call_123",
+                                "function": {
+                                    "name": "get_statistics",
+                                    "arguments": json.dumps({"file_id": 1}),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 8, "total_tokens": 23},
+        }
+        mock_post.return_value = mock_resp
+
+        provider = OpenAIProvider(api_key="sk-test-key")
+        res = provider.complete("system prompt", "user query")
+        self.assertEqual(res["text"], "Hello from OpenAI!")
+        self.assertEqual(len(res["tool_calls"]), 1)
+        self.assertEqual(res["tool_calls"][0]["name"], "get_statistics")
+        self.assertEqual(res["tool_calls"][0]["arguments"], {"file_id": 1})
+        self.assertEqual(res["usage"]["total_tokens"], 23)
+
+    @patch("requests.post")
+    def test_openai_provider_stream_success(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        chunk1 = json.dumps({
+            "choices": [{"delta": {"content": "Chunk 1"}}]
+        })
+        chunk2 = json.dumps({
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_abc",
+                                "function": {"name": "navigate", "arguments": '{"route": "/view"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        })
+        mock_resp.iter_lines.return_value = [
+            f"data: {chunk1}".encode("utf-8"),
+            f"data: {chunk2}".encode("utf-8"),
+            b"data: [DONE]",
+        ]
+        mock_post.return_value = mock_resp
+
+        provider = OpenAIProvider(api_key="sk-test-key")
+        events = list(provider.stream_chat("system prompt", "user query"))
+        types = [e["type"] for e in events]
+        self.assertIn("text", types)
+        self.assertIn("tool_call", types)
+        self.assertIn("done", types)
+
+
+class ValidateApiKeyEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="val_user", password="password")
+        self.client.force_authenticate(user=self.user)
+        self.url = "/api/assistant/validate-key/"
+
+    def test_empty_request_body_fails(self):
+        res = self.client.post(self.url, {}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_empty_key_fails(self):
+        res = self.client.post(self.url, {"provider": "gemini", "api_key": ""}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data.get("valid"))
+
+    @patch("requests.get")
+    def test_gemini_key_validation_success(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
+
+        res = self.client.post(self.url, {"provider": "gemini", "api_key": "AIzaSy_fake"}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data.get("valid"))
+        self.assertEqual(res.data.get("provider"), "gemini")
+
+    @patch("requests.get")
+    def test_openai_key_validation_success(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
+
+        res = self.client.post(self.url, {"provider": "openai", "api_key": "sk-proj-test"}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data.get("valid"))
+        self.assertEqual(res.data.get("provider"), "openai")
+
+    @patch("requests.post")
+    def test_anthropic_key_validation_success(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        res = self.client.post(self.url, {"provider": "anthropic", "api_key": "sk-ant-test"}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data.get("valid"))
+        self.assertEqual(res.data.get("provider"), "anthropic")
+
 

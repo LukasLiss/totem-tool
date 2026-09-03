@@ -52,6 +52,19 @@ def format_tool_for_anthropic(tool_spec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def format_tool_for_openai(tool_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Format tool specification for OpenAI chat completions functions/tools."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool_spec["name"],
+            "description": tool_spec.get("description", ""),
+            "parameters": tool_spec.get("parameters", {"type": "object", "properties": {}}),
+        },
+    }
+
+
+
 class BaseLLMProvider(abc.ABC):
     """Abstract base class for LLM streaming and completion providers."""
 
@@ -163,9 +176,10 @@ class GeminiProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         if not self.api_key:
             return {
-                "text": "LLM API key is not configured.",
+                "text": "Google Gemini API key is missing. Please configure your API key.",
                 "tool_calls": [],
                 "usage": {},
+                "error_type": "key_error",
             }
 
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
@@ -174,6 +188,13 @@ class GeminiProvider(BaseLLMProvider):
         try:
             resp = requests.post(url, json=payload, timeout=self.timeout)
             resp.encoding = "utf-8"
+            if resp.status_code in (400, 401, 403):
+                return {
+                    "text": f"Google Gemini API error ({resp.status_code}): Invalid API key or quota exceeded.",
+                    "tool_calls": [],
+                    "usage": {},
+                    "error_type": "key_error",
+                }
             if resp.status_code != 200:
                 # Attempt fallback model if 404 or unsupported
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
@@ -232,7 +253,7 @@ class GeminiProvider(BaseLLMProvider):
         history: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.api_key:
-            yield {"type": "text", "content": "LLM API key is not configured."}
+            yield {"type": "key_error", "provider": "gemini", "message": "Google Gemini API key is missing. Please configure your API key."}
             yield {"type": "done", "usage": {}}
             return
 
@@ -242,6 +263,17 @@ class GeminiProvider(BaseLLMProvider):
         try:
             resp = requests.post(url, json=payload, stream=True, timeout=self.timeout)
             resp.encoding = "utf-8"
+            if resp.status_code in (400, 401, 403):
+                err_msg = f"Google Gemini API error ({resp.status_code}): Invalid API key or quota exceeded."
+                try:
+                    err_json = resp.json()
+                    if "error" in err_json and "message" in err_json["error"]:
+                        err_msg = err_json["error"]["message"]
+                except Exception:
+                    pass
+                yield {"type": "key_error", "provider": "gemini", "message": err_msg}
+                yield {"type": "done", "usage": {}}
+                return
             if resp.status_code != 200:
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
@@ -326,9 +358,10 @@ class AnthropicProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         if not self.api_key:
             return {
-                "text": "LLM API key is not configured.",
+                "text": "Anthropic Claude API key is missing. Please configure your API key.",
                 "tool_calls": [],
                 "usage": {},
+                "error_type": "key_error",
             }
 
         headers = {
@@ -361,6 +394,13 @@ class AnthropicProvider(BaseLLMProvider):
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, timeout=self.timeout)
             resp.encoding = "utf-8"
+            if resp.status_code in (401, 403):
+                return {
+                    "text": f"Anthropic API key error ({resp.status_code}): Invalid key or unauthorized.",
+                    "tool_calls": [],
+                    "usage": {},
+                    "error_type": "key_error",
+                }
             if resp.status_code != 200:
                 return {
                     "text": f"Anthropic error ({resp.status_code}): {resp.text}",
@@ -401,7 +441,7 @@ class AnthropicProvider(BaseLLMProvider):
         history: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.api_key:
-            yield {"type": "text", "content": "LLM API key is not configured."}
+            yield {"type": "key_error", "provider": "anthropic", "message": "Anthropic Claude API key is missing. Please configure your API key."}
             yield {"type": "done", "usage": {}}
             return
 
@@ -435,6 +475,10 @@ class AnthropicProvider(BaseLLMProvider):
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, stream=True, timeout=self.timeout)
             resp.encoding = "utf-8"
+            if resp.status_code in (401, 403):
+                yield {"type": "key_error", "provider": "anthropic", "message": f"Anthropic API key error ({resp.status_code}): Invalid key or unauthorized."}
+                yield {"type": "done", "usage": {}}
+                return
             if resp.status_code != 200:
                 yield {"type": "error", "message": f"Anthropic stream error: {resp.text}"}
                 yield {"type": "done", "usage": {}}
@@ -490,6 +534,241 @@ class AnthropicProvider(BaseLLMProvider):
             yield {"type": "done", "usage": {}}
 
         except Exception as exc:
+            yield {"type": "error", "message": str(exc)}
+            yield {"type": "done", "usage": {}}
+
+
+class OpenAIProvider(BaseLLMProvider):
+    """
+    Direct REST SSE & JSON provider for OpenAI Chat Completions API.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: int = 45,
+    ):
+        self.api_key = api_key if api_key is not None else getattr(settings, "OPENAI_API_KEY", "")
+        self.model = model or getattr(settings, "OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+        self.timeout = timeout
+        self.base_url = "https://api.openai.com/v1/chat/completions"
+
+    def _build_payload(
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        messages: List[Dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        if history:
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                role = "assistant" if item.get("role") in ("assistant", "model") else "user"
+                content = str(item.get("content", ""))
+                if content:
+                    messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": user_message})
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": stream,
+        }
+
+        if tools:
+            payload["tools"] = [format_tool_for_openai(t) for t in tools]
+
+        return payload
+
+    def complete(
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        if not self.api_key:
+            return {
+                "text": "OpenAI API key is missing. Please configure your API key.",
+                "tool_calls": [],
+                "usage": {},
+                "error_type": "key_error",
+            }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = self._build_payload(system_prompt, user_message, tools, history, stream=False)
+
+        try:
+            resp = requests.post(self.base_url, headers=headers, json=payload, timeout=self.timeout)
+            resp.encoding = "utf-8"
+            if resp.status_code in (401, 403):
+                return {
+                    "text": f"OpenAI API key error ({resp.status_code}): Invalid key or quota exceeded.",
+                    "tool_calls": [],
+                    "usage": {},
+                    "error_type": "key_error",
+                }
+            if resp.status_code != 200:
+                return {
+                    "text": f"OpenAI error ({resp.status_code}): {resp.text}",
+                    "tool_calls": [],
+                    "usage": {},
+                }
+
+            data = resp.json()
+            choices = data.get("choices", [])
+            text = ""
+            tool_calls = []
+
+            if choices:
+                msg = choices[0].get("message", {})
+                text = repair_mojibake(msg.get("content", "") or "")
+                for tc in msg.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    fn_name = fn.get("name", "")
+                    raw_args = fn.get("arguments", "{}")
+                    try:
+                        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except json.JSONDecodeError:
+                        parsed_args = {}
+                    tool_calls.append({
+                        "id": tc.get("id", str(uuid.uuid4())),
+                        "name": fn_name,
+                        "arguments": parsed_args,
+                    })
+
+            usage = data.get("usage", {})
+            return {
+                "text": text,
+                "tool_calls": tool_calls,
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                },
+            }
+        except Exception as exc:
+            return {"text": f"Error: {str(exc)}", "tool_calls": [], "usage": {}}
+
+    def stream_chat(
+        self,
+        system_prompt: str,
+        user_message: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        if not self.api_key:
+            yield {"type": "key_error", "provider": "openai", "message": "OpenAI API key is missing. Please configure your API key."}
+            yield {"type": "done", "usage": {}}
+            return
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = self._build_payload(system_prompt, user_message, tools, history, stream=True)
+
+        try:
+            resp = requests.post(self.base_url, headers=headers, json=payload, stream=True, timeout=self.timeout)
+            resp.encoding = "utf-8"
+            if resp.status_code in (401, 403):
+                yield {"type": "key_error", "provider": "openai", "message": f"OpenAI API key error ({resp.status_code}): Invalid key or quota exceeded."}
+                yield {"type": "done", "usage": {}}
+                return
+            if resp.status_code != 200:
+                yield {"type": "error", "message": f"OpenAI stream error ({resp.status_code}): {resp.text}"}
+                yield {"type": "done", "usage": {}}
+                return
+
+            accumulated_tools: Dict[int, Dict[str, Any]] = {}
+
+            for raw_line in resp.iter_lines():
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+
+                choice = choices[0]
+                delta = choice.get("delta", {})
+
+                # Text delta
+                text_chunk = delta.get("content")
+                if text_chunk:
+                    yield {"type": "text", "content": repair_mojibake(text_chunk)}
+
+                # Tool calls delta
+                tc_deltas = delta.get("tool_calls", [])
+                for tcd in tc_deltas:
+                    idx = tcd.get("index", 0)
+                    if idx not in accumulated_tools:
+                        accumulated_tools[idx] = {
+                            "id": tcd.get("id", str(uuid.uuid4())),
+                            "name": tcd.get("function", {}).get("name", ""),
+                            "arguments": "",
+                        }
+                    else:
+                        if tcd.get("id"):
+                            accumulated_tools[idx]["id"] = tcd["id"]
+                        if tcd.get("function", {}).get("name"):
+                            accumulated_tools[idx]["name"] += tcd["function"]["name"]
+                    if tcd.get("function", {}).get("arguments"):
+                        accumulated_tools[idx]["arguments"] += tcd["function"]["arguments"]
+
+                if choice.get("finish_reason") in ("tool_calls", "stop") and accumulated_tools:
+                    for _, tc_info in sorted(accumulated_tools.items()):
+                        try:
+                            parsed_args = json.loads(tc_info["arguments"]) if tc_info["arguments"] else {}
+                        except json.JSONDecodeError:
+                            parsed_args = {}
+                        yield {
+                            "type": "tool_call",
+                            "id": tc_info["id"],
+                            "name": tc_info["name"],
+                            "arguments": parsed_args,
+                        }
+                    accumulated_tools.clear()
+
+            if accumulated_tools:
+                for _, tc_info in sorted(accumulated_tools.items()):
+                    try:
+                        parsed_args = json.loads(tc_info["arguments"]) if tc_info["arguments"] else {}
+                    except json.JSONDecodeError:
+                        parsed_args = {}
+                    yield {
+                        "type": "tool_call",
+                        "id": tc_info["id"],
+                        "name": tc_info["name"],
+                        "arguments": parsed_args,
+                    }
+
+            yield {"type": "done", "usage": {}}
+
+        except Exception as exc:
+            logger.exception("OpenAI stream exception: %s", exc)
             yield {"type": "error", "message": str(exc)}
             yield {"type": "done", "usage": {}}
 
@@ -576,7 +855,6 @@ class MockProvider(BaseLLMProvider):
 
         text = res.get("text", "")
         if text:
-            # Yield in smaller chunks
             words = text.split(" ")
             for i, word in enumerate(words):
                 chunk = word if i == 0 else " " + word
@@ -585,16 +863,152 @@ class MockProvider(BaseLLMProvider):
         yield {"type": "done", "usage": res.get("usage", {})}
 
 
-def get_llm_provider(provider_name: Optional[str] = None) -> BaseLLMProvider:
-    """Resolve active LLM provider based on settings or explicit provider choice."""
-    gemini_key = getattr(settings, "GEMINI_API_KEY", "")
-    anthropic_key = getattr(settings, "ANTHROPIC_API_KEY", "")
+def get_llm_provider(
+    provider_name: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+) -> BaseLLMProvider:
+    """Resolve active LLM provider based on explicit choice, supplied key, or settings."""
+    p_name = (provider_name or "").strip().lower()
+    key = (api_key or "").strip()
 
-    if provider_name == "gemini" or (provider_name is None and gemini_key):
-        return GeminiProvider(api_key=gemini_key)
-    elif provider_name == "anthropic" or (provider_name is None and anthropic_key):
-        return AnthropicProvider(api_key=anthropic_key)
+    # Auto-detect provider if missing but key supplied
+    if not p_name and key:
+        if key.startswith("AIza"):
+            p_name = "gemini"
+        elif key.startswith("sk-ant-"):
+            p_name = "anthropic"
+        elif key.startswith("sk-"):
+            p_name = "openai"
+
+    if p_name == "gemini":
+        resolved_key = key or getattr(settings, "GEMINI_API_KEY", "")
+        return GeminiProvider(api_key=resolved_key, model=model)
+    elif p_name == "openai":
+        resolved_key = key or getattr(settings, "OPENAI_API_KEY", "")
+        return OpenAIProvider(api_key=resolved_key, model=model)
+    elif p_name == "anthropic":
+        resolved_key = key or getattr(settings, "ANTHROPIC_API_KEY", "")
+        return AnthropicProvider(api_key=resolved_key, model=model)
+
+    # Fallback to configured settings in environment
+    if getattr(settings, "GEMINI_API_KEY", ""):
+        return GeminiProvider(api_key=settings.GEMINI_API_KEY, model=model)
+    elif getattr(settings, "OPENAI_API_KEY", ""):
+        return OpenAIProvider(api_key=settings.OPENAI_API_KEY, model=model)
+    elif getattr(settings, "ANTHROPIC_API_KEY", ""):
+        return AnthropicProvider(api_key=settings.ANTHROPIC_API_KEY, model=model)
+
     return MockProvider()
+
+
+def validate_provider_key(provider: str, api_key: str) -> Dict[str, Any]:
+    """
+    Lightweight probe to test whether a given API key is valid for a provider.
+    Returns {'valid': bool, 'provider': str, 'message': str, 'error': Optional[str]}
+    """
+    clean_provider = (provider or "").strip().lower()
+    clean_key = (api_key or "").strip()
+
+    if not clean_key:
+        return {
+            "valid": False,
+            "provider": clean_provider or "unknown",
+            "error": "API key cannot be empty.",
+        }
+
+    # Auto-detect provider if missing
+    if not clean_provider:
+        if clean_key.startswith("AIza"):
+            clean_provider = "gemini"
+        elif clean_key.startswith("sk-ant-"):
+            clean_provider = "anthropic"
+        elif clean_key.startswith("sk-"):
+            clean_provider = "openai"
+        else:
+            clean_provider = "gemini"
+
+    try:
+        if clean_provider == "gemini":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                return {
+                    "valid": True,
+                    "provider": "gemini",
+                    "message": "Google Gemini API key verified successfully.",
+                }
+            err_msg = "Invalid Google Gemini API key or quota exceeded."
+            try:
+                data = resp.json()
+                if "error" in data and "message" in data["error"]:
+                    err_msg = data["error"]["message"]
+            except Exception:
+                pass
+            return {"valid": False, "provider": "gemini", "error": err_msg}
+
+        elif clean_provider == "openai":
+            url = "https://api.openai.com/v1/models"
+            resp = requests.get(url, headers={"Authorization": f"Bearer {clean_key}"}, timeout=10)
+            if resp.status_code == 200:
+                return {
+                    "valid": True,
+                    "provider": "openai",
+                    "message": "OpenAI API key verified successfully.",
+                }
+            err_msg = "Invalid OpenAI API key."
+            try:
+                data = resp.json()
+                if "error" in data and "message" in data["error"]:
+                    err_msg = data["error"]["message"]
+            except Exception:
+                pass
+            return {"valid": False, "provider": "openai", "error": err_msg}
+
+        elif clean_provider == "anthropic":
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": clean_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+            body = {
+                "model": "claude-3-5-sonnet-20241022",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+            resp = requests.post(url, headers=headers, json=body, timeout=10)
+            if resp.status_code in (200, 400):
+                data = resp.json() if resp.content else {}
+                if data.get("type") == "error" and data.get("error", {}).get("type") == "authentication_error":
+                    return {"valid": False, "provider": "anthropic", "error": "Invalid Anthropic API key."}
+                return {
+                    "valid": True,
+                    "provider": "anthropic",
+                    "message": "Anthropic Claude API key verified successfully.",
+                }
+            err_msg = "Invalid Anthropic API key."
+            try:
+                data = resp.json()
+                if "error" in data and "message" in data["error"]:
+                    err_msg = data["error"]["message"]
+            except Exception:
+                pass
+            return {"valid": False, "provider": "anthropic", "error": err_msg}
+
+        else:
+            return {
+                "valid": False,
+                "provider": clean_provider,
+                "error": f"Unsupported provider: '{clean_provider}'. Supported: gemini, openai, anthropic.",
+            }
+
+    except Exception as exc:
+        return {
+            "valid": False,
+            "provider": clean_provider,
+            "error": f"Network/Connection error validating API key: {str(exc)}",
+        }
 
 
 def complete(
@@ -603,9 +1017,10 @@ def complete(
     tools: Optional[List[Dict[str, Any]]] = None,
     history: Optional[List[Dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute complete using configured or selected LLM provider."""
-    provider = get_llm_provider(provider_name)
+    provider = get_llm_provider(provider_name=provider_name, api_key=api_key)
     return provider.complete(
         system_prompt=system_prompt,
         user_message=user_message,
@@ -620,12 +1035,14 @@ def stream_chat(
     tools: Optional[List[Dict[str, Any]]] = None,
     history: Optional[List[Dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Generator[Dict[str, Any], None, None]:
     """Stream chat using configured or selected LLM provider."""
-    provider = get_llm_provider(provider_name)
+    provider = get_llm_provider(provider_name=provider_name, api_key=api_key)
     yield from provider.stream_chat(
         system_prompt=system_prompt,
         user_message=user_message,
         tools=tools,
         history=history,
     )
+
