@@ -594,17 +594,17 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
             if not layout or not isinstance(layout, list) or len(layout) == 0:
                 layout = [
                     {"component_name": "LogStatisticsComponent", "x": 0, "y": 0, "w": 12, "h": 2},
-                    {"component_name": "VariantsComponent", "x": 0, "y": 2, "w": 6, "h": 5},
+                    {"component_name": "VariantsComponent", "x": 0, "y": 2, "w": 6, "h": 6},
                     {
                         "component_name": "OCDottedChartComponent",
                         "x": 6,
                         "y": 2,
                         "w": 6,
-                        "h": 5,
+                        "h": 6,
                         "props": {"file_id": active_file_id} if active_file_id else {},
                     },
-                    {"component_name": "NewOCDFGComponent", "x": 0, "y": 7, "w": 8, "h": 6},
-                    {"component_name": "NumberofEventsComponent", "x": 8, "y": 7, "w": 4, "h": 6},
+                    {"component_name": "NewOCDFGComponent", "x": 0, "y": 8, "w": 6, "h": 6},
+                    {"component_name": "OCCNComponent", "x": 6, "y": 8, "w": 6, "h": 6},
                 ]
 
             return DashboardService.create_dashboard(
