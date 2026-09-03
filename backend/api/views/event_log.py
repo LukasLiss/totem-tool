@@ -1132,7 +1132,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "earliest_timestamp": earliest_timestamp,
                 "newest_timestamp": newest_timestamp,
             }
-            set_cached_result(user_file, "statistics", result)
+            set_cached_result(user_file, "statistics", result, filter_cache_params)
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
