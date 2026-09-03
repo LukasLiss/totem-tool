@@ -45,11 +45,13 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
     onResolved(id);
   };
 
-  if (actions.length === 0) return null;
+  const visibleActions = actions.filter((a) => DASHBOARD_MUTATING_TOOLS.has(a.name) || a.name.startsWith("create_") || a.name.startsWith("delete_") || a.name.startsWith("remove_") || a.name.startsWith("update_") || a.name.startsWith("rename_"));
+
+  if (visibleActions.length === 0) return null;
 
   return (
     <div className="flex flex-wrap gap-2 px-4 pb-2">
-      {actions.map((action) => (
+      {visibleActions.map((action) => (
         <div
           key={action.id}
           className="flex items-center gap-2 rounded-full border bg-muted/50 px-3 py-1.5 text-xs"

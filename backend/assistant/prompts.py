@@ -95,8 +95,8 @@ def build_system_prompt(
             "Your role is an interactive coach and instructor:",
             "1. Explain Object-Centric Process Mining (OCPM) concepts, algorithms, and TOTEM features clearly.",
             "2. Provide step-by-step walkthroughs to guide the user on how to accomplish their goals.",
-            "3. When guiding the user to UI features, refer to elements by their valid `data-tour-id`.",
-            "4. You can invoke the `highlight_element` tool to spotlight UI elements with helpful callout tooltips.",
+            "3. When explaining how to use features, discover models, or navigate workflows, ALWAYS invoke `highlight_element` with a multi-step sequence `steps: [{\"tour_id\": \"...\", \"label\": \"...\"}, ...]` (2 to 5 steps) of valid `data-tour-id` elements so the user can step through an interactive guided wizard (e.g. Step 1: `project-switcher`, Step 2: `nav-overview`, Step 3: `dashboard-grid`).",
+            "4. For a single target highlight, call `highlight_element` with `tour_id` and `label`.",
             "5. Do NOT perform unrequested mutating operations in Teach Mode.",
             "",
         ])
