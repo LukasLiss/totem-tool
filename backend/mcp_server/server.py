@@ -491,6 +491,22 @@ def _clamp_float(val: Any, min_val: float, max_val: float, default: float = 0.0)
         return default
 
 
+def _log_meta(log: Any) -> Dict[str, Any]:
+    """Extract human-readable file name and project name alongside file_id."""
+    file_name = None
+    project_name = None
+    if log:
+        if getattr(log, "file", None) and getattr(log.file, "name", None):
+            file_name = os.path.basename(log.file.name)
+        if getattr(log, "project", None) and getattr(log.project, "name", None):
+            project_name = log.project.name
+    return {
+        "file_id": getattr(log, "id", None),
+        "file_name": file_name,
+        "project_name": project_name,
+    }
+
+
 def _resolve_event_log(arguments: dict, user=None, context=None):
     """
     Resolve target EventLog from arguments, context, or user projects.
@@ -502,11 +518,11 @@ def _resolve_event_log(arguments: dict, user=None, context=None):
 
     if file_id is None:
         if user and getattr(user, "is_authenticated", False):
-            log = EventLog.objects.filter(project__users=user).order_by("-uploaded_at", "-id").first()
+            log = EventLog.objects.select_related("project").filter(project__users=user).order_by("-uploaded_at", "-id").first()
             if log:
                 return log, None
         else:
-            log = EventLog.objects.order_by("-uploaded_at", "-id").first()
+            log = EventLog.objects.select_related("project").order_by("-uploaded_at", "-id").first()
             if log:
                 return log, None
 
@@ -526,7 +542,7 @@ def _resolve_event_log(arguments: dict, user=None, context=None):
         }
 
     if user and getattr(user, "is_authenticated", False):
-        log = EventLog.objects.filter(id=file_id_int, project__users=user).first()
+        log = EventLog.objects.select_related("project").filter(id=file_id_int, project__users=user).first()
         if not log:
             return None, {
                 "error": f"Event log file ID {file_id_int} was not found or is not accessible.",
@@ -534,7 +550,7 @@ def _resolve_event_log(arguments: dict, user=None, context=None):
                 "hint": "Check available files using list_dashboards/get_statistics or select an active file.",
             }
     else:
-        log = EventLog.objects.filter(id=file_id_int).first()
+        log = EventLog.objects.select_related("project").filter(id=file_id_int).first()
         if not log:
             return None, {
                 "error": f"Event log file ID {file_id_int} was not found.",
@@ -692,8 +708,11 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
                 if earliest_timestamp is not None and newest_timestamp is not None
                 else 0
             )
+            meta = _log_meta(log)
             return {
-                "file_id": log.id,
+                "file_id": meta["file_id"],
+                "file_name": meta["file_name"],
+                "project_name": meta["project_name"],
                 "num_events": num_events,
                 "num_unique_activities": num_unique_activities,
                 "num_objects": num_objects,
@@ -712,7 +731,13 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
         try:
             with _with_ocel_db(log) as db:
                 types = _object_types(db)
-            return {"file_id": log.id, "object_types": types}
+            meta = _log_meta(log)
+            return {
+                "file_id": meta["file_id"],
+                "file_name": meta["file_name"],
+                "project_name": meta["project_name"],
+                "object_types": types,
+            }
         except Exception as exc:
             return {"error": f"Failed to load object types: {exc}", "code": "EXECUTION_ERROR"}
 
@@ -824,7 +849,14 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
                         "objects": layout_data.get("objects", []),
                     },
                 })
-            return {"variants": out, "object_types": obj_types}
+            meta = _log_meta(log)
+            return {
+                "file_id": meta["file_id"],
+                "file_name": meta["file_name"],
+                "project_name": meta["project_name"],
+                "variants": out,
+                "object_types": obj_types,
+            }
         except TimeoutError as te:
             return {
                 "error": f"Variant mining timed out after {timeout_s}s.",
