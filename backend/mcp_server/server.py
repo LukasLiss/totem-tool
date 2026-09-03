@@ -578,9 +578,35 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
 
         # Authenticated execution via DashboardService
         if name == "create_dashboard":
-            title = args.get("name") or args.get("title") or "New Dashboard"
-            project_id = args.get("project_id")
+            title = args.get("name") or args.get("title") or "Process Overview Dashboard"
+            project_id = args.get("project_id") or (context.get("project_id") if context else None)
+            active_file_id = context.get("active_file_id") if context else None
+
+            if not project_id and active_file_id:
+                try:
+                    ev = EventLog.objects.get(id=active_file_id)
+                    if ev.project:
+                        project_id = ev.project.id
+                except EventLog.DoesNotExist:
+                    pass
+
             layout = args.get("layout")
+            if not layout or not isinstance(layout, list) or len(layout) == 0:
+                layout = [
+                    {"component_name": "LogStatisticsComponent", "x": 0, "y": 0, "w": 12, "h": 2},
+                    {"component_name": "VariantsComponent", "x": 0, "y": 2, "w": 6, "h": 5},
+                    {
+                        "component_name": "OCDottedChartComponent",
+                        "x": 6,
+                        "y": 2,
+                        "w": 6,
+                        "h": 5,
+                        "props": {"file_id": active_file_id} if active_file_id else {},
+                    },
+                    {"component_name": "NewOCDFGComponent", "x": 0, "y": 7, "w": 8, "h": 6},
+                    {"component_name": "NumberofEventsComponent", "x": 8, "y": 7, "w": 4, "h": 6},
+                ]
+
             return DashboardService.create_dashboard(
                 user=user,
                 title=title,
