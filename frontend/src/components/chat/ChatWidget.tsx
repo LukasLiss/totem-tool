@@ -100,15 +100,28 @@ export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string
 };
 
 export interface MarkdownBlock {
-  type: "header" | "blockquote" | "list-bullet" | "list-number" | "paragraph" | "code" | "spacer";
+  type:
+    | "header"
+    | "blockquote"
+    | "list-bullet"
+    | "list-number"
+    | "paragraph"
+    | "code"
+    | "spacer"
+    | "table"
+    | "hr";
   content?: string;
   level?: number;
   language?: string;
   isStreaming?: boolean;
+  headers?: string[];
+  alignments?: ("left" | "center" | "right")[];
+  rows?: string[][];
 }
 
 /**
  * Parses markdown text into structured blocks for streaming rendering.
+ * Supports headers, blockquotes, lists, tables, horizontal rules, code blocks.
  */
 export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
   const lines = content.split("\n");
@@ -147,6 +160,64 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
       continue;
     }
 
+    const trimmed = line.trim();
+
+    // Horizontal rule (--- or *** or ___)
+    if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
+      blocks.push({ type: "hr" });
+      continue;
+    }
+
+    // Markdown Table Detection: line starts and ends with |
+    if (trimmed.startsWith("|") && trimmed.endsWith("|") && (trimmed.match(/\|/g) || []).length >= 2) {
+      const tableLines: string[] = [];
+      while (i < lines.length) {
+        const rowTrim = lines[i].trim();
+        if (rowTrim.startsWith("|") && rowTrim.endsWith("|") && (rowTrim.match(/\|/g) || []).length >= 2) {
+          tableLines.push(rowTrim);
+          i++;
+        } else {
+          break;
+        }
+      }
+      i--; // adjust loop index
+
+      if (tableLines.length >= 2) {
+        const rawHeaders = tableLines[0].split("|").slice(1, -1).map((c) => c.trim());
+        const secondLine = tableLines[1];
+        const isDelimiter =
+          /^\|[\s:\-]+\|$/.test(secondLine) ||
+          secondLine.split("|").slice(1, -1).every((c) => /^[\s:\-]+$/.test(c.trim()));
+
+        let alignments: ("left" | "center" | "right")[] = [];
+        let dataLines = tableLines.slice(1);
+
+        if (isDelimiter) {
+          alignments = secondLine.split("|").slice(1, -1).map((c) => {
+            const t = c.trim();
+            if (t.startsWith(":") && t.endsWith(":")) return "center";
+            if (t.endsWith(":")) return "right";
+            return "left";
+          });
+          dataLines = tableLines.slice(2);
+        } else {
+          alignments = rawHeaders.map(() => "left");
+        }
+
+        const rows = dataLines.map((rowStr) =>
+          rowStr.split("|").slice(1, -1).map((c) => c.trim())
+        );
+
+        blocks.push({
+          type: "table",
+          headers: rawHeaders,
+          alignments,
+          rows,
+        });
+        continue;
+      }
+    }
+
     // Headers
     if (line.startsWith("### ")) {
       blocks.push({ type: "header", level: 3, content: line.slice(4) });
@@ -181,46 +252,80 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
 }
 
 export function formatInline(text: string): React.ReactNode {
+  if (!text) return null;
+
+  // 1. Split by HTML break tags: <br>, <br/>, <br /> (case-insensitive)
+  const brRegex = /(<br\s*\/?>)/gi;
+  const segments = text.split(brRegex);
   const parts: React.ReactNode[] = [];
-  const regex = /(\*\*.*?\*\*|`.*?`|\*.*?\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.substring(lastIndex, match.index));
+  segments.forEach((seg, segIdx) => {
+    if (brRegex.test(seg)) {
+      parts.push(<br key={`br-${segIdx}`} className="my-0.5" />);
+      return;
     }
-    const token = match[0];
-    if (token.startsWith("**") && token.endsWith("**")) {
-      parts.push(
-        <strong key={match.index} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>
-      );
-    } else if (token.startsWith("`") && token.endsWith("`")) {
-      parts.push(
-        <code
-          key={match.index}
-          className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-foreground"
-        >
-          {token.slice(1, -1)}
-        </code>
-      );
-    } else if (token.startsWith("*") && token.endsWith("*")) {
-      parts.push(<em key={match.index}>{token.slice(1, -1)}</em>);
+
+    // 2. Parse inline tokens: **bold**, `code`, *italic*, [link](url)
+    const tokenRegex = /(\*\*.*?\*\*|`.*?`|\*.*?\*|\[.*?\]\(.*?\))/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = tokenRegex.exec(seg)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(seg.substring(lastIndex, match.index));
+      }
+      const token = match[0];
+      const key = `${segIdx}-${match.index}`;
+
+      if (token.startsWith("**") && token.endsWith("**")) {
+        parts.push(
+          <strong key={key} className="font-semibold text-foreground">
+            {token.slice(2, -2)}
+          </strong>
+        );
+      } else if (token.startsWith("`") && token.endsWith("`")) {
+        parts.push(
+          <code
+            key={key}
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-primary"
+          >
+            {token.slice(1, -1)}
+          </code>
+        );
+      } else if (token.startsWith("*") && token.endsWith("*")) {
+        parts.push(
+          <em key={key} className="italic">
+            {token.slice(1, -1)}
+          </em>
+        );
+      } else if (token.startsWith("[") && token.includes("](")) {
+        const linkMatch = token.match(/^\[(.*?)\]\((.*?)\)$/);
+        if (linkMatch) {
+          parts.push(
+            <a
+              key={key}
+              href={linkMatch[2]}
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary underline font-medium"
+            >
+              {linkMatch[1]}
+            </a>
+          );
+        } else {
+          parts.push(token);
+        }
+      }
+
+      lastIndex = tokenRegex.lastIndex;
     }
-    lastIndex = regex.lastIndex;
-  }
 
-  if (lastIndex === 0) {
-    return text;
-  }
+    if (lastIndex < seg.length) {
+      parts.push(seg.substring(lastIndex));
+    }
+  });
 
-  if (lastIndex < text.length) {
-    parts.push(text.substring(lastIndex));
-  }
-
-  return parts;
+  return parts.length === 1 ? parts[0] : parts;
 }
 
 /**
@@ -247,20 +352,20 @@ export function MarkdownRenderer({ content }: { content: string }) {
           case "header":
             if (block.level === 1) {
               return (
-                <h2 key={idx} className="mt-4 mb-2 font-bold text-lg">
+                <h2 key={idx} className="mt-4 mb-2 font-bold text-lg text-foreground">
                   {formatInline(block.content || "")}
                 </h2>
               );
             }
             if (block.level === 2) {
               return (
-                <h3 key={idx} className="mt-3.5 mb-1.5 font-bold text-base">
+                <h3 key={idx} className="mt-3.5 mb-1.5 font-bold text-base text-foreground">
                   {formatInline(block.content || "")}
                 </h3>
               );
             }
             return (
-              <h4 key={idx} className="mt-3 mb-1 font-semibold text-sm">
+              <h4 key={idx} className="mt-3 mb-1 font-semibold text-sm text-foreground">
                 {formatInline(block.content || "")}
               </h4>
             );
@@ -291,6 +396,65 @@ export function MarkdownRenderer({ content }: { content: string }) {
 
           case "spacer":
             return <div key={idx} className="h-2" />;
+
+          case "hr":
+            return <hr key={idx} className="my-3 border-t border-border/70" />;
+
+          case "table": {
+            const headers = block.headers || [];
+            const alignments = block.alignments || [];
+            const rows = block.rows || [];
+
+            const getAlignClass = (align?: "left" | "center" | "right") => {
+              if (align === "center") return "text-center";
+              if (align === "right") return "text-right";
+              return "text-left";
+            };
+
+            return (
+              <div
+                key={idx}
+                className="my-3 w-full overflow-x-auto rounded-lg border border-border/80 bg-card shadow-2xs"
+              >
+                <table className="w-full border-collapse text-xs">
+                  {headers.length > 0 && (
+                    <thead className="bg-muted/70 text-foreground font-semibold border-b border-border/80">
+                      <tr>
+                        {headers.map((h, hIdx) => (
+                          <th
+                            key={hIdx}
+                            className={cn(
+                              "px-3 py-2 font-semibold text-xs whitespace-nowrap",
+                              getAlignClass(alignments[hIdx])
+                            )}
+                          >
+                            {formatInline(h)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  )}
+                  <tbody className="divide-y divide-border/40">
+                    {rows.map((row, rIdx) => (
+                      <tr key={rIdx} className="hover:bg-muted/30 transition-colors">
+                        {row.map((cell, cIdx) => (
+                          <td
+                            key={cIdx}
+                            className={cn(
+                              "px-3 py-2 align-top text-xs leading-relaxed text-foreground/90",
+                              getAlignClass(alignments[cIdx])
+                            )}
+                          >
+                            {formatInline(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          }
 
           case "paragraph":
             return (

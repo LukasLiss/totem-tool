@@ -124,6 +124,7 @@ class ChatView(APIView):
 
         def event_stream():
             tool_calls = []
+            total_text_emitted = False
 
             for event in stream_chat(
                 system_prompt=system_prompt,
@@ -135,6 +136,7 @@ class ChatView(APIView):
                 event_type = event.get("type")
 
                 if event_type == "text":
+                    total_text_emitted = True
                     yield _sse_frame(event)
 
                 elif event_type == "tool_call":
@@ -235,6 +237,7 @@ class ChatView(APIView):
                             "description": desc,
                             "arguments": tool_args,
                         })
+                        total_text_emitted = True
                         yield _sse_frame({
                             "type": "text",
                             "content": f"I have prepared the action: **{desc}**.\n\nPlease review and click the green checkmark on the action chip below to confirm and apply it to your workspace."
@@ -242,6 +245,12 @@ class ChatView(APIView):
 
                 elif event_type in ("done", "error"):
                     if not tool_calls:
+                        if not total_text_emitted and event_type == "done":
+                            total_text_emitted = True
+                            yield _sse_frame({
+                                "type": "text",
+                                "content": "I have processed your request. Please ask if you need further analysis or actions on your active event log.",
+                            })
                         yield _sse_frame(event)
                         return
                     # When tools were called, break to execute the synthesis turn
@@ -271,7 +280,6 @@ class ChatView(APIView):
                         f"Please synthesize and present these findings clearly with key metrics, process insights, and markdown formatting."
                     )
 
-                    text_emitted = False
                     for evt in stream_chat(
                         system_prompt=synthesis_sys_prompt,
                         user_message=followup_prompt,
@@ -280,33 +288,47 @@ class ChatView(APIView):
                         provider_name=provider,
                     ):
                         if evt.get("type") == "text":
-                            text_emitted = True
+                            total_text_emitted = True
                             yield _sse_frame(evt)
                         elif evt.get("type") in ("done", "error"):
                             break
 
-                    # Fallback if model produced no text tokens in turn 2
-                    if not text_emitted:
-                        fallback_lines = ["### Analysis Complete\n"]
-                        for tc in read_only_calls:
-                            t_name = tc.get("name")
-                            t_res = tc.get("result", {})
-                            if isinstance(t_res, dict):
-                                if "variants" in t_res:
-                                    variants_list = t_res.get("variants", [])
-                                    fallback_lines.append(f"Discovered **{len(variants_list)} process variants**.")
+            # Fallback if no text tokens were emitted across the entire request
+            if not total_text_emitted:
+                fallback_lines = ["### Process Analysis Summary\n"]
+                if tool_calls:
+                    for tc in tool_calls:
+                        t_name = tc.get("name")
+                        t_res = tc.get("result", {})
+                        if isinstance(t_res, dict):
+                            if "variants" in t_res:
+                                variants_list = t_res.get("variants", [])
+                                fallback_lines.append(f"Discovered **{len(variants_list)} process variants**.")
+                                if variants_list:
+                                    fallback_lines.append("\n| Variant | Cases | Sequence |")
+                                    fallback_lines.append("| :--- | :--- | :--- |")
                                     for idx, v in enumerate(variants_list[:5], 1):
                                         sig = v.get("signature", "Unknown")
                                         supp = v.get("support", 0)
-                                        fallback_lines.append(f"{idx}. **Variant #{v.get('id', idx)}** (Cases: {supp}): `{sig}`")
-                                elif "num_events" in t_res:
-                                    fallback_lines.append(
-                                        f"- **Events**: {t_res.get('num_events', 0):,}\n"
-                                        f"- **Activities**: {t_res.get('num_unique_activities', 0)}\n"
-                                        f"- **Objects**: {t_res.get('num_objects', 0):,}\n"
-                                        f"- **Object Types**: {t_res.get('num_object_types', 0)}"
-                                    )
-                        yield _sse_frame({"type": "text", "content": "\n".join(fallback_lines)})
+                                        fallback_lines.append(f"| **#{v.get('id', idx)}** | {supp:,} | `{sig}` |")
+                            elif "num_events" in t_res:
+                                fallback_lines.append(
+                                    "\n| Metric | Value |\n| :--- | :--- |\n"
+                                    f"| **Total Events** | {t_res.get('num_events', 0):,} |\n"
+                                    f"| **Distinct Activities** | {t_res.get('num_unique_activities', 0):,} |\n"
+                                    f"| **Total Objects** | {t_res.get('num_objects', 0):,} |\n"
+                                    f"| **Object Types** | {t_res.get('num_object_types', 0):,} |"
+                                )
+                            elif "error" in t_res:
+                                fallback_lines.append(f"- Tool `{t_name}` error: {t_res.get('error')}")
+                            else:
+                                fallback_lines.append(f"- Tool `{t_name}` executed successfully.")
+                        else:
+                            fallback_lines.append(f"- Tool `{t_name}` executed successfully.")
+                else:
+                    fallback_lines.append("Analysis completed. Please select an event log to view process metrics.")
+
+                yield _sse_frame({"type": "text", "content": "\n".join(fallback_lines)})
 
             yield _sse_frame({"type": "done", "usage": {}})
 

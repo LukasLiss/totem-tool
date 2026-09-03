@@ -561,5 +561,42 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       const elements = formatted as React.ReactNode[];
       expect(elements.length).toBeGreaterThanOrEqual(4);
     });
+
+    it("parses markdown tables with headers, alignments, and rows", () => {
+      const tableMarkdown = "| Metric | Value | Interpretation |\n| :--- | :---: | ---: |\n| Total Events | 28,278 | High density |\n| Total Objects | 8,819 | Unique entities |";
+      const blocks = parseMarkdownBlocks(tableMarkdown);
+
+      expect(blocks).toEqual([
+        {
+          type: "table",
+          headers: ["Metric", "Value", "Interpretation"],
+          alignments: ["left", "center", "right"],
+          rows: [
+            ["Total Events", "28,278", "High density"],
+            ["Total Objects", "8,819", "Unique entities"],
+          ],
+        },
+      ]);
+    });
+
+    it("parses horizontal rules (---, ***, ___)", () => {
+      const hrMarkdown = "Paragraph 1\n---\nParagraph 2";
+      const blocks = parseMarkdownBlocks(hrMarkdown);
+
+      expect(blocks).toEqual([
+        { type: "paragraph", content: "Paragraph 1" },
+        { type: "hr" },
+        { type: "paragraph", content: "Paragraph 2" },
+      ]);
+    });
+
+    it("handles HTML <br> tags in formatInline", () => {
+      const textWithBr = "Line 1 <br> Line 2 <br/> Line 3";
+      const formatted = formatInline(textWithBr);
+
+      expect(Array.isArray(formatted)).toBe(true);
+      const elements = formatted as React.ReactNode[];
+      expect(elements.length).toBe(5);
+    });
   });
 });
