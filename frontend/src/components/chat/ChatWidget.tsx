@@ -120,11 +120,36 @@ export interface MarkdownBlock {
 }
 
 /**
+ * Repairs Latin-1 / Windows-1252 mojibake where UTF-8 bytes were misdecoded.
+ * E.g., 'ð\x9f\x93\x8a' -> '📊'
+ */
+export function repairMojibake(text: string): string {
+  if (!text) return "";
+  if (!text.includes("ð") && !text.includes("â") && !text.includes("Ã")) {
+    return text;
+  }
+  try {
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) {
+      bytes[i] = text.charCodeAt(i) & 0xff;
+    }
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (decoded && !decoded.includes("\ufffd")) {
+      return decoded;
+    }
+  } catch {
+    // fallback
+  }
+  return text;
+}
+
+/**
  * Parses markdown text into structured blocks for streaming rendering.
  * Supports headers, blockquotes, lists, tables, horizontal rules, code blocks.
  */
 export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
-  const lines = content.split("\n");
+  const normalized = repairMojibake(content);
+  const lines = normalized.split("\n");
   const blocks: MarkdownBlock[] = [];
   let inCodeBlock = false;
   let codeLanguage = "";
@@ -253,10 +278,11 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
 
 export function formatInline(text: string): React.ReactNode {
   if (!text) return null;
+  const cleanText = repairMojibake(text);
 
   // 1. Split by HTML break tags: <br>, <br/>, <br /> (case-insensitive)
   const brRegex = /(<br\s*\/?>)/gi;
-  const segments = text.split(brRegex);
+  const segments = cleanText.split(brRegex);
   const parts: React.ReactNode[] = [];
 
   segments.forEach((seg, segIdx) => {

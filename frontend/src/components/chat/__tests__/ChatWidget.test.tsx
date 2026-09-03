@@ -9,6 +9,7 @@ import {
   QUICK_SUGGESTIONS,
   parseMarkdownBlocks,
   formatInline,
+  repairMojibake,
 } from "../ChatWidget";
 import { TOUR_IDS } from "@/tour/tourIds";
 import { SSEEvent, TourStep } from "@/api/assistantApi";
@@ -597,6 +598,12 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       expect(Array.isArray(formatted)).toBe(true);
       const elements = formatted as React.ReactNode[];
       expect(elements.length).toBe(5);
+    });
+
+    it("repairs Latin-1 / Windows-1252 mojibake back to genuine emojis", () => {
+      const mojibake = "\xf0\x9f\x93\x8a Log Profile & Key Metrics";
+      const repaired = repairMojibake(mojibake);
+      expect(repaired).toBe("📊 Log Profile & Key Metrics");
     });
   });
 });

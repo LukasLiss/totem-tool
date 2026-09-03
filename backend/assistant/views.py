@@ -334,7 +334,7 @@ class ChatView(APIView):
 
         response = StreamingHttpResponse(
             event_stream(),
-            content_type="text/event-stream",
+            content_type="text/event-stream; charset=utf-8",
         )
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
@@ -476,7 +476,7 @@ def _describe_action(name: str, arguments: Any) -> str:
 
 def _sse_frame(event: Dict[str, Any]) -> bytes:
     """Format a dict as an SSE ``data:`` frame with double-newline terminator."""
-    payload = json.dumps(event, default=str)
+    payload = json.dumps(event, default=str, ensure_ascii=False)
     return f"data: {payload}\n\n".encode("utf-8")
 
 
