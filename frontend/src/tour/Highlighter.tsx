@@ -22,6 +22,29 @@ interface TargetRect {
   right: number;
 }
 
+export function findTourElement(tourId: TourId | string | null): HTMLElement | null {
+  if (!tourId) return null;
+  // 1. Direct data-tour-id lookup
+  let el = document.querySelector<HTMLElement>(`[data-tour-id="${tourId}"]`);
+  if (el) return el;
+
+  // 2. Alias: 'file-selector' -> top-left project switcher
+  if (tourId === "file-selector" || tourId === "file_selector") {
+    el = document.querySelector<HTMLElement>(`[data-tour-id="project-switcher"]`);
+    if (el) return el;
+    el = document.querySelector<HTMLElement>(`[data-tour-id="nav-project"]`);
+    if (el) return el;
+  }
+
+  // 3. Alias: 'project-switcher' -> 'file-selector'
+  if (tourId === "project-switcher" || tourId === "project_switcher") {
+    el = document.querySelector<HTMLElement>(`[data-tour-id="file-selector"]`);
+    if (el) return el;
+  }
+
+  return null;
+}
+
 export function Highlighter({
   tourId,
   label,
@@ -35,6 +58,7 @@ export function Highlighter({
 }: HighlighterProps) {
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
 
+  // 1. Position tracking
   useEffect(() => {
     if (!showNav || !tourId) {
       setTargetRect(null);
@@ -42,7 +66,7 @@ export function Highlighter({
     }
 
     const updatePosition = () => {
-      const el = document.querySelector(`[data-tour-id="${tourId}"]`);
+      const el = findTourElement(tourId);
       if (el) {
         const rect = el.getBoundingClientRect();
         setTargetRect({
@@ -71,6 +95,44 @@ export function Highlighter({
       clearTimeout(timer);
     };
   }, [showNav, tourId]);
+
+  // 2. Interactive Click Recording: Elevate the target element so user can click it directly
+  useEffect(() => {
+    if (!showNav || !tourId) return;
+
+    const el = findTourElement(tourId);
+    if (!el) return;
+
+    const originalZIndex = el.style.zIndex;
+    const originalPosition = el.style.position;
+    const originalPointerEvents = el.style.pointerEvents;
+    const originalBoxShadow = el.style.boxShadow;
+
+    // Elevate element above the backdrop (z-index: 55 > 50)
+    el.style.zIndex = "55";
+    if (!el.style.position || window.getComputedStyle(el).position === "static") {
+      el.style.position = "relative";
+    }
+    el.style.pointerEvents = "auto";
+    el.style.cursor = "pointer";
+
+    const handleElementClick = () => {
+      // Allow the element's actual click behavior (e.g. dropdown toggle) to run, then advance tour
+      setTimeout(() => {
+        onNext();
+      }, 350);
+    };
+
+    el.addEventListener("click", handleElementClick);
+
+    return () => {
+      el.style.zIndex = originalZIndex;
+      el.style.position = originalPosition;
+      el.style.pointerEvents = originalPointerEvents;
+      el.style.boxShadow = originalBoxShadow;
+      el.removeEventListener("click", handleElementClick);
+    };
+  }, [showNav, tourId, onNext]);
 
   if (!showNav || !tourId) return null;
 
@@ -102,8 +164,8 @@ export function Highlighter({
         style={
           targetRect
             ? {
-                top: `${Math.min(window.innerHeight - 160, Math.max(20, targetRect.bottom + 16))}px`,
-                left: `${Math.min(window.innerWidth - 340, Math.max(20, targetRect.left))}px`,
+                top: `${Math.min(window.innerHeight - 180, Math.max(20, targetRect.bottom + 16))}px`,
+                left: `${Math.min(window.innerWidth - 360, Math.max(20, targetRect.left))}px`,
               }
             : {
                 top: "50%",
@@ -112,7 +174,7 @@ export function Highlighter({
               }
         }
       >
-        <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-84 bg-background/95 backdrop-blur-md">
+        <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-88 bg-background/95 backdrop-blur-md">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 text-primary text-xs font-bold">
@@ -123,12 +185,16 @@ export function Highlighter({
               </span>
             </div>
             {totalSteps > 1 && (
-              <span className="text-[11px] font-semibold bg-muted px-2 py-0.5 rounded-full text-muted-foreground">
+              <span className="text-[11px] font-semibold bg-primary/10 text-primary px-2 py-0.5 rounded-full">
                 Step {currentIndex + 1} of {totalSteps}
               </span>
             )}
           </div>
-          <p className="text-sm font-medium mb-4 leading-relaxed">{label}</p>
+          <p className="text-sm font-medium mb-3 leading-relaxed">{label}</p>
+          <div className="text-[11px] text-primary/80 font-medium flex items-center gap-1 mb-3 bg-primary/5 px-2 py-1 rounded border border-primary/20">
+            <span>👉</span>
+            <span>Click the highlighted element on screen to continue</span>
+          </div>
           <div className="flex items-center justify-between pt-2 border-t border-border/50">
             <div className="flex items-center gap-2">
               <button

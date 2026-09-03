@@ -235,6 +235,10 @@ class ChatView(APIView):
                             "description": desc,
                             "arguments": tool_args,
                         })
+                        yield _sse_frame({
+                            "type": "text",
+                            "content": f"I have prepared the action: **{desc}**.\n\nPlease review and click the green checkmark on the action chip below to confirm and apply it to your workspace."
+                        })
 
                 elif event_type in ("done", "error"):
                     if not tool_calls:
