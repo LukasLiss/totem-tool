@@ -941,22 +941,14 @@ def validate_provider_key(provider: str, api_key: str) -> Dict[str, Any]:
             return {"valid": False, "provider": "openai", "error": err_msg}
 
         elif clean_provider == "anthropic":
-            url = "https://api.anthropic.com/v1/messages"
+            # Use the lightweight /v1/models list endpoint — no inference, instant auth check
+            url = "https://api.anthropic.com/v1/models"
             headers = {
                 "x-api-key": clean_key,
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
             }
-            body = {
-                "model": "claude-3-5-sonnet-20241022",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "ping"}],
-            }
-            resp = requests.post(url, headers=headers, json=body, timeout=10)
-            if resp.status_code in (200, 400):
-                data = resp.json() if resp.content else {}
-                if data.get("type") == "error" and data.get("error", {}).get("type") == "authentication_error":
-                    return {"valid": False, "provider": "anthropic", "error": "Invalid Anthropic API key."}
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
                 return {
                     "valid": True,
                     "provider": "anthropic",
@@ -965,8 +957,11 @@ def validate_provider_key(provider: str, api_key: str) -> Dict[str, Any]:
             err_msg = "Invalid Anthropic API key."
             try:
                 data = resp.json()
-                if "error" in data and "message" in data["error"]:
-                    err_msg = data["error"]["message"]
+                err_detail = data.get("error", {})
+                if isinstance(err_detail, dict) and err_detail.get("message"):
+                    err_msg = err_detail["message"]
+                elif isinstance(err_detail, str):
+                    err_msg = err_detail
             except Exception:
                 pass
             return {"valid": False, "provider": "anthropic", "error": err_msg}
