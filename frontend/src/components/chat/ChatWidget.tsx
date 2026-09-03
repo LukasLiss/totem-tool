@@ -556,6 +556,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                 // If in Teach Mode, launch guided tour
                 if (mode === "teach" && tourController && event.steps.length > 0) {
                   tourController.startTour(event.steps);
+                  setIsOpen(false);
                 }
                 return {
                   ...msg,
@@ -622,7 +623,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   return (
     <>
       {/* Floating Chat Trigger Button */}
-      <Sheet open={isOpen} onOpenChange={setIsOpen}>
+      <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>
         <SheetTrigger asChild>
           <Button
             size="icon"
@@ -647,6 +648,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
         {/* Collapsible Drawer Sheet */}
         <SheetContent
           side="right"
+          hideOverlay
           data-tour-id={TOUR_IDS.CHAT_DRAWER}
           className="flex flex-col w-full sm:max-w-md md:max-w-lg p-0 gap-0 h-full border-l shadow-2xl bg-background"
         >

@@ -96,43 +96,31 @@ export function Highlighter({
     };
   }, [showNav, tourId]);
 
-  // 2. Interactive Click Recording: Elevate the target element so user can click it directly
+  // 2. Interactive Click Recording: Detect real user clicks on the target element
   useEffect(() => {
     if (!showNav || !tourId) return;
 
-    const el = findTourElement(tourId);
-    if (!el) return;
+    const handlePointerDown = (e: MouseEvent | PointerEvent) => {
+      const el = findTourElement(tourId);
+      if (!el) return;
 
-    const originalZIndex = el.style.zIndex;
-    const originalPosition = el.style.position;
-    const originalPointerEvents = el.style.pointerEvents;
-    const originalBoxShadow = el.style.boxShadow;
-
-    // Elevate element above the backdrop (z-index: 55 > 50)
-    el.style.zIndex = "55";
-    if (!el.style.position || window.getComputedStyle(el).position === "static") {
-      el.style.position = "relative";
-    }
-    el.style.pointerEvents = "auto";
-    el.style.cursor = "pointer";
-
-    const handleElementClick = () => {
-      // Allow the element's actual click behavior (e.g. dropdown toggle) to run, then advance tour
-      setTimeout(() => {
-        onNext();
-      }, 350);
+      // Check if user clicked the highlighted element or inside it
+      if (el === e.target || el.contains(e.target as Node)) {
+        // If there is a next step, smoothly advance after action opens
+        // If it's the final step, stay visible so user can complete action and click "Finish Tour"
+        if (!isLastStep) {
+          setTimeout(() => {
+            onNext();
+          }, 600);
+        }
+      }
     };
 
-    el.addEventListener("click", handleElementClick);
-
+    window.addEventListener("pointerdown", handlePointerDown, { capture: true });
     return () => {
-      el.style.zIndex = originalZIndex;
-      el.style.position = originalPosition;
-      el.style.pointerEvents = originalPointerEvents;
-      el.style.boxShadow = originalBoxShadow;
-      el.removeEventListener("click", handleElementClick);
+      window.removeEventListener("pointerdown", handlePointerDown, { capture: true });
     };
-  }, [showNav, tourId, onNext]);
+  }, [showNav, tourId, onNext, isLastStep]);
 
   if (!showNav || !tourId) return null;
 
@@ -141,37 +129,16 @@ export function Highlighter({
       data-testid="tour-highlighter"
       className="fixed inset-0 z-50 pointer-events-none transition-all duration-200"
     >
-      {/* Dimmed backdrop - NO blur filter, does NOT dismiss tour on click */}
-      <div
-        className="absolute inset-0 bg-black/35 pointer-events-auto"
-        onClick={(e) => {
-          e.stopPropagation();
-          // Intentionally do not dismiss the tour on backdrop click to prevent accidental exits
-        }}
-      />
-
-      {/* Target element spotlight frame & interactive click trigger */}
+      {/* Target element spotlight frame - non-blocking glowing highlight ring */}
       {targetRect && (
         <div
           data-testid="tour-spotlight"
-          className="absolute z-20 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background transition-all duration-300 animate-pulse pointer-events-auto cursor-pointer hover:ring-primary/80"
+          className="absolute z-20 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background shadow-[0_0_25px_rgba(59,130,246,0.5)] transition-all duration-300 animate-pulse pointer-events-none"
           style={{
             top: `${Math.max(0, targetRect.top - 4)}px`,
             left: `${Math.max(0, targetRect.left - 4)}px`,
             width: `${targetRect.width + 8}px`,
             height: `${targetRect.height + 8}px`,
-          }}
-          title="Click to activate and advance guide"
-          onClick={(e) => {
-            e.stopPropagation();
-            const el = findTourElement(tourId);
-            if (el) {
-              el.focus?.();
-              el.click();
-            }
-            setTimeout(() => {
-              onNext();
-            }, 250);
           }}
         />
       )}
