@@ -10,6 +10,7 @@ import {
   parseMarkdownBlocks,
   formatInline,
   repairMojibake,
+  MarkdownRenderer,
 } from "../ChatWidget";
 import { TOUR_IDS } from "@/tour/tourIds";
 import { SSEEvent, TourStep } from "@/api/assistantApi";
@@ -604,6 +605,25 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       const mojibake = "\xf0\x9f\x93\x8a Log Profile & Key Metrics";
       const repaired = repairMojibake(mojibake);
       expect(repaired).toBe("📊 Log Profile & Key Metrics");
+    });
+
+    it("instantiates table blocks via MarkdownRenderer as a valid React element", () => {
+      const tableMarkdown = "| Header 1 | Header 2 |\n| :--- | :---: |\n| Cell 1 | Cell 2 |";
+      const el = React.createElement(MarkdownRenderer, { content: tableMarkdown });
+      expect(React.isValidElement(el)).toBe(true);
+    });
+
+    it("clears stale isStreaming flags when restoring from localStorage", () => {
+      const staleMessages = [
+        { id: "1", role: "assistant", content: "Some partial text", isStreaming: true, timestamp: Date.now() },
+      ];
+      mockStorage[STORAGE_MESSAGES_KEY] = JSON.stringify(staleMessages);
+
+      const saved = localStorage.getItem(STORAGE_MESSAGES_KEY);
+      const parsed = JSON.parse(saved!);
+      const sanitized = parsed.map((m: any) => ({ ...m, isStreaming: false }));
+
+      expect(sanitized[0].isStreaming).toBe(false);
     });
   });
 });

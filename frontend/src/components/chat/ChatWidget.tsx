@@ -33,6 +33,7 @@ import {
 } from "@/api/assistantApi";
 import { useOptionalTourController } from "@/tour/TourController";
 import { TOUR_IDS } from "@/tour/tourIds";
+import { cn } from "@/lib/utils";
 
 export type ChatMode = "teach" | "act";
 
@@ -228,6 +229,7 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
     // Markdown Table Detection: line starts and ends with |
     if (trimmed.startsWith("|") && trimmed.endsWith("|") && (trimmed.match(/\|/g) || []).length >= 2) {
       const tableLines: string[] = [];
+      const startIndex = i;
       while (i < lines.length) {
         const rowTrim = lines[i].trim();
         if (rowTrim.startsWith("|") && rowTrim.endsWith("|") && (rowTrim.match(/\|/g) || []).length >= 2) {
@@ -271,6 +273,10 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
           alignments,
           rows,
         });
+        continue;
+      } else {
+        i = startIndex;
+        blocks.push({ type: "paragraph", content: lines[startIndex] });
         continue;
       }
     }
@@ -376,6 +382,9 @@ export function formatInline(text: string): React.ReactNode {
       }
 
       lastIndex = tokenRegex.lastIndex;
+      if (token.length === 0) {
+        tokenRegex.lastIndex++;
+      }
     }
 
     if (lastIndex < seg.length) {
@@ -384,6 +393,41 @@ export function formatInline(text: string): React.ReactNode {
   });
 
   return parts.length === 1 ? parts[0] : parts;
+}
+
+interface ChatErrorBoundaryProps {
+  children: React.ReactNode;
+  fallbackText?: string;
+}
+
+interface ChatErrorBoundaryState {
+  hasError: boolean;
+}
+
+export class ChatErrorBoundary extends React.Component<ChatErrorBoundaryProps, ChatErrorBoundaryState> {
+  constructor(props: ChatErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, info: unknown) {
+    console.error("Chat rendering error intercepted by boundary:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed my-1">
+          {this.props.fallbackText || "Message content could not be displayed with rich styling."}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 /**
@@ -400,171 +444,182 @@ export function MarkdownRenderer({ content }: { content: string }) {
     }
   };
 
-  const blocks = parseMarkdownBlocks(content);
+  let blocks: MarkdownBlock[] = [];
+  try {
+    blocks = parseMarkdownBlocks(content);
+  } catch (err) {
+    console.error("Error parsing markdown blocks:", err);
+    return (
+      <div className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">
+        {content}
+      </div>
+    );
+  }
+
   let codeBlockCounter = 0;
 
   return (
-    <div className="space-y-1">
-      {blocks.map((block, idx) => {
-        switch (block.type) {
-          case "header":
-            if (block.level === 1) {
+    <ChatErrorBoundary fallbackText={content}>
+      <div className="space-y-1">
+        {blocks.map((block, idx) => {
+          switch (block.type) {
+            case "header":
+              if (block.level === 1) {
+                return (
+                  <h2 key={idx} className="mt-4 mb-2 font-bold text-lg text-foreground">
+                    {formatInline(block.content || "")}
+                  </h2>
+                );
+              }
+              if (block.level === 2) {
+                return (
+                  <h3 key={idx} className="mt-3.5 mb-1.5 font-bold text-base text-foreground">
+                    {formatInline(block.content || "")}
+                  </h3>
+                );
+              }
               return (
-                <h2 key={idx} className="mt-4 mb-2 font-bold text-lg text-foreground">
+                <h4 key={idx} className="mt-3 mb-1 font-semibold text-sm text-foreground">
                   {formatInline(block.content || "")}
-                </h2>
+                </h4>
               );
-            }
-            if (block.level === 2) {
+
+            case "blockquote":
               return (
-                <h3 key={idx} className="mt-3.5 mb-1.5 font-bold text-base text-foreground">
+                <blockquote
+                  key={idx}
+                  className="my-2 border-l-2 border-primary/60 pl-3 italic text-muted-foreground text-xs"
+                >
                   {formatInline(block.content || "")}
-                </h3>
+                </blockquote>
               );
-            }
-            return (
-              <h4 key={idx} className="mt-3 mb-1 font-semibold text-sm text-foreground">
-                {formatInline(block.content || "")}
-              </h4>
-            );
 
-          case "blockquote":
-            return (
-              <blockquote
-                key={idx}
-                className="my-2 border-l-2 border-primary/60 pl-3 italic text-muted-foreground text-xs"
-              >
-                {formatInline(block.content || "")}
-              </blockquote>
-            );
+            case "list-bullet":
+              return (
+                <li key={idx} className="ml-4 list-disc text-sm my-0.5">
+                  {formatInline(block.content || "")}
+                </li>
+              );
 
-          case "list-bullet":
-            return (
-              <li key={idx} className="ml-4 list-disc text-sm my-0.5">
-                {formatInline(block.content || "")}
-              </li>
-            );
+            case "list-number":
+              return (
+                <li key={idx} className="ml-4 list-decimal text-sm my-0.5">
+                  {formatInline(block.content || "")}
+                </li>
+              );
 
-          case "list-number":
-            return (
-              <li key={idx} className="ml-4 list-decimal text-sm my-0.5">
-                {formatInline(block.content || "")}
-              </li>
-            );
+            case "spacer":
+              return <div key={idx} className="h-2" />;
 
-          case "spacer":
-            return <div key={idx} className="h-2" />;
+            case "hr":
+              return <hr key={idx} className="my-3 border-t border-border/70" />;
 
-          case "hr":
-            return <hr key={idx} className="my-3 border-t border-border/70" />;
+            case "table": {
+              const headers = block.headers || [];
+              const alignments = block.alignments || [];
+              const rows = block.rows || [];
 
-          case "table": {
-            const headers = block.headers || [];
-            const alignments = block.alignments || [];
-            const rows = block.rows || [];
+              const getAlignClass = (align?: "left" | "center" | "right") => {
+                if (align === "center") return "text-center";
+                if (align === "right") return "text-right";
+                return "text-left";
+              };
 
-            const getAlignClass = (align?: "left" | "center" | "right") => {
-              if (align === "center") return "text-center";
-              if (align === "right") return "text-right";
-              return "text-left";
-            };
-
-            return (
-              <div
-                key={idx}
-                className="my-3 w-full overflow-x-auto rounded-lg border border-border/80 bg-card shadow-2xs"
-              >
-                <table className="w-full border-collapse text-xs">
-                  {headers.length > 0 && (
-                    <thead className="bg-muted/70 text-foreground font-semibold border-b border-border/80">
-                      <tr>
-                        {headers.map((h, hIdx) => (
-                          <th
-                            key={hIdx}
-                            className={cn(
-                              "px-3 py-2 font-semibold text-xs whitespace-nowrap",
-                              getAlignClass(alignments[hIdx])
-                            )}
-                          >
-                            {formatInline(h)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                  )}
-                  <tbody className="divide-y divide-border/40">
-                    {rows.map((row, rIdx) => (
-                      <tr key={rIdx} className="hover:bg-muted/30 transition-colors">
-                        {row.map((cell, cIdx) => (
-                          <td
-                            key={cIdx}
-                            className={cn(
-                              "px-3 py-2 align-top text-xs leading-relaxed text-foreground/90",
-                              getAlignClass(alignments[cIdx])
-                            )}
-                          >
-                            {formatInline(cell)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          }
-
-          case "paragraph":
-            return (
-              <p key={idx} className="text-sm leading-relaxed my-1">
-                {formatInline(block.content || "")}
-              </p>
-            );
-
-          case "code": {
-            const curIndex = codeBlockCounter++;
-            const codeString = block.content || "";
-            return (
-              <div
-                key={idx}
-                className="my-3 overflow-hidden rounded-md border border-border/80 bg-zinc-950 text-zinc-100 text-xs font-mono"
-              >
-                <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5 text-zinc-400">
-                  <span className="flex items-center gap-1.5">
-                    <Code className="size-3.5" />
-                    {block.language || "code"}
-                    {block.isStreaming ? " (streaming...)" : ""}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(codeString, curIndex)}
-                    className="flex items-center gap-1 hover:text-zinc-100 text-zinc-400 transition-colors"
-                  >
-                    {copiedIndex === curIndex ? (
-                      <>
-                        <Check className="size-3.5 text-emerald-400" />
-                        <span className="text-emerald-400">Copied</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="size-3.5" />
-                        <span>Copy</span>
-                      </>
+              return (
+                <div
+                  key={idx}
+                  className="my-3 w-full overflow-x-auto rounded-lg border border-border/80 bg-card shadow-2xs"
+                >
+                  <table className="w-full border-collapse text-xs">
+                    {headers.length > 0 && (
+                      <thead className="bg-muted/70 text-foreground font-semibold border-b border-border/80">
+                        <tr>
+                          {headers.map((h, hIdx) => (
+                            <th
+                              key={hIdx}
+                              className={`px-3 py-2 font-semibold text-xs whitespace-nowrap ${getAlignClass(
+                                alignments[hIdx]
+                              )}`}
+                            >
+                              {formatInline(h)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
                     )}
-                  </button>
+                    <tbody className="divide-y divide-border/40">
+                      {rows.map((row, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-muted/30 transition-colors">
+                          {row.map((cell, cIdx) => (
+                            <td
+                              key={cIdx}
+                              className={`px-3 py-2 align-top text-xs leading-relaxed text-foreground/90 ${getAlignClass(
+                                alignments[cIdx]
+                              )}`}
+                            >
+                              {formatInline(cell)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <pre className="p-3 overflow-x-auto">
-                  <code>{codeString}</code>
-                </pre>
-              </div>
-            );
-          }
+              );
+            }
 
-          default:
-            return null;
-        }
-      })}
-    </div>
+            case "paragraph":
+              return (
+                <p key={idx} className="text-sm leading-relaxed my-1">
+                  {formatInline(block.content || "")}
+                </p>
+              );
+
+            case "code": {
+              const curIndex = codeBlockCounter++;
+              const codeString = block.content || "";
+              return (
+                <div
+                  key={idx}
+                  className="my-3 overflow-hidden rounded-md border border-border/80 bg-zinc-950 text-zinc-100 text-xs font-mono"
+                >
+                  <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5 text-zinc-400">
+                    <span className="flex items-center gap-1.5">
+                      <Code className="size-3.5" />
+                      {block.language || "code"}
+                      {block.isStreaming ? " (streaming...)" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(codeString, curIndex)}
+                      className="flex items-center gap-1 hover:text-zinc-100 text-zinc-400 transition-colors"
+                    >
+                      {copiedIndex === curIndex ? (
+                        <>
+                          <Check className="size-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3.5" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3 overflow-x-auto">
+                    <code>{codeString}</code>
+                  </pre>
+                </div>
+              );
+            }
+
+            default:
+              return null;
+          }
+        })}
+      </div>
+    </ChatErrorBoundary>
   );
 }
 
@@ -593,7 +648,13 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
         const saved = localStorage.getItem(STORAGE_MESSAGES_KEY);
         if (saved) {
           const parsed = JSON.parse(saved);
-          return Array.isArray(parsed) ? parsed : [];
+          if (Array.isArray(parsed)) {
+            // Clear any stale isStreaming flags on page reload so it never stays stuck in "Thinking..."
+            return parsed.map((m: ChatMessage) => ({
+              ...m,
+              isStreaming: false,
+            }));
+          }
         }
       }
       return [];
@@ -637,11 +698,12 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     }
   };
 
-  // Persist message history
+  // Persist message history (sanitizing isStreaming)
   useEffect(() => {
     try {
       if (typeof localStorage !== "undefined") {
-        localStorage.setItem(STORAGE_MESSAGES_KEY, JSON.stringify(messages));
+        const sanitized = messages.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+        localStorage.setItem(STORAGE_MESSAGES_KEY, JSON.stringify(sanitized));
       }
     } catch {
       // Ignore storage error
@@ -1068,7 +1130,9 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
                           {/* Markdown Response Text */}
                           {msg.content ? (
-                            <MarkdownRenderer content={msg.content} />
+                            <ChatErrorBoundary fallbackText={msg.content}>
+                              <MarkdownRenderer content={msg.content} />
+                            </ChatErrorBoundary>
                           ) : msg.isStreaming ? (
                             <div className="flex items-center gap-1.5 py-1 text-muted-foreground text-xs">
                               <Loader2 className="size-3.5 animate-spin" />
