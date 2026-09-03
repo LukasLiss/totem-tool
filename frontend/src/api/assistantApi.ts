@@ -104,8 +104,6 @@ export async function* streamChat(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
       Accept: "text/event-stream",
-      ...(storedKey ? { "X-LLM-Key": storedKey } : {}),
-      ...(storedProvider ? { "X-LLM-Provider": storedProvider } : {}),
     },
     body: JSON.stringify({
       message,
