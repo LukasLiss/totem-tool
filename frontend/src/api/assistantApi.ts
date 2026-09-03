@@ -51,7 +51,8 @@ export type SSEEvent =
  */
 export async function* streamChat(
   message: string,
-  context: AssistantContext
+  context: AssistantContext,
+  mode: string = "teach"
 ): AsyncGenerator<SSEEvent> {
   const token = localStorage.getItem("access_token");
 
@@ -62,7 +63,7 @@ export async function* streamChat(
       Authorization: `Bearer ${token}`,
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({ message, context }),
+    body: JSON.stringify({ message, context: { ...context, mode }, mode }),
   });
 
   if (!response.ok) {

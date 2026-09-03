@@ -159,6 +159,7 @@ class ChatView(APIView):
                                 tool_name, tool_args,
                                 user=user, context=context,
                             )
+                            event["result"] = result
                             yield _sse_frame({
                                 "type": "tool_result",
                                 "id": event.get("id", ""),
@@ -166,6 +167,7 @@ class ChatView(APIView):
                                 "result": result,
                             })
                         except Exception as exc:
+                            event["result"] = {"error": str(exc)}
                             yield _sse_frame({
                                 "type": "tool_result",
                                 "id": event.get("id", ""),
@@ -174,16 +176,31 @@ class ChatView(APIView):
                             })
 
                     elif tool_name == "highlight_element":
-                        # Emit tour_path for Teach mode
-                        step = {
-                            "tour_id": tool_args.get("tour_id", ""),
-                            "title": tool_args.get("label", "") or "UI Highlight",
-                            "description": tool_args.get("label", ""),
-                        }
-                        yield _sse_frame({
-                            "type": "tour_path",
-                            "steps": [step],
-                        })
+                        # Extract steps (support single step or multi-step array)
+                        raw_steps = tool_args.get("steps")
+                        if isinstance(raw_steps, list) and raw_steps:
+                            steps = [
+                                {
+                                    "tour_id": s.get("tour_id", ""),
+                                    "title": s.get("title", "") or s.get("label", "") or "Guide Step",
+                                    "label": s.get("label", "") or s.get("title", ""),
+                                }
+                                for s in raw_steps if isinstance(s, dict) and s.get("tour_id")
+                            ]
+                        else:
+                            step = {
+                                "tour_id": tool_args.get("tour_id", ""),
+                                "title": tool_args.get("label", "") or "UI Highlight",
+                                "label": tool_args.get("label", ""),
+                            }
+                            steps = [step] if step["tour_id"] else []
+
+                        if steps:
+                            yield _sse_frame({
+                                "type": "tour_path",
+                                "steps": steps,
+                            })
+
                         # Register action
                         desc = _describe_action(tool_name, tool_args)
                         action_id = register_action(
@@ -202,7 +219,7 @@ class ChatView(APIView):
                         })
 
                     else:
-                        # Mutating or frontend action
+                        # Mutating action requiring user approval chip
                         desc = _describe_action(tool_name, tool_args)
                         action_id = register_action(
                             user_id=getattr(user, "id", None),
@@ -220,27 +237,72 @@ class ChatView(APIView):
                         })
 
                 elif event_type in ("done", "error"):
-                    yield _sse_frame(event)
-                    return
+                    if not tool_calls:
+                        yield _sse_frame(event)
+                        return
+                    # When tools were called, break to execute the synthesis turn
+                    break
 
-            # If read-only tools were invoked, re-prompt LLM with findings
+            # If read-only tools were invoked, synthesize findings with LLM
             if tool_calls:
                 read_only_calls = [tc for tc in tool_calls if _is_read_only(tc.get("name"))]
                 if read_only_calls:
-                    tool_result_msg = "\n\n".join(
-                        f"[Tool result: {tc.get('name')}]" for tc in read_only_calls
+                    results_text_parts = []
+                    for tc in read_only_calls:
+                        t_name = tc.get("name")
+                        t_res = tc.get("result", {})
+                        res_str = json.dumps(t_res, default=str)[:3500]
+                        results_text_parts.append(f"Tool `{t_name}` returned:\n```json\n{res_str}\n```")
+
+                    tool_result_msg = "\n\n".join(results_text_parts)
+                    synthesis_sys_prompt = (
+                        f"{system_prompt}\n\n"
+                        "IMPORTANT: All requested process mining data and metrics have been extracted by the system and are provided in the message below. "
+                        "Synthesize these findings into a detailed, well-structured markdown analytical response with key metrics, process insights, and conclusions. "
+                        "Do not attempt to call any tools."
                     )
+                    followup_prompt = (
+                        f"{message}\n\n"
+                        f"[Analysis Tool Execution Results]:\n{tool_result_msg}\n\n"
+                        f"Please synthesize and present these findings clearly with key metrics, process insights, and markdown formatting."
+                    )
+
+                    text_emitted = False
                     for evt in stream_chat(
-                        system_prompt=system_prompt,
-                        user_message=f"{message}\n\n{tool_result_msg}",
+                        system_prompt=synthesis_sys_prompt,
+                        user_message=followup_prompt,
                         tools=[],
                         history=history,
                         provider_name=provider,
                     ):
                         if evt.get("type") == "text":
+                            text_emitted = True
                             yield _sse_frame(evt)
                         elif evt.get("type") in ("done", "error"):
                             break
+
+                    # Fallback if model produced no text tokens in turn 2
+                    if not text_emitted:
+                        fallback_lines = ["### Analysis Complete\n"]
+                        for tc in read_only_calls:
+                            t_name = tc.get("name")
+                            t_res = tc.get("result", {})
+                            if isinstance(t_res, dict):
+                                if "variants" in t_res:
+                                    variants_list = t_res.get("variants", [])
+                                    fallback_lines.append(f"Discovered **{len(variants_list)} process variants**.")
+                                    for idx, v in enumerate(variants_list[:5], 1):
+                                        sig = v.get("signature", "Unknown")
+                                        supp = v.get("support", 0)
+                                        fallback_lines.append(f"{idx}. **Variant #{v.get('id', idx)}** (Cases: {supp}): `{sig}`")
+                                elif "num_events" in t_res:
+                                    fallback_lines.append(
+                                        f"- **Events**: {t_res.get('num_events', 0):,}\n"
+                                        f"- **Activities**: {t_res.get('num_unique_activities', 0)}\n"
+                                        f"- **Objects**: {t_res.get('num_objects', 0):,}\n"
+                                        f"- **Object Types**: {t_res.get('num_object_types', 0)}"
+                                    )
+                        yield _sse_frame({"type": "text", "content": "\n".join(fallback_lines)})
 
             yield _sse_frame({"type": "done", "usage": {}})
 

@@ -299,5 +299,5 @@ for env_candidate in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.6-flash')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.5-flash')
 ASSISTANT_AGENT_ENABLED = True

@@ -90,7 +90,7 @@ class GeminiProvider(BaseLLMProvider):
         model: Optional[str] = None,
         timeout: int = 30,
     ):
-        self.api_key = api_key or getattr(settings, "GEMINI_API_KEY", "")
+        self.api_key = api_key if api_key is not None else getattr(settings, "GEMINI_API_KEY", "")
         self.model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
         self.timeout = timeout
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
@@ -287,7 +287,7 @@ class AnthropicProvider(BaseLLMProvider):
         model: str = "claude-3-5-sonnet-20241022",
         timeout: int = 30,
     ):
-        self.api_key = api_key or getattr(settings, "ANTHROPIC_API_KEY", "")
+        self.api_key = api_key if api_key is not None else getattr(settings, "ANTHROPIC_API_KEY", "")
         self.model = model
         self.timeout = timeout
         self.base_url = "https://api.anthropic.com/v1/messages"

@@ -5,7 +5,10 @@ export interface HighlighterProps {
   tourId: TourId | null;
   label: string;
   onNext: () => void;
+  onPrev?: () => void;
   onSkip: () => void;
+  currentIndex?: number;
+  totalSteps?: number;
   isLastStep: boolean;
   showNav: boolean;
 }
@@ -23,7 +26,10 @@ export function Highlighter({
   tourId,
   label,
   onNext,
+  onPrev,
   onSkip,
+  currentIndex = 0,
+  totalSteps = 1,
   isLastStep,
   showNav,
 }: HighlighterProps) {
@@ -106,24 +112,44 @@ export function Highlighter({
               }
         }
       >
-        <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-80 bg-background/95 backdrop-blur-md">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 text-primary text-xs font-bold">
-              ★
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Teach Mode Guide
-            </span>
+        <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-84 bg-background/95 backdrop-blur-md">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary/20 text-primary text-xs font-bold">
+                ★
+              </span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Teach Mode Guide
+              </span>
+            </div>
+            {totalSteps > 1 && (
+              <span className="text-[11px] font-semibold bg-muted px-2 py-0.5 rounded-full text-muted-foreground">
+                Step {currentIndex + 1} of {totalSteps}
+              </span>
+            )}
           </div>
           <p className="text-sm font-medium mb-4 leading-relaxed">{label}</p>
           <div className="flex items-center justify-between pt-2 border-t border-border/50">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onSkip}
+                className="px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Skip
+              </button>
+              {currentIndex > 0 && onPrev && (
+                <button
+                  type="button"
+                  onClick={onPrev}
+                  className="px-2.5 py-1 text-xs font-medium border rounded-md hover:bg-muted transition-colors"
+                >
+                  ← Back
+                </button>
+              )}
+            </div>
             <button
-              onClick={onSkip}
-              className="px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Skip Tour
-            </button>
-            <button
+              type="button"
               onClick={onNext}
               className="px-3.5 py-1.5 text-xs font-semibold bg-primary text-primary-foreground rounded-md shadow hover:opacity-90 active:scale-95 transition-all"
             >

@@ -436,20 +436,32 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     # -------------------------------------------------------------------------
     {
         "name": "highlight_element",
-        "description": "Trigger Teach Mode spotlight highlight on a DOM element by tour ID.",
+        "description": "Trigger Teach Mode spotlight highlight on a DOM element by tour ID, or pass steps for a guided tour.",
         "parameters": {
             "type": "object",
             "properties": {
                 "tour_id": {
                     "type": "string",
-                    "description": "The data-tour-id of the target element."
+                    "description": "The data-tour-id of the target element (for single-step highlights)."
                 },
                 "label": {
                     "type": "string",
                     "description": "Explanation text to show in the callout tooltip."
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "Optional list of multi-step tour items: [{'tour_id': 'nav-overview', 'label': '...'}, ...]",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tour_id": {"type": "string"},
+                            "label": {"type": "string"}
+                        },
+                        "required": ["tour_id", "label"]
+                    }
                 }
             },
-            "required": ["tour_id"]
+            "required": []
         }
     }
 ]

@@ -80,6 +80,20 @@ export function TourController({ children }: TourControllerProps) {
     });
   }, []);
 
+  const prevStep = useCallback(() => {
+    setState((prev) => {
+      if (!prev.active || prev.currentIndex <= 0) return prev;
+      const prevIdx = prev.currentIndex - 1;
+      return {
+        ...prev,
+        currentIndex: prevIdx,
+        currentTourId: prev.steps[prevIdx].tour_id,
+        currentLabel: prev.steps[prevIdx].label,
+        isLastStep: false,
+      };
+    });
+  }, []);
+
   const skipTour = useCallback(() => {
     setState(EMPTY_STATE);
     if (typeof window !== "undefined") {
@@ -114,7 +128,10 @@ export function TourController({ children }: TourControllerProps) {
         tourId={state.currentTourId}
         label={state.currentLabel}
         onNext={nextStep}
+        onPrev={prevStep}
         onSkip={skipTour}
+        currentIndex={state.currentIndex}
+        totalSteps={state.steps.length}
         isLastStep={state.isLastStep}
         showNav={state.active}
       />

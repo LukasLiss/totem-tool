@@ -496,7 +496,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
     try {
       const activeContext: AssistantContext = context ?? {};
-      const streamGenerator = streamChat(text, activeContext);
+      const streamGenerator = streamChat(text, activeContext, mode);
 
       for await (const event of streamGenerator) {
         if (controller.signal.aborted) {
