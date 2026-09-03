@@ -130,7 +130,7 @@ class DashboardService:
             except Project.DoesNotExist:
                 raise PermissionError(f"Project with ID {project_id} does not exist or user lacks access.")
         else:
-            project = Project.objects.filter(users=user).first()
+            project = Project.objects.filter(users=user).last()
             if project is None:
                 project = Project.objects.create(name=f"{getattr(user, 'username', 'User')}'s Project")
                 project.users.add(user)

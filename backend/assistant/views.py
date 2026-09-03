@@ -513,16 +513,11 @@ def confirm_action(request):
         update_action_status(pending_action_id, "executed")
         tool_name = action_record.get("tool_name", "")
         tool_args = action_record.get("arguments", {})
-        ctx = action_record.get("context", {})
+        ctx = action_record.get("context", {}) or {}
+        exec_ctx = {**ctx, "__confirmed__": True, "confirmed": True}
 
         try:
-            result = call_tool(tool_name, tool_args, user=request.user, context=ctx)
-        except PermissionError:
-            result = {
-                "status": "executed",
-                "tool": tool_name,
-                "arguments": tool_args,
-            }
+            result = call_tool(tool_name, tool_args, user=request.user, context=exec_ctx)
         except Exception as exc:
             result = {"error": str(exc)}
     else:

@@ -1,4 +1,4 @@
-﻿import { useContext, useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -30,6 +30,7 @@ export function useAssistantContext(overrides?: Partial<AssistantContext>): Assi
     const payload: AssistantContext = {
       active_file_id: selectedFile?.id ?? undefined,
       selected_file_id: selectedFile?.id ?? undefined,
+      project_id: selectedFile?.project ?? undefined,
       view_mode: viewModeStr,
       pathname: location?.pathname || "/",
       current_dashboard_id: currentDashboardId,

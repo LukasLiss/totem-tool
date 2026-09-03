@@ -30,14 +30,22 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
   const handleDecision = async (id: string, approved: boolean, name: string, actionArgs: Record<string, unknown>) => {
     setDeciding((prev) => ({ ...prev, [id]: true }));
     try {
-      await confirmAction(id, approved);
-      // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh
+      const res = await confirmAction(id, approved);
+      // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh & auto-selection
       if (approved && DASHBOARD_MUTATING_TOOLS.has(name)) {
+        const targetId = (res as any)?.result?.id ?? actionArgs?.dashboard_id;
         window.dispatchEvent(
           new CustomEvent("totem:refresh-dashboard", {
-            detail: { dashboard_id: actionArgs.dashboard_id },
+            detail: { dashboard_id: targetId },
           })
         );
+        if (targetId) {
+          window.dispatchEvent(
+            new CustomEvent("totem:select-dashboard", {
+              detail: { dashboard_id: targetId },
+            })
+          );
+        }
       }
     } catch {
       // Best-effort — server may not implement storage yet
