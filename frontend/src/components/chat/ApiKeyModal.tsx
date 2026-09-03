@@ -47,7 +47,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "gemini",
     name: "Google Gemini",
-    tagline: "Gemini 2.5 Flash · Free tier on Google AI Studio",
+    tagline: "Gemini 3.8 Flash · Free tier on Google AI Studio",
     placeholder: "AIzaSy...",
     linkText: "Get Gemini Key",
     linkUrl: "https://aistudio.google.com/app/apikey",
@@ -57,7 +57,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "openai",
     name: "OpenAI",
-    tagline: "GPT-4o · Latest flagship model",
+    tagline: "GPT-5.6 Luna · Latest cost-efficient flagship",
     placeholder: "sk-proj-...",
     linkText: "Get OpenAI Key",
     linkUrl: "https://platform.openai.com/api-keys",
@@ -67,7 +67,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "anthropic",
     name: "Anthropic Claude",
-    tagline: "Claude Sonnet 4.5 · Latest Sonnet",
+    tagline: "Claude Sonnet 5 · Latest Sonnet",
     placeholder: "sk-ant-api03-...",
     linkText: "Get Claude Key",
     linkUrl: "https://console.anthropic.com/settings/keys",
