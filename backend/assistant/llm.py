@@ -80,18 +80,20 @@ class BaseLLMProvider(abc.ABC):
 
 class GeminiProvider(BaseLLMProvider):
     """
-    Direct REST SSE & JSON provider for Google Gemini models.
-    Supports gemini-3.6-flash, gemini-2.5-flash, gemini-1.5-flash.
+    Direct REST SSE & JSON provider for Google Gemini API (v1beta).
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 45,
     ):
         self.api_key = api_key if api_key is not None else getattr(settings, "GEMINI_API_KEY", "")
-        self.model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
+        chosen_model = model or getattr(settings, "ASSISTANT_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
+        if chosen_model in ("gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"):
+            chosen_model = "gemini-3.6-flash"
+        self.model = chosen_model
         self.timeout = timeout
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -108,15 +110,25 @@ class GeminiProvider(BaseLLMProvider):
             for item in history:
                 if not isinstance(item, dict):
                     continue
-                role = "model" if item.get("role") in ("assistant", "model") else "user"
+                role = "user" if item.get("role") in ("user", "human") else "model"
                 content = str(item.get("content", ""))
                 if content:
-                    contents.append({"role": role, "parts": [{"text": content}]})
+                    contents.append({
+                        "role": role,
+                        "parts": [{"text": content}]
+                    })
 
-        contents.append({"role": "user", "parts": [{"text": user_message}]})
+        contents.append({
+            "role": "user",
+            "parts": [{"text": user_message}]
+        })
 
         payload: Dict[str, Any] = {
             "contents": contents,
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 4096,
+            }
         }
 
         if system_prompt:
@@ -149,6 +161,7 @@ class GeminiProvider(BaseLLMProvider):
 
         try:
             resp = requests.post(url, json=payload, timeout=self.timeout)
+            resp.encoding = "utf-8"
             if resp.status_code != 200:
                 # Attempt fallback model if 404 or unsupported
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
@@ -172,7 +185,7 @@ class GeminiProvider(BaseLLMProvider):
                 for part in parts:
                     if isinstance(part, dict):
                         if "text" in part:
-                            text_parts.append(part["text"])
+                            text_parts.append(repair_mojibake(part["text"]))
                         if "functionCall" in part:
                             fc = part["functionCall"]
                             tool_calls.append({
@@ -216,6 +229,7 @@ class GeminiProvider(BaseLLMProvider):
 
         try:
             resp = requests.post(url, json=payload, stream=True, timeout=self.timeout)
+            resp.encoding = "utf-8"
             if resp.status_code != 200:
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
@@ -227,11 +241,10 @@ class GeminiProvider(BaseLLMProvider):
                 return
 
             last_usage = {}
-            for line in resp.iter_lines(decode_unicode=True):
-                if not line:
+            for raw_line in resp.iter_lines():
+                if not raw_line:
                     continue
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8")
+                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
                 if line.startswith("data: "):
                     data_str = line[6:].strip()
                     if not data_str:
@@ -258,7 +271,7 @@ class GeminiProvider(BaseLLMProvider):
                     for part in parts:
                         if isinstance(part, dict):
                             if "text" in part and part["text"]:
-                                yield {"type": "text", "content": part["text"]}
+                                yield {"type": "text", "content": repair_mojibake(part["text"])}
                             if "functionCall" in part:
                                 fc = part["functionCall"]
                                 yield {
@@ -335,6 +348,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, timeout=self.timeout)
+            resp.encoding = "utf-8"
             if resp.status_code != 200:
                 return {
                     "text": f"Anthropic error ({resp.status_code}): {resp.text}",
@@ -346,7 +360,7 @@ class AnthropicProvider(BaseLLMProvider):
             tool_calls = []
             for block in data.get("content", []):
                 if block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
+                    text_parts.append(repair_mojibake(block.get("text", "")))
                 elif block.get("type") == "tool_use":
                     tool_calls.append({
                         "id": block.get("id", str(uuid.uuid4())),
@@ -408,6 +422,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         try:
             resp = requests.post(self.base_url, headers=headers, json=payload, stream=True, timeout=self.timeout)
+            resp.encoding = "utf-8"
             if resp.status_code != 200:
                 yield {"type": "error", "message": f"Anthropic stream error: {resp.text}"}
                 yield {"type": "done", "usage": {}}
@@ -416,11 +431,10 @@ class AnthropicProvider(BaseLLMProvider):
             current_tool_call: Optional[Dict[str, Any]] = None
             json_accum = ""
 
-            for line in resp.iter_lines(decode_unicode=True):
-                if not line:
+            for raw_line in resp.iter_lines():
+                if not raw_line:
                     continue
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8")
+                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
                 if not line.startswith("data: "):
                     continue
                 data_str = line[6:].strip()
