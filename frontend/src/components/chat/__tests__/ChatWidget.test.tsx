@@ -6,6 +6,8 @@ import {
   ToolExecution,
   STORAGE_MODE_KEY,
   STORAGE_MESSAGES_KEY,
+  STORAGE_MESSAGES_KEY_TEACH,
+  STORAGE_MESSAGES_KEY_ACT,
   STORAGE_DRAWER_WIDTH_KEY,
   DEFAULT_DRAWER_WIDTH,
   WIDE_DRAWER_WIDTH,
@@ -645,6 +647,24 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       expect(saved).toBe("720");
       const parsed = parseInt(saved!, 10);
       expect(parsed).toBe(720);
+    });
+
+    it("verifies per-mode storage keys and separate message persistence for teach and act", () => {
+      expect(STORAGE_MESSAGES_KEY_TEACH).toBe("totem_chat_messages_teach");
+      expect(STORAGE_MESSAGES_KEY_ACT).toBe("totem_chat_messages_act");
+
+      const teachHistory = [{ id: "t1", role: "user", content: "Teach question", timestamp: 1 }];
+      const actHistory = [{ id: "a1", role: "user", content: "Act task", timestamp: 2 }];
+
+      mockStorage[STORAGE_MESSAGES_KEY_TEACH] = JSON.stringify(teachHistory);
+      mockStorage[STORAGE_MESSAGES_KEY_ACT] = JSON.stringify(actHistory);
+
+      const parsedTeach = JSON.parse(localStorage.getItem(STORAGE_MESSAGES_KEY_TEACH)!);
+      const parsedAct = JSON.parse(localStorage.getItem(STORAGE_MESSAGES_KEY_ACT)!);
+
+      expect(parsedTeach[0].content).toBe("Teach question");
+      expect(parsedAct[0].content).toBe("Act task");
+      expect(parsedTeach).not.toEqual(parsedAct);
     });
   });
 });
