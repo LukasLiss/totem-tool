@@ -71,8 +71,11 @@ export function NavDashboard({
   const handleAddDashboard = async () => {
     if (!selectedFile?.project) return;
     try {
-      await addDashboard(dashboardname, selectedFile.project);
+      const newDash = await addDashboard(dashboardname, selectedFile.project);
       await refreshDashboards();   // ✅ ask parent to reload dashboards
+      if (newDash?.id) {
+        setViewMode({ type: 'dashboard', id: newDash.id });
+      }
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
     } catch (error: unknown) {
@@ -201,7 +204,7 @@ export function NavDashboard({
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
                     <Dialog open={open} onOpenChange={setOpen}>
-                      <SidebarMenuSubButton asChild className="cursor-pointer">
+                      <SidebarMenuSubButton asChild className="cursor-pointer" data-tour-id={TOUR_IDS.DASHBOARD_ADD_BTN}>
                         <DialogTrigger>
                           <Plus className="w-4 h-4 shrink-0" />
                           <span className="truncate">Add Dashboard</span>
@@ -231,6 +234,7 @@ export function NavDashboard({
                                 <Input
                                   id="name-1"
                                   name="name"
+                                  data-tour-id={TOUR_IDS.DASHBOARD_NAME_INPUT}
                                   value={dashboardname}
                                   onChange={(e) => setDashboardname(e.target.value)}
                                   placeholder="Dashboard Name"
@@ -241,7 +245,7 @@ export function NavDashboard({
                               <DialogClose asChild>
                                 <Button type="button" variant="outline">Cancel</Button>
                               </DialogClose>
-                              <Button type="submit">Save changes</Button>
+                              <Button type="submit" data-tour-id={TOUR_IDS.DASHBOARD_SAVE_BTN}>Save changes</Button>
                             </DialogFooter>
                           </form>
                         </DialogContent>

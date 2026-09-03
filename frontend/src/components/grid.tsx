@@ -141,6 +141,7 @@ const GridContent: React.FC = () => {
         <Button
             variant="ghost"
             size="icon"
+            data-tour-id={TOUR_IDS.DASHBOARD_ADD_CARD}
             onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
             setIsEditMode(!isEditMode);}}>

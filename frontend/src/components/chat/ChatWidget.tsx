@@ -75,8 +75,8 @@ export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string
       prompt: "Explain how conformance checking works in Totem and what alignments mean.",
     },
     {
-      label: "Guide me through dashboard creation",
-      prompt: "Walk me through creating and configuring a custom analytics dashboard.",
+      label: "Create new dashboard",
+      prompt: "Guide me through creating a new dashboard step by step.",
     },
   ],
   act: [
