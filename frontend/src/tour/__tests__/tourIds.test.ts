@@ -17,6 +17,9 @@ describe("tourIds and contracts", () => {
     expect(TOUR_IDS.CHAT_MODE_ACT).toBe("chat-mode-act");
     expect(TOUR_IDS.DASHBOARD_GRID).toBe("dashboard-grid");
     expect(TOUR_IDS.DASHBOARD_ADD_CARD).toBe("dashboard-add-card");
+    expect(TOUR_IDS.DASHBOARD_ADD_BTN).toBe("dashboard-add-btn");
+    expect(TOUR_IDS.DASHBOARD_NAME_INPUT).toBe("dashboard-name-input");
+    expect(TOUR_IDS.DASHBOARD_SAVE_BTN).toBe("dashboard-save-btn");
     expect(TOUR_IDS.FILE_SELECTOR).toBe("file-selector");
     expect(TOUR_IDS.PROJECT_SWITCHER).toBe("project-switcher");
     expect(TOUR_IDS.VIEW_MODE_SELECTOR).toBe("view-mode-selector");

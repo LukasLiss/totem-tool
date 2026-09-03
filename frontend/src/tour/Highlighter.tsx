@@ -141,12 +141,15 @@ export function Highlighter({
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
 
-    const timer = setTimeout(updatePosition, 100);
+    // Poll for dynamic appearance (e.g. dropdown expanding, dialog popping up)
+    const interval = setInterval(updatePosition, 100);
+    const stopTimer = setTimeout(() => clearInterval(interval), 3000);
 
     return () => {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
-      clearTimeout(timer);
+      clearInterval(interval);
+      clearTimeout(stopTimer);
     };
   }, [showNav, tourId]);
 
@@ -160,9 +163,9 @@ export function Highlighter({
 
       // Check if user clicked the highlighted element or inside it
       if (el === e.target || el.contains(e.target as Node)) {
-        // If there is a next step, smoothly advance after action opens
-        // If it's the final step, stay visible so user can complete action and click "Finish Tour"
-        if (!isLastStep) {
+        // If the element is an input or textarea, let the user focus and type without advancing immediately!
+        const isInput = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+        if (!isLastStep && !isInput) {
           setTimeout(() => {
             onNext();
           }, 600);
