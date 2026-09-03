@@ -195,6 +195,8 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
     "content-type",
+    "x-llm-key",
+    "x-llm-provider",
 ]
 
 cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
