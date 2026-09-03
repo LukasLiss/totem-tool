@@ -473,8 +473,8 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         totem = self._totem()
 
         with (
-            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
-            patch("api.views.totemDiscovery_db", return_value=totem),
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=totem),
         ):
             response = self.client.get(
                 f"/api/files/{self.event_log.pk}/discover_totem/"
@@ -504,10 +504,10 @@ class EventLogObjectTypesApiTests(TestCase):
     def test_returns_cached_metadata_without_taking_algorithm_lock(self):
         with (
             patch(
-                "api.views._get_ocel_object_types",
+                "api.views.event_log._get_ocel_object_types",
                 return_value=["Item", "Order"],
             ) as get_types,
-            patch("api.views._with_ocel_db") as algorithm_lock,
+            patch("api.views.event_log._with_ocel_db") as algorithm_lock,
         ):
             response = self.client.get(self.url, {"bypass_cache": "1"})
 
@@ -748,10 +748,10 @@ class TotemConformanceApiValidationTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ) as load_ocel,
-            patch("api.views.conformance_of_totem") as conformance,
+            patch("api.views.event_log.conformance_of_totem") as conformance,
         ):
             conformance.return_value.to_dict.return_value = expected_result
             response = self.client.post(
@@ -807,8 +807,8 @@ class TotemConformanceApiValidationTests(TestCase):
                     content_json=content_json
                 )
                 with (
-                    patch("api.views._with_ocel_db") as load_ocel,
-                    patch("api.views.conformance_of_totem") as conformance,
+                    patch("api.views.event_log._with_ocel_db") as load_ocel,
+                    patch("api.views.event_log.conformance_of_totem") as conformance,
                 ):
                     response = self.client.post(
                         self.url,
@@ -830,10 +830,10 @@ class TotemConformanceApiValidationTests(TestCase):
     def test_ocel_load_failure_returns_server_error(self):
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 side_effect=RuntimeError("OCEL unavailable"),
             ) as load_ocel,
-            patch("api.views.conformance_of_totem") as conformance,
+            patch("api.views.event_log.conformance_of_totem") as conformance,
         ):
             response = self._post_directly_to_view()
 
@@ -852,11 +852,11 @@ class TotemConformanceApiValidationTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ),
             patch(
-                "api.views.conformance_of_totem",
+                "api.views.event_log.conformance_of_totem",
                 side_effect=RuntimeError("Conformance failed"),
             ) as conformance,
         ):
@@ -884,11 +884,11 @@ class TotemConformanceApiValidationTests(TestCase):
         }
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(object()),
             ),
-            patch("api.views.conformance_of_totem") as conformance,
-            patch("api.views.totemDiscovery_db") as discovery,
+            patch("api.views.event_log.conformance_of_totem") as conformance,
+            patch("api.views.event_log.totemDiscovery_db") as discovery,
         ):
             conformance.return_value.to_dict.return_value = result_json
             response = self.client.post(
@@ -987,9 +987,9 @@ class OCCNConformanceApiTests(TestCase):
 
     def test_unsupported_replay_unit_strategy_is_rejected(self):
         with (
-            patch("api.views._with_ocel_db") as load_ocel,
-            patch("api.views.extract_occn_replay_units") as extract,
-            patch("api.views.occn_replay_fitness") as fitness,
+            patch("api.views.event_log._with_ocel_db") as load_ocel,
+            patch("api.views.event_log.extract_occn_replay_units") as extract,
+            patch("api.views.event_log.occn_replay_fitness") as fitness,
         ):
             response = self.client.post(
                 self.url,
@@ -1037,12 +1037,12 @@ class OCCNConformanceApiTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ),
-            patch("api.views._object_types", return_value=["Item", "Order"]),
-            patch("api.views.extract_occn_replay_units") as extract,
-            patch("api.views.occn_replay_fitness") as fitness,
+            patch("api.views.event_log._object_types", return_value=["Item", "Order"]),
+            patch("api.views.event_log.extract_occn_replay_units") as extract,
+            patch("api.views.event_log.occn_replay_fitness") as fitness,
         ):
             response = self.client.post(
                 self.url,
@@ -1160,9 +1160,9 @@ class OCCNConformanceApiTests(TestCase):
                     content_json=content_json
                 )
                 with (
-                    patch("api.views._with_ocel_db") as load_ocel,
-                    patch("api.views.extract_occn_replay_units") as extract,
-                    patch("api.views.occn_replay_fitness") as fitness,
+                    patch("api.views.event_log._with_ocel_db") as load_ocel,
+                    patch("api.views.event_log.extract_occn_replay_units") as extract,
+                    patch("api.views.event_log.occn_replay_fitness") as fitness,
                 ):
                     response = self.client.post(
                         self.url,
@@ -1185,11 +1185,11 @@ class OCCNConformanceApiTests(TestCase):
     def test_ocel_load_failure_returns_server_error(self):
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 side_effect=RuntimeError("OCEL unavailable"),
             ) as load_ocel,
-            patch("api.views.extract_occn_replay_units") as extract,
-            patch("api.views.occn_replay_fitness") as fitness,
+            patch("api.views.event_log.extract_occn_replay_units") as extract,
+            patch("api.views.event_log.occn_replay_fitness") as fitness,
         ):
             response = self._post_directly_to_view()
 
@@ -1206,14 +1206,14 @@ class OCCNConformanceApiTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 side_effect=RuntimeError("Extraction failed"),
             ) as extract,
-            patch("api.views.occn_replay_fitness") as fitness,
+            patch("api.views.event_log.occn_replay_fitness") as fitness,
         ):
             response = self._post_directly_to_view()
 
@@ -1234,15 +1234,15 @@ class OCCNConformanceApiTests(TestCase):
         replay_units = (object(),)
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=replay_units,
             ),
             patch(
-                "api.views.occn_replay_fitness",
+                "api.views.event_log.occn_replay_fitness",
                 side_effect=RuntimeError("Replay failed"),
             ) as fitness,
         ):
@@ -1291,7 +1291,7 @@ class OCCNConformanceApiTests(TestCase):
         database = OcelDuckDB(source)
         try:
             with patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(database),
             ):
                 response = self.client.post(
@@ -1351,7 +1351,7 @@ class OCCNConformanceApiTests(TestCase):
         database = OcelDuckDB(source)
         try:
             with patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(database),
             ):
                 response = self.client.post(
@@ -1421,15 +1421,15 @@ class OCCNConformanceApiTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ) as load_ocel,
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=replay_units,
             ) as extract,
             patch(
-                "api.views.occn_replay_fitness",
+                "api.views.event_log.occn_replay_fitness",
                 return_value=result,
             ) as fitness,
         ):
@@ -1495,15 +1495,15 @@ class OCCNConformanceApiTests(TestCase):
         result = OCCNReplayFitnessResult(unit_results=())
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(object()),
             ),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=(),
             ),
             patch(
-                "api.views.occn_replay_fitness",
+                "api.views.event_log.occn_replay_fitness",
                 return_value=result,
             ),
         ):
@@ -1578,7 +1578,7 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             file="foreign-detail-log.json",
         )
 
-        with patch("api.views._with_ocel_db") as load_ocel:
+        with patch("api.views.event_log._with_ocel_db") as load_ocel:
             response = self.client.get(
                 f"/api/files/{foreign_log.pk}/occn_replay_unit_detail/",
                 {"unit_id": "connected_components:000001"},
@@ -1603,7 +1603,7 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         for label, query in invalid_queries:
             with (
                 self.subTest(label=label),
-                patch("api.views._with_ocel_db") as load_ocel,
+                patch("api.views.event_log._with_ocel_db") as load_ocel,
             ):
                 response = self.client.get(self.url, query)
 
@@ -1613,11 +1613,11 @@ class OCCNReplayUnitDetailApiTests(TestCase):
     def test_unknown_replay_unit_returns_not_found(self):
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(object()),
             ),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=(self._unit(),),
             ),
         ):
@@ -1642,12 +1642,12 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         db = object()
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(db),
             ),
-            patch("api.views._object_types", return_value=["Order"]),
+            patch("api.views.event_log._object_types", return_value=["Order"]),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=(replay_unit,),
             ) as extract,
         ):
@@ -1674,7 +1674,7 @@ class OCCNReplayUnitDetailApiTests(TestCase):
 
     def test_extraction_failure_returns_server_error(self):
         with patch(
-            "api.views._with_ocel_db",
+            "api.views.event_log._with_ocel_db",
             side_effect=RuntimeError("OCEL unavailable"),
         ):
             response = self._get_directly_to_view(
@@ -1694,11 +1694,11 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         replay_unit = self._unit(event_count=5)
         with (
             patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(object()),
             ),
             patch(
-                "api.views.extract_occn_replay_units",
+                "api.views.event_log.extract_occn_replay_units",
                 return_value=(replay_unit,),
             ) as extract,
         ):
@@ -1818,7 +1818,7 @@ class OCCNReplayUnitDetailApiTests(TestCase):
         database = OcelDuckDB(source)
         try:
             with patch(
-                "api.views._with_ocel_db",
+                "api.views.event_log._with_ocel_db",
                 return_value=nullcontext(database),
             ):
                 objectless = self.client.get(
@@ -2591,7 +2591,7 @@ class EventLogConversionErrorTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-    @patch("api.views.import_ocel_db")
+    @patch("api.views.event_log.import_ocel_db")
     def test_conversion_failure_deletes_project_eventlog_and_duckdb_file(self, mock_import):
         mock_import.side_effect = RuntimeError("Simulated DuckDB conversion crash")
 
@@ -2694,9 +2694,9 @@ class ProcessAreaDiscoveryApiTests(TestCase):
     def _get(self, query=""):
         url = f"/api/files/{self.event_log.pk}/discover_process_areas/{query}"
         with (
-            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
-            patch("api.views.totemDiscovery_db", return_value=self._totem()),
-            patch("api.views.prepare_db", return_value=self._aggregates()) as prepared,
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=self._totem()),
+            patch("api.views.event_log.prepare_db", return_value=self._aggregates()) as prepared,
         ):
             return self.client.get(url), prepared
 
@@ -2799,8 +2799,8 @@ class ProcessAreaDiscoveryApiTests(TestCase):
     def test_mlpa_cache_key_is_untouched(self):
         totem = self._totem()
         with (
-            patch("api.views._with_ocel_db", return_value=nullcontext(object())),
-            patch("api.views.totemDiscovery_db", return_value=totem),
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=totem),
         ):
             response = self.client.get(f"/api/files/{self.event_log.pk}/discover_mlpa/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -3148,10 +3148,10 @@ class OcelDbConcurrencyTests(TestCase):
             return object()
 
         with (
-            patch.object(_views, "_get_or_load_ocel_db", return_value=fake_db),
-            patch.object(_views, "convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
-            patch.object(_views, "discover_occn", side_effect=fake_discover),
-            patch.object(_views, "serialize_occn", return_value={"ok": True}),
+            patch("api.views._ocel_db._get_or_load_ocel_db", return_value=fake_db),
+            patch("api.views.occn.convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
+            patch("api.views.occn.discover_occn", side_effect=fake_discover),
+            patch("api.views.occn.serialize_occn", return_value={"ok": True}),
         ):
             _views._occn_base_cache.clear()
             response = client.get("/api/occn/", {"file_id": event_log.pk})
