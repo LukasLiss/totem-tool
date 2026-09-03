@@ -24,7 +24,7 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   OCDottedChartComponent: { minW: 4, minH: 3 },
   NewOCDFGComponent: { minW: 4, minH: 4 },
   NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
-  SQLQueryComponent: { minW: 3, minH: 3 },
+  SqlQueryComponent: { minW: 4, minH: 5 },
   PieChartComponent: { minW: 2, minH: 6 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
@@ -319,6 +319,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           automatic_loading: (node as any).automatic_loading ?? false,
           timeout_s: (node as any).timeout_s ?? 30.0,
         };
+      } else if (component_name === "SqlQueryComponent") {
+        props = {
+          name: (node as any).name ?? "",
+          query: (node as any).query ?? "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+          expected_result: (node as any).expected_result ?? null,
+          row_limit: (node as any).row_limit ?? 25,
+        };
       } else if (component_name === "PieChartComponent") {
         props = {
           query: (node as any).query ?? '',
@@ -419,6 +426,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "OC Petri Net";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
+        } else if (item.component_name === "SqlQueryComponent") {
+          content = "SQL Editor";
         } else if (item.component_name === "PieChartComponent") {
           content = "Pie Chart";
         } else {
@@ -493,6 +502,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w_divergence: item.w_divergence,
             alpha: item.alpha,
             beta: item.beta,
+            // SqlQueryComponent properties
+            name: item.name,
+            query: item.query,
+            expected_result: item.expected_result,
+            row_limit: item.row_limit,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -551,6 +565,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).w_divergence = item.w_divergence;
               (node as any).alpha = item.alpha;
               (node as any).beta = item.beta;
+              // SqlQueryComponent properties
+              (node as any).name = item.name;
+              (node as any).query = item.query;
+              (node as any).expected_result = item.expected_result;
+              (node as any).row_limit = item.row_limit;
             }
           }
           // Set data attribute for persistence

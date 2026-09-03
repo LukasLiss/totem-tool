@@ -274,7 +274,22 @@ class OCDFGComponent(DashboardComponent):
 
 class FilterStackComponent(DashboardComponent):
     filter_stack_json = models.JSONField(default=list, blank=True)
-    
+
+
+class SqlQueryComponent(DashboardComponent):
+    # What other widgets could bind to (name-based source lookup — not wired
+    # to any consumer yet, reserved for a follow-up).
+    name = models.CharField(max_length=100, blank=True, default="")
+    query = models.TextField(
+        default="SELECT activity, count(*) AS n FROM events GROUP BY activity"
+    )
+    # Optional human annotation of the expected result shape; null means the
+    # "Expected result" pane is not shown at all (equivalent of the design's
+    # `expectedResult === undefined`).
+    expected_result = models.TextField(null=True, blank=True, default=None)
+    row_limit = models.PositiveIntegerField(default=25)
+
+
 class OCDottedChartComponent(DashboardComponent):
     file_id = models.PositiveIntegerField(null=True, blank=True)
     x_axis = models.CharField(max_length=255, default="time")
@@ -295,10 +310,6 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
-
-class SQLQueryComponent(DashboardComponent):
-    query = models.TextField(default="SELECT * FROM data LIMIT 10")
-
 
 class PieChartComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM events LIMIT 10")

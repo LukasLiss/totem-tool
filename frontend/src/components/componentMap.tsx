@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useContext, useCallback } from "react";
 import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
@@ -59,7 +59,6 @@ import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
-import SQLQueryComponent from './SQLQueryComponent';
 import PieChartComponent from './PieChartComponent';
 import { Label } from '@/components/ui/label';
 import {
@@ -72,6 +71,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ChevronDown } from 'lucide-react';
+import SqlQueryEditor, {
+  SQL_QUERY_DEFAULT,
+  type SqlQueryConfig,
+} from '@/react_component/SqlQueryEditor';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 
 function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
@@ -138,6 +141,11 @@ interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // SqlQueryComponent properties
+    name?: string;
+    query?: string;
+    expected_result?: string | null;
+    row_limit?: number;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
@@ -167,7 +175,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
       {isEditMode ? (
         // Edit mode: Editable
         <Card className="w-full h-full min-h-80 rounded-none">
-          
+
           <CardContent>
             <Textarea
             value={text}
@@ -177,7 +185,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
           />
           </CardContent>
         </Card>
-        
+
       ) : (
         // Normal mode: Read-only
         <Card className="w-full h-full min-h-80 rounded-none">
@@ -197,23 +205,23 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
-  
-  
+
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-  
+
   console.log("selectedFile start:", selectedFile);
 
   useEffect(() => {
     const handleProcessFile = async () => {
-      
-      
+
+
       if (!selectedFile?.id) {
         console.log("No file selected, skipping processing");
         setProcessedResult(null);
         return;
       }
-      
+
       setIsLoading(true);
       setError(null);
 
@@ -228,7 +236,7 @@ const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node,
         setIsLoading(false);
       }
     };
-    
+
     handleProcessFile();
   }, [selectedFile]); // Only re-run when selectedFile changes
 
@@ -981,7 +989,7 @@ const TotemMinerComponent: React.FC<ComponentProps> = ({
             The TOTeM Miner discovers and visualizes the structure of your event log.
           </p>
           <p className="text-sm text-muted-foreground">
-            {selectedFile 
+            {selectedFile
               ? `Currently analyzing: ${selectedFile.name || selectedFile.filename || 'Event Log'}`
               : 'Automatically analyzing the current project\'s event log.'}
           </p>
@@ -1748,6 +1756,45 @@ const OCPNComponent: React.FC<ComponentProps> = ({
 };
 
 
+
+// SqlQueryComponent: dashboard-grid adapter around the standalone
+// SqlQueryEditor (frontend/src/react_component/SqlQueryEditor.tsx). All
+// behavior lives there; this just maps the GridStack node/onUpdate contract
+// onto SqlQueryEditor's plain value/onChange props.
+
+const SqlQueryComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const value: SqlQueryConfig = {
+    name: node.name ?? "",
+    query: node.query ?? SQL_QUERY_DEFAULT,
+    expectedResult: node.expected_result ?? null,
+    rowLimit: node.row_limit ?? 25,
+  };
+
+  const handleChange = (patch: Partial<SqlQueryConfig>) => {
+    const update: Record<string, unknown> = {};
+    if (patch.name !== undefined) update.name = patch.name;
+    if (patch.query !== undefined) update.query = patch.query;
+    if (patch.expectedResult !== undefined) update.expected_result = patch.expectedResult;
+    if (patch.rowLimit !== undefined) update.row_limit = patch.rowLimit;
+    onUpdate?.(update as any);
+  };
+
+  return (
+    <SqlQueryEditor
+      value={value}
+      onChange={handleChange}
+      isEditMode={isEditMode}
+      fileId={selectedFile?.id}
+    />
+  );
+};
+
+
 // Component map for easy lookup
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -1762,7 +1809,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
   OCPNComponent,
-  SQLQueryComponent,
   PieChartComponent,
   OCCNComponent,
+  SqlQueryComponent,
 };

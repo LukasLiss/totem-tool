@@ -12,7 +12,7 @@ from totem_lib import (
 from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SQLQueryComponent, PieChartComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent
 from django.db.models import Max
 
 
@@ -446,12 +446,6 @@ class OCCNComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 #Fill in new Component Serializers here and then edit the mapping below
 
-class SQLQueryComponentSerializer(DashboardComponentSerializer):
-    class Meta:
-        model = SQLQueryComponent
-        fields = "__all__"
-
-
 class PieChartComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = PieChartComponent
@@ -462,6 +456,14 @@ class FilterStackComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = FilterStackComponent
         fields = "__all__"
+
+
+class SqlQueryComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = SqlQueryComponent
+        fields = "__all__"
+
+
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -477,7 +479,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCPNComponent: OCPNComponentSerializer,
-        SQLQueryComponent: SQLQueryComponentSerializer,
         PieChartComponent: PieChartComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
+        SqlQueryComponent: SqlQueryComponentSerializer,
     }
