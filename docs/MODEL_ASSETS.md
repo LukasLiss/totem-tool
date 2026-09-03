@@ -189,6 +189,17 @@ after viewing is cheap), converts the result to the canonical asset JSON, and
 stores it through the regular asset validation. The response is the created
 asset (`201`), or `400` for validation errors such as a duplicate name.
 
+The **global filter** is honoured exactly as by the read endpoints: when the
+component's global-filter toggle is on, the frontend sends the applied filter
+as query parameters (`object_types`, `activities`, `after`, `before`) and the
+backend mines the model on the filtered log, so the stored model is the one
+on screen. The global object-type filter narrows the component's own
+`object_types` selection (intersection; if the selection lies completely
+outside the filter, the filter wins). With the toggle off the filter is
+deliberately not sent. A filtered save records the filter under
+`metadata.global_filter`, and filtered discoveries never share cache entries
+with unfiltered ones.
+
 ### Image assets
 
 Besides model assets, projects can store images (png, jpeg, jpg, svg) under

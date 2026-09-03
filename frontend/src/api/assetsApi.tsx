@@ -128,6 +128,12 @@ export interface SaveDiscoveredModelParams {
   modelType: AssetType;
   /** Discovery settings of the requesting component (tau, threshold, …). */
   params?: Record<string, unknown>;
+  /**
+   * Whether the component displays the globally filtered log. When true the
+   * applied global filter is sent along (as for the read endpoints), so the
+   * stored model is the one on screen; when false it is deliberately not.
+   */
+  filterEnabled?: boolean;
 }
 
 /**
@@ -139,6 +145,7 @@ export async function saveDiscoveredModel({
   name,
   modelType,
   params,
+  filterEnabled = false,
 }: SaveDiscoveredModelParams) {
   const { data } = await axios.post<ProjectAsset>(
     `/api/files/${fileId}/save_discovered_model/`,
@@ -146,7 +153,8 @@ export async function saveDiscoveredModel({
       name,
       model_type: modelType,
       params: params ?? {},
-    }
+    },
+    { _skipGlobalFilter: !filterEnabled }
   );
   return data;
 }

@@ -659,6 +659,7 @@ function OCCNVisualizer({
             {data == null && fileId != null && (
               <SaveModelAssetButton
                 fileId={fileId}
+                filterEnabled={filterEnabled}
                 modelType="OCCN"
                 params={{
                   relative_occurrence_threshold: threshold,

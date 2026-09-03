@@ -1231,6 +1231,16 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 t.strip() for t in raw_object_types.split(",") if t.strip()
             ) or None
 
+        # The global filter arrives as query parameters, exactly as for the
+        # read endpoints the components display. The stored model has to be
+        # the one the user is looking at, so discovery runs on the same
+        # filtered log: event predicates through the shadow tables, the
+        # object-type predicate by narrowing the component's own selection.
+        fp = _parse_filter_params(request)
+        is_filtered = bool(fp)
+        object_type_filter = _effective_object_types(object_type_filter, fp.get("object_types"))
+        fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
+
         try:
             if model_type == ProjectAsset.AssetType.TOTEM:
                 try:
@@ -1239,7 +1249,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     tau = 0.0
                 tau = min(1.0, max(0.0, tau))
                 with _with_ocel_db(user_file) as db:
-                    totem = totemDiscovery_db(db, tau=tau)
+                    with _filter_shadow(db, fp):
+                        totem = totemDiscovery_db(db, tau=tau)
                 content_json = totem_to_dict(totem)
 
             elif model_type == ProjectAsset.AssetType.OCCN:
@@ -1248,7 +1259,20 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     threshold = 0.0
                 threshold = min(1.0, max(0.0, threshold))
-                base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
+                if is_filtered:
+                    # Same path as OCCNViewSet with a filter: the shared base
+                    # cache only knows unfiltered nets, so mine a fresh one.
+                    parameters = (
+                        {"object_types": object_type_filter} if object_type_filter else None
+                    )
+                    with _with_ocel_db(user_file) as db:
+                        with _filter_shadow(db, fp_non_types):
+                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    base_occn = discover_occn(
+                        ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters
+                    )
+                else:
+                    base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
                 if base_occn is None:
                     return Response(
                         {"error": "Failed to discover OCCN"},
@@ -1274,24 +1298,31 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 ocpn_cache_key = (
                     f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
                 )
+                if is_filtered:
+                    filter_suffix = sha1(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:8]
+                    ocpn_cache_key = f"{ocpn_cache_key}_{filter_suffix}"
                 cached_result = cache.get(ocpn_cache_key)
                 if cached_result and cached_result.get("ocpn"):
                     content_json = cached_result["ocpn"]
                 else:
                     with _with_ocel_db(user_file) as db:
-                        content_json = discover_ocpn_db(
-                            db,
-                            object_types=object_type_filter,
-                            timeout_s=timeout_s,
-                            name=os.path.splitext(
-                                os.path.basename(user_file.file.name)
-                            )[0],
-                        )
+                        with _filter_shadow(db, fp):
+                            content_json = discover_ocpn_db(
+                                db,
+                                object_types=object_type_filter,
+                                timeout_s=timeout_s,
+                                name=os.path.splitext(
+                                    os.path.basename(user_file.file.name)
+                                )[0],
+                            )
                     cache.set(ocpn_cache_key, {"ocpn": content_json}, timeout=3600)
 
             else:  # OCDFG
                 with _with_ocel_db(user_file) as db:
-                    graph = NewOCDFGDb.from_ocel_db(db, object_types=object_type_filter)
+                    # object_types is handled by the library param (like
+                    # NewOCDFGViewSet); shadow only time / activity predicates.
+                    with _filter_shadow(db, fp_non_types):
+                        graph = NewOCDFGDb.from_ocel_db(db, object_types=object_type_filter)
                 object_types = set()
                 activities = []
                 for node in graph.nodes:
@@ -1350,6 +1381,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     "source": "discovery",
                     "event_log_id": user_file.pk,
                     "params": params,
+                    # Provenance: which global filter the model was mined under
+                    # (omitted when none was applied).
+                    **({"global_filter": fp} if is_filtered else {}),
                 },
             },
             context={"request": request},
@@ -2315,6 +2349,23 @@ def _optional_int(value):
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _effective_object_types(selected, global_types):
+    """
+    The object types a discovery should see.
+
+    ``selected`` is the component's own object-type selection, ``global_types``
+    the applied global filter's. The component only ever shows types inside
+    the global filter, so the result is the intersection; when that is empty
+    (the component still remembers types the filter removed) the global filter
+    wins, which is what the read endpoints end up doing as well.
+    """
+    selected = sorted({t for t in (selected or []) if t}) or None
+    global_types = sorted({t for t in (global_types or []) if t}) or None
+    if selected and global_types:
+        return sorted(set(selected) & set(global_types)) or global_types
+    return selected or global_types
 
 
 def _parse_filter_params(request):
