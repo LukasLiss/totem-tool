@@ -155,7 +155,10 @@ export default function OrgaMiningExplorer({
         });
         if (fileIdRef.current !== currentFileId || cancelled) return;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const types: string[] = await res.json();
+        const raw = await res.json();
+        const types: string[] = Array.isArray(raw)
+          ? raw.map((t: any) => (typeof t === "string" ? t : t.name))
+          : [];
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setObjectTypes(types);
         // Default: all types are potential business objects; the selector will

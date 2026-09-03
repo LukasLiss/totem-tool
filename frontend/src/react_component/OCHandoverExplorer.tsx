@@ -253,8 +253,11 @@ export default function OCHandoverExplorer({
         });
         if (fileIdRef.current !== currentFileId || cancelled) return;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const types: string[] = await res.json();
+        const raw = await res.json();
         if (fileIdRef.current !== currentFileId || cancelled) return;
+        const types: string[] = Array.isArray(raw)
+          ? raw.map((t: any) => (typeof t === "string" ? t : t.name))
+          : [];
         setObjectTypes(types);
       } catch (e: any) {
         if (fileIdRef.current !== currentFileId || cancelled) return;

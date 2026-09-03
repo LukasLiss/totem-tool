@@ -2701,6 +2701,26 @@ def variants(request):
     set_cached_result(user_file, "variants", result, cache_params)
     return Response(result, status=status.HTTP_200_OK)
 
+
+def _build_ocel_from_path(path: str):
+    from totem_lib.ocel.ocel import ObjectCentricEventLog
+    from totem_lib.ocel.importer import (
+        load_events_from_sqlite, load_objects_from_sqlite,
+        load_events_from_json,   load_objects_from_json,
+        load_events_from_xml,    load_objects_from_xml,
+    )
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".sqlite", ".db"):
+        log = ObjectCentricEventLog(events=load_events_from_sqlite(path), objects=load_objects_from_sqlite(path))
+    elif ext == ".json":
+        log = ObjectCentricEventLog(events=load_events_from_json(path), objects=load_objects_from_json(path))
+    elif ext == ".xml":
+        log = ObjectCentricEventLog(events=load_events_from_xml(path), objects=load_objects_from_xml(path))
+    else:
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml")
+    return log
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def ochandover(request):
