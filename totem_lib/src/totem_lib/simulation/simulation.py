@@ -6,7 +6,6 @@ from collections import Counter, defaultdict
 import numpy as np
 import polars as pl
 
-from totem_lib import mlpaDiscovery, totemDiscovery
 from totem_lib.ocel.ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEventLog
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     WEEKDAY_NAMES,
@@ -185,7 +184,7 @@ def _estimate_expected_constraint_slots(
 
 
 def _estimate_structure_activity_occurrences(structure_variant, model, rng, n_samples):
-    """Monte-Carlo estimate of expected activity occurrences for one structure. - Needed for the advanced playout, 
+    """Monte-Carlo estimate of expected activity occurrences for one structure. - Needed for the advanced playout,
     as the events of the variant, are not already given be the input variant
 
     Generates ``n_samples`` executions over a fresh clone of the structure's
@@ -702,7 +701,6 @@ class OCProcessAreaSimulationModel:
     This model captures the behavior of objects, resources and their apearance in activities based on the OCEL and the discovered variants.
     It can be used to simulate the execution of the process area under different scenarios, such as varying arrival rates, resource availability, and object interactions.
     It includes:
-    - ToTem Model: The discovered ToTem model for the process, giving higher-level information about the process
     - PlayoutStrategy: Strategy for the playout of the simulation model. This can be a simple playout based on the discovered variants, or a more complex playout based on the stochastic state-space of the process.
     - Resource Constraints: Constraints captued from the OCEL or coming from user input, that represent extra knowledge about the resources used by different events
     - Resource Allocation Strategy: A strategy for allocating resources to events during the simulation, based on the observed behavior in the OCEL or from user input.
@@ -715,7 +713,6 @@ class OCProcessAreaSimulationModel:
         resource_constraints,
         resource_allocation_strategy,
         resource_cooldown_distribution,
-        totem_model,
         needed_resources_per_activity,
         simulation_config,
         source_log_start_unix,
@@ -729,7 +726,6 @@ class OCProcessAreaSimulationModel:
         self.fallback_constraints = fallback_constraints or {}
         self.resource_allocation_strategy = resource_allocation_strategy
         self.resource_cooldown_distribution = resource_cooldown_distribution
-        self.totem_model = totem_model
         self.needed_resources_per_activity = needed_resources_per_activity
         self.simulation_config = simulation_config
         self.source_log_start_unix = source_log_start_unix
@@ -755,11 +751,10 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_simple_simulation(cls, ocel, process_area, resource_types=None):
+    def for_simple_simulation(cls, ocel, process_area):
 
-        # Discover ToTem Model and MLPA
-        totem_model = totemDiscovery(ocel)
-        mlpa = mlpaDiscovery(totem_model)
+        # Resource object types are an explicit input on the process area
+        resource_types = process_area.resource_types
 
         # Discover resource availability calendars
         type_calendars = {}
@@ -772,13 +767,12 @@ class OCProcessAreaSimulationModel:
             }
 
         # Calculate Resource Cooldown Distribution including the resource calendars
-        cooldown_types = resource_types if resource_types else process_area.object_types
         resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, cooldown_types, process_area.activities, calendars=type_calendars
+            ocel, resource_types, process_area.activities, calendars=type_calendars
         )
 
         # Filter event log on Process Area
-        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+        filtered_ocel = ocel.filter_by_process_area(process_area)
 
         # Calculate Variants
         variants = find_object_variants_connected_component(filtered_ocel)
@@ -817,7 +811,6 @@ class OCProcessAreaSimulationModel:
             resource_constraints,
             resource_allocation_strategy,
             resource_cooldown_dist,
-            totem_model,
             needed_resources_per_activity,
             OCProcessAreaSimulationConfiguration(),
             source_log_start_unix,
@@ -827,12 +820,9 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_advanced_simulation(
-        cls, ocel, process_area, resource_types=None, runtime_context_provider=None
-    ):
-        # Discover ToTem Model and MLPA
-        totem_model = totemDiscovery(ocel)
-        mlpa = mlpaDiscovery(totem_model)
+    def for_advanced_simulation(cls, ocel, process_area, runtime_context_provider=None):
+        # Resource object types are an explicit input on the process area
+        resource_types = process_area.resource_types
 
         # Discover resource availability calendars
         type_calendars = {}
@@ -845,13 +835,12 @@ class OCProcessAreaSimulationModel:
             }
 
         # Calculate Resource Cooldown Distribution
-        cooldown_types = resource_types if resource_types else process_area.object_types
         resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, cooldown_types, process_area.activities, calendars=type_calendars
+            ocel, resource_types, process_area.activities, calendars=type_calendars
         )
 
         # Filter event log on Process Area
-        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+        filtered_ocel = ocel.filter_by_process_area(process_area)
 
         # Object-structure variants: the arrival units (object connected components
         # clustered by structure). This mirrors for_simple_simulation — everything
@@ -905,7 +894,6 @@ class OCProcessAreaSimulationModel:
             resource_constraints,
             resource_allocation_strategy,
             resource_cooldown_dist,
-            totem_model,
             needed_resources_per_activity,
             OCProcessAreaSimulationConfiguration(),
             source_log_start_unix,

@@ -108,7 +108,6 @@ def _build_model(
         resource_constraints=constraints or {},
         resource_allocation_strategy=allocation or {},
         resource_cooldown_distribution=cooldowns or {},
-        totem_model=None,
         needed_resources_per_activity={variant: needed},
         simulation_config=config or OCProcessAreaSimulationConfiguration(),
         source_log_start_unix=int(START.timestamp()),

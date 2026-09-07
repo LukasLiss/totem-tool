@@ -2593,16 +2593,20 @@ def run_simulation(request):
     try:
         # Build Process Area
         _report_progress(progress_id, _SIM_RUN_STEPS, 1)
-        process_area = ProcessArea(object_types=object_types, activities=activities)
+        process_area = ProcessArea(
+            object_types=object_types,
+            activities=activities,
+            resource_types=[rt for rt, count in resource_pool.items() if count > 0],
+        )
 
         # Build simulation model based on mode
         if mode == "advanced":
             simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(
-                ocel, process_area, resource_types=list(resource_pool.keys())
+                ocel, process_area
             )
         else:
             simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(
-                ocel, process_area, resource_types=list(resource_pool.keys())
+                ocel, process_area
             )
 
         # Override config if provided
@@ -2648,9 +2652,7 @@ def run_simulation(request):
 
         # Filter original OCEL by process area for comparison
         _report_progress(progress_id, _SIM_RUN_STEPS, 4)
-        totem = totemDiscovery(ocel)
-        mlpa = mlpaDiscovery(totem)
-        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+        filtered_ocel = ocel.filter_by_process_area(process_area)
 
         # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
         _report_progress(progress_id, _SIM_RUN_STEPS, 5)
@@ -3034,10 +3036,12 @@ def get_simulation_details(request):
     try:
         # Build process area and filter OCEL
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 1)
-        process_area = ProcessArea(object_types=object_types, activities=activities)
-        totem = totemDiscovery(ocel)
-        mlpa = mlpaDiscovery(totem)
-        filtered_ocel = ocel.filter_by_process_area(mlpa, process_area)
+        process_area = ProcessArea(
+            object_types=object_types,
+            activities=activities,
+            resource_types=resource_types,
+        )
+        filtered_ocel = ocel.filter_by_process_area(process_area)
 
         # Compute variants_report_progress(progress_id, _SIM_DETAILS_STEPS, 2)
         if mode == "advanced":

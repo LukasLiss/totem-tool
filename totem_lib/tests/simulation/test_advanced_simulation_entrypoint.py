@@ -56,7 +56,7 @@ def _raw_order_log(n_cases=8):
     process area covers only Order/Item, so ``filter_by_process_area`` moves the
     Worker into each event's ``process_area_resources`` attribute — exactly the
     shape ``for_advanced_simulation`` expects. Orders carry an o2o edge to their
-    Items so TOTeM discovery has a relation to work with.
+    Items so the object structure variants have a relation to work with.
     """
     events, objects, tid = [], [], 0
     workers = ["W0", "W1", "W2"]
@@ -86,7 +86,9 @@ def _raw_order_log(n_cases=8):
 
 def _process_area():
     return ProcessArea(
-        object_types=["Order", "Item"], activities=["create", "pick", "ship"]
+        object_types=["Order", "Item"],
+        activities=["create", "pick", "ship"],
+        resource_types=["Worker"],
     )
 
 
@@ -96,7 +98,7 @@ def test_for_advanced_simulation_runs_end_to_end():
     random.seed(0)
     np.random.seed(0)
     model = OCProcessAreaSimulationModel.for_advanced_simulation(
-        _raw_order_log(), _process_area(), resource_types=["Worker"]
+        _raw_order_log(), _process_area()
     )
     sim_log, finished, spawned = model.run(
         sim_duration_s=3 * 24 * HOUR, resource_pool={"Worker": 3}
@@ -115,7 +117,7 @@ def test_advanced_cooldowns_and_calendars_keyed_by_resource_type():
     (Worker), not for the process area's object types (audit H1). A Worker-keyed
     cooldown is what actually gates the resource in the playout."""
     model = OCProcessAreaSimulationModel.for_advanced_simulation(
-        _raw_order_log(), _process_area(), resource_types=["Worker"]
+        _raw_order_log(), _process_area()
     )
 
     # Every activity's cooldown is keyed by the resource type, never by Order/Item.
@@ -131,7 +133,7 @@ def test_advanced_simulation_actually_allocates_resources():
     random.seed(0)
     np.random.seed(0)
     model = OCProcessAreaSimulationModel.for_advanced_simulation(
-        _raw_order_log(), _process_area(), resource_types=["Worker"]
+        _raw_order_log(), _process_area()
     )
     sim_log, _, _ = model.run(sim_duration_s=3 * 24 * HOUR, resource_pool={"Worker": 3})
 
