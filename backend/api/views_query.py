@@ -4,9 +4,9 @@ Backend for the SQL Editor dashboard widget.
 Two endpoints: `query_columns` feeds the table/column browser, `query_execute`
 runs a user-authored SELECT against the OCEL data for one uploaded file.
 Both resolve `file_id` to an `EventLog` the same way the other per-file
-algorithm endpoints do (see `NewOCDFGViewSet`/`OCCNViewSet` in `views.py`),
-and reuse `_with_ocel_db` so a query never races an algorithm run on the same
-DuckDB connection.
+algorithm endpoints do (see `NewOCDFGViewSet`/`OCCNViewSet` in
+`views/ocdfg.py` and `views/occn.py`), and reuse `_with_ocel_db` so a query
+never races an algorithm run on the same DuckDB connection.
 """
 
 import re
