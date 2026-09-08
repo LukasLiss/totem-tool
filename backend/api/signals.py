@@ -18,7 +18,7 @@ def delete_eventlog_file(sender, instance, **kwargs):
 
     # Evict the DuckDB connection from the process-local registry so stale
     # handles don't linger after the underlying file is gone.
-    from .views import (
+    from .views._ocel_db import (
         _OCEL_DB_REGISTRY,
         _OCEL_DB_REGISTRY_LOCK,
         _OCEL_OBJECT_TYPES_REGISTRY,
