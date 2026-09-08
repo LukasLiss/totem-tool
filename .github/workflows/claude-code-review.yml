@@ -40,6 +40,26 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # The code-review plugin's sub-agents read files, run git blame/log and
+          # inspect past PRs, but the plugin frontmatter only allowlists a handful
+          # of `gh` commands. Without these the sub-agent calls are denied, the
+          # session burns its turns retrying, and it never reaches the final
+          # "post a comment" step. Read-only tools only; nothing that can mutate
+          # the checkout or the repository.
+          claude_args: |
+            --allowed-tools Read,Grep,Glob,Task,TodoWrite,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git log:*),Bash(git blame:*),Bash(git show:*),Bash(git diff:*)
+            --max-turns 150
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
+
+      - name: Report denied tool calls
+        if: always()
+        env:
+          EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          if [ -z "$EXECUTION_FILE" ] || [ ! -f "$EXECUTION_FILE" ]; then
+            echo "No execution file available (path: '${EXECUTION_FILE}')"
+            exit 0
+          fi
+          python3 .github/scripts/report_denials.py "$EXECUTION_FILE"
 
