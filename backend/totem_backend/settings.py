@@ -68,6 +68,7 @@ if os.environ.get('RAILWAY_STATIC_URL') or os.environ.get('RAILWAY_ENVIRONMENT')
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -75,11 +76,15 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # 'django_extensions',  # seems not to be needed anymore
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'api',
     'authentification',
+    'assistant',
+    'agent',
+    'mcp_server',
 ]
 
 MIDDLEWARE = [
@@ -117,6 +122,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'totem_backend.wsgi.application'
+ASGI_APPLICATION = 'totem_backend.asgi.application'
 
 
 # Database
@@ -189,6 +195,8 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
     "content-type",
+    "x-llm-key",
+    "x-llm-provider",
 ]
 
 cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
@@ -268,3 +276,30 @@ if LOCAL_MODE:
 # Credentials used for the auto-seeded Guest account in local mode
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
+
+# Load environment variables from .env files
+for env_candidate in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
+    if env_candidate.exists():
+        try:
+            with open(env_candidate, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception:
+            pass
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.5-flash')
+ASSISTANT_AGENT_ENABLED = True

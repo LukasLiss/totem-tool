@@ -15,6 +15,7 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
 import { DashboardContext, AnalysisComponent } from "@/contexts/DashboardContext"
+import { TOUR_IDS } from "@/tour/tourIds"
 
 const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarChart3 }[] = [
   { id: 'processArea', label: 'Process Area', icon: BarChart3 },
@@ -38,7 +39,11 @@ export function NavAnalysis() {
         <Collapsible asChild className="group/collapsible">
           <SidebarMenuItem>
             <CollapsibleTrigger asChild>
-              <SidebarMenuButton tooltip="Analysis Tools" data-active={isAnalysisActive}>
+              <SidebarMenuButton
+                tooltip="Analysis Tools"
+                data-active={isAnalysisActive}
+                data-tour-id={TOUR_IDS.NAV_ANALYSIS}
+              >
                 <BarChart3 />
                 <span>Analysis</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -66,3 +71,4 @@ export function NavAnalysis() {
     </SidebarGroup>
   )
 }
+

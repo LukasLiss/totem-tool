@@ -1,0 +1,1455 @@
+import React, { useState, useEffect, useRef } from "react";
+import {
+  Bot,
+  User,
+  Send,
+  Square,
+  Trash2,
+  GraduationCap,
+  Zap,
+  Sparkles,
+  ChevronRight,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Code,
+  Copy,
+  Check,
+  Maximize2,
+  Minimize2,
+  Key,
+} from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { PendingActions, PendingActionItem } from "./PendingActions";
+import {
+  streamChat,
+  validateApiKey,
+  AssistantContext,
+  TourStep,
+} from "@/api/assistantApi";
+import { ApiKeyModal } from "./ApiKeyModal";
+import { useOptionalTourController } from "@/tour/TourController";
+import { TOUR_IDS } from "@/tour/tourIds";
+import { cn } from "@/lib/utils";
+
+export type ChatMode = "teach" | "act";
+
+export interface ToolExecution {
+  id?: string;
+  name: string;
+  arguments?: Record<string, unknown>;
+  result?: unknown;
+  status: "executing" | "completed" | "failed";
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  mode?: ChatMode;
+  isStreaming?: boolean;
+  toolExecutions?: ToolExecution[];
+  pendingActions?: PendingActionItem[];
+  tourPath?: TourStep[];
+  error?: string;
+}
+
+export const STORAGE_MODE_KEY = "totem_chat_mode";
+export const STORAGE_MESSAGES_KEY = "totem_chat_messages";
+export const STORAGE_MESSAGES_KEY_TEACH = "totem_chat_messages_teach";
+export const STORAGE_MESSAGES_KEY_ACT = "totem_chat_messages_act";
+export const STORAGE_DRAWER_WIDTH_KEY = "totem_chat_drawer_width";
+export const DEFAULT_DRAWER_WIDTH = 580;
+export const WIDE_DRAWER_WIDTH = 840;
+export const MIN_DRAWER_WIDTH = 420;
+
+export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string }[]> = {
+  teach: [
+    {
+      label: "Create new dashboard",
+      prompt: "Guide me through creating a new dashboard step by step.",
+    },
+    {
+      label: "Where do I select event logs?",
+      prompt: "Show me where to select or switch projects and event logs in the top left.",
+    },
+    {
+      label: "Where to run conformance?",
+      prompt: "Show me where to navigate and run conformance checking in the interface.",
+    },
+    {
+      label: "How to upload event logs?",
+      prompt: "Where do I upload new event log files in Totem?",
+    },
+    {
+      label: "How to discover process model?",
+      prompt: "How do I discover and visualize a process model from my event log in the UI?",
+    },
+    {
+      label: "Explain conformance checking",
+      prompt: "Explain how conformance checking works in Totem and what alignments mean.",
+    },
+    {
+      label: "What is OCPM?",
+      prompt: "What is Object-Centric Process Mining (OCPM) and how does it differ from traditional process mining?",
+    },
+    {
+      label: "Explain process variants",
+      prompt: "What are process execution variants and trace frequency distributions, and why are they important?",
+    },
+  ],
+  act: [
+    {
+      label: "Create summary dashboard",
+      prompt: "Create a new process overview dashboard with variant distribution and throughput cards.",
+    },
+    {
+      label: "Show top 5 process variants",
+      prompt: "Analyze the active log and show me the top 5 most frequent process variants.",
+    },
+    {
+      label: "Analyze bottleneck activities",
+      prompt: "Identify activities with the longest waiting times and highest bottleneck risk.",
+    },
+    {
+      label: "Calculate case durations",
+      prompt: "Calculate the average, median, minimum, and maximum case durations for this log.",
+    },
+    {
+      label: "Summarize log metrics",
+      prompt: "Extract and summarize total events, activities, objects, and object types for this log.",
+    },
+    {
+      label: "Discover causal net (OCCN)",
+      prompt: "Discover the Object-Centric Causal Net (OCCN) model for the active event log.",
+    },
+    {
+      label: "Inspect object type breakdown",
+      prompt: "Analyze the object types and their entity counts across all recorded events.",
+    },
+    {
+      label: "Throughput dotted chart",
+      prompt: "Analyze event throughput and activity time distribution using the dotted chart.",
+    },
+  ],
+};
+
+export interface MarkdownBlock {
+  type:
+    | "header"
+    | "blockquote"
+    | "list-bullet"
+    | "list-number"
+    | "paragraph"
+    | "code"
+    | "spacer"
+    | "table"
+    | "hr";
+  content?: string;
+  level?: number;
+  language?: string;
+  isStreaming?: boolean;
+  headers?: string[];
+  alignments?: ("left" | "center" | "right")[];
+  rows?: string[][];
+}
+
+/**
+ * Repairs Latin-1 / Windows-1252 mojibake where UTF-8 bytes were misdecoded.
+ * E.g., 'ð\x9f\x93\x8a' -> '📊'
+ */
+export function repairMojibake(text: string): string {
+  if (!text) return "";
+  if (!text.includes("ð") && !text.includes("â") && !text.includes("Ã")) {
+    return text;
+  }
+  try {
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) {
+      bytes[i] = text.charCodeAt(i) & 0xff;
+    }
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (decoded && !decoded.includes("\ufffd")) {
+      return decoded;
+    }
+  } catch {
+    // fallback
+  }
+  return text;
+}
+
+/**
+ * Parses markdown text into structured blocks for streaming rendering.
+ * Supports headers, blockquotes, lists, tables, horizontal rules, code blocks.
+ */
+export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
+  const normalized = repairMojibake(content);
+  const lines = normalized.split("\n");
+  const blocks: MarkdownBlock[] = [];
+  let inCodeBlock = false;
+  let codeLanguage = "";
+  let codeBuffer: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Fenced code block start or end
+    if (line.startsWith("```")) {
+      if (inCodeBlock) {
+        // Close code block
+        blocks.push({
+          type: "code",
+          content: codeBuffer.join("\n"),
+          language: codeLanguage || "code",
+          isStreaming: false,
+        });
+        inCodeBlock = false;
+        codeBuffer = [];
+        codeLanguage = "";
+      } else {
+        // Open code block
+        inCodeBlock = true;
+        codeLanguage = line.slice(3).trim();
+        codeBuffer = [];
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBuffer.push(line);
+      continue;
+    }
+
+    const trimmed = line.trim();
+
+    // Horizontal rule (--- or *** or ___)
+    if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
+      blocks.push({ type: "hr" });
+      continue;
+    }
+
+    // Markdown Table Detection: line starts and ends with |
+    if (trimmed.startsWith("|") && trimmed.endsWith("|") && (trimmed.match(/\|/g) || []).length >= 2) {
+      const tableLines: string[] = [];
+      const startIndex = i;
+      while (i < lines.length) {
+        const rowTrim = lines[i].trim();
+        if (rowTrim.startsWith("|") && rowTrim.endsWith("|") && (rowTrim.match(/\|/g) || []).length >= 2) {
+          tableLines.push(rowTrim);
+          i++;
+        } else {
+          break;
+        }
+      }
+      i--; // adjust loop index
+
+      if (tableLines.length >= 2) {
+        const rawHeaders = tableLines[0].split("|").slice(1, -1).map((c) => c.trim());
+        const secondLine = tableLines[1];
+        const isDelimiter =
+          /^\|[\s:\-]+\|$/.test(secondLine) ||
+          secondLine.split("|").slice(1, -1).every((c) => /^[\s:\-]+$/.test(c.trim()));
+
+        let alignments: ("left" | "center" | "right")[] = [];
+        let dataLines = tableLines.slice(1);
+
+        if (isDelimiter) {
+          alignments = secondLine.split("|").slice(1, -1).map((c) => {
+            const t = c.trim();
+            if (t.startsWith(":") && t.endsWith(":")) return "center";
+            if (t.endsWith(":")) return "right";
+            return "left";
+          });
+          dataLines = tableLines.slice(2);
+        } else {
+          alignments = rawHeaders.map(() => "left");
+        }
+
+        const rows = dataLines.map((rowStr) =>
+          rowStr.split("|").slice(1, -1).map((c) => c.trim())
+        );
+
+        blocks.push({
+          type: "table",
+          headers: rawHeaders,
+          alignments,
+          rows,
+        });
+        continue;
+      } else {
+        i = startIndex;
+        blocks.push({ type: "paragraph", content: lines[startIndex] });
+        continue;
+      }
+    }
+
+    // Headers
+    if (line.startsWith("### ")) {
+      blocks.push({ type: "header", level: 3, content: line.slice(4) });
+    } else if (line.startsWith("## ")) {
+      blocks.push({ type: "header", level: 2, content: line.slice(3) });
+    } else if (line.startsWith("# ")) {
+      blocks.push({ type: "header", level: 1, content: line.slice(2) });
+    } else if (line.startsWith("> ")) {
+      blocks.push({ type: "blockquote", content: line.slice(2) });
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      blocks.push({ type: "list-bullet", content: line.slice(2) });
+    } else if (/^\d+\.\s/.test(line)) {
+      blocks.push({ type: "list-number", content: line.replace(/^\d+\.\s/, "") });
+    } else if (line.trim() === "") {
+      blocks.push({ type: "spacer" });
+    } else {
+      blocks.push({ type: "paragraph", content: line });
+    }
+  }
+
+  // If stream ended while still inside an unclosed code block, emit partial code
+  if (inCodeBlock && codeBuffer.length > 0) {
+    blocks.push({
+      type: "code",
+      content: codeBuffer.join("\n"),
+      language: codeLanguage || "code",
+      isStreaming: true,
+    });
+  }
+
+  return blocks;
+}
+
+export function formatInline(text: string): React.ReactNode {
+  if (!text) return null;
+  const cleanText = repairMojibake(text);
+
+  // 1. Split by HTML break tags: <br>, <br/>, <br /> (case-insensitive)
+  const brRegex = /(<br\s*\/?>)/gi;
+  const segments = cleanText.split(brRegex);
+  const parts: React.ReactNode[] = [];
+
+  segments.forEach((seg, segIdx) => {
+    if (brRegex.test(seg)) {
+      parts.push(<br key={`br-${segIdx}`} className="my-0.5" />);
+      return;
+    }
+
+    // 2. Parse inline tokens: **bold**, `code`, *italic*, [link](url)
+    const tokenRegex = /(\*\*.*?\*\*|`.*?`|\*.*?\*|\[.*?\]\(.*?\))/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = tokenRegex.exec(seg)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(seg.substring(lastIndex, match.index));
+      }
+      const token = match[0];
+      const key = `${segIdx}-${match.index}`;
+
+      if (token.startsWith("**") && token.endsWith("**")) {
+        parts.push(
+          <strong key={key} className="font-semibold text-foreground">
+            {token.slice(2, -2)}
+          </strong>
+        );
+      } else if (token.startsWith("`") && token.endsWith("`")) {
+        parts.push(
+          <code
+            key={key}
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-primary"
+          >
+            {token.slice(1, -1)}
+          </code>
+        );
+      } else if (token.startsWith("*") && token.endsWith("*")) {
+        parts.push(
+          <em key={key} className="italic">
+            {token.slice(1, -1)}
+          </em>
+        );
+      } else if (token.startsWith("[") && token.includes("](")) {
+        const linkMatch = token.match(/^\[(.*?)\]\((.*?)\)$/);
+        if (linkMatch) {
+          parts.push(
+            <a
+              key={key}
+              href={linkMatch[2]}
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary underline font-medium"
+            >
+              {linkMatch[1]}
+            </a>
+          );
+        } else {
+          parts.push(token);
+        }
+      }
+
+      lastIndex = tokenRegex.lastIndex;
+      if (token.length === 0) {
+        tokenRegex.lastIndex++;
+      }
+    }
+
+    if (lastIndex < seg.length) {
+      parts.push(seg.substring(lastIndex));
+    }
+  });
+
+  return parts.length === 1 ? parts[0] : parts;
+}
+
+interface ChatErrorBoundaryProps {
+  children: React.ReactNode;
+  fallbackText?: string;
+}
+
+interface ChatErrorBoundaryState {
+  hasError: boolean;
+}
+
+export class ChatErrorBoundary extends React.Component<ChatErrorBoundaryProps, ChatErrorBoundaryState> {
+  constructor(props: ChatErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, info: unknown) {
+    console.error("Chat rendering error intercepted by boundary:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed my-1">
+          {this.props.fallbackText || "Message content could not be displayed with rich styling."}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/**
+ * Lightweight streaming Markdown renderer with syntax-styled code blocks & copy button.
+ */
+export function MarkdownRenderer({ content }: { content: string }) {
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  const handleCopy = (code: string, idx: number) => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(code);
+      setCopiedIndex(idx);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    }
+  };
+
+  let blocks: MarkdownBlock[] = [];
+  try {
+    blocks = parseMarkdownBlocks(content);
+  } catch (err) {
+    console.error("Error parsing markdown blocks:", err);
+    return (
+      <div className="text-xs text-foreground whitespace-pre-wrap font-sans leading-relaxed">
+        {content}
+      </div>
+    );
+  }
+
+  let codeBlockCounter = 0;
+
+  return (
+    <ChatErrorBoundary fallbackText={content}>
+      <div className="space-y-1">
+        {blocks.map((block, idx) => {
+          switch (block.type) {
+            case "header":
+              if (block.level === 1) {
+                return (
+                  <h2 key={idx} className="mt-4 mb-2 font-bold text-lg text-foreground">
+                    {formatInline(block.content || "")}
+                  </h2>
+                );
+              }
+              if (block.level === 2) {
+                return (
+                  <h3 key={idx} className="mt-3.5 mb-1.5 font-bold text-base text-foreground">
+                    {formatInline(block.content || "")}
+                  </h3>
+                );
+              }
+              return (
+                <h4 key={idx} className="mt-3 mb-1 font-semibold text-sm text-foreground">
+                  {formatInline(block.content || "")}
+                </h4>
+              );
+
+            case "blockquote":
+              return (
+                <blockquote
+                  key={idx}
+                  className="my-2 border-l-2 border-primary/60 pl-3 italic text-muted-foreground text-xs"
+                >
+                  {formatInline(block.content || "")}
+                </blockquote>
+              );
+
+            case "list-bullet":
+              return (
+                <li key={idx} className="ml-4 list-disc text-sm my-0.5">
+                  {formatInline(block.content || "")}
+                </li>
+              );
+
+            case "list-number":
+              return (
+                <li key={idx} className="ml-4 list-decimal text-sm my-0.5">
+                  {formatInline(block.content || "")}
+                </li>
+              );
+
+            case "spacer":
+              return <div key={idx} className="h-2" />;
+
+            case "hr":
+              return <hr key={idx} className="my-3 border-t border-border/70" />;
+
+            case "table": {
+              const headers = block.headers || [];
+              const alignments = block.alignments || [];
+              const rows = block.rows || [];
+
+              const getAlignClass = (align?: "left" | "center" | "right") => {
+                if (align === "center") return "text-center";
+                if (align === "right") return "text-right";
+                return "text-left";
+              };
+
+              return (
+                <div
+                  key={idx}
+                  className="my-3 w-full overflow-x-auto rounded-lg border border-border/80 bg-card shadow-2xs"
+                >
+                  <table className="w-full border-collapse text-xs">
+                    {headers.length > 0 && (
+                      <thead className="bg-muted/70 text-foreground font-semibold border-b border-border/80">
+                        <tr>
+                          {headers.map((h, hIdx) => (
+                            <th
+                              key={hIdx}
+                              className={`px-3 py-2 font-semibold text-xs whitespace-nowrap ${getAlignClass(
+                                alignments[hIdx]
+                              )}`}
+                            >
+                              {formatInline(h)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                    )}
+                    <tbody className="divide-y divide-border/40">
+                      {rows.map((row, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-muted/30 transition-colors">
+                          {row.map((cell, cIdx) => (
+                            <td
+                              key={cIdx}
+                              className={`px-3 py-2 align-top text-xs leading-relaxed text-foreground/90 ${getAlignClass(
+                                alignments[cIdx]
+                              )}`}
+                            >
+                              {formatInline(cell)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }
+
+            case "paragraph":
+              return (
+                <p key={idx} className="text-sm leading-relaxed my-1">
+                  {formatInline(block.content || "")}
+                </p>
+              );
+
+            case "code": {
+              const curIndex = codeBlockCounter++;
+              const codeString = block.content || "";
+              return (
+                <div
+                  key={idx}
+                  className="my-3 overflow-hidden rounded-md border border-border/80 bg-zinc-950 text-zinc-100 text-xs font-mono"
+                >
+                  <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3 py-1.5 text-zinc-400">
+                    <span className="flex items-center gap-1.5">
+                      <Code className="size-3.5" />
+                      {block.language || "code"}
+                      {block.isStreaming ? " (streaming...)" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(codeString, curIndex)}
+                      className="flex items-center gap-1 hover:text-zinc-100 text-zinc-400 transition-colors"
+                    >
+                      {copiedIndex === curIndex ? (
+                        <>
+                          <Check className="size-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3.5" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3 overflow-x-auto">
+                    <code>{codeString}</code>
+                  </pre>
+                </div>
+              );
+            }
+
+            default:
+              return null;
+          }
+        })}
+      </div>
+    </ChatErrorBoundary>
+  );
+}
+
+export interface ChatWidgetProps {
+  context?: AssistantContext;
+  defaultOpen?: boolean;
+}
+
+function loadStoredMessages(key: string, fallbackKey?: string): ChatMessage[] {
+  try {
+    if (typeof localStorage !== "undefined") {
+      let saved = localStorage.getItem(key);
+      if (!saved && fallbackKey) {
+        saved = localStorage.getItem(fallbackKey);
+      }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((m: ChatMessage) => ({
+            ...m,
+            isStreaming: false,
+          }));
+        }
+      }
+    }
+  } catch {}
+  return [];
+}
+
+export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [mode, setMode] = useState<ChatMode>(() => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        const saved = localStorage.getItem(STORAGE_MODE_KEY);
+        return saved === "act" ? "act" : "teach";
+      }
+      return "teach";
+    } catch {
+      return "teach";
+    }
+  });
+
+  // Persistent conversation history per mode (Teach and Act kept separate)
+  const [messagesByMode, setMessagesByMode] = useState<Record<ChatMode, ChatMessage[]>>(() => {
+    return {
+      teach: loadStoredMessages(STORAGE_MESSAGES_KEY_TEACH, STORAGE_MESSAGES_KEY),
+      act: loadStoredMessages(STORAGE_MESSAGES_KEY_ACT),
+    };
+  });
+
+  // Active mode messages
+  const messages = messagesByMode[mode] || [];
+
+  // Active mode updater helper
+  const setMessages = (
+    updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
+  ) => {
+    setMessagesByMode((prev) => {
+      const currentList = prev[mode] || [];
+      const updatedList = typeof updater === "function" ? updater(currentList) : updater;
+      return {
+        ...prev,
+        [mode]: updatedList,
+      };
+    });
+  };
+
+  const [inputValue, setInputValue] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Optional TourController integration
+  const tourController = useOptionalTourController();
+
+  // Resizable drawer width (persisted in localStorage)
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        const saved = localStorage.getItem(STORAGE_DRAWER_WIDTH_KEY);
+        if (saved) {
+          const num = parseInt(saved, 10);
+          if (!isNaN(num) && num >= MIN_DRAWER_WIDTH && num <= 1600) {
+            return num;
+          }
+        }
+      }
+    } catch {}
+    return DEFAULT_DRAWER_WIDTH;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const isWide = drawerWidth >= 750;
+
+  const toggleWideMode = () => {
+    const nextWidth = isWide ? DEFAULT_DRAWER_WIDTH : WIDE_DRAWER_WIDTH;
+    setDrawerWidth(nextWidth);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORAGE_DRAWER_WIDTH_KEY, String(nextWidth));
+      }
+    } catch {}
+  };
+
+  const handleMouseDownResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Drawer is anchored to the right viewport edge
+      const calculatedWidth = window.innerWidth - e.clientX;
+      const maxWidth = Math.floor(window.innerWidth * 0.94);
+      const clamped = Math.max(MIN_DRAWER_WIDTH, Math.min(calculatedWidth, maxWidth));
+      setDrawerWidth(clamped);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(STORAGE_DRAWER_WIDTH_KEY, String(drawerWidth));
+        }
+      } catch {}
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing, drawerWidth]);
+
+  // Switch mode while preserving both conversation histories
+  const handleModeChange = (newMode: ChatMode) => {
+    if (newMode === mode) return;
+
+    if (isStreaming && abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+
+    // Ensure any active streaming message in the previous mode is cleanly finalized
+    setMessagesByMode((prev) => ({
+      ...prev,
+      [mode]: (prev[mode] || []).map((msg) =>
+        msg.isStreaming ? { ...msg, isStreaming: false } : msg
+      ),
+    }));
+
+    setIsStreaming(false);
+    setInputValue("");
+    setMode(newMode);
+
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORAGE_MODE_KEY, newMode);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  // Persist message history per mode (sanitizing isStreaming)
+  useEffect(() => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        const sanitize = (list: ChatMessage[]) =>
+          (list || []).map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY_TEACH,
+          JSON.stringify(sanitize(messagesByMode.teach))
+        );
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY_ACT,
+          JSON.stringify(sanitize(messagesByMode.act))
+        );
+        // Keep legacy STORAGE_MESSAGES_KEY in sync with active mode
+        localStorage.setItem(
+          STORAGE_MESSAGES_KEY,
+          JSON.stringify(sanitize(messagesByMode[mode]))
+        );
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [messagesByMode, mode]);
+
+  // Auto-scroll to bottom on new messages or streaming tokens
+  useEffect(() => {
+    if (isOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isStreaming, isOpen]);
+
+  // Check API key whenever chat drawer opens
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (typeof localStorage !== "undefined") {
+        const savedKey = localStorage.getItem("totem_llm_api_key");
+        const savedProvider = localStorage.getItem("totem_llm_provider") || "gemini";
+        if (!savedKey) {
+          setIsApiKeyModalOpen(true);
+        } else {
+          // Probe key validity in background
+          validateApiKey(savedProvider, savedKey)
+            .then((res) => {
+              if (!res.valid) {
+                setApiKeyError(
+                  res.error ||
+                    `The saved ${savedProvider.toUpperCase()} API key failed authentication. Please update it.`
+                );
+                setIsApiKeyModalOpen(true);
+              }
+            })
+            .catch(() => {
+              // Ignore background network check failure
+            });
+        }
+      }
+    }
+  }, [isOpen]);
+
+  // Auto-resize textarea
+  const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputValue(e.target.value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
+    }
+  };
+
+  const handleClearConversation = () => {
+    if (isStreaming && abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+    // Clear both conversation histories (the whole chat history)
+    setMessagesByMode({ teach: [], act: [] });
+    setIsStreaming(false);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem(STORAGE_MESSAGES_KEY);
+        localStorage.removeItem(STORAGE_MESSAGES_KEY_TEACH);
+        localStorage.removeItem(STORAGE_MESSAGES_KEY_ACT);
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleStopStreaming = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
+    }
+    setIsStreaming(false);
+    setMessages((prev) =>
+      prev.map((msg) => (msg.isStreaming ? { ...msg, isStreaming: false } : msg))
+    );
+  };
+
+  const handleSendMessage = async (promptToSend?: string) => {
+    const text = (promptToSend ?? inputValue).trim();
+    if (!text || isStreaming) return;
+
+    // Verify user has an API key configured before starting request
+    const savedKey = typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") : null;
+    if (!savedKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+
+    if (!promptToSend) {
+      setInputValue("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    }
+
+    const userMessageId = `usr-${Date.now()}`;
+    const assistantMessageId = `asst-${Date.now()}`;
+
+    const userMessage: ChatMessage = {
+      id: userMessageId,
+      role: "user",
+      content: text,
+      timestamp: Date.now(),
+      mode,
+    };
+
+    const initialAssistantMessage: ChatMessage = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      mode,
+      isStreaming: true,
+      toolExecutions: [],
+      pendingActions: [],
+    };
+
+    setMessages((prev) => [...prev, userMessage, initialAssistantMessage]);
+    setIsStreaming(true);
+
+    const controller = new AbortController();
+    setAbortController(controller);
+
+    try {
+      const activeContext: AssistantContext = context ?? {};
+      const streamGenerator = streamChat(text, activeContext, mode);
+
+      for await (const event of streamGenerator) {
+        if (controller.signal.aborted) {
+          break;
+        }
+
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== assistantMessageId) return msg;
+
+            switch (event.type) {
+              case "text":
+                return {
+                  ...msg,
+                  content: msg.content + event.content,
+                };
+
+              case "tool_call":
+                return {
+                  ...msg,
+                  toolExecutions: [
+                    ...(msg.toolExecutions || []),
+                    {
+                      id: event.id,
+                      name: event.name,
+                      arguments: event.arguments,
+                      status: "executing",
+                    },
+                  ],
+                };
+
+              case "tool_result":
+                return {
+                  ...msg,
+                  toolExecutions: (msg.toolExecutions || []).map((te) =>
+                    te.id === event.id || te.name === event.name
+                      ? { ...te, result: event.result, status: "completed" }
+                      : te
+                  ),
+                };
+
+              case "pending_action":
+                return {
+                  ...msg,
+                  pendingActions: [
+                    ...(msg.pendingActions || []),
+                    {
+                      id: event.id,
+                      name: event.name,
+                      description: event.description,
+                      arguments: event.arguments,
+                    },
+                  ],
+                };
+
+              case "tour_path": {
+                // If in Teach Mode, launch guided tour
+                if (mode === "teach" && tourController && event.steps.length > 0) {
+                  tourController.startTour(event.steps);
+                  setIsOpen(false);
+                }
+                return {
+                  ...msg,
+                  tourPath: event.steps,
+                };
+              }
+
+              case "key_error": {
+                const keyErrMsg = (event as any).message || "Invalid or missing API key. Please configure your credentials.";
+                setApiKeyError(keyErrMsg);
+                setIsApiKeyModalOpen(true);
+                return {
+                  ...msg,
+                  error: keyErrMsg,
+                  isStreaming: false,
+                };
+              }
+
+              case "error":
+                return {
+                  ...msg,
+                  error: (event as any).error || (event as any).message || "An error occurred during generation",
+                };
+
+              case "done":
+                return {
+                  ...msg,
+                  isStreaming: false,
+                };
+
+              default:
+                return msg;
+            }
+          })
+        );
+      }
+    } catch (err: unknown) {
+      if (!controller.signal.aborted) {
+        const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred";
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, error: errorMsg, isStreaming: false }
+              : msg
+          )
+        );
+      }
+    } finally {
+      setIsStreaming(false);
+      setAbortController(null);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId ? { ...msg, isStreaming: false } : msg
+        )
+      );
+    }
+  };
+
+  const handleActionResolved = (actionId: string) => {
+    setMessages((prev) =>
+      prev.map((msg) => ({
+        ...msg,
+        pendingActions: msg.pendingActions?.filter((a) => a.id !== actionId),
+      }))
+    );
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  return (
+    <>
+      {/* Floating Chat Trigger Button */}
+      <Sheet open={isOpen} onOpenChange={setIsOpen} modal={false}>
+        <SheetTrigger asChild>
+          <Button
+            size="icon"
+            data-tour-id={TOUR_IDS.CHAT_TOGGLE}
+            aria-label="Open AI Assistant"
+            className="fixed bottom-6 right-6 z-40 size-12 rounded-full shadow-xl bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all duration-200"
+          >
+            <Bot className="size-6" />
+            <span className="sr-only">Toggle AI Assistant</span>
+            {mode === "teach" ? (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 ring-2 ring-background">
+                <GraduationCap className="size-2.5 text-white" />
+              </span>
+            ) : (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-background">
+                <Zap className="size-2.5 text-white" />
+              </span>
+            )}
+          </Button>
+        </SheetTrigger>
+
+        {/* Collapsible Drawer Sheet */}
+        <SheetContent
+          side="right"
+          hideOverlay
+          data-tour-id={TOUR_IDS.CHAT_DRAWER}
+          className={cn(
+            "fixed inset-y-0 right-0 z-50 flex flex-col p-0 gap-0 h-full border-l shadow-2xl bg-background w-full max-w-none sm:max-w-none",
+            isResizing && "select-none transition-none"
+          )}
+          style={{ width: `${drawerWidth}px`, maxWidth: "94vw" }}
+        >
+          {/* Draggable resize handle on the left edge */}
+          <div
+            onMouseDown={handleMouseDownResize}
+            className="absolute -left-2 top-0 bottom-0 w-4 cursor-ew-resize group z-50 flex items-center justify-center select-none"
+            title="Drag to resize chat drawer (or click expand button in header)"
+          >
+            <div
+              className={cn(
+                "w-1 h-16 rounded-full bg-border/80 transition-all group-hover:bg-primary group-hover:w-1.5 group-hover:h-24",
+                isResizing && "bg-primary w-1.5 h-28 shadow-sm"
+              )}
+            />
+          </div>
+
+          {/* Header */}
+          <SheetHeader className="p-4 border-b bg-muted/20 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="size-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                  <Sparkles className="size-4" />
+                </div>
+                <div>
+                  <SheetTitle className="text-base font-semibold">Totem Assistant</SheetTitle>
+                  <SheetDescription className="text-xs">
+                    {mode === "teach"
+                      ? "Teach Mode: Interactive Guided Tours"
+                      : "Act Mode: Process Mining Automation"}
+                  </SheetDescription>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-1 pr-6">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 text-muted-foreground hover:text-primary"
+                  title="Configure LLM API Key (Gemini, OpenAI, Anthropic)"
+                  onClick={() => {
+                    setApiKeyError(undefined);
+                    setIsApiKeyModalOpen(true);
+                  }}
+                >
+                  <Key className="size-3.5" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 text-muted-foreground hover:text-foreground"
+                  title={isWide ? "Restore compact width (580px)" : "Expand width (840px)"}
+                  onClick={toggleWideMode}
+                >
+                  {isWide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+                </Button>
+                {(messagesByMode.teach.length > 0 || messagesByMode.act.length > 0) && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground hover:text-destructive"
+                    title="Clear Conversation"
+                    onClick={handleClearConversation}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Mode Toggle Pills */}
+            <div className="grid grid-cols-2 p-1 bg-muted rounded-lg text-xs font-medium">
+              <button
+                type="button"
+                data-tour-id={TOUR_IDS.CHAT_MODE_TEACH}
+                onClick={() => handleModeChange("teach")}
+                className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md transition-all ${
+                  mode === "teach"
+                    ? "bg-background text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <GraduationCap className="size-3.5 text-blue-500" />
+                <span>Teach Mode</span>
+              </button>
+              <button
+                type="button"
+                data-tour-id={TOUR_IDS.CHAT_MODE_ACT}
+                onClick={() => handleModeChange("act")}
+                className={`flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md transition-all ${
+                  mode === "act"
+                    ? "bg-background text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Zap className="size-3.5 text-emerald-500" />
+                <span>Act Mode</span>
+              </button>
+            </div>
+          </SheetHeader>
+
+          {/* Message List */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col justify-center items-center text-center p-6 space-y-4 text-muted-foreground">
+                <div className="size-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                  {mode === "teach" ? (
+                    <GraduationCap className="size-6 text-blue-500" />
+                  ) : (
+                    <Zap className="size-6 text-emerald-500" />
+                  )}
+                </div>
+                <div>
+                  <h4 className="font-semibold text-foreground text-sm">
+                    {mode === "teach"
+                      ? "Welcome to Teach Mode"
+                      : "Welcome to Act Mode"}
+                  </h4>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+                    {mode === "teach"
+                      ? "Ask questions about Totem features to trigger interactive spotlights and guided step-by-step tours."
+                      : "Request process analytics, variant discoveries, or automated dashboard creations."}
+                  </p>
+                </div>
+
+                {/* Quick Suggestion Chips */}
+                <div className="w-full space-y-2 pt-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 text-left">
+                    Suggestions
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {QUICK_SUGGESTIONS[mode].map((sugg, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleSendMessage(sugg.prompt)}
+                        className="flex items-center justify-between text-left text-xs bg-muted/50 hover:bg-muted p-2.5 rounded-lg border border-border/50 text-foreground transition-all hover:translate-x-0.5"
+                      >
+                        <span>{sugg.label}</span>
+                        <ChevronRight className="size-3.5 text-muted-foreground" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 text-sm min-w-0 w-full ${
+                    msg.role === "user" ? "flex-row-reverse" : "flex-row"
+                  }`}
+                >
+                  {/* Avatar */}
+                  <div
+                    className={`size-7 rounded-full flex items-center justify-center shrink-0 ${
+                      msg.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted border text-foreground"
+                    }`}
+                  >
+                    {msg.role === "user" ? (
+                      <User className="size-4" />
+                    ) : (
+                      <Bot className="size-4" />
+                    )}
+                  </div>
+
+                  {/* Message Bubble */}
+                  <div
+                    className={`flex flex-col min-w-0 space-y-2 ${
+                      msg.role === "user" ? "max-w-[85%] items-end" : "w-full min-w-0 items-start"
+                    }`}
+                  >
+                    <div
+                      className={`rounded-2xl px-4 py-2.5 shadow-xs min-w-0 ${
+                        msg.role === "user"
+                          ? "bg-primary text-primary-foreground rounded-tr-xs"
+                          : "w-full bg-muted/70 text-foreground border rounded-tl-xs overflow-hidden"
+                      }`}
+                    >
+                      {msg.role === "user" ? (
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                          {msg.content}
+                        </p>
+                      ) : (
+                        <div>
+                          {/* Tool Execution Badges */}
+                          {msg.toolExecutions && msg.toolExecutions.length > 0 && (
+                            <div className="space-y-1 mb-2">
+                              {msg.toolExecutions.map((tool, idx) => (
+                                <div
+                                  key={idx}
+                                  className="flex items-center gap-1.5 text-xs text-muted-foreground bg-background/80 px-2 py-1 rounded border"
+                                >
+                                  {tool.status === "executing" ? (
+                                    <>
+                                      <Loader2 className="size-3 animate-spin text-primary" />
+                                      <span>Executing tool: <code>{tool.name}</code></span>
+                                    </>
+                                  ) : tool.status === "completed" ? (
+                                    <>
+                                      <CheckCircle2 className="size-3 text-emerald-500" />
+                                      <span>Executed: <code>{tool.name}</code></span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <AlertCircle className="size-3 text-destructive" />
+                                      <span>Tool error: <code>{tool.name}</code></span>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Markdown Response Text */}
+                          {msg.content ? (
+                            <ChatErrorBoundary fallbackText={msg.content}>
+                              <MarkdownRenderer content={msg.content} />
+                            </ChatErrorBoundary>
+                          ) : msg.isStreaming ? (
+                            <div className="flex items-center gap-1.5 py-1 text-muted-foreground text-xs">
+                              <Loader2 className="size-3.5 animate-spin" />
+                              <span>Thinking...</span>
+                            </div>
+                          ) : msg.pendingActions && msg.pendingActions.length > 0 ? (
+                            <p className="text-xs text-muted-foreground">
+                              Action prepared. Please review and confirm the action chip below:
+                            </p>
+                          ) : !msg.error ? (
+                            <p className="text-xs text-muted-foreground italic">
+                              Process mining co-pilot ready.
+                            </p>
+                          ) : null}
+
+                          {/* Error Banner */}
+                          {msg.error && (
+                            <div className="mt-2 text-xs text-destructive bg-destructive/10 p-2 rounded flex items-center gap-1.5">
+                              <AlertCircle className="size-3.5 shrink-0" />
+                              <span>{msg.error}</span>
+                            </div>
+                          )}
+
+                          {/* Tour Triggered Badge */}
+                          {msg.tourPath && msg.tourPath.length > 0 && (
+                            <div className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 dark:bg-blue-950/40 p-2 rounded border border-blue-200 dark:border-blue-900">
+                              <GraduationCap className="size-3.5 shrink-0" />
+                              <span>Guided tour initiated ({msg.tourPath.length} steps).</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pending Action Confirmation Chips */}
+                    {msg.pendingActions && msg.pendingActions.length > 0 && (
+                      <PendingActions
+                        actions={msg.pendingActions}
+                        onResolved={handleActionResolved}
+                      />
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Footer & Input Area */}
+          <div className="p-3 border-t bg-muted/20 space-y-2">
+            {isStreaming && (
+              <div className="flex justify-center">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleStopStreaming}
+                  className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground shadow-xs"
+                >
+                  <Square className="size-3 text-destructive fill-destructive" />
+                  <span>Stop generating</span>
+                </Button>
+              </div>
+            )}
+
+            <div className="relative flex items-end gap-2 bg-background rounded-xl border p-1.5 focus-within:ring-2 focus-within:ring-ring/50">
+              <textarea
+                ref={textareaRef}
+                data-tour-id={TOUR_IDS.CHAT_INPUT}
+                rows={1}
+                value={inputValue}
+                onChange={handleTextareaInput}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  mode === "teach"
+                    ? "Ask how to use a feature..."
+                    : "Ask to analyze logs or create dashboards..."
+                }
+                className="flex-1 max-h-40 min-h-9 resize-none bg-transparent px-2.5 py-1.5 text-sm placeholder:text-muted-foreground outline-none disabled:cursor-not-allowed"
+                disabled={isStreaming}
+              />
+              <Button
+                size="icon"
+                disabled={!inputValue.trim() || isStreaming}
+                onClick={() => handleSendMessage()}
+                className="size-8 shrink-0 rounded-lg"
+              >
+                <Send className="size-4" />
+                <span className="sr-only">Send</span>
+              </Button>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground px-1">
+              <span>Shift+Enter for newline</span>
+              <span className="flex items-center gap-1">
+                Active: <strong>{mode === "teach" ? "Teach Mode" : "Act Mode"}</strong>
+              </span>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <ApiKeyModal
+        open={isApiKeyModalOpen}
+        onOpenChange={setIsApiKeyModalOpen}
+        initialError={apiKeyError}
+        onSuccess={() => setApiKeyError(undefined)}
+      />
+    </>
+  );
+}
+
+export default ChatWidget;
