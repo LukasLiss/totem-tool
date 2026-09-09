@@ -77,6 +77,22 @@ from ._process_view import (
 from .occn import _get_or_discover_base_occn
 
 
+# Upper bound on sampled points for the dotted chart endpoint.
+OC_DOTTED_CHART_MAX_POINTS = 50_000
+
+
+def _project_name_for_upload(file_name: str, username: str) -> str:
+    """Project.name is a CharField(max_length=30).
+
+    SQLite silently stores longer values but PostgreSQL raises DataError
+    (→ 500, with the uploaded file already on disk). Keep the user suffix
+    and trim the slug so the result always fits.
+    """
+    limit = Project._meta.get_field("name").max_length
+    suffix = f"_{username}"
+    return (slugify(file_name)[: max(1, limit - len(suffix))] + suffix)[:limit]
+
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
@@ -89,7 +105,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         user = self.request.user if self.request.user.is_authenticated else None
 
         file_name = serializer.validated_data["file"].name
-        project_name = f"{slugify(file_name)}_{user.username if user else 'anonymous'}"
+        project_name = _project_name_for_upload(file_name, user.username if user else "anonymous")
 
         project = Project.objects.create(name=project_name)
         if user:
@@ -321,9 +337,14 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         filters_data = request.data.get("filters", [])
 
+        # Malformed filter definitions are a client error, not a server one.
+        try:
+            filter_stack = FilterStack.from_dict({"filters": filters_data})
+        except (ValueError, KeyError, TypeError) as e:
+            return Response({"error": f"Invalid filters: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             with _with_ocel_db(user_file) as db:
-                filter_stack = FilterStack.from_dict({"filters": filters_data})
                 _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
         except Exception as e:
             return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1155,17 +1176,20 @@ class EventLogViewSet(viewsets.ModelViewSet):
             row_max = _optional_int(request.query_params.get("row_max"))
             max_points = int(request.query_params.get("max_points", 3000))
             sample_seed = int(request.query_params.get("sample_seed", 0))
+            local_t_min = _optional_int(request.query_params.get("t_min"))
+            local_t_max = _optional_int(request.query_params.get("t_max"))
         except ValueError:
             return Response(
                 {
-                    "error": "row_min, row_max, max_points, and sample_seed must be integers"
+                    "error": "row_min, row_max, t_min, t_max, max_points, and sample_seed must be integers"
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Bound the sample size so a single request cannot pin the per-file
+        # lock (and worker memory) with an arbitrarily large scan.
+        max_points = max(1, min(max_points, OC_DOTTED_CHART_MAX_POINTS))
 
         fp = _parse_filter_params(request)
-        local_t_min = _optional_int(request.query_params.get("t_min"))
-        local_t_max = _optional_int(request.query_params.get("t_max"))
         global_after  = fp.get("after")
         global_before = fp.get("before")
         effective_t_min = max(v for v in [local_t_min, global_after]  if v is not None) if any(v is not None for v in [local_t_min, global_after])  else None
