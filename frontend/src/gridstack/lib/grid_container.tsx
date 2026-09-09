@@ -23,13 +23,15 @@ const GridContainer: React.FC<{ children: React.ReactNode; className?: string }>
         } catch (err) {
           // defensive: if onResize not present for some reason, fallback to compact()
           // (but onResize is the documented method).
-          // eslint-disable-next-line no-console
+           
           console.warn("grid.onResize failed, trying compact() as fallback", err);
-          try { 
+          try {
             if (grid && grid.engine) {
-              grid.compact(); 
+              grid.compact();
             }
-          } catch (_) {}
+          } catch {
+            console.warn("grid.compact() fallback also failed");
+          }
         }
       }
     });

@@ -2,12 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { Label, Pie, PieChart } from "recharts";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { executeQuery } from '../api/fileApi';
 import { GridStackNode } from 'gridstack';
 

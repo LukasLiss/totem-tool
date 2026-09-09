@@ -8,8 +8,6 @@ import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import {
   Card,
-  CardAction,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,

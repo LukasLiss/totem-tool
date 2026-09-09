@@ -132,7 +132,6 @@ const RELATION_COLOR: Record<string, string> = {
 const NODE_H = 36;
 const NODE_PADDING_X = 16;
 const NODE_R = 6;
-const OVAL_RX = 20;
 const OVAL_RY = 10;
 const SQUARE_SIZE = 7;
 const FONT_SIZE_NODE = 12;
@@ -277,7 +276,6 @@ function computeHierarchicalLayout(
   edges: GraphEdge[],
   width: number,
   height: number,
-  nodeWidths: Map<string, number>,
 ): Map<string, { x: number; y: number }> {
   if (nodeIds.length === 0) return new Map();
   if (nodeIds.length === 1) {
@@ -430,28 +428,6 @@ function bezierPoint(
     y: u * u * y1 + 2 * u * t * cpy + t * t * y2,
   };
 }
-function bezierMid(
-  x1: number, y1: number,
-  x2: number, y2: number,
-  curvature = 0,
-): { x: number; y: number } {
-  return bezierPoint(x1, y1, x2, y2, curvature, 0.5);
-}
-
-/** Direction vector along quadratic bezier at t=0 (tangent at start). */
-function bezierStartTangent(
-  x1: number, y1: number,
-  x2: number, y2: number,
-  curvature = 0,
-): { dx: number; dy: number } {
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const edx = x2 - x1, edy = y2 - y1;
-  const len = Math.sqrt(edx * edx + edy * edy) || 1;
-  const cpx = mx - (edy / len) * curvature;
-  const cpy = my + (edx / len) * curvature;
-  return { dx: cpx - x1, dy: cpy - y1 };
-}
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function TotemMinerVisualizer({
@@ -640,7 +616,7 @@ function TotemMinerVisualizer({
   // ── Hierarchical layout & Relayout controls ──────────────────────────────────
   const handleRelayout = useCallback(() => {
     if (nodeIds.length === 0 || !stableSvgSize) return;
-    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
+    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
     setLayoutPositions(newLayout);
     setManualNodePositions(new Map());
   }, [nodeIds, edges, stableSvgSize, widthMap]);
@@ -654,7 +630,7 @@ function TotemMinerVisualizer({
   // Run layout on initial load or if layoutPositions is empty
   useEffect(() => {
     if (nodeIds.length > 0 && layoutPositions.size === 0 && stableSvgSize) {
-      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
+      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
       setLayoutPositions(initialLayout);
     }
   }, [nodeIds, edges, stableSvgSize, widthMap, layoutPositions.size]);
@@ -925,7 +901,7 @@ function TotemMinerVisualizer({
       const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
-      let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      const bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
       let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
       // Angle parallel to the edge vector (same logic as TotemRelationEdge)
@@ -934,7 +910,7 @@ function TotemMinerVisualizer({
       const bubbleAngle = flipped ? rawAngle + (rawAngle > 0 ? -180 : 180) : rawAngle;
 
       // Keep pill text placement matching the physical node placement when flipped
-      let rawBubbleLabel = edge.bubbleLabel || '0|0';
+      const rawBubbleLabel = edge.bubbleLabel || '0|0';
       let bubbleLabel = rawBubbleLabel;
       if (rawBubbleLabel.includes('|')) {
         const parts = rawBubbleLabel.split('|');

@@ -27,7 +27,6 @@ import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
-type LayoutDirection = 'TB' | 'LR';
 
 const VARIANT_PRESETS = {
   full: {

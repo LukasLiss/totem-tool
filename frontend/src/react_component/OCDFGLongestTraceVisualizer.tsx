@@ -135,10 +135,6 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
     return values.filter((t): t is string => typeof t === 'string' && t.length > 0);
   };
 
-  const resolveOwnerPairs = (entry?: { objtypes?: string[] }) => {
-    return resolveOwnerTypes(entry).map(type => ({ owner: type, type }));
-  };
-
   function computeTypeAvailability(layoutNodes: Node[], layoutEdges: Edge[], allTypes: string[]) {
     const presence = Object.fromEntries(allTypes.map(t => [t, false])) as Record<string, boolean>;
     const visibleNodeIds = new Set(
@@ -436,7 +432,6 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
       .map(([type]) => type)
       .sort();
 
-    const requestedTypes = activeTypes;
     const traceLimitKey = JSON.stringify(typeTraceLimit);
 
     layoutActiveTypesRef.current = activeTypes;

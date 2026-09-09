@@ -6,14 +6,11 @@ import {
 import { type Point, sampleCubicBezier } from './edgeGeometry';
 import {
   BUFFER_ZONE_MARGIN,
-  BUFFER_REPULSION_RADIUS,
   LONGEST_TRACE_BEZIER_SAMPLES,
   LONGEST_TRACE_BEZIER_HANDLE_SCALE,
   LONGEST_TRACE_LANE_OFFSET,
-  CYCLE_BEND_MAGNITUDE,
   type EdgeCurveState,
   relaxPolylineAroundBuffers,
-  buildBufferRectsFromNodes,
 } from './edgeCurveGeneration';
 import type { TraceVariantsPerType } from '../react_component/OCDFGVisualizer';
 
@@ -270,7 +267,7 @@ function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
-function getLayoutSpacing(direction: 'TB' | 'LR' = 'TB', preset?: string) {
+function getLayoutSpacing(direction: 'TB' | 'LR' = 'TB') {
   // Spacing along trace flow (vertical in internal layout)
   // This becomes HORIZONTAL in LR after swap
   const nodePrimarySpacing = 150;  // Keep same for both modes
@@ -856,7 +853,6 @@ async function layoutWithLongestTrace(
   // Layout configuration - direction-aware spacing
   const spacing = getLayoutSpacing(direction);
   const VERTICAL_SPACING = spacing.nodePrimarySpacing;
-  const COLUMN_PADDING = spacing.columnPadding;
   const COLUMN_SPACING = spacing.columnSpacing; // center-to-center spacing with a full column gap
   const FIRST_COLUMN_CENTER = 300; 
   const typeCenters = new Map<string, number>();

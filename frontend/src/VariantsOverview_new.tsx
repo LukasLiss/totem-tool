@@ -11,7 +11,7 @@ import {
 
 export function VariantsOverview() {
   const { selectedFile } = useContext(SelectedFileContext);
-  const [variants, setVariants] = useState<Variant[]>([]);
+  const [, setVariants] = useState<Variant[]>([]);
   const [status, setStatus] =
     useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");

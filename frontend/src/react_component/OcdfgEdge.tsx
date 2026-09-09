@@ -7,7 +7,6 @@ import {
   roundedPath,
   trimPolyline,
   type Point,
-  sampleCubicBezier,
 } from '../utils/edgeGeometry';
 
 type NodeVariant = 'start' | 'end' | 'center';
@@ -461,8 +460,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
     }
 
     // Compute base polyline points
-    let basePoints: Point[];
-
+    //
     // DISABLED: Parametric edge rendering was causing massive backwards bending artifacts
     // because it recomputed curves differently than GraphLayouter. Using pre-computed polyline instead.
     // if (data?.curveParams) {
@@ -471,7 +469,7 @@ const OcdfgEdge = memo(function OcdfgEdge({
 
     // Use pre-computed polyline from GraphLayouter (always)
     // Lane offsets for parallel edges are already baked into the polyline by GraphLayouter
-    basePoints = (data?.polyline && data.polyline.length >= 2)
+    const basePoints: Point[] = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
 

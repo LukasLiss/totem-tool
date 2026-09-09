@@ -236,10 +236,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     const nodes = gridRef.current.save(false) as GridStackNode[];
     return nodes.map((node, index) => {
       // Ensure component_id is set (generate if missing)
-      let component_id = (node as any).component_id || generateComponentId();
+      const component_id = (node as any).component_id || generateComponentId();
       (node as any).component_id = component_id;  // Update node for consistency
       // Use component_name from the node, fallback to data attribute or content-based logic
-      let component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
+      const component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
       let props: any = {};
       const w =
         node.w ??
