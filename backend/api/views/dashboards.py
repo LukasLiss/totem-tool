@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.db import transaction
 
 from ..models import (
     Dashboard,
@@ -41,9 +42,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        project_id = self.request.data.get("project")
-        project = Project.objects.get(id=project_id, users=self.request.user)
-        serializer.save(project=project)
+        # `project` is validated against the user's memberships by
+        # DashboardSerializer.validate_project.
+        serializer.save()
 
     @action(detail=True, methods=["PATCH"])
     def rename(self, request, pk=None):
@@ -78,7 +79,10 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "SQLQueryComponent": SQLQueryComponent,
         "PieChartComponent": PieChartComponent,
         "OCCNComponent": OCCNComponent,
+        "FilterStackComponent": FilterStackComponent,
     }
+
+    _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
 
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
@@ -100,6 +104,29 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 {"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Validate the whole payload before touching the database so a bad
+        # item cannot leave the dashboard half-deleted.
+        for index, item in enumerate(layout):
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": f"layout[{index}] must be an object"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            missing = [k for k in self._REQUIRED_LAYOUT_KEYS if k not in item]
+            if missing:
+                return Response(
+                    {"error": f"layout[{index}] is missing {', '.join(missing)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Replace the components atomically: either the new layout is stored
+        # in full, or the previous one is kept.
+        with transaction.atomic():
+            self._replace_components(dashboard, layout, request)
+
+        return Response({"status": "saved"})
+
+    def _replace_components(self, dashboard, layout, request):
         # Clear existing components
         dashboard.components.all().delete()
 

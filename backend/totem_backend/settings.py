@@ -30,18 +30,66 @@ except ImportError:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Writable runtime data (SQLite DB, uploaded logs, result cache). Defaults to
+# BASE_DIR for development and server deployments. The Electron app passes
+# TOTEM_DATA_DIR=<per-user app data folder> because inside a packaged (and
+# code-signed) app bundle BASE_DIR is read-only and must never be mutated.
+DATA_DIR = Path(os.environ.get('TOTEM_DATA_DIR') or BASE_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'SECRET_KEY',
-    'django-insecure-*0lbvark4r$*=svt+$-(n!*&mwk$rk4g$azq^e6@9_+mg^ilsg'
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 't')
+
+# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
+
+
+def _local_secret_key() -> str:
+    """Per-installation secret for the desktop app.
+
+    JWTs are signed with SECRET_KEY, so a key shared by every install would
+    let anyone mint tokens for any user id. Generate one on first launch and
+    keep it next to the database in DATA_DIR.
+    """
+    from django.core.management.utils import get_random_secret_key
+
+    key_file = DATA_DIR / '.secret_key'
+    try:
+        if key_file.exists():
+            existing = key_file.read_text(encoding='utf-8').strip()
+            if existing:
+                return existing
+        key = get_random_secret_key()
+        key_file.write_text(key, encoding='utf-8')
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+        return key
+    except OSError:
+        # Unwritable data dir: fall back to a process-lifetime key. Sessions
+        # won't survive a restart, but nothing is shared across installs.
+        return get_random_secret_key()
+
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if LOCAL_MODE:
+        SECRET_KEY = _local_secret_key()
+    elif DEBUG:
+        # Development fallback only — never used when DEBUG is off.
+        SECRET_KEY = 'django-insecure-*0lbvark4r$*=svt+$-(n!*&mwk$rk4g$azq^e6@9_+mg^ilsg'
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(
+            'SECRET_KEY environment variable must be set when DEBUG is off.'
+        )
 
 # Allowed hosts configuration
 allowed_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
@@ -135,7 +183,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': DATA_DIR / 'db.sqlite3',
         }
     }
 
@@ -184,7 +232,12 @@ if HAS_WHITENOISE:
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ORIGIN_ALLOW_ALL = os.environ.get('CORS_ORIGIN_ALLOW_ALL', '1') == '1'
+# Cross-origin browser access is opt-in. Only the origins in
+# CORS_ALLOWED_ORIGINS (default: the local dev frontend; the Electron app
+# passes its own bundled-frontend origin) may call the API with credentials.
+# The old default of "allow all" meant any website open in the user's browser
+# could talk to the desktop app's local API (which auto-logs-in as Guest).
+CORS_ORIGIN_ALLOW_ALL = os.environ.get('CORS_ORIGIN_ALLOW_ALL', '0') == '1'
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
@@ -219,6 +272,11 @@ REST_FRAMEWORK = {
       'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Only the login/refresh views opt into throttling (see totem_backend/urls.py)
+    # to slow down password guessing against /token/.
+    'DEFAULT_THROTTLE_RATES': {
+        'login': os.environ.get('LOGIN_THROTTLE_RATE', '30/min'),
+    },
 }
 
 SIMPLE_JWT = {
@@ -228,13 +286,13 @@ SIMPLE_JWT = {
      'BLACKLIST_AFTER_ROTATION': True
 }
 
-MEDIA_ROOT = BASE_DIR / "user_files"
+MEDIA_ROOT = DATA_DIR / "user_files"
 MEDIA_URL = "/files/"
 
 # ---------------------------------------------------------------------------
 # Request result cache (filesystem-backed, size-capped)  — Epic #71
 # ---------------------------------------------------------------------------
-RESULT_CACHE_DIR = BASE_DIR / "cache" / "results"
+RESULT_CACHE_DIR = DATA_DIR / "cache" / "results"
 RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("TOTEM_CACHE_MAX_ENTRIES", "300"))
 
 CACHES = {
@@ -254,9 +312,6 @@ CACHES = {
     },
 }
 
-# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
-LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
-
 if LOCAL_MODE:
     SIMPLE_JWT = {
         'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
@@ -265,6 +320,9 @@ if LOCAL_MODE:
         'BLACKLIST_AFTER_ROTATION': True,
     }
 
-# Credentials used for the auto-seeded Guest account in local mode
+# Credentials used for the auto-seeded Guest account. The account is only
+# created (and its password reset) in LOCAL_MODE, or when SEED_GUEST_USER=1
+# is set explicitly for demo deployments.
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
+SEED_GUEST_USER = LOCAL_MODE or os.environ.get('SEED_GUEST_USER', '0') == '1'
