@@ -80,6 +80,10 @@ from .occn import _get_or_discover_base_occn
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
+    # No PUT/PATCH: the uploaded file is converted, validated and registered
+    # in `perform_create` only. Replacing it in place would skip conversion,
+    # leave the old file on disk and keep serving the stale DuckDB handle.
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
         return EventLog.objects.filter(project__users=self.request.user)

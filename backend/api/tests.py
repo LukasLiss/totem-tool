@@ -488,6 +488,27 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class EventLogReplaceIsNotAllowedTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="no-replace-user")
+        self.project = Project.objects.create(name="No Replace")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(project=self.project, file="keep.duckdb")
+        self.client.force_authenticate(user=self.user)
+
+    def test_put_and_patch_are_rejected(self):
+        for method in (self.client.put, self.client.patch):
+            response = method(
+                f"/api/files/{self.event_log.pk}/",
+                {"file": SimpleUploadedFile("other.json", b"{}")},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.event_log.refresh_from_db()
+        self.assertEqual(self.event_log.file.name, "keep.duckdb")
+
+
 class EventLogObjectTypesApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
