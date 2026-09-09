@@ -32,13 +32,27 @@ def delete_user_data(request):
         )
 
     user = request.user
-    projects = Project.objects.filter(users=user)
-    deleted_count = projects.count()
-    projects.delete()
+    deleted_count = 0
+    left_count = 0
+    for project in Project.objects.filter(users=user):
+        if project.users.exclude(pk=user.pk).exists():
+            # Shared project: other members keep their logs, dashboards and
+            # assets — only this user's membership is removed.
+            project.users.remove(user)
+            left_count += 1
+        else:
+            project.delete()
+            deleted_count += 1
+    UserSettings.objects.filter(user=user).delete()
 
     return Response(
         {
-            "detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."
+            "detail": (
+                f"Deleted {deleted_count} project(s) and related data for user "
+                f"'{user.username}'; left {left_count} shared project(s)."
+            ),
+            "deleted_projects": deleted_count,
+            "left_shared_projects": left_count,
         },
         status=status.HTTP_200_OK,
     )

@@ -488,6 +488,96 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class EventLogReplaceIsNotAllowedTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="no-replace-user")
+        self.project = Project.objects.create(name="No Replace")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(project=self.project, file="keep.duckdb")
+        self.client.force_authenticate(user=self.user)
+
+    def test_put_and_patch_are_rejected(self):
+        for method in (self.client.put, self.client.patch):
+            response = method(
+                f"/api/files/{self.event_log.pk}/",
+                {"file": SimpleUploadedFile("other.json", b"{}")},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.event_log.refresh_from_db()
+        self.assertEqual(self.event_log.file.name, "keep.duckdb")
+
+
+class DeleteUserDataTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="deleter")
+        self.other = User.objects.create_user(username="colleague")
+        self.own = Project.objects.create(name="own")
+        self.own.users.add(self.user)
+        self.shared = Project.objects.create(name="shared")
+        self.shared.users.add(self.user, self.other)
+        self.client.force_authenticate(user=self.user)
+
+    def test_requires_confirmation(self):
+        response = self.client.delete("/api/delete-data/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Project.objects.filter(pk=self.own.pk).exists())
+
+    def test_shared_projects_survive_for_other_members(self):
+        response = self.client.delete(
+            "/api/delete-data/", {"confirm": "DELETE"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Project.objects.filter(pk=self.own.pk).exists())
+        self.shared.refresh_from_db()
+        self.assertEqual(list(self.shared.users.all()), [self.other])
+        self.assertEqual(response.data["deleted_projects"], 1)
+        self.assertEqual(response.data["left_shared_projects"], 1)
+
+
+class ApiInputValidationTests(TestCase):
+    """Client mistakes must be 400s, not 500s."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="validation-user")
+        self.project = Project.objects.create(name="Validation")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(project=self.project, file="v.duckdb")
+        self.client.force_authenticate(user=self.user)
+
+    def test_variants_with_non_integer_file_id_is_400(self):
+        response = self.client.get("/api/variants/?file_id=abc")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_dotted_chart_with_non_integer_time_bounds_is_400(self):
+        response = self.client.get(
+            f"/api/files/{self.event_log.pk}/oc_dotted_chart/?t_min=abc"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_filter_definition_is_400(self):
+        with patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())):
+            response = self.client.post(
+                f"/api/files/{self.event_log.pk}/apply_filters/",
+                {"filters": [{"type": "definitely-not-a-filter"}]},
+                format="json",
+            )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_long_upload_filename_yields_project_name_within_limit(self):
+        from .views.event_log import _project_name_for_upload
+
+        name = _project_name_for_upload("x" * 80 + ".json", self.user.username)
+        self.assertLessEqual(len(name), 30)
+        self.assertTrue(name.endswith(f"_{self.user.username}"))
+        self.assertEqual(
+            _project_name_for_upload("log.json", "bob"), "logjson_bob"
+        )
+
+
 class EventLogObjectTypesApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()

@@ -51,7 +51,11 @@ def variants(request):
 
     # Verify user has access to this file
     try:
-        user_file = EventLog.objects.get(pk=file_id, project__users=request.user)
+        user_file = EventLog.objects.get(pk=int(file_id), project__users=request.user)
+    except (ValueError, TypeError):
+        return Response(
+            {"error": "file_id must be an integer"}, status=status.HTTP_400_BAD_REQUEST
+        )
     except EventLog.DoesNotExist:
         return Response(
             {"error": "File not found or access denied"},
