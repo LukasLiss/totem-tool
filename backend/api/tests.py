@@ -2807,6 +2807,83 @@ class ProcessAreaDiscoveryApiTests(TestCase):
         self.assertIsNotNone(get_cached_result(self.event_log, "discover_mlpa"))
 
 
+class DashboardAuthorizationAndLayoutTests(TestCase):
+    """Dashboards must stay inside projects the caller belongs to, and a bad
+    layout payload must not wipe the existing layout."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="dash-owner")
+        self.other = User.objects.create_user(username="dash-other")
+        self.project = Project.objects.create(name="Mine")
+        self.project.users.add(self.user)
+        self.foreign_project = Project.objects.create(name="Theirs")
+        self.foreign_project.users.add(self.other)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_cannot_create_dashboard_in_foreign_project(self):
+        response = self.client.post(
+            "/api/dashboard/",
+            {"project": self.foreign_project.pk, "name": "sneaky"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Dashboard.objects.filter(project=self.foreign_project).exists())
+
+    def test_create_with_unknown_project_is_400_not_500(self):
+        response = self.client.post(
+            "/api/dashboard/", {"project": 999999, "name": "x"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_move_dashboard_into_foreign_project(self):
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/",
+            {"project": self.foreign_project.pk},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.dashboard.refresh_from_db()
+        self.assertEqual(self.dashboard.project, self.project)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+
+    def test_invalid_layout_item_keeps_existing_components(self):
+        ok = self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "hi"}]
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+        bad = self._save([{"component_name": "TextBoxComponent"}])  # no x/y/w/h
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+        bad = self._save(["not-an-object"])
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+    def test_filter_stack_component_round_trips(self):
+        rules = [{"kind": "activity", "values": ["a"]}]
+        response = self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "FilterStackComponent",
+              "filter_stack_json": rules}]
+        )
+        self.assertEqual(response.status_code, 200)
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.status_code, 200)
+        self.assertEqual(layout.data[0]["component_name"], "FilterStackComponent")
+        self.assertEqual(layout.data[0]["filter_stack_json"], rules)
+
+
 class ProcessAreaComponentPersistenceTests(TestCase):
     """
     Dashboard round-trip for the Process Area component's discovery settings.
@@ -3062,6 +3139,60 @@ def _write_minimal_duckdb_log(path: str) -> None:
     db = OcelDuckDB._from_prepared_connection(conn, [], [])
     db.save(path)
     db.close()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class ExecuteQuerySandboxTests(APITestCase):
+    """The ad-hoc SQL endpoint must not reach the host filesystem."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("sql-user", password="pw")
+        self.project = Project.objects.create(name="sql-project")
+        self.project.users.add(self.user)
+        filename = f"sql-sandbox-{self._testMethodName}.duckdb"
+        _write_minimal_duckdb_log(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def _run(self, query):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/", {"query": query}, format="json"
+        )
+
+    def test_select_works_and_reports_truncation_flag(self):
+        response = self._run("SELECT activity FROM events ORDER BY activity;")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["columns"], ["activity"])
+        self.assertEqual(
+            [r["activity"] for r in response.data["data"]], ["create order", "ship order"]
+        )
+        self.assertFalse(response.data["truncated"])
+
+    def test_multiple_statements_are_rejected(self):
+        response = self._run("SELECT 1; SELECT 2")
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_select_statement_is_rejected(self):
+        response = self._run("COPY (SELECT 1) TO '/tmp/should-not-exist.csv'")
+        self.assertEqual(response.status_code, 400)
+        response = self._run("CREATE TABLE x AS SELECT 1")
+        self.assertEqual(response.status_code, 400)
+
+    def test_select_cannot_read_host_files(self):
+        response = self._run("SELECT * FROM glob('/*')")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertNotIn("data", response.data)
+        response = self._run("SELECT content FROM read_text('/etc/hosts')")
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_other_users_cannot_query_the_log(self):
+        other = User.objects.create_user("other-sql-user", password="pw")
+        self.client.force_authenticate(other)
+        response = self._run("SELECT 1")
+        self.assertEqual(response.status_code, 404)
 
 
 class OcelDbConcurrencyTests(TestCase):

@@ -7,6 +7,9 @@ frontend can trigger against a stored event log is an ``@action`` here.
 import copy
 import json
 import os
+from contextlib import contextmanager
+
+import duckdb
 from hashlib import sha1
 
 from rest_framework import serializers, status, viewsets
@@ -75,6 +78,32 @@ from ._process_view import (
     _serialize_process_layers,
 )
 from .occn import _get_or_discover_base_occn
+
+
+# Upper bound on rows returned by the ad-hoc SQL endpoint.
+EXECUTE_QUERY_MAX_ROWS = 10_000
+
+
+@contextmanager
+def _sandboxed_query_connection(log_path: str):
+    """Yield a DuckDB connection that can only read the given log.
+
+    A fresh in-memory instance attaches the log file READ_ONLY (multiple
+    read-only openers of one file are allowed, so this coexists with the
+    registry connection), then `enable_external_access` is switched off.
+    That setting is one-way for the lifetime of the instance, which is why
+    this is not done on the long-lived registry connection (it relies on
+    DataFrame replacement scans, which the setting also disables).
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        escaped = log_path.replace("'", "''")
+        conn.execute(f"ATTACH '{escaped}' AS log (READ_ONLY)")
+        conn.execute("USE log")
+        conn.execute("SET enable_external_access = false")
+        yield conn
+    finally:
+        conn.close()
 
 
 class EventLogViewSet(viewsets.ModelViewSet):
@@ -1236,18 +1265,49 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if not query:
             return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security check: only allow SELECT queries (read-only)
-        query_upper = query.strip().upper()
-        if not query_upper.startswith('SELECT'):
+        if not isinstance(query, str):
+            return Response({"error": "Query must be a string"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: exactly one statement, and it must be a SELECT.
+        # A plain "starts with SELECT" check lets `SELECT 1; COPY ... TO ...`
+        # through, so parse with DuckDB and inspect the statement type.
+        query = query.strip().rstrip(";").strip()
+        try:
+            statements = duckdb.extract_statements(query)
+        except Exception as e:
+            return Response({"error": f"Invalid SQL: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(statements) != 1:
+            return Response({"error": "Exactly one SQL statement is allowed"}, status=status.HTTP_400_BAD_REQUEST)
+        if statements[0].type != duckdb.StatementType.SELECT:
             return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Cap the result size so a `SELECT * FROM event_object` on a large log
+        # cannot exhaust worker memory. Fetch one extra row to report truncation.
+        wrapped = f"SELECT * FROM ({query}) AS _user_query LIMIT {EXECUTE_QUERY_MAX_ROWS + 1}"
+
+        # Run in a throwaway sandbox connection rather than on the shared
+        # registry connection: DuckDB's read-only mode protects the database
+        # file only, so user SQL could otherwise call read_text('/etc/passwd'),
+        # glob('/**') or ATTACH other files. The sandbox attaches the log
+        # read-only and then disables external access for good.
+        log_path = user_file.file.path
+        if os.path.splitext(log_path)[1].lower() != ".duckdb":
+            return Response(
+                {"error": "SQL queries are only available for converted (.duckdb) event logs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
-            with _with_ocel_db(user_file) as db:
-                cursor = db.conn.execute(query)
+            with _sandboxed_query_connection(log_path) as conn:
+                cursor = conn.execute(wrapped)
                 columns = [d[0] for d in cursor.description]
                 rows = cursor.fetchall()
         except Exception as e:
-            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        truncated = len(rows) > EXECUTE_QUERY_MAX_ROWS
+        rows = rows[:EXECUTE_QUERY_MAX_ROWS]
         data = [dict(zip(columns, row)) for row in rows]
-        return Response({"data": data, "columns": columns}, status=status.HTTP_200_OK)
+        return Response(
+            {"data": data, "columns": columns, "truncated": truncated, "max_rows": EXECUTE_QUERY_MAX_ROWS},
+            status=status.HTTP_200_OK,
+        )
