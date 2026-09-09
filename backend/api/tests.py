@@ -3064,6 +3064,60 @@ def _write_minimal_duckdb_log(path: str) -> None:
     db.close()
 
 
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class ExecuteQuerySandboxTests(APITestCase):
+    """The ad-hoc SQL endpoint must not reach the host filesystem."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("sql-user", password="pw")
+        self.project = Project.objects.create(name="sql-project")
+        self.project.users.add(self.user)
+        filename = f"sql-sandbox-{self._testMethodName}.duckdb"
+        _write_minimal_duckdb_log(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def _run(self, query):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/", {"query": query}, format="json"
+        )
+
+    def test_select_works_and_reports_truncation_flag(self):
+        response = self._run("SELECT activity FROM events ORDER BY activity;")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["columns"], ["activity"])
+        self.assertEqual(
+            [r["activity"] for r in response.data["data"]], ["create order", "ship order"]
+        )
+        self.assertFalse(response.data["truncated"])
+
+    def test_multiple_statements_are_rejected(self):
+        response = self._run("SELECT 1; SELECT 2")
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_select_statement_is_rejected(self):
+        response = self._run("COPY (SELECT 1) TO '/tmp/should-not-exist.csv'")
+        self.assertEqual(response.status_code, 400)
+        response = self._run("CREATE TABLE x AS SELECT 1")
+        self.assertEqual(response.status_code, 400)
+
+    def test_select_cannot_read_host_files(self):
+        response = self._run("SELECT * FROM glob('/*')")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertNotIn("data", response.data)
+        response = self._run("SELECT content FROM read_text('/etc/hosts')")
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_other_users_cannot_query_the_log(self):
+        other = User.objects.create_user("other-sql-user", password="pw")
+        self.client.force_authenticate(other)
+        response = self._run("SELECT 1")
+        self.assertEqual(response.status_code, 404)
+
+
 class OcelDbConcurrencyTests(TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="totem-duckdb-tests-")
