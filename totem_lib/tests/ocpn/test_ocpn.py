@@ -10,15 +10,17 @@ from totem_lib.ocel import schema_base_filtering, propagate_filtering
 import pm4py
 import os
 
+# Resolve relative to this file so the suite also runs from the repo root.
+EXAMPLE_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "example_data")
 OCEL_FILES = [
-    "example_data/ContainerLogistics.json",
-    "example_data/ocel2-p2p.json",
+    os.path.join(EXAMPLE_DATA, "ContainerLogistics.json"),
+    os.path.join(EXAMPLE_DATA, "ocel2-p2p.json"),
 ]
 
 
 def id_fn(filepath):
     """Creates a clean name for the pytest output based on the filename."""
-    return filepath.split("/")[-1]
+    return os.path.basename(filepath)
 
 
 @pytest.fixture(scope="module", params=OCEL_FILES, ids=id_fn)
