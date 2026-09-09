@@ -78,6 +78,10 @@ from ._process_view import (
     _serialize_process_layers,
 )
 from .occn import _get_or_discover_base_occn
+# Bounds for the client-supplied discovery watchdog (seconds).
+MIN_TIMEOUT_S = 1.0
+MAX_TIMEOUT_S = 300.0
+
 
 
 # Upper bound on rows returned by the ad-hoc SQL endpoint.
@@ -884,8 +888,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             timeout_s = float(request.query_params.get("timeout_s", "30.0"))
-            if timeout_s <= 0:
-                timeout_s = None  # disable
+            if timeout_s != timeout_s:  # NaN
+                raise ValueError("timeout_s must be a number")
+            # Clamp server-side: <= 0 used to disable the watchdog entirely,
+            # which let one request pin a worker indefinitely.
+            timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
         except (TypeError, ValueError):
             timeout_s = 30.0
 
@@ -1058,8 +1065,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             elif model_type == ProjectAsset.AssetType.OCPN:
                 try:
                     timeout_s = float(params.get("timeout_s", 30.0))
-                    if timeout_s <= 0:
-                        timeout_s = None
+                    if timeout_s != timeout_s:  # NaN
+                        raise ValueError("timeout_s must be a number")
+                    # Clamp server-side: <= 0 used to disable the watchdog entirely,
+                    # which let one request pin a worker indefinitely.
+                    timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
                 except (TypeError, ValueError):
                     timeout_s = 30.0
                 # Same cache key as discover_ocpn, so a save right after

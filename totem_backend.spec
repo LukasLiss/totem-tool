@@ -1,13 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 simplejwt_hidden_imports = collect_submodules('rest_framework_simplejwt')
+
+# PuLP ships its CBC solver as a platform binary under pulp/solverdir/; without
+# it mlpaDiscovery / process areas fail in the frozen app with "solver not found".
+pulp_solver_files = collect_data_files('pulp', includes=['solverdir/**'])
 
 a = Analysis(
     ['backend/manage.py'],
     pathex=[],
     binaries=[],
-    datas=[('backend/initial_user.json', '.')],
+    datas=[('backend/initial_user.json', '.')] + pulp_solver_files,
     hiddenimports=simplejwt_hidden_imports,
     hookspath=[],
     hooksconfig={},
@@ -27,7 +31,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX breaks Authenticode on some DLLs and triggers AV false positives
+    # Keep a console subsystem so backend stdout/stderr reach electron/main.js;
+    # it spawns the process with windowsHide so no window is shown.
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -40,7 +46,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='totem_backend',
 )

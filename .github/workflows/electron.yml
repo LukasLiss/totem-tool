@@ -1,47 +1,136 @@
 name: electron
 
+# Builds the desktop app (PyInstaller backend + Vite frontend + Electron shell)
+# for Windows (x64), macOS Apple Silicon (arm64) and macOS Intel (x64).
+#
+# The PyInstaller backend is single-architecture, so each macOS flavour is
+# built on a runner of that architecture (macos-14 = arm64, macos-13 = x64).
+#
+# Signing / notarization is optional: when the secrets below are not set the
+# build produces unsigned artifacts (fine for testing, not for distribution).
+#   macOS:   CSC_LINK (base64 .p12), CSC_KEY_PASSWORD, APPLE_ID,
+#            APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows: WIN_CSC_LINK (base64 .pfx), WIN_CSC_KEY_PASSWORD
+#            (or WIN_CERT_SUBJECT_NAME for a certificate in the machine store,
+#            or electron-builder's azureSignOptions for Azure Trusted Signing)
+
 on:
-  # push:
-  #   branches: [ main ]
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            build-script: build-all
+          - os: macos-14
+            name: macos-arm64
+            build-script: build-all-mac
+          - os: macos-13
+            name: macos-x64
+            build-script: build-all-mac
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Install dependencies
-      run: |
-        npm install
-        cd frontend
-        npm install
-        cd ../electron
-        npm install
-        cd ..
-        python -m venv backend/.venv
-        ./backend/.venv/Scripts/activate
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-        pip install -r backend/requirements-dev.txt
-        pip install -e totem_lib
+      - name: Install Node dependencies
+        run: |
+          npm ci
+          npm ci --prefix frontend
+          npm ci --prefix electron
 
-    - name: Build application
-      run: npm run build-all
+      # The build scripts (scripts/run-python.js) expect the venv at
+      # backend/.venv. Use the venv's own interpreter for every install
+      # instead of "activate" (which is a no-op for later steps).
+      - name: Create Python venv and install backend (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/python -m pip install --upgrade pip
+          backend/.venv/bin/python -m pip install -r backend/requirements.txt
+          backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
+          backend/.venv/bin/python -m pip install -e totem_lib
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: totem-tool-win
-        path: electron/dist/win-unpacked/
+      - name: Create Python venv and install backend (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv backend\.venv
+          backend\.venv\Scripts\python.exe -m pip install --upgrade pip
+          backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+          backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+          backend\.venv\Scripts\python.exe -m pip install -e totem_lib
+
+      - name: Build application
+        run: npm run ${{ matrix.build-script }}
+        env:
+          # macOS code signing + notarization (electron-builder reads these).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode (PFX). Leave unset for an unsigned build.
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CERT_SUBJECT_NAME: ${{ secrets.WIN_CERT_SUBJECT_NAME }}
+          # Without a certificate electron-builder must not go looking for
+          # one in the keychain (an unsigned build is the intended outcome).
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          # Never publish from the build step; the release job below does it.
+          EB_PUBLISH: never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: totem-tool-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            electron/dist/*.dmg
+            electron/dist/*.zip
+            electron/dist/*.exe
+            electron/dist/*.blockmap
+            electron/dist/latest*.yml
+
+  release:
+    name: Attach artifacts to GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la release-artifacts
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: release-artifacts/*

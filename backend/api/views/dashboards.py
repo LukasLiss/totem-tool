@@ -5,7 +5,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.conf import settings
 from django.db import transaction
+import os
 
 from ..models import (
     Dashboard,
@@ -27,7 +29,31 @@ from ..models import (
     TotemMinerComponent,
     FilterStackComponent,
 )
-from ..serializers import DashboardComponentPolymorphicSerializer, DashboardSerializer
+from ..serializers import (
+    DashboardComponentPolymorphicSerializer,
+    DashboardSerializer,
+    ImageAssetSerializer,
+)
+from rest_framework import serializers as drf_serializers
+
+
+def _validated_legacy_image_path(raw, project):
+    """Return ``raw`` (minus the ``/files/`` prefix) only if it names an existing
+    file under MEDIA_ROOT inside the project's own upload directory."""
+    if not raw or not isinstance(raw, str):
+        return None
+    rel = raw[len("/files/"):] if raw.startswith("/files/") else raw
+    rel = rel.lstrip("/")
+    if not rel or "\\" in rel or ".." in rel.split("/"):
+        return None
+    media_root = os.path.realpath(str(settings.MEDIA_ROOT))
+    project_dir = os.path.realpath(os.path.join(media_root, project.name))
+    candidate = os.path.realpath(os.path.join(media_root, rel))
+    if not candidate.startswith(project_dir + os.sep):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return os.path.relpath(candidate, media_root).replace(os.sep, "/")
 
 
 class DashboardViewSet(viewsets.ModelViewSet):
@@ -155,14 +181,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color=item.get("color", "blue"),
                 )
             elif component_name == "ImageComponent":
-                # Legacy image path, stripping /files/ prefix if present
-                image_path = item.get("image", None)
-                if (
-                    image_path
-                    and isinstance(image_path, str)
-                    and image_path.startswith("/files/")
-                ):
-                    image_path = image_path[7:]  # Remove '/files/' prefix
+                # Legacy image path: only keep it when it points at an
+                # existing upload of this dashboard's project. Anything else
+                # (arbitrary paths, other projects' files) is dropped.
+                image_path = _validated_legacy_image_path(
+                    item.get("image"), dashboard.project
+                )
 
                 # Image asset reference: only accept assets of this
                 # dashboard's project the user can actually see.
@@ -386,6 +410,14 @@ class DashboardViewSet(viewsets.ModelViewSet):
         if not image_file:
             return Response(
                 {"error": "No image file provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Same type/size rules as the image asset store.
+        try:
+            ImageAssetSerializer().validate_image(image_file)
+        except drf_serializers.ValidationError as exc:
+            return Response(
+                {"error": " ".join(str(d) for d in exc.detail)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

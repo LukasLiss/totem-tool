@@ -28,9 +28,35 @@ declare module 'gridstack' {
     y_axis?: string;
     color_by?: string;
     shape_by?: string;
-    row_order?: string;
+    row_order?: 'first_occurrence' | 'last_occurrence';
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
+    // ImageComponent (asset store)
+    image_asset?: number | null;
+    image_asset_url?: string | null;
+    image_fit?: string;
+    image_alignment?: string;
+    // OCCNComponent
+    relative_occurrence_threshold?: number;
+    object_types?: string;
+    // SQLQueryComponent / PieChartComponent
+    query?: string;
+    ring_text?: string;
+    chart_type?: string;
+    title?: string;
+    show_legend?: boolean;
+    show_tooltip?: boolean;
+    label_column?: string;
+    value_column?: string;
+    // FilterStackComponent
+    filter_stack_json?: unknown;
+    // ProcessAreaComponent
+    algorithm?: 'mlpa' | 'advanced';
+    w_temporal?: number;
+    w_cardinality?: number;
+    w_divergence?: number;
+    alpha?: number;
+    beta?: number;
   }
 }

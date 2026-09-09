@@ -59,6 +59,7 @@ function detailPage(
     file_id: 12,
     unit_id: unitId,
     replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    leading_object_type: null,
     event_count: totalCount,
     object_types: ["Item", "Order"],
     pagination: {

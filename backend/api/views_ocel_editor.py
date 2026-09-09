@@ -97,6 +97,33 @@ def _serialize_session(session: OcelEditorSession, summary: dict) -> dict:
     }
 
 
+MAX_PAGE_SIZE = 1000
+
+
+class _DeleteOnCloseFile:
+    """File wrapper that removes the underlying scratch file once the
+    response has been streamed (``FileResponse`` closes it when done)."""
+
+    def __init__(self, path):
+        self._path = path
+        self._file = open(path, "rb")
+
+    def __getattr__(self, name):
+        return getattr(self._file, name)
+
+    def __iter__(self):
+        return iter(self._file)
+
+    def close(self):
+        try:
+            self._file.close()
+        finally:
+            try:
+                os.remove(self._path)
+            except OSError:
+                pass
+
+
 def _error(message, code=status.HTTP_400_BAD_REQUEST):
     return Response({"error": str(message)}, status=code)
 
@@ -115,6 +142,12 @@ def _list_params(request) -> dict:
         params["page_size"] = int(params["page_size"])
     except (TypeError, ValueError):
         raise OcelEditorError("page and page_size must be integers.")
+    if params["page"] < 1:
+        raise OcelEditorError("page must be >= 1.")
+    if params["page_size"] < 1:
+        raise OcelEditorError("page_size must be >= 1.")
+    # Cap the page so a single request cannot serialise a whole large log.
+    params["page_size"] = min(params["page_size"], MAX_PAGE_SIZE)
     return params
 
 
@@ -485,7 +518,9 @@ def export(request, session_id):
         return _error(f"Export failed: {e}", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     filename = f"{slugify(session.name) or 'ocel'}{extension}"
-    return FileResponse(open(dest, "rb"), as_attachment=True, filename=filename)
+    # The export is a scratch file next to the working copy; hand it to the
+    # response and delete it as soon as the download finishes.
+    return FileResponse(_DeleteOnCloseFile(dest), as_attachment=True, filename=filename)
 
 
 @api_view(["POST"])

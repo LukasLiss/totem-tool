@@ -73,8 +73,21 @@ def cache_stats(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def cache_clear(request):
-    """Clear the entire results cache."""
+    """Clear the entire results cache.
+
+    The cache is shared by every user of this server, so on a hosted
+    deployment only staff may wipe it. In LOCAL_MODE (the desktop app) the
+    single Guest user owns the whole installation and may always clear it.
+    """
+    from django.conf import settings
+
     from ..cache_utils import clear_all_cache
+
+    if not settings.LOCAL_MODE and not request.user.is_staff:
+        return Response(
+            {"error": "Only staff users may clear the shared results cache."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     clear_all_cache()
     return Response({"status": "cleared"})

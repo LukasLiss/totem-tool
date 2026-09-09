@@ -5,11 +5,12 @@ from totem_lib.ocel import schema_base_filtering, propagate_filtering
 from totem_lib.ocel.importer_db import import_ocel_db
 
 TEST_DATA = Path(__file__).parent.parent.parent / "test_data" / "small"
+EXAMPLE_DATA = Path(__file__).parent.parent.parent / "example_data"
 
 
 def test_ocfhm():
     # import ocel
-    ocel = import_ocel("example_data/ContainerLogistics.json")
+    ocel = import_ocel(str(EXAMPLE_DATA / "ContainerLogistics.json"))
     # discover occn
     occn = discover_occn(ocel, relativeOccuranceThreshold=0)
     print(occn)

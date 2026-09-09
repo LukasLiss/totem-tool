@@ -1,7 +1,17 @@
 {
   "name": "totem-tool",
   "version": "1.0.0",
-  "description": "TOTeM-Tool - React + Django + Electron Desktop App",
+  "description": "TOTeM Tool: object-centric process mining desktop and web application (React/Vite frontend, Django backend, totem_lib analysis core, Electron packaging)",
+  "author": {
+    "name": "Lukas Liss",
+    "email": "liss@pads.rwth-aachen.de"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/LukasLiss/totem-tool",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LukasLiss/totem-tool.git"
+  },
   "scripts": {
     "install-all": "npm run setup-env",
     "start-backend": "node scripts/run-python.js backend/manage.py runserver 8000",
@@ -16,15 +26,11 @@
     "build-backend": "node scripts/run-python.js -m PyInstaller totem_backend.spec --noconfirm --clean",
     "db:migrate": "node scripts/run-db.js migrate",
     "db:seed": "node scripts/run-db.js seed",
-    "prebuild:electron": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend && shx mkdir -p electron/resources/totem_lib",
+    "prebuild:electron": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend",
     "copy:frontend": "shx cp -r frontend/dist/. electron/resources/frontend-build/",
     "copy:backend": "shx cp -r dist/totem_backend/. electron/resources/backend/",
-    "copy:totem_lib": "shx cp -r totem_lib/. electron/resources/totem_lib/",
-    "build:copy-resources": "shx rm -rf electron/resources && shx mkdir -p electron/resources/frontend-build && shx mkdir -p electron/resources/backend && shx cp -r frontend/dist/. electron/resources/frontend-build/ && shx cp -r backend/. electron/resources/backend/ && shx cp -r totem_lib electron/resources/totem_lib",
-    "build:setup-backend": "cd electron/resources/backend && python -m venv venv && .\\venv\\Scripts\\python.exe -m pip install -r requirements.txt && .\\venv\\Scripts\\python.exe -m pip install -e ../totem_lib && .\\venv\\Scripts\\python.exe manage.py migrate && .\\venv\\Scripts\\python.exe manage.py loaddata initial_user.json",
-    "package-win": "npm run build-frontend && cd electron && shx mkdir -p resources && shx cp -r ../frontend/dist resources/frontend-build && shx cp -r ../backend resources/backend && shx cp -r ../totem_lib resources/totem_lib && shx rm -rf resources/backend/venv resources/backend/__pycache__ && shx rm -rf resources/totem_lib/src/totem_lib.egg-info resources/totem_lib/__pycache__ && npm run package-win",
-    "build-all": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run copy:totem_lib && npm run build-electron-win",
-    "build-all-mac": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run copy:totem_lib && npm run build-electron-mac",
+    "build-all": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run build-electron-win",
+    "build-all-mac": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run build-electron-mac",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
     "electron-dev": "concurrently \"cross-env LOCAL_MODE=1 npm run start-backend\" \"wait-on http-get://localhost:8000/api/health-check/ && cross-env VITE_LOCAL_MODE=1 npm run start-frontend\" \"wait-on http-get://localhost:3000 && npm run start-electron\"",
     "setup-env": "node ./scripts/setup-env.js"
@@ -35,8 +41,6 @@
     "shx": "^0.4.0",
     "wait-on": "^7.2.0"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "cmdk": "^1.1.1",
     "glpk.js": "^4.0.2",

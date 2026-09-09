@@ -88,6 +88,7 @@ function workflowState(overrides: Record<string, unknown> = {}) {
       retry: vi.fn(),
     },
     replayUnitStrategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    runLeadingObjectType: vi.fn(),
     setReplayUnitStrategy: vi.fn(),
     leadingObjectType: null,
     setLeadingObjectType: vi.fn(),
