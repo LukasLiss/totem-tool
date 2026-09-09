@@ -488,6 +488,34 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class DeleteUserDataTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="deleter")
+        self.other = User.objects.create_user(username="colleague")
+        self.own = Project.objects.create(name="own")
+        self.own.users.add(self.user)
+        self.shared = Project.objects.create(name="shared")
+        self.shared.users.add(self.user, self.other)
+        self.client.force_authenticate(user=self.user)
+
+    def test_requires_confirmation(self):
+        response = self.client.delete("/api/delete-data/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Project.objects.filter(pk=self.own.pk).exists())
+
+    def test_shared_projects_survive_for_other_members(self):
+        response = self.client.delete(
+            "/api/delete-data/", {"confirm": "DELETE"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Project.objects.filter(pk=self.own.pk).exists())
+        self.shared.refresh_from_db()
+        self.assertEqual(list(self.shared.users.all()), [self.other])
+        self.assertEqual(response.data["deleted_projects"], 1)
+        self.assertEqual(response.data["left_shared_projects"], 1)
+
+
 class EventLogObjectTypesApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
