@@ -41,14 +41,55 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'SECRET_KEY',
-    'django-insecure-*0lbvark4r$*=svt+$-(n!*&mwk$rk4g$azq^e6@9_+mg^ilsg'
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 't')
+
+# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
+
+
+def _local_secret_key() -> str:
+    """Per-installation secret for the desktop app.
+
+    JWTs are signed with SECRET_KEY, so a key shared by every install would
+    let anyone mint tokens for any user id. Generate one on first launch and
+    keep it next to the database in DATA_DIR.
+    """
+    from django.core.management.utils import get_random_secret_key
+
+    key_file = DATA_DIR / '.secret_key'
+    try:
+        if key_file.exists():
+            existing = key_file.read_text(encoding='utf-8').strip()
+            if existing:
+                return existing
+        key = get_random_secret_key()
+        key_file.write_text(key, encoding='utf-8')
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+        return key
+    except OSError:
+        # Unwritable data dir: fall back to a process-lifetime key. Sessions
+        # won't survive a restart, but nothing is shared across installs.
+        return get_random_secret_key()
+
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if LOCAL_MODE:
+        SECRET_KEY = _local_secret_key()
+    elif DEBUG:
+        # Development fallback only — never used when DEBUG is off.
+        SECRET_KEY = 'django-insecure-*0lbvark4r$*=svt+$-(n!*&mwk$rk4g$azq^e6@9_+mg^ilsg'
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+
+        raise ImproperlyConfigured(
+            'SECRET_KEY environment variable must be set when DEBUG is off.'
+        )
 
 # Allowed hosts configuration
 allowed_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
@@ -231,6 +272,11 @@ REST_FRAMEWORK = {
       'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Only the login/refresh views opt into throttling (see totem_backend/urls.py)
+    # to slow down password guessing against /token/.
+    'DEFAULT_THROTTLE_RATES': {
+        'login': os.environ.get('LOGIN_THROTTLE_RATE', '30/min'),
+    },
 }
 
 SIMPLE_JWT = {
@@ -266,9 +312,6 @@ CACHES = {
     },
 }
 
-# Local / Electron mode — set LOCAL_MODE=1 in the environment to enable guest auto-login
-LOCAL_MODE = os.environ.get('LOCAL_MODE', '0') == '1'
-
 if LOCAL_MODE:
     SIMPLE_JWT = {
         'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
@@ -277,6 +320,9 @@ if LOCAL_MODE:
         'BLACKLIST_AFTER_ROTATION': True,
     }
 
-# Credentials used for the auto-seeded Guest account in local mode
+# Credentials used for the auto-seeded Guest account. The account is only
+# created (and its password reset) in LOCAL_MODE, or when SEED_GUEST_USER=1
+# is set explicitly for demo deployments.
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
+SEED_GUEST_USER = LOCAL_MODE or os.environ.get('SEED_GUEST_USER', '0') == '1'

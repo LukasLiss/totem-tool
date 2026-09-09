@@ -14,24 +14,39 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+import os
+
 from django.contrib import admin
 from django.urls import path, include, re_path
 from django.views.static import serve
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework_simplejwt import views as jwt_views
 from django.conf import settings
 from django.conf.urls.static import static
 
+class LoginRateThrottle(AnonRateThrottle):
+    scope = 'login'
+
+
+class ThrottledTokenObtainPairView(jwt_views.TokenObtainPairView):
+    throttle_classes = [LoginRateThrottle]
+
+
+class ThrottledTokenRefreshView(jwt_views.TokenRefreshView):
+    throttle_classes = [LoginRateThrottle]
+
+
 urlpatterns = [
-    path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
-    path('token/', 
-          jwt_views.TokenObtainPairView.as_view(), 
-          name ='token_obtain_pair'),
-     path('token/refresh/', 
-          jwt_views.TokenRefreshView.as_view(), 
-          name ='token_refresh'),
+    path('token/', ThrottledTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('token/refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
     path('', include('authentification.urls')),
 ]
+
+# The Django admin is only mounted for development, the desktop app, or when
+# explicitly enabled — a public instance should not expose it by default.
+if settings.DEBUG or settings.LOCAL_MODE or os.environ.get('ENABLE_ADMIN') == '1':
+    urlpatterns.insert(0, path('admin/', admin.site.urls))
 # Uploaded files (image assets etc.) are served by Django itself in
 # development and in the local desktop app, where there is no reverse proxy.
 # `static()` is a no-op unless DEBUG, so the desktop build (DEBUG=0,
