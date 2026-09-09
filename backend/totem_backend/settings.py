@@ -184,7 +184,12 @@ if HAS_WHITENOISE:
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ORIGIN_ALLOW_ALL = os.environ.get('CORS_ORIGIN_ALLOW_ALL', '1') == '1'
+# Cross-origin browser access is opt-in. Only the origins in
+# CORS_ALLOWED_ORIGINS (default: the local dev frontend; the Electron app
+# passes its own bundled-frontend origin) may call the API with credentials.
+# The old default of "allow all" meant any website open in the user's browser
+# could talk to the desktop app's local API (which auto-logs-in as Guest).
+CORS_ORIGIN_ALLOW_ALL = os.environ.get('CORS_ORIGIN_ALLOW_ALL', '0') == '1'
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
