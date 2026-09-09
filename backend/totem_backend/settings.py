@@ -30,6 +30,13 @@ except ImportError:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Writable runtime data (SQLite DB, uploaded logs, result cache). Defaults to
+# BASE_DIR for development and server deployments. The Electron app passes
+# TOTEM_DATA_DIR=<per-user app data folder> because inside a packaged (and
+# code-signed) app bundle BASE_DIR is read-only and must never be mutated.
+DATA_DIR = Path(os.environ.get('TOTEM_DATA_DIR') or BASE_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -135,7 +142,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': DATA_DIR / 'db.sqlite3',
         }
     }
 
@@ -233,13 +240,13 @@ SIMPLE_JWT = {
      'BLACKLIST_AFTER_ROTATION': True
 }
 
-MEDIA_ROOT = BASE_DIR / "user_files"
+MEDIA_ROOT = DATA_DIR / "user_files"
 MEDIA_URL = "/files/"
 
 # ---------------------------------------------------------------------------
 # Request result cache (filesystem-backed, size-capped)  — Epic #71
 # ---------------------------------------------------------------------------
-RESULT_CACHE_DIR = BASE_DIR / "cache" / "results"
+RESULT_CACHE_DIR = DATA_DIR / "cache" / "results"
 RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("TOTEM_CACHE_MAX_ENTRIES", "300"))
 
 CACHES = {
