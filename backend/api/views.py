@@ -49,6 +49,7 @@ from django.http import HttpResponse
 
 import os
 import math
+import time
 import uuid
 import datetime as dt
 from hashlib import sha1
@@ -2429,6 +2430,33 @@ _SIM_DETAILS_STEPS = [
 ]
 
 
+class SimulationCancelled(Exception):
+    """Raised inside a simulation request once the user cancelled it."""
+
+
+def _clear_simulation_cancel(progress_id):
+    """Drop a stale cancel flag before a new run starts under the same id."""
+    if progress_id:
+        cache.delete(f"sim_cancel_{progress_id}")
+
+
+def _is_simulation_cancelled(progress_id):
+    """Whether the client asked to abort the run behind ``progress_id``."""
+    if not progress_id:
+        return False
+    return bool(cache.get(f"sim_cancel_{progress_id}"))
+
+
+def _raise_if_cancelled(progress_id):
+    """Abort the current request if the user cancelled it.
+
+    Raises:
+        SimulationCancelled: If a cancel was requested for ``progress_id``.
+    """
+    if _is_simulation_cancelled(progress_id):
+        raise SimulationCancelled()
+
+
 def _report_progress(progress_id, steps, current, percent=None):
     """Publish progress of a long-running simulation request to the cache.
 
@@ -2579,6 +2607,7 @@ def run_simulation(request):
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
     # Load OCEL
+    _clear_simulation_cancel(progress_id)
     _report_progress(progress_id, _SIM_RUN_STEPS, 0)
     cache_key = f"ocel_object_{file_id}"
     ocel = cache.get(cache_key)
@@ -2592,6 +2621,7 @@ def run_simulation(request):
 
     try:
         # Build Process Area
+        _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 1)
         process_area = ProcessArea(
             object_types=object_types,
@@ -2629,12 +2659,20 @@ def run_simulation(request):
         )
 
         # Run simulation
+        _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 2)
         sim_duration_s = int(sim_duration_days * 24 * 3600)
 
-        _sim_progress_state = {"pct": -1}
+        _sim_progress_state = {"pct": -1, "cancel_checked_at": 0.0}
 
         def _on_sim_progress(fraction):
+            # The callback fires on every clock tick, so poll the cancel flag at
+            # most twice a second instead of on each tick.
+            now = time.monotonic()
+            if now - _sim_progress_state["cancel_checked_at"] >= 0.5:
+                _sim_progress_state["cancel_checked_at"] = now
+                _raise_if_cancelled(progress_id)
+
             pct = int(max(0.0, min(1.0, fraction)) * 100)
             if pct == _sim_progress_state["pct"]:
                 return
@@ -2651,10 +2689,12 @@ def run_simulation(request):
             )
 
         # Filter original OCEL by process area for comparison
+        _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 4)
         filtered_ocel = ocel.filter_by_process_area(process_area)
 
         # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
+        _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 5)
         evaluation = None
         evaluation_error = None
@@ -2680,6 +2720,7 @@ def run_simulation(request):
         # collection lazily, when the user explicitly chooses to keep it (see
         # simulation_save_log). Keeping it out of the EventLog table avoids
         # cluttering the file list with every trial run.
+        _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 6)
         _cleanup_sim_tmp()
         original_log = EventLog.objects.get(pk=file_id)
@@ -2725,6 +2766,12 @@ def run_simulation(request):
         _report_progress(progress_id, _SIM_RUN_STEPS, len(_SIM_RUN_STEPS))
         return Response(response_data, status=status.HTTP_200_OK)
 
+    except SimulationCancelled:
+        _clear_simulation_cancel(progress_id)
+        return Response(
+            {"cancelled": True, "error": "Simulation cancelled"},
+            status=status.HTTP_409_CONFLICT,
+        )
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -2747,6 +2794,23 @@ def get_simulation_progress(request):
     if state is None:
         state = {"steps": [], "current": 0}
     return Response(state, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cancel_simulation(request):
+    """Ask the in-flight simulation behind ``progress_id`` to abort.
+
+    The running request cannot be interrupted from the outside, so the flag is
+    published to the cache and picked up by the run itself: between its steps
+    and, during the playout, from the tick progress callback. The run then
+    answers its own (still open) request with HTTP 409.
+    """
+    progress_id = request.data.get("progress_id")
+    if not progress_id:
+        return Response({"error": "Missing progress_id"}, status=status.HTTP_400_BAD_REQUEST)
+    cache.set(f"sim_cancel_{progress_id}", True, timeout=600)
+    return Response({"cancelled": True}, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])

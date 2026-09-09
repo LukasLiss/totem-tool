@@ -245,12 +245,37 @@ export async function fetchSimulationProgress(progressId: string): Promise<Simul
   }
 }
 
+// Thrown by runSimulation when the run ended because the user cancelled it,
+// so callers can tell an abort apart from a real failure.
+export class SimulationCancelledError extends Error {
+  constructor() {
+    super("Simulation cancelled");
+    this.name = "SimulationCancelledError";
+  }
+}
+
 export async function runSimulation(config: SimulationConfig): Promise<SimulationResult> {
   try {
     const { data } = await axios.post(`${BASE_URL}/simulation/run/`, config);
     return data;
   } catch (e) {
+    if (
+      axios.isAxiosError(e) &&
+      (e.response?.data as { cancelled?: boolean } | undefined)?.cancelled
+    ) {
+      throw new SimulationCancelledError();
+    }
     throw toError(e, "HTTP error");
+  }
+}
+
+// Ask the backend to abort the run publishing progress under `progressId`. The
+// run itself notices the request and answers with a cancelled response.
+export async function cancelSimulation(progressId: string): Promise<void> {
+  try {
+    await axios.post(`${BASE_URL}/simulation/cancel/`, { progress_id: progressId });
+  } catch (e) {
+    throw toError(e, "Cancel failed");
   }
 }
 

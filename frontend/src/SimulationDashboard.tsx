@@ -14,6 +14,8 @@ import {
   fetchSimulationDetails,
   fetchSimulationProgress,
   runSimulation,
+  cancelSimulation,
+  SimulationCancelledError,
   fetchGraphEditDistance,
   saveSimulatedLog,
   downloadSimulatedLog,
@@ -298,6 +300,11 @@ export const SimulationDashboard: React.FC = () => {
   // Simulation results
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [simError, setSimError] = useState("");
+
+  // Cancelling the in-flight run: the progress id doubles as its handle, since
+  // the backend keys both progress and the cancel flag on it.
+  const runProgressIdRef = useRef<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   // Stale closure prevention
   const fileIdRef = useRef<number | undefined>(fileId);
@@ -649,6 +656,7 @@ export const SimulationDashboard: React.FC = () => {
     if (!fileId) return;
     setPhase("running");
     setSimError("");
+    setCancelling(false);
 
     // Once the details phase has been loaded, carry the reviewed/edited values
     // so the backend simulates with them instead of re-discovering everything.
@@ -706,6 +714,7 @@ export const SimulationDashboard: React.FC = () => {
       progress_id: progressId,
     };
 
+    runProgressIdRef.current = progressId;
     const stopPolling = startProgressPolling(progressId, RUN_STEPS, setRunProgress);
     try {
       const res = await runSimulation(config);
@@ -714,10 +723,31 @@ export const SimulationDashboard: React.FC = () => {
       setPhase("results");
     } catch (err: any) {
       if (fileIdRef.current !== fileId) return;
-      setSimError(err.message || "Simulation failed");
+      if (err instanceof SimulationCancelledError) {
+        toast.info("Simulation cancelled");
+      } else {
+        setSimError(err.message || "Simulation failed");
+      }
       setPhase("details");
     } finally {
       stopPolling();
+      runProgressIdRef.current = null;
+      setCancelling(false);
+    }
+  };
+
+  // Ask the backend to stop the in-flight run. It aborts between its steps and,
+  // while simulating, on the next clock tick, so the button stays in a pending
+  // state until the run's own request comes back.
+  const handleCancelSimulation = async () => {
+    const progressId = runProgressIdRef.current;
+    if (!progressId) return;
+    setCancelling(true);
+    try {
+      await cancelSimulation(progressId);
+    } catch (err: any) {
+      setCancelling(false);
+      toast.error(err.message || "Failed to cancel the simulation");
     }
   };
 
@@ -1371,6 +1401,20 @@ export const SimulationDashboard: React.FC = () => {
               <p className="text-xs text-muted-foreground">
                 Mode: {mode} | Duration: {simDurationDays} days | Tick: {tickSize}s
               </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                disabled={cancelling}
+                onClick={handleCancelSimulation}
+              >
+                {cancelling ? "Cancelling..." : "Cancel Simulation"}
+              </Button>
+              {cancelling && (
+                <p className="text-xs text-muted-foreground">
+                  Waiting for the current step to stop...
+                </p>
+              )}
             </CardContent>
           </Card>
           <StepProgress
