@@ -346,6 +346,18 @@ class DashboardSerializer(serializers.ModelSerializer):
         model = Dashboard
         fields = ['id', 'project', 'name', 'order_in_project', 'created_at']
 
+    def validate_project(self, value):
+        # Only projects the requesting user is a member of. Without this a
+        # dashboard could be created in — or re-parented into — any project
+        # by guessing its (sequential) id.
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authenticated request context is required.")
+        if not value.users.filter(pk=user.pk).exists():
+            raise serializers.ValidationError("You do not have access to this project.")
+        return value
+
     def create(self, validated_data):
         project = validated_data['project']
 
