@@ -13,15 +13,16 @@ log makes a miner crash, add an entry to the relevant ``XFAIL_*`` map below.
 Known crashes are marked ``xfail(strict=True)`` with the exact exception pinned via
 ``raises=``. ``strict=True`` means that once a miner is hardened the test turns into an
 XPASS failure, forcing us to remove the stale entry (and pin `raises` so an *unrelated*
-new crash surfaces as a real failure, not a silent xfail). Each entry names a follow-up
-to file under Epic #200.
+new crash surfaces as a real failure, not a silent xfail).
+
+The five crashes the corpus originally documented were all fixed under Issue #296,
+so the ``XFAIL_*`` maps are currently empty and the corpus is expected to run clean.
 """
 
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-import polars as pl
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -71,61 +72,25 @@ def _apply_xfail(request, stem, xmap):
 
 # ---------------------------------------------------------------------------
 # Known-crash maps: fixture stem -> (reason, expected exception type).
-# Every entry is a documented bug tracked as a follow-up under Epic #200.
+#
+# All five root causes the corpus originally documented were fixed under #296,
+# so every map below is empty and the whole corpus is expected to run clean.
+# The maps are kept because they are the documented way to pin a *new* crash:
+# add `stem: (reason, ExceptionType)` to the relevant map and file a follow-up.
+# See the recipe in ``test_data/edge_cases/README.md``.
 # ---------------------------------------------------------------------------
 
-# The Polars importer cannot load a zero-event log (the timestamp column comes
-# out null-typed). This blocks every Polars-path miner for the `empty` fixture.
-_EMPTY_POLARS = (
-    "import_ocel raises SchemaError on a zero-event log (null-typed timestamp "
-    "column); the DuckDB path handles it. Follow-up under Epic #200.",
-    pl.exceptions.SchemaError,
-)
-
-XFAIL_IMPORT_POLARS = {"empty": _EMPTY_POLARS}
-XFAIL_TOTEM_POLARS = {"empty": _EMPTY_POLARS}
-XFAIL_OCDFG_POLARS = {"empty": _EMPTY_POLARS}
-XFAIL_VARIANTS_POLARS = {"empty": _EMPTY_POLARS}
-
-XFAIL_OCPN_POLARS = {
-    "empty": _EMPTY_POLARS,
-    # NOTE: pm4py's behavior on duplicate event ids is version-dependent.
-    # pm4py 2.7.17.x (installed by CI) raises KeyError; pm4py 2.7.22.4 (e.g.
-    # some dev venvs) is more lenient and returns normally. Because the crash
-    # is real on CI, the xfail is pinned with `raises=KeyError`. Devs on newer
-    # pm4py may see an XPASS-failure locally — treat that as noise until we
-    # pin pm4py in pyproject (pyproject currently allows `pm4py>=2.7.17.1`).
-    "duplicate_event_ids": (
-        "pm4py OCPN discovery is version-dependent on duplicate event ids "
-        "(two events share id 'e1' with different activities): KeyError on "
-        "pm4py<=2.7.17.x (CI), silently OK on newer (e.g. 2.7.22.4). Follow-up "
-        "under Epic #200.",
-        KeyError,
-    ),
-}
-
-XFAIL_OCCN = {
-    "empty": _EMPTY_POLARS,
-    # "cyclic" used to crash discover_occn with a TypeError (empty marker list).
-    # Fixed: bindings with no obligations are now dropped instead of being handed
-    # to OCCausalNet.MarkerGroup, so the cyclic fixture discovers cleanly.
-    "duplicate_event_ids": (
-        "discover_occn raises on duplicate event ids ('Invalid marker groups ... "
-        "max() empty'). Follow-up under Epic #200.",
-        Exception,
-    ),
-}
-# occn_precision is computed from the discovered OCCN, so it inherits the same
-# discovery crashes (the test raises inside discover_occn before precision runs).
-XFAIL_OCCN_PRECISION = XFAIL_OCCN
-
-XFAIL_VARIANTS_DB = {
-    "unicode_names": (
-        "DuckDB find_variants raises UnicodeEncodeError on non-ASCII activity/type "
-        "names (en-dash / emoji). Follow-up under Epic #200.",
-        UnicodeEncodeError,
-    ),
-}
+XFAIL_IMPORT_POLARS: dict = {}
+XFAIL_TOTEM_POLARS: dict = {}
+XFAIL_OCDFG_POLARS: dict = {}
+XFAIL_VARIANTS_POLARS: dict = {}
+XFAIL_OCPN_POLARS: dict = {}
+XFAIL_OCCN: dict = {}
+# occn_precision is computed from the discovered OCCN, so it normally inherits
+# any discovery crash — but keep it a separate dict so precision can be pinned
+# on its own when discovery is fine and only the metric breaks.
+XFAIL_OCCN_PRECISION: dict = {}
+XFAIL_VARIANTS_DB: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +239,49 @@ def test_duplicate_event_ids_deduped_by_duckdb_import():
     """graceful_import drops the second event that reuses an existing id."""
     with _load_db(EDGE_CASES_DIR / "duplicate_event_ids.json") as db:
         assert db.query("SELECT COUNT(*) AS c FROM events")["c"][0] == 1
+
+
+def test_duplicate_event_ids_deduped_by_polars_import():
+    """
+    The Polars importer drops the duplicate too, so both paths agree.
+
+    Before #296 it kept both rows and only warned, which crashed OCCN discovery
+    and pm4py's OCPN miner and made the same file mean two different things
+    depending on which importer read it.
+    """
+    with pytest.warns(UserWarning, match="Duplicate event IDs"):
+        ocel = import_ocel(str(EDGE_CASES_DIR / "duplicate_event_ids.json"))
+    assert ocel.events.height == 1
+    # The first occurrence survives, matching the DuckDB importer.
+    assert ocel.events["_activity"].to_list() == ["Create Order"]
+
+
+def test_empty_log_imports_empty_on_polars_path():
+    """The zero-event log imports cleanly rather than raising a SchemaError."""
+    ocel = import_ocel(str(EDGE_CASES_DIR / "empty.json"))
+    assert ocel.events.height == 0
+    assert ocel.objects.height == 0
+    assert list(ocel.object_types) == []
+
+
+def test_cyclic_log_yields_replayable_occn():
+    """
+    A length-2 loop (A -> B -> A -> B) is discovered as an actual cycle.
+
+    pm4py's plain dependency measure rejects both arcs of such a loop, and its
+    own length-2-loop repair never runs, leaving a net with no arcs at all.
+    `discover_occn` restores those arcs, so every event replays.
+    """
+    ocel = import_ocel(str(EDGE_CASES_DIR / "cyclic.json"))
+    occn = discover_occn(ocel, OCCN_THRESHOLD)
+    assert {"A", "B"}.issubset(set(occn.activities))
+    result = occn_precision(ocel, occn)
+    assert result.num_events == 4
+    assert result.num_replayable_events == result.num_events
+
+
+def test_unicode_names_variants_db():
+    """Non-ASCII activity names group into variants instead of crashing."""
+    with _load_db(EDGE_CASES_DIR / "unicode_names.json") as db:
+        variants = find_variants_db(db, extraction="connected", verbose=False)
+    assert len(variants) > 0

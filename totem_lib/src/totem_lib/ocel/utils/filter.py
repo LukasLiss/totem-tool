@@ -180,14 +180,29 @@ def propagate_filtering(ocel):
             pl.col("_objId").is_in(valid_object_ids.implode())
         )
 
-    # Check for duplicate event IDs and object IDs
+    # Drop duplicate event IDs and object IDs, keeping the first occurrence.
+    # This matches what the DuckDB importer does through its primary keys (see
+    # the graceful_import contract in importer_db.py), so the same file yields
+    # the same log on either path.
     if getattr(ocel, "events", None) is not None and ocel.events.height > 0:
         if ocel.events.height > ocel.events.select("_eventId").n_unique():
-            warnings.warn("Duplicate event IDs detected in the events table.")
+            warnings.warn(
+                "Duplicate event IDs detected in the events table; "
+                "keeping the first occurrence of each ID."
+            )
+            ocel.events = ocel.events.unique(
+                subset=["_eventId"], keep="first", maintain_order=True
+            )
 
     if getattr(ocel, "objects", None) is not None and ocel.objects.height > 0:
         if ocel.objects.height > ocel.objects.select("_objId").n_unique():
-            warnings.warn("Duplicate object IDs detected in the objects table.")
+            warnings.warn(
+                "Duplicate object IDs detected in the objects table; "
+                "keeping the first occurrence of each ID."
+            )
+            ocel.objects = ocel.objects.unique(
+                subset=["_objId"], keep="first", maintain_order=True
+            )
 
     return ocel
 
