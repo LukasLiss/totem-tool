@@ -17,23 +17,19 @@ export async function processFile(fileId: string | number) {
   return data;
 }
 
-// Execute a SQL query on OCEL data
-export async function executeQuery(token: string, fileId: string, query: string) {
-  const response = await fetch(`http://localhost:8000/api/files/${fileId}/execute_query/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query }),
-  });
-  if (response.status === 401) {
-    throw new Error("UNAUTHORIZED");
+// Execute a SQL query on OCEL data.
+// Goes through the shared axios instance so it honours API_BASE_URL (hosted
+// builds), the token-refresh interceptor and the global-filter params, instead
+// of a raw fetch against a hardcoded http://localhost:8000.
+export async function executeQuery(fileId: string | number, query: string) {
+  try {
+    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, { query });
+    return data as { data: Record<string, unknown>[]; columns: string[] };
+  } catch (err: any) {
+    const message =
+      err?.response?.data?.error ||
+      (err?.response ? `Query execution failed: ${err.response.status} ${err.response.statusText}` : err?.message) ||
+      "Query execution failed";
+    throw new Error(message);
   }
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Query execution failed: ${response.status} ${response.statusText}`);
-  }
-
-  return await response.json();
 }
