@@ -20,10 +20,12 @@ import { getUserSettings } from "./api/settingsApi";
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 async function guestLogin() {
-  const { data } = await axios.post("/token/", {
-    username: "Guest",
-    password: "guest",
-  });
+  const { data } = await axios.post(
+    "/token/",
+    { username: "Guest", password: "guest" },
+    // Never let a 401 from the login itself trigger the refresh interceptor.
+    { _skipAuthRefresh: true }
+  );
   axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
   localStorage.setItem("access_token", data.access);
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);

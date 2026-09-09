@@ -103,7 +103,12 @@ async function guestReAuth() {
   const resp = await axios.post(
     getApiUrl("/token/"),
     { username: "Guest", password: "guest" },
-    { headers: { "Content-Type": "application/json" } }
+    {
+      headers: { "Content-Type": "application/json" },
+      // A 401 here means the Guest account is missing/misconfigured; it must
+      // never re-enter the refresh → guestReAuth path or we recurse forever.
+      _skipAuthRefresh: true,
+    }
   );
   const { access, refresh: newRefresh } = resp.data;
   axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;
@@ -136,12 +141,16 @@ axios.interceptors.response.use(
   (resp) => resp,
   async (error) => {
     const cfg = error.config || {};
-    // Only handle 401s, and never recurse on the refresh call itself.
+    const url = String(cfg.url ?? "");
+    // Only handle 401s, and never recurse on the token endpoints themselves
+    // (login or refresh): a 401 from /token/ means bad credentials, and
+    // retrying it via the refresh/guest path would loop indefinitely.
     if (
       !error.response ||
       error.response.status !== 401 ||
       cfg._skipAuthRefresh ||
-      cfg._retried
+      cfg._retried ||
+      /\/token\/(refresh\/)?$/.test(url)
     ) {
       return Promise.reject(error);
     }
