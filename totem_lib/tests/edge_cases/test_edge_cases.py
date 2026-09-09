@@ -63,10 +63,17 @@ def _load_db(path: Path):
 
 
 def _apply_xfail(request, stem, xmap):
-    """If `stem` is a known crasher for this miner, mark the test xfail(strict)."""
+    """If `stem` is a known crasher for this miner, mark the test xfail(strict).
+
+    Entries are ``(reason, raises)`` or ``(reason, raises, strict)``. The optional
+    third element lets a crash that only happens on some dependency versions be
+    marked non-strict, so an unexpected pass on a newer dependency is reported
+    as XPASS instead of failing the suite.
+    """
     if stem in xmap:
-        reason, raises = xmap[stem]
-        request.applymarker(pytest.mark.xfail(reason=reason, strict=True, raises=raises))
+        reason, raises, *rest = xmap[stem]
+        strict = rest[0] if rest else True
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=strict, raises=raises))
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +99,16 @@ XFAIL_OCPN_POLARS = {
     # NOTE: pm4py's behavior on duplicate event ids is version-dependent.
     # pm4py 2.7.17.x (installed by CI) raises KeyError; pm4py 2.7.22.4 (e.g.
     # some dev venvs) is more lenient and returns normally. Because the crash
-    # is real on CI, the xfail is pinned with `raises=KeyError`. Devs on newer
-    # pm4py may see an XPASS-failure locally — treat that as noise until we
-    # pin pm4py in pyproject (pyproject currently allows `pm4py>=2.7.17.1`).
+    # is real on old pm4py, the xfail is pinned with `raises=KeyError` but marked
+    # non-strict so newer pm4py reports XPASS instead of failing the suite
+    # (pyproject currently allows `pm4py>=2.7.17.1`).
     "duplicate_event_ids": (
         "pm4py OCPN discovery is version-dependent on duplicate event ids "
         "(two events share id 'e1' with different activities): KeyError on "
         "pm4py<=2.7.17.x (CI), silently OK on newer (e.g. 2.7.22.4). Follow-up "
         "under Epic #200.",
         KeyError,
+        False,
     ),
 }
 
