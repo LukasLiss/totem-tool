@@ -1,10 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   Card,
-  CardAction,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';

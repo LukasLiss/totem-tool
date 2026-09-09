@@ -1,21 +1,17 @@
 "use client"
 
-import React, { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext } from "react";
 import {
-  AudioWaveform, Command, GalleryVerticalEnd,
-  Map, PieChart, Settings2, FileStack, ArrowUp01,
+  Settings2,
   ChevronRight, LogOut
 } from "lucide-react"
 
-import { NavMain } from "@/components/nav-main"
 import { NavDashboard } from "@/components/nav-dashboard"
-import { NavProjects } from "@/components/nav-projects"
 import { Switcher } from "@/components/team-switcher"
 import {
   Sidebar,
   SidebarContent,
   SidebarHeader,
-  SidebarRail,
   SidebarFooter,
   SidebarMenuButton,
 } from "@/components/ui/sidebar"
@@ -28,22 +24,14 @@ import { NavConformance } from "./nav-conformance";
 import { NavEditor } from "./nav-editor";
 import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
-import { error } from "console";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
-export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar() {
   const navigate = useNavigate();
-  const location = useLocation();
   const context = useContext(SelectedFileContext);
-  if (!context) {
-    console.error('SelectedFileContext not provided');
-    return null;
-  }
-  const { selectedFile } = context;
-  const [files, setFiles] = useState<any[]>([]);
+  const selectedFile = context?.selectedFile;
+  const [, setFiles] = useState<any[]>([]);
   const [dashboards, setDashboards] = useState<any[]>([]);
-
-  console.log("Current selectedFile:", selectedFile);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -76,6 +64,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     };
     fetchDashboards();
   }, [selectedFile]);
+
+  if (!context) {
+    console.error('SelectedFileContext not provided');
+    return null;
+  }
 
   return (
     <Sidebar variant="inset" collapsible="icon">

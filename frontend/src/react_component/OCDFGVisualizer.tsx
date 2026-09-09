@@ -873,7 +873,6 @@ function OCDFGVisualizer({
       .map(([type]) => type)
       .sort();
 
-    const requestedTypes = activeTypes;
     const traceLimitKey = JSON.stringify(typeTraceLimit);
 
     layoutActiveTypesRef.current = activeTypes;

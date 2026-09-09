@@ -15,7 +15,7 @@ import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { useGridMode } from '../gridstack/lib/gridstackprovider';
 import {
-  Settings, Save, Minus, Plus
+  Save, Minus, Plus
 } from "lucide-react"
 import { toast } from "sonner"
 import FilterChipStack from "@/components/FilterChipStack";
@@ -23,7 +23,7 @@ import FilterChipStack from "@/components/FilterChipStack";
 // Removed initialWidgets - grid starts empty now
 
 const GridContent: React.FC = () => {
-  const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
+  const { getLayout: getGridLayout, loadLayout, resetGrid } = useGrid();
   const { viewMode } = useContext(DashboardContext);
 
   // Extract dashboard ID when in dashboard mode
@@ -81,19 +81,6 @@ const GridContent: React.FC = () => {
     }
   };
 
-  const handleLoad = async () => {
-    if (!selectedDashboard) {
-      toast.error("No dashboard selected!");
-      return;
-    }
-    const response = await getLayout(selectedDashboard);
-    // Small delay to ensure any pending operations complete
-    setTimeout(() => loadLayout(response), 50);
-  };
-
-  const handleLog = async () => {
-    console.log("Current layout:", getGridLayout());
-  };
   const { isEditMode, setIsEditMode } = useGridMode();
 
   return (

@@ -28,7 +28,6 @@ import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
-type LayoutDirection = 'TB' | 'LR';
 
 const VARIANT_PRESETS = {
   full: {
@@ -606,7 +605,7 @@ function NewOCDFGVariantsVisualizer({
       });
 
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   // Slider change: pure client-side — just update traceLimit state.

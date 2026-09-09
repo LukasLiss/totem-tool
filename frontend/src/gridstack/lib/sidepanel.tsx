@@ -1,9 +1,6 @@
 import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
 import { useGrid } from "./gridstackprovider";
-import {
-  Trash, CirclePlus, Image, TextInitial, Hash
-} from "lucide-react"
 
 
 const SidePanel: React.FC = () => {

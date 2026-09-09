@@ -26,7 +26,7 @@ export function trimPolyline(
 ): Point[] {
   if (points.length < 2) return clonePoints(points);
 
-  let trimmed = clonePoints(points);
+  const trimmed = clonePoints(points);
 
   if (startOffset > 0) {
     let remaining = startOffset;

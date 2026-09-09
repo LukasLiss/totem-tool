@@ -1,18 +1,15 @@
-import React, { useState, useEffect, useContext, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { GridStackNode } from 'gridstack';
-import { SelectedFileContext } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { API_BASE_URL } from '@/config/api';
@@ -40,7 +37,6 @@ import {
   type ProcessAreaParams,
 } from '@/react_component/TotemVisualizer';
 import { ReactFlowProvider } from "@xyflow/react";
-import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import DottedChart from '@/react_component/DottedChart';
 import {
   DottedChartControls,
@@ -194,13 +190,11 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 
 
 // NumberOfEventsComponent: Static display with a button (customize as needed)
-const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
+const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
-  
-  
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [, setIsLoading] = useState(false);
+  const [, setError] = useState(null);
   
   console.log("selectedFile start:", selectedFile);
 
@@ -346,7 +340,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
       let created: ImageAssetInfo;
       try {
         created = await uploadImageAsset({ projectId, name: baseName, file });
-      } catch (error) {
+      } catch {
         // Most likely a duplicate name — retry once with a unique suffix.
         created = await uploadImageAsset({
           projectId,
@@ -964,8 +958,6 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 
 // TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
 const TotemMinerComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
   isEditMode = false,
   selectedFile
 }) => {
