@@ -49,15 +49,8 @@ const OCELQueryComponent: React.FC<OCELQueryComponentProps> = ({
     setError(null);
     setResults(null);
 
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      setError('No access token found');
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      const result = await executeQuery(token, selectedFile.id.toString(), query);
+      const result = await executeQuery(selectedFile.id, query);
       setResults(result);
     } catch (err: any) {
       setError(err.message || 'Failed to execute query');
