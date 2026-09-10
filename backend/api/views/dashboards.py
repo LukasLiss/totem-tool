@@ -24,7 +24,7 @@ from ..models import (
     NewOCDFGComponent,
     OCCNComponent,
     OCPNComponent,
-    SQLQueryComponent,
+    SqlQueryComponent,
     PieChartComponent,
     TotemMinerComponent,
     FilterStackComponent,
@@ -110,7 +110,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "NewOCDFGComponent": NewOCDFGComponent,
         "NewOCDFGVariantsComponent": NewOCDFGComponent,
         "OCPNComponent": OCPNComponent,
-        "SQLQueryComponent": SQLQueryComponent,
+        "SqlQueryComponent": SqlQueryComponent,
         "PieChartComponent": PieChartComponent,
         "OCCNComponent": OCCNComponent,
         "FilterStackComponent": FilterStackComponent,
@@ -376,15 +376,18 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     filter_stack_json=item.get('filter_stack_json', []),
                 )
-            elif component_name == 'SQLQueryComponent':
-                SQLQueryComponent.objects.create(
+            elif component_name == 'SqlQueryComponent':
+                SqlQueryComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],
                     y=item['y'],
                     w=item['w'],
                     h=item['h'],
                     component_name=component_name,
-                    query=item.get('query', 'SELECT * FROM data LIMIT 10'),
+                    name=item.get('name', ''),
+                    query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                    expected_result=item.get('expected_result'),
+                    row_limit=item.get('row_limit', 25),
                 )
             # Add more as needed
             elif component_name == 'PieChartComponent':

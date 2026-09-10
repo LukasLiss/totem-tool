@@ -91,6 +91,29 @@ MAX_TIMEOUT_S = 300.0
 # Upper bound on rows returned by the ad-hoc SQL endpoint.
 EXECUTE_QUERY_MAX_ROWS = 10_000
 
+# Tables the SQL editor's schema browser lists. Mirrors
+# totem_lib/src/totem_lib/ocel/ocel_duckdb.py:create_ocel_schema. Attribute
+# columns are VARCHAR whatever the source type was, so numeric work needs an
+# explicit cast (e.g. cost::DOUBLE).
+QUERY_BROWSER_TABLES = (
+    "events",
+    "objects",
+    "event_object",
+    "object_attribute_history",
+    "object_relations",
+)
+
+# Structural PK/FK hints, read straight off the schema DDL rather than guessed.
+QUERY_BROWSER_COLUMN_NOTES = {
+    ("events", "event_id"): "PK",
+    ("objects", "obj_id"): "PK",
+    ("event_object", "event_id"): "FK -> events",
+    ("event_object", "obj_id"): "FK -> objects",
+    ("object_attribute_history", "obj_id"): "FK -> objects",
+    ("object_relations", "source_obj_id"): "FK -> objects",
+    ("object_relations", "target_obj_id"): "FK -> objects",
+}
+
 
 @contextmanager
 def _sandboxed_query_connection(log_path: str):
@@ -1455,3 +1478,54 @@ class EventLogViewSet(viewsets.ModelViewSet):
             {"data": data, "columns": columns, "truncated": truncated, "max_rows": EXECUTE_QUERY_MAX_ROWS},
             status=status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["get"])
+    def query_columns(self, request, pk=None):
+        """Schema of the tables the SQL editor may reference, for one log.
+
+        Feeds the editor's table/column browser. Runs through the same
+        sandbox as ``execute_query`` — it is only DESCRIBE plus a count, but
+        there is no reason to reach the filesystem for that either.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        log_path = user_file.file.path
+        if os.path.splitext(log_path)[1].lower() != ".duckdb":
+            return Response(
+                {"error": "SQL queries are only available for converted (.duckdb) event logs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _sandboxed_query_connection(log_path) as conn:
+                tables = []
+                for table in QUERY_BROWSER_TABLES:
+                    described = conn.execute(f'DESCRIBE "{table}"').fetchall()
+                    row_count = conn.execute(
+                        f'SELECT count(*) FROM "{table}"'
+                    ).fetchone()[0]
+                    tables.append(
+                        {
+                            "name": table,
+                            "columns": [
+                                {
+                                    "name": row[0],
+                                    "type": str(row[1]),
+                                    "note": QUERY_BROWSER_COLUMN_NOTES.get(
+                                        (table, row[0])
+                                    ),
+                                }
+                                for row in described
+                            ],
+                            "rowCount": int(row_count),
+                        }
+                    )
+        except Exception as e:
+            return Response(
+                {"error": f"Schema lookup failed: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({"tables": tables}, status=status.HTTP_200_OK)
