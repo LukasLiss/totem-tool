@@ -13,6 +13,7 @@ from ..models import (
     Dashboard,
     ImageAsset,
     Project,
+    ProjectAsset,
     NumberofEventsComponent,
     TextBoxComponent,
     ImageComponent,
@@ -26,6 +27,9 @@ from ..models import (
     OCPNComponent,
     SqlQueryComponent,
     PieChartComponent,
+    KpiComponent,
+    BarChartComponent,
+    ScatterPlotComponent,
     TotemMinerComponent,
     FilterStackComponent,
 )
@@ -54,6 +58,36 @@ def _validated_legacy_image_path(raw, project):
     if not os.path.isfile(candidate):
         return None
     return os.path.relpath(candidate, media_root).replace(os.sep, "/")
+
+
+def _query_asset_for(item, dashboard, request):
+    """The stored query (``ProjectAsset`` of type QUERY) a layout item links.
+
+    Only assets of the dashboard's own project that the requesting user can
+    see are accepted; anything else silently unlinks (the component then
+    falls back to its local ``query`` text).
+    """
+    asset_id = item.get("query_asset")
+    if not asset_id:
+        return None
+    try:
+        asset_id = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    return ProjectAsset.objects.filter(
+        pk=asset_id,
+        project=dashboard.project,
+        project__users=request.user,
+        asset_type=ProjectAsset.AssetType.QUERY,
+    ).first()
+
+
+def _bounded_int(item, key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(item.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, lo), hi)
 
 
 def _string_list_field(item, key: str) -> list:
@@ -112,6 +146,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "OCPNComponent": OCPNComponent,
         "SqlQueryComponent": SqlQueryComponent,
         "PieChartComponent": PieChartComponent,
+        "KpiComponent": KpiComponent,
+        "BarChartComponent": BarChartComponent,
+        "ScatterPlotComponent": ScatterPlotComponent,
         "OCCNComponent": OCCNComponent,
         "FilterStackComponent": FilterStackComponent,
     }
@@ -386,8 +423,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     name=item.get('name', ''),
                     query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
-                    expected_result=item.get('expected_result'),
-                    row_limit=item.get('row_limit', 25),
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    row_limit=_bounded_int(item, 'row_limit', 25, 1, 1000),
                 )
             # Add more as needed
             elif component_name == 'PieChartComponent':
@@ -399,6 +436,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item['h'],
                     component_name=component_name,
                     query=item.get('query', ''),
+                    query_asset=_query_asset_for(item, dashboard, request),
                     ring_text=item.get('ring_text', ''),
                     chart_type=item.get('chart_type', 'donut'),
                     title=item.get('title', ''),
@@ -406,6 +444,55 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_tooltip=item.get('show_tooltip', True),
                     label_column=item.get('label_column', ''),
                     value_column=item.get('value_column', ''),
+                )
+            elif component_name == 'KpiComponent':
+                KpiComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    value_column=item.get('value_column') or '',
+                    prefix=item.get('prefix') or '',
+                    suffix=item.get('suffix') or '',
+                    decimals=_bounded_int(item, 'decimals', 0, 0, 10),
+                )
+            elif component_name == 'BarChartComponent':
+                BarChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    label_column=item.get('label_column') or '',
+                    value_column=item.get('value_column') or '',
+                    horizontal=bool(item.get('horizontal', False)),
+                    show_values=bool(item.get('show_values', False)),
+                )
+            elif component_name == 'ScatterPlotComponent':
+                ScatterPlotComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    x_column=item.get('x_column') or '',
+                    y_column=item.get('y_column') or '',
+                    series_column=item.get('series_column') or '',
+                    x_label=item.get('x_label') or '',
+                    y_label=item.get('y_label') or '',
                 )
 
         return Response({"status": "saved"})

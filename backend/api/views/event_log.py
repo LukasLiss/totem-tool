@@ -54,6 +54,7 @@ from ..serializers import (
     TotemConformanceRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
+from ..query_refs import QueryReferenceError, resolve_query_references
 from ._ocel_db import (
     _OCEL_DB_REGISTRY,
     _OCEL_DB_REGISTRY_LOCK,
@@ -1435,6 +1436,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if not isinstance(query, str):
             return Response({"error": "Query must be a string"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Stored queries of the log's project can be referenced by name like
+        # tables; they are prepended as CTEs before validation and execution.
+        stored = {
+            asset.name: str((asset.content_json or {}).get("query") or "")
+            for asset in ProjectAsset.objects.filter(
+                project=user_file.project, asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        try:
+            query = resolve_query_references(
+                query.strip().rstrip(";"), stored, reserved=QUERY_BROWSER_TABLES
+            )
+        except QueryReferenceError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         # Security check: exactly one statement, and it must be a SELECT.
         # A plain "starts with SELECT" check lets `SELECT 1; COPY ... TO ...`
         # through, so parse with DuckDB and inspect the statement type.
@@ -1448,9 +1464,34 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if statements[0].type != duckdb.StatementType.SELECT:
             return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Optional paging: ``limit`` rows starting at ``offset``. Without an
+        # explicit limit the historical cap applies. Fetch one extra row to
+        # report whether another page exists.
+        raw_offset = request.data.get("offset")
+        raw_limit = request.data.get("limit")
+        try:
+            offset = 0 if raw_offset is None else int(raw_offset)
+            limit = EXECUTE_QUERY_MAX_ROWS if raw_limit is None else int(raw_limit)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "offset and limit must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if offset < 0 or limit < 1:
+            return Response(
+                {"error": "offset must be >= 0 and limit >= 1"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        limit = min(limit, EXECUTE_QUERY_MAX_ROWS)
+
         # Cap the result size so a `SELECT * FROM event_object` on a large log
-        # cannot exhaust worker memory. Fetch one extra row to report truncation.
-        wrapped = f"SELECT * FROM ({query}) AS _user_query LIMIT {EXECUTE_QUERY_MAX_ROWS + 1}"
+        # cannot exhaust worker memory. Note that paging an unordered query is
+        # only stable if the query itself has an ORDER BY; the editor tells
+        # users so.
+        wrapped = (
+            f"SELECT * FROM ({query}) AS _user_query "
+            f"LIMIT {limit + 1} OFFSET {offset}"
+        )
 
         # Run in a throwaway sandbox connection rather than on the shared
         # registry connection: DuckDB's read-only mode protects the database
@@ -1471,11 +1512,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        truncated = len(rows) > EXECUTE_QUERY_MAX_ROWS
-        rows = rows[:EXECUTE_QUERY_MAX_ROWS]
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         data = [dict(zip(columns, row)) for row in rows]
         return Response(
-            {"data": data, "columns": columns, "truncated": truncated, "max_rows": EXECUTE_QUERY_MAX_ROWS},
+            {
+                "data": data,
+                "columns": columns,
+                "offset": offset,
+                "limit": limit,
+                "has_more": has_more,
+                # Kept for older clients: "truncated" used to mean "more rows
+                # than the cap exist".
+                "truncated": has_more,
+                "max_rows": limit,
+            },
             status=status.HTTP_200_OK,
         )
 
