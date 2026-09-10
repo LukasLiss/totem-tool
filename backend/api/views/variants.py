@@ -11,11 +11,24 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from totem_lib.variants import find_variants
-from totem_lib.variants.ocvariants import calculate_layout
 
 from ..models import EventLog
 from ..cache_utils import get_cached_result, set_cached_result
-from ._ocel_db import OcelDuckDB, _filter_shadow, _object_types, _with_ocel_db
+from ..variant_params import (
+    VariantParamError,
+    parse_extraction_params,
+    parse_iso,
+    parse_timeout,
+    resolve_extraction_params,
+    serialize_variants,
+)
+from ._ocel_db import (
+    OcelDuckDB,
+    _activities_with_counts,
+    _filter_shadow,
+    _object_types,
+    _with_ocel_db,
+)
 from ._filters import _parse_filter_params, _should_use_cache
 # Bounds for the client-supplied discovery watchdog (seconds).
 MIN_TIMEOUT_S = 1.0
@@ -35,12 +48,6 @@ def _layout_shim(db: OcelDuckDB):
         db.conn.execute("SELECT obj_id, obj_type FROM objects").fetchall()
     )
     return SimpleNamespace(obj_type_map=obj_type_map)
-
-
-# Accepted enums for the advanced-settings query params on the variants
-# endpoint. Keep in sync with totem_lib.variants.ocvariants_db.{Extraction,IsoStrategy}.
-_VALID_EXTRACTIONS = {"leading_1hop", "leading_bfs", "connected"}
-_VALID_ISOS = {"db_signature", "trace", "signature", "wl", "wl+vf2", "exact"}
 
 
 @api_view(["GET"])
@@ -73,43 +80,21 @@ def variants(request):
         )
 
     # --- Advanced settings (query params, all optional with sane defaults) ---
-    extraction = request.query_params.get("extraction") or "leading_1hop"
-    iso = request.query_params.get("iso") or "wl+vf2"
-    if extraction not in _VALID_EXTRACTIONS:
-        return Response(
-            {
-                "error": f"Invalid extraction '{extraction}'. "
-                f"Allowed: {sorted(_VALID_EXTRACTIONS)}"
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    if iso not in _VALID_ISOS:
-        return Response(
-            {"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    # Parsing is shared with the process-execution endpoint (variant_params);
+    # parse_timeout clamps to [MIN_TIMEOUT_S, MAX_TIMEOUT_S] server-side.
     try:
-        timeout_s = float(request.query_params.get("timeout_s", "10.0"))
-        if timeout_s != timeout_s:  # NaN
-            raise ValueError("timeout_s must be a number")
-        # Clamp server-side: <= 0 used to disable the watchdog entirely,
-        # which let one request pin a worker indefinitely.
-        timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
-    except (TypeError, ValueError):
-        timeout_s = 10.0
+        params = parse_extraction_params(request.query_params)
+        iso = parse_iso(request.query_params)
+    except VariantParamError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    timeout_s = parse_timeout(request.query_params)
 
     fp = _parse_filter_params(request)
-    leading_object_type = request.query_params.get("leading_type")
 
     # --- Cache lookup (#72 / #74) ---
     # The filter params are part of the key: without them a filtered and an
     # unfiltered run would share one entry and serve each other's results.
-    cache_params = {
-        "leading_type": leading_object_type or "",
-        "extraction": extraction,
-        "iso": iso,
-        "timeout_s": timeout_s,
-    }
+    cache_params = {**params.cache_params(), "iso": iso, "timeout_s": timeout_s}
     if fp:
         cache_params.update({f"f_{k}": str(v) for k, v in sorted(fp.items())})
     if _should_use_cache(request):
@@ -120,28 +105,21 @@ def variants(request):
     try:
         with _with_ocel_db(user_file) as db:
             with _filter_shadow(db, fp):
-                # Resolve the leading type *inside* the shadow: the filter may
+                # Resolve the parameters *inside* the shadow: the filter may
                 # have removed the type the client last asked for, and falling
                 # back to a type that no longer exists yields an empty result
                 # instead of a sensible default.
                 obj_types = _object_types(db)
-
-                # Leading type is only needed for the leading_* extractions.
-                # For "connected" we skip the default-to-first-alphabetical
-                # fallback entirely — the param is ignored downstream anyway.
-                if extraction.startswith("leading"):
-                    if not leading_object_type or leading_object_type not in obj_types:
-                        if not obj_types:
-                            return Response(
-                                {
-                                    "variants": [],
-                                    "object_types": [],
-                                },
-                                status=status.HTTP_200_OK,
-                            )
-                        leading_object_type = obj_types[0]
-                else:
-                    leading_object_type = None
+                activities = [a["name"] for a in _activities_with_counts(db)]
+                try:
+                    resolved = resolve_extraction_params(params, obj_types, activities)
+                except VariantParamError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                if resolved is None:
+                    return Response(
+                        {"variants": [], "object_types": []},
+                        status=status.HTTP_200_OK,
+                    )
 
                 # The default iso strategy ("wl+vf2") is sound and exact.
                 # `find_variants` creates connection-scoped TEMP TABLEs — the
@@ -150,8 +128,7 @@ def variants(request):
                 # interrupts long SQL and raises TimeoutError.
                 mined = find_variants(
                     db,
-                    extraction=extraction,
-                    leading_type=leading_object_type,
+                    **resolved.library_kwargs(),
                     iso=iso,
                     timeout_s=timeout_s,
                     verbose=False,
@@ -178,51 +155,16 @@ def variants(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    out = []
-    for var in mined:
-        layout_data = calculate_layout(var, layout_ocel)
-
-        signature = " → ".join(
-            node_data["label"]
-            for _, node_data in sorted(
-                var.graph.nodes(data=True), key=lambda x: x[1]["timestamp"]
-            )
-        )
-        signature_hash = sha1(signature.encode("utf-8")).hexdigest()[:8]
-
-        final_nodes = []
-        for node in layout_data["nodes"]:
-            final_nodes.append(
-                {
-                    "id": node["id"],
-                    "activity": node["activity"],
-                    "x": node["x"],
-                    "y_lane": node["y_lane"],
-                    "y_lanes": node["y_lanes"],
-                    "objectIds": [f"type::{t}" for t in node["types"]],
-                    "types": node["types"],
-                }
-            )
-
-        out.append(
-            {
-                "id": str(var.id),
-                "support": int(var.support),
-                "signature": signature_hash,
-                "signature_hash": signature_hash,
-                "graph": {
-                    "nodes": final_nodes,
-                    "edges": layout_data["edges"],
-                    "objects": layout_data["objects"],
-                },
-            }
-        )
-
     result = {
-        "variants": out,
+        "variants": serialize_variants(mined, layout_ocel),
         "object_types": obj_types,
+        "extraction": resolved.extraction,
+        "leading_type": resolved.leading_type,
+        "business_object_types": list(resolved.business_object_types),
+        "business_activities": (
+            None if resolved.business_activities is None
+            else list(resolved.business_activities)
+        ),
     }
-    # Update cache_params with the resolved leading_type
-    cache_params["leading_type"] = leading_object_type or ""
     set_cached_result(user_file, "variants", result, cache_params)
     return Response(result, status=status.HTTP_200_OK)

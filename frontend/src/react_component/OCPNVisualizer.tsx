@@ -354,9 +354,9 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
             </Button>
             <SaveModelAssetButton
               fileId={fileId}
+              filterEnabled={filterEnabled}
               modelType="OCPN"
               params={{ timeout_s: timeoutS }}
-              filterEnabled={filterEnabled}
               disabled={!model}
             />
             {objectTypes.length > 0 && (

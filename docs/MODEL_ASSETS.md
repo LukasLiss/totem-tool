@@ -196,6 +196,7 @@ endpoints: when the requesting component has its global-filter toggle on
 from the filtered log — so the stored asset matches the filtered view. The
 applied filter is recorded in the asset's `metadata.global_filter` for
 traceability.
+Filtered discoveries never share cache entries with unfiltered ones.
 
 ### Image assets
 

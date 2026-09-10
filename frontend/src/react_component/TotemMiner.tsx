@@ -109,9 +109,9 @@ export default function TotemMiner({
 
           <SaveModelAssetButton
             fileId={fileId ?? undefined}
+            filterEnabled={filterEnabled}
             modelType="TOTEM"
             params={{ tau }}
-            filterEnabled={filterEnabled}
             disabled={!fileId}
           />
         </div>

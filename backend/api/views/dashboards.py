@@ -56,6 +56,14 @@ def _validated_legacy_image_path(raw, project):
     return os.path.relpath(candidate, media_root).replace(os.sep, "/")
 
 
+def _string_list_field(item, key: str) -> list:
+    """A JSON list of strings from a layout item; anything else becomes []."""
+    value = item.get(key)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [v for v in value if isinstance(v, str) and v]
+
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -241,6 +249,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     extraction=item.get("extraction") or "leading_1hop",
                     iso=item.get("iso") or "wl+vf2",
                     timeout_s=item.get("timeout_s", 10.0),
+                    business_object_types=_string_list_field(item, "business_object_types"),
+                    business_activities=_string_list_field(item, "business_activities"),
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(

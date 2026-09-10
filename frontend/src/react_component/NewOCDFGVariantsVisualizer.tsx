@@ -1290,8 +1290,8 @@ function NewOCDFGVariantsVisualizer({
             {data == null && fileId != null && (
               <SaveModelAssetButton
                 fileId={fileId}
-                modelType="OCDFG"
                 filterEnabled={filterEnabled}
+                modelType="OCDFG"
                 disabled={dfgData == null}
                 iconOnly
                 className="rounded-full h-9 w-9"
