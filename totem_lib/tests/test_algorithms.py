@@ -38,6 +38,9 @@ def _log(**overrides) -> EvaluationLog:
 def test_every_algorithm_named_by_the_issue_is_registered():
     expected = {
         "import_ocel",
+        # Not in the issue's list. Added so the DuckDB loading step is measured too,
+        # instead of happening for free while the inputs are prepared.
+        "import_ocel_db",
         "totemDiscovery",
         "totemDiscovery_db",
         "mlpaDiscovery",

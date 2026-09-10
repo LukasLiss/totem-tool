@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from functools import partial
+from itertools import count
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -98,11 +99,34 @@ class LogContext:
         leaves scratch files beside its database.
         """
         if self._ocel_db is None:
-            if self._db_dir is None:
-                self._db_dir = tempfile.mkdtemp(prefix="totem-eval-")
-            db_path = Path(self._db_dir) / f"{self.log.name}.duckdb"
+            db_path = Path(self._scratch_dir()) / f"{self.log.name}.duckdb"
             self._ocel_db = import_ocel_db(str(self.log.path), db_path=str(db_path))
         return self._ocel_db
+
+    def _scratch_dir(self) -> str:
+        """Where throwaway DuckDB files go. Removed by close()."""
+        if self._db_dir is None:
+            self._db_dir = tempfile.mkdtemp(prefix="totem-eval-")
+        return self._db_dir
+
+    def fresh_db_import(self) -> Callable[[], Any]:
+        """
+        A call that builds a new DuckDB copy every time it runs.
+
+        `ocel_db` keeps its database and hands the same one to every algorithm, which
+        is what those algorithms want. It is wrong for timing the conversion though:
+        the second repeat would find the work already done and measure nothing. So
+        each call here writes its own file.
+        """
+        counter = count()
+
+        def convert():
+            path = Path(self._scratch_dir()) / f"timed-{next(counter)}.duckdb"
+            db = import_ocel_db(str(self.log.path), db_path=str(path))
+            db.close()
+            return path
+
+        return convert
 
     @property
     def totem(self):
@@ -166,6 +190,7 @@ class Algorithm:
 
 ALGORITHMS: tuple[Algorithm, ...] = (
     Algorithm("import_ocel", lambda c: partial(import_ocel, *import_args(c.log))),
+    Algorithm("import_ocel_db", lambda c: c.fresh_db_import()),
     Algorithm("totemDiscovery", lambda c: partial(totemDiscovery, c.ocel)),
     Algorithm("totemDiscovery_db", lambda c: partial(totemDiscovery_db, c.ocel_db)),
     Algorithm("mlpaDiscovery", lambda c: partial(mlpaDiscovery, c.totem)),

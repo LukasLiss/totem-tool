@@ -12,11 +12,18 @@ Costs vary enormously, and not with the number of events. Averages of three runs
 idle machine:
 
     algorithm       ocel2-p2p (14.7k)  order-management (21k)  container_logistics (35.4k)
-    discover_occn            18.3 s              434.7 s                  37.5 s
-    totemDiscovery            3.5 s                8.0 s                   6.9 s
-    totemDiscovery_db        0.26 s               0.82 s                  0.33 s
-    OCDFG.from_ocel          0.08 s               0.12 s                  0.11 s
+    discover_occn            18.4 s              415.2 s                  36.6 s
+    import_ocel_db            6.1 s                8.6 s                   4.4 s
+    totemDiscovery            3.3 s                7.4 s                   6.5 s
+    import_ocel               2.9 s                3.5 s                   3.5 s
+    totemDiscovery_db        0.29 s               0.80 s                  0.40 s
+    OCDFG.from_ocel          0.09 s               0.13 s                  0.10 s
     find_variants             1.6 s        out of memory            not measured
+
+Both loaders are measured. A Polars algorithm costs import_ocel plus its own time, a
+DuckDB one costs import_ocel_db plus its own. That matters: totemDiscovery_db beats
+totemDiscovery by 9x to 17x on its own, but loading into DuckDB is the slower of the two
+loaders, so the whole job is only 0.96x to 2.08x - slightly slower on the smallest log.
 
 order-management is the smaller log of the last two, yet it is where the slow algorithms
 blow up. It has the most event-to-object relations by far (147k, against 74k), which is

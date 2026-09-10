@@ -113,11 +113,15 @@ example `--formats md`. Each run overwrites the previous files. The generated JS
 gitignored; the Markdown and CSV are not, so an example run can be committed.
 
 It also saves one plot per size metric to `figures/`, named
-`runtime_vs_<metric>.png`. Each figure uses two channels: the line **colour** says which algorithm, the
-**marker shape** says which log a point came from. Runtime is on a log scale because the
-algorithms differ by five orders of magnitude, and `import_ocel` is drawn as a grey
-dashed baseline because it is the loading step the others build on, not a discovery
-algorithm.
+`runtime_vs_<metric>.png`. Each figure uses two channels: the line **colour** says which
+algorithm, the **marker shape** says which log a point came from. Runtime is on a log
+scale because the algorithms differ by five orders of magnitude.
+
+The two loading steps are drawn as grey baselines rather than coloured lines, because
+they are what the other algorithms build on rather than discovery algorithms themselves.
+`import_ocel` is dashed and reads the log into Polars; `import_ocel_db` is dotted and
+reads the same file into DuckDB. Which one applies depends on the algorithm: five of
+them need the Polars log, two need the DuckDB one.
 
 Use `--no-figures` for a quick partial run: a filtered run would otherwise overwrite the
 committed figures with incomplete data. To rebuild the figures from the saved results
@@ -141,10 +145,10 @@ algorithm that cannot complete (see below):
 
 ```bash
 python evaluation/run_benchmarks.py --repeats 3 \
-  --algorithms import_ocel,totemDiscovery,totemDiscovery_db,mlpaDiscovery,discover_oc_petri_net_polars,discover_occn,OCDFG.from_ocel,CCDFG.from_ocel
+  --algorithms import_ocel,import_ocel_db,totemDiscovery,totemDiscovery_db,mlpaDiscovery,discover_oc_petri_net_polars,discover_occn,OCDFG.from_ocel,CCDFG.from_ocel
 ```
 
-That takes about 25 minutes, almost all of it `discover_occn` on `order-management`.
+That takes about 30 minutes, almost all of it `discover_occn` on `order-management`.
 
 - [`evaluation/results/benchmark_results.md`](evaluation/results/benchmark_results.md) — the tables
 - [`evaluation/results/benchmark_results.csv`](evaluation/results/benchmark_results.csv) — the same rows, for tools
@@ -169,9 +173,24 @@ Compare the two figures side by side:
 - [runtime against events](figures/runtime_vs_num_events.png) — the misleading view
 - [runtime against event-to-object relations](figures/runtime_vs_num_e2o_relations.png) — the explanatory one
 
-`totemDiscovery_db` is also worth noting: it runs 10x to 21x faster than the Polars
-`totemDiscovery` on every log (3.5 s to 0.26 s, 8.0 s to 0.82 s, 6.9 s to 0.33 s). Both
-read the same OCEL file, so this is a like-for-like comparison.
+### DuckDB is fast, but the loading is not free
+
+`totemDiscovery_db` looks dramatically faster than the Polars `totemDiscovery` — 9x to
+17x on the algorithm alone. That is real, but on its own it is misleading, because the
+two need different loaders and loading into DuckDB costs more.
+
+| Log | Loading | Algorithm alone | Whole job |
+|---|---|---|---|
+| `ocel2-p2p` | 2.90 s / 6.12 s | 3.28 s / 0.29 s = 11.3x | 6.18 s / 6.41 s = **0.96x** |
+| `order-management` | 3.52 s / 8.58 s | 7.42 s / 0.80 s = 9.2x | 10.94 s / 9.38 s = **1.17x** |
+| `container_logistics` | 3.46 s / 4.40 s | 6.53 s / 0.40 s = 16.5x | 9.99 s / 4.79 s = **2.08x** |
+
+(Polars / DuckDB.)
+
+Read end to end, the advantage shrinks a lot, and on the smallest log it disappears — the
+whole job is slightly *slower* through DuckDB. The win grows with the log, so DuckDB
+still looks like the better bet as logs get bigger. But one load feeding many algorithms
+is where it pays off, not one load feeding one algorithm.
 
 ### How to read the numbers
 
@@ -193,6 +212,9 @@ read the same OCEL file, so this is a like-for-like comparison.
   not byte-identical though: the Polars importer filters out objects the DuckDB one
   keeps, so `ocel2-p2p` has 9,543 objects on the DuckDB side against 9,054 on the Polars
   side. Event counts and labels match everywhere.
+- **Both loaders are timed, so compare like with like.** A Polars algorithm costs
+  `import_ocel` plus its own time; a DuckDB one costs `import_ocel_db` plus its own. The
+  algorithm rows on their own leave the loading out.
 - **Re-running with `--logs` or `--algorithms` overwrites these files** with partial
   data. Regenerate the committed example only from the full command.
 
