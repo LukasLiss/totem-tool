@@ -29,7 +29,7 @@ export default function TotemMiner({
   embedded = false,
   backendBaseUrl = API_BASE_URL,
   height = 600,
-  filterEnabled = false,
+  filterEnabled = true,
   onToggleFilter,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
@@ -111,6 +111,7 @@ export default function TotemMiner({
             fileId={fileId ?? undefined}
             modelType="TOTEM"
             params={{ tau }}
+            filterEnabled={filterEnabled}
             disabled={!fileId}
           />
         </div>

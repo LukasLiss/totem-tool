@@ -32,6 +32,12 @@ export interface SaveModelAssetButtonProps {
   modelType: AssetType;
   /** Discovery settings currently in effect (tau, threshold, …). */
   params?: Record<string, unknown>;
+  /**
+   * The component's global-filter toggle state. When true (default) the save
+   * request carries the active global filter, so the stored model matches
+   * the filtered view the component shows.
+   */
+  filterEnabled?: boolean;
   disabled?: boolean;
   /** Compact icon-only trigger (for floating control pills). */
   iconOnly?: boolean;
@@ -50,6 +56,7 @@ export function SaveModelAssetButton({
   fileId,
   modelType,
   params,
+  filterEnabled = true,
   disabled = false,
   iconOnly = false,
   className,
@@ -87,6 +94,7 @@ export function SaveModelAssetButton({
         name: name.trim(),
         modelType,
         params,
+        applyGlobalFilter: filterEnabled,
       });
       toast.success(`${typeLabel} saved to the project's model assets`);
       handleOpenChange(false);
@@ -126,6 +134,9 @@ export function SaveModelAssetButton({
                 Stores the model discovered from the current event log in the
                 project's model asset store, using the discovery settings
                 currently in effect.
+                {filterEnabled
+                  ? ' An active global filter is applied, so the saved model matches the filtered view.'
+                  : ' The global filter is off for this component, so the model is mined from the unfiltered log.'}
               </DialogDescription>
             </DialogHeader>
 
