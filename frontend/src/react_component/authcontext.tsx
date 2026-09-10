@@ -16,7 +16,7 @@ async function guestReAuth() {
   const resp = await axios.post(
     "/token/",
     { username: "Guest", password: "guest" },
-    { headers: { "Content-Type": "application/json" } }
+    { headers: { "Content-Type": "application/json" }, _skipAuthRefresh: true }
   );
   const { access, refresh } = resp.data;
   axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;

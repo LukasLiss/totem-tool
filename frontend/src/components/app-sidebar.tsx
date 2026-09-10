@@ -28,22 +28,19 @@ import { NavConformance } from "./nav-conformance";
 import { NavEditor } from "./nav-editor";
 import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
-import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
+
+// In the desktop build the only account is the auto-logged-in Guest, so
+// "Log out" would just drop the user's place and log them straight back in.
+const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate();
   const location = useLocation();
-  const context = useContext(SelectedFileContext);
-  if (!context) {
-    console.error('SelectedFileContext not provided');
-    return null;
-  }
-  const { selectedFile } = context;
+  // Hooks must run unconditionally; the context has a non-null default.
+  const { selectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
   const [dashboards, setDashboards] = useState<any[]>([]);
-
-  console.log("Current selectedFile:", selectedFile);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -110,11 +107,13 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             <span>Settings</span>
             <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
         </SidebarMenuButton>
-        <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
-            <LogOut />
-            <span>Log out</span>
-            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-        </SidebarMenuButton>
+        {!LOCAL_MODE && (
+          <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
+              <LogOut />
+              <span>Log out</span>
+              <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+          </SidebarMenuButton>
+        )}
       </SidebarFooter>
     </Sidebar>
   )

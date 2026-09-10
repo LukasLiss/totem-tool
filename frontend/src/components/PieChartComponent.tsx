@@ -82,11 +82,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setError(null);
 
     try {
-      const token = localStorage.getItem("access_token");
-      if (!token) throw new Error("No authentication token");
-
       // Execute query to get column information
-      const result = await executeQuery(token, selectedFile.id.toString(), query);
+      const result = await executeQuery(selectedFile.id, query);
       if (result.data && result.columns) {
         setAvailableColumns(result.columns);
       } else {
@@ -113,10 +110,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
       setError(null);
 
       try {
-        const token = localStorage.getItem("access_token");
-        if (!token) throw new Error("No authentication token");
-
-        const result = await executeQuery(token, selectedFile.id.toString(), query);
+        const result = await executeQuery(selectedFile.id, query);
 
         if (result.data && Array.isArray(result.data)) {
           // Transform data for recharts
