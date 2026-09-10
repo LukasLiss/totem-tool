@@ -13,9 +13,10 @@ scale with different things, so one x-axis is not enough.
 The y-axis is logarithmic because runtimes here span five orders of magnitude, from
 0.008 s to over 900 s. On a linear axis every fast algorithm sits flat on zero.
 
-import_ocel is drawn as a grey dashed baseline rather than as one of the coloured
-lines. It is the loading step all the other algorithms build on, and it is mostly file
-parsing, so it is a different kind of measurement.
+The two loading steps, import_ocel and import_ocel_db, are drawn as grey baselines
+rather than coloured lines. They are what the other algorithms build on, and they are
+mostly file parsing, so they are a different kind of measurement. import_ocel is dashed
+and import_ocel_db is dotted.
 
 Colours are the validated categorical palette, assigned in a fixed order so an algorithm
 keeps its colour even if a run covers only some of them. Three of the colours are light
@@ -49,8 +50,12 @@ from evaluation.datasets import LOGS, SIZE_METRICS, LogStatistics  # noqa: E402
 FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
 FILE_PREFIX = "runtime_vs_"
 
-# The algorithm drawn as a baseline instead of a coloured series.
-BASELINE_ALGORITHM = "import_ocel"
+# The loading steps, drawn as grey baselines instead of coloured series. Each maps to
+# the line style that tells the two apart.
+BASELINE_ALGORITHMS = {
+    "import_ocel": "--",
+    "import_ocel_db": ":",
+}
 
 # Validated categorical palette. Never reorder or cycle this: each algorithm takes the
 # next free slot, so it keeps its colour across runs.
@@ -149,10 +154,10 @@ def series_for(rows: Sequence, metric: str) -> dict[str, list[tuple[int, float, 
     return {name: sorted(points) for name, points in series.items()}
 
 
-def _logs_in(series: Mapping, baseline) -> set[str]:
+def _logs_in(series: Mapping, baseline_points) -> set[str]:
     """Every log that actually has a point in this figure."""
     drawn = {log for points in series.values() for _, _, log in points}
-    return drawn | {log for _, _, log in (baseline or [])}
+    return drawn | {log for _, _, log in (baseline_points or [])}
 
 
 def markers_for_logs(rows: Sequence) -> dict[str, str]:
@@ -209,10 +214,13 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
                 zorder=zorder + 1,
             )
 
-    # The baseline is drawn first so the coloured lines sit on top of it.
-    baseline = series.pop(BASELINE_ALGORITHM, None)
-    if baseline:
-        draw(baseline, BASELINE_COLOR, BASELINE_ALGORITHM + " (loading step)", "--", 2)
+    # Baselines are drawn first so the coloured lines sit on top of them.
+    baselines = []
+    for name, style in BASELINE_ALGORITHMS.items():
+        points = series.pop(name, None)
+        if points:
+            draw(points, BASELINE_COLOR, name + " (loading step)", style, 2)
+            baselines += points
 
     for index, name in enumerate(sorted(series)):
         color = SERIES_COLORS[index % len(SERIES_COLORS)]
@@ -259,7 +267,7 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
         axes.add_artist(algorithms)
         legends.append(algorithms)
 
-        drawn_logs = [name for name in log_markers if name in _logs_in(series, baseline)]
+        drawn_logs = [name for name in log_markers if name in _logs_in(series, baselines)]
         log_handles = [
             Line2D([], [], color=TICKS, marker=log_markers[name], linestyle="none",
                    markersize=7, label=name)

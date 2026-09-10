@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from functools import partial
+from itertools import count
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -27,6 +28,9 @@ from typing import Any, Callable, Sequence
 _TOTEM_LIB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_TOTEM_LIB / "src"))
 sys.path.insert(0, str(_TOTEM_LIB))
+
+import shutil
+import tempfile
 
 import polars as pl
 
@@ -40,6 +44,7 @@ from totem_lib import (
     mlpaDiscovery,
     totemDiscovery,
 )
+from totem_lib.ocel.importer_db import import_ocel_db
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 from totem_lib.totem import totemDiscovery_db
 from totem_lib.variants import find_variants
@@ -69,6 +74,7 @@ class LogContext:
         self.log = log
         self._ocel = None
         self._ocel_db = None
+        self._db_dir = None
         self._totem = None
         self._base_df = None
 
@@ -81,14 +87,46 @@ class LogContext:
 
     @property
     def ocel_db(self) -> OcelDuckDB:
-        """The DuckDB copy of the log, for the `_db` algorithms."""
+        """
+        The log loaded into DuckDB, for the `_db` algorithms.
+
+        Built from the same OCEL file the Polars side reads, so both families measure
+        the same data. The `.duckdb` files in test_data are not used: they were built
+        once from a normalised copy of the logs, with spaces stripped from object types
+        and activities, so they hold different labels and slightly different rows.
+
+        It is written to a temporary directory, not next to the log, because DuckDB
+        leaves scratch files beside its database.
+        """
         if self._ocel_db is None:
-            if not self.log.has_duckdb:
-                raise MissingInput(
-                    f"{self.log.name} has no DuckDB copy at {self.log.duckdb_path}"
-                )
-            self._ocel_db = OcelDuckDB.load(str(self.log.duckdb_path))
+            db_path = Path(self._scratch_dir()) / f"{self.log.name}.duckdb"
+            self._ocel_db = import_ocel_db(str(self.log.path), db_path=str(db_path))
         return self._ocel_db
+
+    def _scratch_dir(self) -> str:
+        """Where throwaway DuckDB files go. Removed by close()."""
+        if self._db_dir is None:
+            self._db_dir = tempfile.mkdtemp(prefix="totem-eval-")
+        return self._db_dir
+
+    def fresh_db_import(self) -> Callable[[], Any]:
+        """
+        A call that builds a new DuckDB copy every time it runs.
+
+        `ocel_db` keeps its database and hands the same one to every algorithm, which
+        is what those algorithms want. It is wrong for timing the conversion though:
+        the second repeat would find the work already done and measure nothing. So
+        each call here writes its own file.
+        """
+        counter = count()
+
+        def convert():
+            path = Path(self._scratch_dir()) / f"timed-{next(counter)}.duckdb"
+            db = import_ocel_db(str(self.log.path), db_path=str(path))
+            db.close()
+            return path
+
+        return convert
 
     @property
     def totem(self):
@@ -128,6 +166,9 @@ class LogContext:
         if self._ocel_db is not None:
             self._ocel_db.close()
             self._ocel_db = None
+        if self._db_dir is not None:
+            shutil.rmtree(self._db_dir, ignore_errors=True)
+            self._db_dir = None
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +190,7 @@ class Algorithm:
 
 ALGORITHMS: tuple[Algorithm, ...] = (
     Algorithm("import_ocel", lambda c: partial(import_ocel, *import_args(c.log))),
+    Algorithm("import_ocel_db", lambda c: c.fresh_db_import()),
     Algorithm("totemDiscovery", lambda c: partial(totemDiscovery, c.ocel)),
     Algorithm("totemDiscovery_db", lambda c: partial(totemDiscovery_db, c.ocel_db)),
     Algorithm("mlpaDiscovery", lambda c: partial(mlpaDiscovery, c.totem)),

@@ -8,16 +8,32 @@ in later.
 
 A failing algorithm is reported and the run carries on. Ctrl+C stops the whole run.
 
-Costs vary enormously, and not with the number of events. Measured once, at one repeat:
+Costs vary enormously, and not with the number of events. Averages of three runs on an
+idle machine:
 
     algorithm       ocel2-p2p (14.7k)  order-management (21k)  container_logistics (35.4k)
-    discover_occn              20 s               610 s                    61 s
-    find_variants             1.6 s        did not finish                 0.8 s
-    OCDFG.from_ocel           0.2 s               0.1 s                    0.1 s
+    discover_occn            18.4 s              415.2 s                  36.6 s
+    import_ocel_db            6.1 s                8.6 s                   4.4 s
+    totemDiscovery            3.3 s                7.4 s                   6.5 s
+    import_ocel               2.9 s                3.5 s                   3.5 s
+    totemDiscovery_db        0.29 s               0.80 s                  0.40 s
+    OCDFG.from_ocel          0.09 s               0.13 s                  0.10 s
+    find_variants             1.6 s        out of memory            not measured
 
-order-management is the smaller log of the last two, yet it is where both slow algorithms
+Both loaders are measured. A Polars algorithm costs import_ocel plus its own time, a
+DuckDB one costs import_ocel_db plus its own. That matters: totemDiscovery_db beats
+totemDiscovery by 9x to 17x on its own, but loading into DuckDB is the slower of the two
+loaders, so the whole job is only 0.96x to 2.08x - slightly slower on the smallest log.
+
+order-management is the smaller log of the last two, yet it is where the slow algorithms
 blow up. It has the most event-to-object relations by far (147k, against 74k), which is
-what those two actually scale with. Start anything new on ocel2-p2p with --repeats 1.
+what they actually scale with. Start anything new on ocel2-p2p with --repeats 1.
+
+find_variants is left out of the committed run: it exhausts memory on order-management
+and ends in a MemoryError, taking the machine down with it. Its container_logistics
+figure is unmeasured - an earlier 0.8 s reading was invalid, because the benchmark then
+loaded a bundled .duckdb whose labels had spaces stripped, so the leading object type
+did not exist and the call did nothing.
 
 Run from the totem_lib/ directory:
     python evaluation/run_benchmarks.py
@@ -211,10 +227,9 @@ def print_plan(logs: Sequence[EvaluationLog], algorithms: Sequence[Algorithm]) -
     """Show what a run would cover, without running anything."""
     print("Logs:")
     for log in logs:
-        duckdb = "yes" if log.has_duckdb else "NO"
         print(
             f"  {log.name:24}{log.event_count or '?':>9} events  "
-            f"duckdb={duckdb}  leading_type={log.leading_object_type!r}"
+            f"leading_type={log.leading_object_type!r}"
         )
     print("\nAlgorithms:")
     for algorithm in algorithms:
