@@ -3219,6 +3219,7 @@ import duckdb as _duckdb
 
 from totem_lib.ocel.ocel_duckdb import create_ocel_schema
 from . import views as _views
+from .views.event_log import QUERY_BROWSER_TABLES
 
 
 def _write_minimal_duckdb_log(path: str) -> None:
@@ -3293,6 +3294,55 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.client.force_authenticate(other)
         response = self._run("SELECT 1")
         self.assertEqual(response.status_code, 404)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class QueryColumnsEndpointTests(APITestCase):
+    """The SQL editor's schema browser."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("cols-user", password="pw")
+        self.project = Project.objects.create(name="cols-project")
+        self.project.users.add(self.user)
+        filename = f"sql-columns-{self._testMethodName}.duckdb"
+        _write_minimal_duckdb_log(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def _get(self, pk=None):
+        return self.client.get(f"/api/files/{pk or self.log.pk}/query_columns/")
+
+    def test_lists_every_exposed_table_with_columns_and_counts(self):
+        response = self._get()
+        self.assertEqual(response.status_code, 200, response.data)
+        tables = {t["name"]: t for t in response.data["tables"]}
+        self.assertEqual(set(tables), set(QUERY_BROWSER_TABLES))
+        events = tables["events"]
+        self.assertEqual(events["rowCount"], 2)
+        self.assertIn("activity", [c["name"] for c in events["columns"]])
+
+    def test_reports_structural_key_hints(self):
+        tables = {t["name"]: t for t in self._get().data["tables"]}
+        notes = {c["name"]: c["note"] for c in tables["event_object"]["columns"]}
+        self.assertEqual(notes["event_id"], "FK -> events")
+        self.assertEqual(notes["obj_id"], "FK -> objects")
+        event_notes = {c["name"]: c["note"] for c in tables["events"]["columns"]}
+        self.assertEqual(event_notes["event_id"], "PK")
+
+    def test_other_users_cannot_read_the_schema(self):
+        other = User.objects.create_user("other-cols-user", password="pw")
+        self.client.force_authenticate(other)
+        self.assertEqual(self._get().status_code, 404)
+
+    def test_non_duckdb_logs_are_rejected(self):
+        json_log = EventLog.objects.create(
+            project=self.project, file="not-converted.json"
+        )
+        response = self._get(pk=json_log.pk)
+        self.assertEqual(response.status_code, 400)
 
 
 class OcelDbConcurrencyTests(TestCase):

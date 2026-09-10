@@ -42,8 +42,12 @@ declare module 'gridstack' {
     // OCCNComponent
     relative_occurrence_threshold?: number;
     object_types?: string;
-    // SQLQueryComponent / PieChartComponent
+    // SqlQueryComponent / PieChartComponent
     query?: string;
+    // SqlQueryComponent
+    name?: string;
+    expected_result?: string | null;
+    row_limit?: number;
     ring_text?: string;
     chart_type?: string;
     title?: string;
