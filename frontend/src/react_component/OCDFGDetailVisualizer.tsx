@@ -26,7 +26,7 @@ function OCDFGDetailVisualizer({
   const providerId = instanceId ?? `detail-flow-${generatedId}`;
 
   return (
-    <ReactFlowProvider id={providerId}>
+    <ReactFlowProvider>
       <NewOCDFGVisualizer
         height={height}
         data={data}

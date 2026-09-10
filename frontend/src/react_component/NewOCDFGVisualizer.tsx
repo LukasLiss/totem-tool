@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -19,7 +20,9 @@ import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -57,6 +60,7 @@ export type DfgNode = {
   id: string;
   label: string;
   types?: string[];
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type DfgLink = {
@@ -66,6 +70,7 @@ export type DfgLink = {
   objtype?: string;
   weight?: number;
   variant_rank?: number;
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type OcdfgGraph = {
@@ -100,6 +105,7 @@ interface NewOCDFGVisualizerProps {
   onSizeChange?: (size: { width: number; height: number }) => void;
   showControls?: boolean;
   initialInteractionLocked?: boolean;
+  filterEnabled?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -235,11 +241,15 @@ function NewOCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
+  filterEnabled = false,
 }: NewOCDFGVisualizerProps) {
   console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
+
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -323,6 +333,48 @@ function NewOCDFGVisualizer({
 
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
+
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+
+  const handleNodeMouseEnter = useCallback((event: React.MouseEvent, node: Node) => {
+    const metrics = (node.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: (node.data as any)?.label
+      });
+    }
+  }, []);
+
+  const handleNodeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleNodeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
+
+  const handleEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
+    const metrics = (edge.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: 'Directly-Follows Arc'
+      });
+    }
+  }, []);
+
+  const handleEdgeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleEdgeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
 
   const fitViewOptions = useMemo(() => {
     if (resolvedVariant === 'detail' || hideChrome) {
@@ -421,6 +473,11 @@ function NewOCDFGVisualizer({
     [hideChrome, typeColors],
   );
 
+  const onSizeChangeRef = useRef(onSizeChange);
+  useEffect(() => {
+    onSizeChangeRef.current = onSizeChange;
+  }, [onSizeChange]);
+
   const reportGraphSize = useCallback(
     (renderNodes?: Node[], renderEdges?: Edge[]) => {
       // Use the passed args first; fall back to refs (not state) so this
@@ -436,20 +493,21 @@ function NewOCDFGVisualizer({
         fallbackNodeHeight,
       );
       if (!measured) return;
+
       const previous = lastReportedSizeRef.current;
       if (previous && previous.width === measured.width && previous.height === measured.height) {
         return;
       }
       lastReportedSizeRef.current = measured;
       setMeasuredGraphSize(measured);
-      if (onSizeChange) {
-        onSizeChange(measured);
+      if (onSizeChangeRef.current) {
+        onSizeChangeRef.current(measured);
       }
     },
-    // nodes and edges intentionally omitted — we use refs to avoid an
-    // infinite loop: setNodes → nodes changes → reportGraphSize recreated
-    // → effect re-runs → setNodes again.
-    [fallbackNodeHeight, fallbackNodeWidth, onSizeChange, paddingForSize],
+    // nodes and edges intentionally omitted - we use refs to avoid an
+    // infinite loop: setNodes -> nodes changes -> reportGraphSize recreated
+    // -> effect re-runs -> setNodes again.
+    [fallbackNodeHeight, fallbackNodeWidth, paddingForSize],
   );
 
   const updateAutoInteractionLock = useCallback(() => {
@@ -522,9 +580,9 @@ function NewOCDFGVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
+    const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url)
+    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -539,7 +597,7 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
-  }, [data, fileId]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   const handleWeightLimitChange = useCallback(
     (otype: string, value: number) => {
@@ -658,6 +716,7 @@ function NewOCDFGVisualizer({
         layoutDirection,
         typeIndicatorSize,
         typeIndicatorThickness,
+        metrics: node.metrics ?? null,
       };
       const terminalLabel =
         node.types && node.types.length > 0
@@ -770,6 +829,8 @@ function NewOCDFGVisualizer({
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
           weight: link.weight ?? 1,
+          metrics: link.metrics ?? (link.weight != null ? { frequency: link.weight, avg_lead_time: null } : null),
+          reactFlowId, // Scopes getNode() lookups to this specific graph instance
         },
       } as Edge;
     });
@@ -780,7 +841,7 @@ function NewOCDFGVisualizer({
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0 || rawEdges.length === 0) return;
+    if (rawNodes.length === 0) return;
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
@@ -956,6 +1017,7 @@ function NewOCDFGVisualizer({
   };
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
+  const hasActivities = dfgData === null || nodes.some(n => n.data?.nodeVariant === 'center');
 
   return (
     <div
@@ -963,12 +1025,19 @@ function NewOCDFGVisualizer({
       className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onNodeMouseMove={handleNodeMouseMove}
+        onEdgeMouseEnter={handleEdgeMouseEnter}
+        onEdgeMouseLeave={handleEdgeMouseLeave}
+        onEdgeMouseMove={handleEdgeMouseMove}
         onMoveEnd={resolvedVariant === 'detail' ? updateAutoInteractionLock : undefined}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
@@ -987,6 +1056,27 @@ function NewOCDFGVisualizer({
         zoomOnDoubleClick={!interactionsDisabled}
         preventScrolling={!interactionsDisabled}
       />
+
+      {!hasActivities && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(255, 255, 255, 0.96)',
+          color: '#64748B',
+          fontFamily: 'var(--font-primary, Inter, sans-serif)',
+          fontSize: 12,
+          fontWeight: 500,
+          textAlign: 'center',
+          padding: 24,
+          zIndex: 10,
+          pointerEvents: 'none',
+        }}>
+          All activities are displayed in lower levels.
+        </div>
+      )}
 
       {!hideChrome && (
         <div
@@ -1214,9 +1304,19 @@ function NewOCDFGVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
+            {data == null && fileId != null && (
+              <SaveModelAssetButton
+                fileId={fileId}
+                modelType="OCDFG"
+                disabled={dfgData == null}
+                iconOnly
+                className="rounded-full h-9 w-9"
+              />
+            )}
           </div>
         </div>
       )}
+      {tooltipState && <MetricTooltip {...tooltipState} />}
     </div>
   );
 }

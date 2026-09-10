@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import type { CSSProperties } from 'react';
 
 type TerminalVariant = 'start' | 'end';
@@ -12,6 +12,9 @@ type TerminalNodeData = {
   layoutDirection?: 'TB' | 'LR';
   sizePreset?: 'terminal' | 'terminal-min';
 };
+
+type TerminalNode = Node<TerminalNodeData, 'ocdfgStart' | 'ocdfgEnd'>;
+type TerminalNodeProps = NodeProps<TerminalNode> & { style?: CSSProperties };
 
 const BASE_SIZE = 80;
 
@@ -73,7 +76,7 @@ const OcdfgTerminalNode = memo(function OcdfgTerminalNode({
   style,
   width: nodeWidth,
   height: nodeHeight,
-}: NodeProps<TerminalNodeData>) {
+}: TerminalNodeProps) {
   const label = data?.label ?? 'Terminal';
   const fillColor = data?.fillColor ?? '#1D4ED8';
   const variant: TerminalVariant = data?.nodeVariant === 'end' ? 'end' : 'start';

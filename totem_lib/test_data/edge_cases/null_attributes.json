@@ -1,0 +1,67 @@
+{
+  "eventTypes": [
+    {
+      "name": "Create Order",
+      "attributes": []
+    },
+    {
+      "name": "Update Order",
+      "attributes": []
+    }
+  ],
+  "objectTypes": [
+    {
+      "name": "order",
+      "attributes": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "Create Order",
+      "time": "2023-01-01T00:00:00Z",
+      "attributes": [
+        {
+          "name": "priority",
+          "value": null
+        },
+        {
+          "name": "note",
+          "value": "first"
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "type": "Update Order",
+      "time": "2023-01-01T00:01:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "order",
+      "attributes": [
+        {
+          "name": "price",
+          "value": null,
+          "time": "2023-01-01T00:00:00Z"
+        }
+      ],
+      "relationships": []
+    }
+  ]
+}

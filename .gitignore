@@ -7,12 +7,16 @@ totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
-!.claude/**/*.md
+!docs/MODEL_ASSETS.md
+!docs/OCCN_REPLAY_FITNESS.md
+!docs/EDGE_CASE_TAXONOMY.md
+!totem_lib/test_data/edge_cases/README.md
 !totem_lib/evaluation/results/*.md
 totem_lib/evaluation/results/*.json
 *.txt
-
-# Reinclude totem_lib tests
+!*requirements*.txt
+!backend/requirements.txt
+!totem_lib/requirements.txt
 !totem_lib/tests/
 
 
@@ -76,6 +80,7 @@ backend/user_files/*
 .env/
 
 # Django specific
+backend/cache/
 backend/db.sqlite3
 backend/db.sqlite3-journal
 backend/media/
@@ -88,6 +93,8 @@ backend/static/
 # Python distribution / packaging
 .Python
 build/
+# Electron packaging assets (icons, entitlements) are tracked on purpose
+!electron/build/
 develop-eggs/
 dist/
 downloads/
@@ -216,6 +223,7 @@ temp/
 
 # Build directories
 build/
+!electron/build/
 dist/
 out/
 

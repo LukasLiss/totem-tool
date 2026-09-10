@@ -1,0 +1,86 @@
+{
+  "eventTypes": [
+    {
+      "name": "Close",
+      "attributes": []
+    },
+    {
+      "name": "Create",
+      "attributes": []
+    },
+    {
+      "name": "Update",
+      "attributes": []
+    }
+  ],
+  "objectTypes": [
+    {
+      "name": "order",
+      "attributes": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "Create",
+      "time": "2023-01-01T00:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "type": "Update",
+      "time": "2023-01-01T00:01:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "Create",
+      "time": "2023-01-01T00:02:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o2",
+          "qualifier": "order"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "Close",
+      "time": "2023-01-01T00:03:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o2",
+          "qualifier": "order"
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "order",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "o2",
+      "type": "order",
+      "attributes": [],
+      "relationships": []
+    }
+  ]
+}

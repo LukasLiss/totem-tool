@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
+import { useFilterVersion } from "@/store/filterStore";
 import {
   ChevronDown, ChevronRight, ZoomIn, ZoomOut,
   MinusCircle, PlusCircle, Settings,
@@ -150,6 +151,8 @@ type VariantsExplorerProps = {
   /** Called when the user clicks Apply in the advanced-settings popover so
    * the parent dashboard can persist the choices on the VariantsComponent. */
   onAdvancedChange?: (s: AdvancedSettings) => void;
+  /** When provided, overrides internal filter state (controlled mode). */
+  filterEnabled?: boolean;
 };
 
 export default function VariantsExplorer({
@@ -164,7 +167,12 @@ export default function VariantsExplorer({
   defaultIso = "wl+vf2",
   defaultTimeoutS = 10,
   onAdvancedChange,
+  filterEnabled: filterEnabledProp,
 }: VariantsExplorerProps) {
+  const filterVersion = useFilterVersion();
+  const filterEnabled = filterEnabledProp ?? false;
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+
   // Component state
   const [variants, setVariants] = useState<Variant[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
@@ -236,8 +244,9 @@ export default function VariantsExplorer({
           return;  // File changed, abort this stale closure
         }
 
-        const { data: objectTypes }: { data: string[] } = await axios.get(
-          `/api/files/${currentFileId}/object_types/`
+        const { data: objectTypesRaw }: { data: { name: string; count: number }[] } = await axios.get(
+          `/api/files/${currentFileId}/object_types/`,
+          { _skipGlobalFilter: true },
         );
 
         // Check again after async operation
@@ -245,6 +254,7 @@ export default function VariantsExplorer({
           return;  // File changed during fetch, abort
         }
 
+        const objectTypes = objectTypesRaw.map(o => o.name);
         if (!cancelled && Array.isArray(objectTypes) && objectTypes.length > 0) {
           setAvailableTypes(objectTypes);
 
@@ -320,7 +330,7 @@ export default function VariantsExplorer({
       setErrorMsg("");
 
       try {
-        const { data: rawData } = await axios.get(`/api/variants/${qs}`);
+        const { data: rawData } = await axios.get(`/api/variants/${qs}`, { _skipGlobalFilter: !filterEnabled });
         const arr: Variant[] = Array.isArray(rawData) ? rawData : rawData.variants;
 
         // Check again after async operation
@@ -358,7 +368,7 @@ export default function VariantsExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad]);
+  }, [leadingType, extraction, iso, timeoutS, automaticLoading, hasStartedLoading, onVariantsLoad, filterEnabled, effectiveFilterVersion]);
 
   const filtered = useMemo(() => {
     return [...variants].sort((a, b) => b.support - a.support);
@@ -549,6 +559,7 @@ export default function VariantsExplorer({
                 onCheckedChange={(checked) => setLabelMode(checked ? "compact" : "full")}
               />
             </div>
+
           </div>
         </div>
       </CardHeader>
@@ -1047,9 +1058,7 @@ function gradientFor(
     // Find object by type instead of ID (IDs may have different formats)
     const obj = objects.find((o) => o.type === typeFromId);
     const base = obj ? typeColor[obj.type] : UI.textSecondary;
-    const siblings = objects.filter((o) => o.type === typeFromId);
-    const idx = siblings.length > 0 ? 0 : 0; // Use first sibling's shade
-    return shade(base, 0.15 * (idx % 5));
+    return shade(base, 0);
   });
   if (colors.length <= 1) return colors[0] || UI.textSecondary;
   const step = 100 / (colors.length - 1);

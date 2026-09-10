@@ -1,0 +1,57 @@
+{
+  "schema": "totem",
+  "version": 1,
+  "tempgraph": {
+    "nodes": [
+      "Item",
+      "Order"
+    ],
+    "D": [
+      [
+        "Order",
+        "Item"
+      ]
+    ],
+    "Di": [],
+    "I": [],
+    "Ii": [],
+    "P": [
+      [
+        "Item",
+        "Order"
+      ]
+    ]
+  },
+  "cardinalities": [
+    {
+      "from": "Item",
+      "to": "Order",
+      "log_cardinality": "0...1",
+      "event_cardinality": "1"
+    },
+    {
+      "from": "Order",
+      "to": "Item",
+      "log_cardinality": "1..*",
+      "event_cardinality": "0...*"
+    }
+  ],
+  "type_relations": [
+    [
+      "Item",
+      "Order"
+    ]
+  ],
+  "all_event_types": [
+    "Create Order",
+    "Pick Item"
+  ],
+  "object_type_to_event_types": {
+    "Item": [
+      "Pick Item"
+    ],
+    "Order": [
+      "Create Order"
+    ]
+  }
+}

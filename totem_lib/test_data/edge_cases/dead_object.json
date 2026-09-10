@@ -1,0 +1,46 @@
+{
+  "eventTypes": [
+    {
+      "name": "Create Order",
+      "attributes": []
+    }
+  ],
+  "objectTypes": [
+    {
+      "name": "item",
+      "attributes": []
+    },
+    {
+      "name": "order",
+      "attributes": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "Create Order",
+      "time": "2023-01-01T00:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "order",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "o_dead",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    }
+  ]
+}

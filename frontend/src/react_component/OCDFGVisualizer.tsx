@@ -353,7 +353,7 @@ function OCDFGVisualizer({
   const hideChrome = resolvedVariant !== 'full' || showControls === false;
   const lastReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const reactFlow = useReactFlow({ id: reactFlowId } as any);
+  const reactFlow = useReactFlow();
   const { fitView } = reactFlow;
   // Layout reserve for legend on the left
   const LEGEND_WIDTH = 300;
@@ -593,8 +593,8 @@ function OCDFGVisualizer({
 
     let cancelled = false;
     const url = fileId
-      ? `http://127.0.0.1:8000/api/ocdfg/?file_id=${fileId}`
-      : 'http://127.0.0.1:8000/api/ocdfg/';
+      ? `/api/ocdfg/?file_id=${fileId}`
+      : '/api/ocdfg/';
 
     axios.get<DfgData>(url)
       .then(({ data: payload }) => {

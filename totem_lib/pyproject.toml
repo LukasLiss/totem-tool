@@ -1,22 +1,45 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "totem_lib"
-version = "0.0.1"
+name = "totem-lib"
+version = "0.1.0"
 authors = [
-  { name="Example Author", email="author@example.com" },
+  { name = "Lukas Liss", email = "liss@pads.rwth-aachen.de" },
 ]
-description = "Library for the TOTeM paper"
+description = "Object-centric process mining: OCEL 2.0 import, TOTeM temporal-object-type relations, process areas, OC-DFG, OCPN, OCCN"
 readme = "README.md"
-requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = [
+    "process mining",
+    "object-centric",
+    "OCEL",
+    "OCEL 2.0",
+    "TOTeM",
+    "process areas",
+    "OC-DFG",
+    "OCPN",
+    "OCCN",
+    "conformance checking",
+]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
     "graphviz>=0.21",
     "networkx>=3.4.2",
     "polars>=1.32.2",
@@ -28,14 +51,18 @@ dependencies = [
     "tqdm>=4.60.0",
     "duckdb>=1.0.0",
     "ijson>=3.2.0",
-    "scipy>=1.11",
+    "scipy>=1.12",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/LukasLiss/totem-tool"
+"Source" = "https://github.com/LukasLiss/totem-tool/tree/main/totem_lib"
 "Bug Tracker" = "https://github.com/LukasLiss/totem-tool/issues"
 
 [project.optional-dependencies]
 test = [
     "pytest",
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]

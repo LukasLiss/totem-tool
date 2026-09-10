@@ -1,0 +1,52 @@
+{
+  "eventTypes": [
+    {
+      "name": "Bestellung anlegen – über",
+      "attributes": []
+    },
+    {
+      "name": "发货 📦",
+      "attributes": []
+    }
+  ],
+  "objectTypes": [
+    {
+      "name": "Auftrag",
+      "attributes": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "Bestellung anlegen – über",
+      "time": "2023-01-01T00:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "Auftrag"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "type": "发货 📦",
+      "time": "2023-01-01T00:01:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "Auftrag"
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "Auftrag",
+      "attributes": [],
+      "relationships": []
+    }
+  ]
+}

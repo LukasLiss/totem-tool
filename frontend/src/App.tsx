@@ -9,18 +9,22 @@ import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
-import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
+import { SettingsView } from "./SettingsView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { setBypassCache } from "./interceptors/axios";
+import { getUserSettings } from "./api/settingsApi";
 
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 async function guestLogin() {
-  const { data } = await axios.post("http://localhost:8000/token/", {
-    username: "Guest",
-    password: "guest",
-  });
+  const { data } = await axios.post(
+    "/token/",
+    { username: "Guest", password: "guest" },
+    // Never let a 401 from the login itself trigger the refresh interceptor.
+    { _skipAuthRefresh: true }
+  );
   axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
   localStorage.setItem("access_token", data.access);
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
@@ -74,6 +78,19 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
     };
   }, []);
 
+  // Seed the global cache-bypass flag from the user's saved setting once we're
+  // authenticated. Guarded on an access token so we don't fire (and trigger a
+  // login redirect) on the pre-auth title/login screens.
+  useEffect(() => {
+    if (!ready) return;
+    if (!localStorage.getItem("access_token")) return;
+    getUserSettings()
+      .then((s) => setBypassCache(s.bypass_cache))
+      .catch(() => {
+        /* not logged in yet or settings unavailable — leave bypass off */
+      });
+  }, [ready]);
+
   if (!ready) {
     return (
       <div className="website-background">
@@ -103,8 +120,8 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
             <Route path="/overview" element={<ProcessOverview />} />
-            <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
+            <Route path="/settings" element={<SettingsView />} />
             <Route
               path="/"
               element={

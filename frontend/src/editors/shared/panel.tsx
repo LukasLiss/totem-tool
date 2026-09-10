@@ -1,11 +1,12 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 /**
- * Small building blocks for the editor property panels so the three model
- * editors share one visual language.
+ * Small building blocks for the editor property panels so the model editors
+ * share one visual language.
  */
 
 let fieldIdCounter = 0;
@@ -141,4 +142,44 @@ export function ColorSwatches({
 export function nextFieldId(prefix: string) {
   fieldIdCounter += 1;
   return `${prefix}-${fieldIdCounter}`;
+}
+
+/** Input that keeps a local draft and commits on blur / Enter (Escape reverts). */
+export function CommitInput({
+  value,
+  onCommit,
+  placeholder,
+  disabled,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  return (
+    <Input
+      className="h-8"
+      value={draft}
+      placeholder={placeholder}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          // Only blur — the onBlur handler performs the single commit
+          // (calling commit() here too would commit twice).
+          (event.target as HTMLInputElement).blur();
+        }
+        if (event.key === 'Escape') setDraft(value);
+      }}
+    />
+  );
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
+import { useFilterVersion } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -19,7 +20,10 @@ import OcdfgDebugLayerNode from './OcdfgDebugLayerNode';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
+import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -57,6 +61,7 @@ export type DfgNode = {
   id: string;
   label: string;
   types?: string[];
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type DfgLink = {
@@ -66,6 +71,7 @@ export type DfgLink = {
   objtype?: string;
   weight?: number;
   variant_rank?: number;
+  metrics?: { frequency?: number; avg_lead_time?: number | null } | null;
 };
 
 export type OcdfgGraph = {
@@ -90,6 +96,9 @@ interface NewOCDFGVariantsVisualizerProps {
   onSizeChange?: (size: { width: number; height: number }) => void;
   showControls?: boolean;
   initialInteractionLocked?: boolean;
+  filterEnabled?: boolean;
+  onToggleFilter?: () => void;
+  showTitle?: boolean;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -225,11 +234,17 @@ function NewOCDFGVariantsVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
+  filterEnabled = false,
+  onToggleFilter = () => {},
+  showTitle = true,
 }: NewOCDFGVariantsVisualizerProps) {
   console.log('[NewOCDFGVariantsVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
+
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -313,6 +328,48 @@ function NewOCDFGVariantsVisualizer({
 
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
+
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+
+  const handleNodeMouseEnter = useCallback((event: React.MouseEvent, node: Node) => {
+    const metrics = (node.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: (node.data as any)?.label
+      });
+    }
+  }, []);
+
+  const handleNodeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleNodeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
+
+  const handleEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
+    const metrics = (edge.data as any)?.metrics;
+    if (metrics) {
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        metrics,
+        label: 'Directly-Follows Arc'
+      });
+    }
+  }, []);
+
+  const handleEdgeMouseLeave = useCallback(() => {
+    setTooltipState(null);
+  }, []);
+
+  const handleEdgeMouseMove = useCallback((event: React.MouseEvent) => {
+    setTooltipState(prev => prev ? { ...prev, x: event.clientX, y: event.clientY } : null);
+  }, []);
 
   const fitViewOptions = useMemo(() => {
     if (resolvedVariant === 'detail' || hideChrome) {
@@ -511,9 +568,9 @@ function NewOCDFGVariantsVisualizer({
     }
 
     let cancelled = false;
-    const url = `http://127.0.0.1:8000/api/new-ocdfg/?file_id=${fileId}`;
+    const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url)
+    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -550,7 +607,7 @@ function NewOCDFGVariantsVisualizer({
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, fileId]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
 
   // Slider change: pure client-side — just update traceLimit state.
   // The layout effect has traceLimit in its dependency array so it will
@@ -649,6 +706,7 @@ function NewOCDFGVariantsVisualizer({
         layoutDirection,
         typeIndicatorSize,
         typeIndicatorThickness,
+        metrics: node.metrics ?? null,
       };
       const terminalLabel =
         node.types && node.types.length > 0
@@ -763,6 +821,7 @@ function NewOCDFGVariantsVisualizer({
           frequency: frequencies[index],
           frequencyNormalized: normalizedValues[index],
           thicknessFactor: thicknessFactors[index],
+          metrics: link.metrics ?? (link.weight != null ? { frequency: link.weight, avg_lead_time: null } : null),
         },
       } as Edge;
     });
@@ -967,12 +1026,19 @@ function NewOCDFGVariantsVisualizer({
       ref={containerRef}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+
       <ReactFlow
         id={reactFlowId}
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onNodeMouseMove={handleNodeMouseMove}
+        onEdgeMouseEnter={handleEdgeMouseEnter}
+        onEdgeMouseLeave={handleEdgeMouseLeave}
+        onEdgeMouseMove={handleEdgeMouseMove}
         onMoveEnd={resolvedVariant === 'detail' ? updateAutoInteractionLock : undefined}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
@@ -1006,21 +1072,26 @@ function NewOCDFGVariantsVisualizer({
             maxHeight: 'calc(100% - 32px)',
           }}
         >
-          <div
-            style={{
-              background: 'transparent',
-              border: '1px solid transparent',
-              borderRadius: 12,
-              padding: '10px 14px',
-              boxShadow: 'none',
-              fontFamily: 'var(--font-primary, Inter, sans-serif)',
-              minWidth: 240,
-            }}
-          >
-            <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-              Object-Centric DFG (Variants)
+          {showTitle && (
+            <div
+              style={{
+                background: 'transparent',
+                border: '1px solid transparent',
+                borderRadius: 12,
+                padding: '10px 14px',
+                boxShadow: 'none',
+                fontFamily: 'var(--font-primary, Inter, sans-serif)',
+                minWidth: 240,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                  Object-Centric DFG (Variants)
+                </div>
+                <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
+              </div>
             </div>
-          </div>
+          )}
 
           {Object.keys(typeColors).length > 0 && (
             <div
@@ -1216,9 +1287,19 @@ function NewOCDFGVariantsVisualizer({
             >
               <Sun className="h-4 w-4" />
             </Button>
+            {data == null && fileId != null && (
+              <SaveModelAssetButton
+                fileId={fileId}
+                modelType="OCDFG"
+                disabled={dfgData == null}
+                iconOnly
+                className="rounded-full h-9 w-9"
+              />
+            )}
           </div>
         </div>
       )}
+      {tooltipState && <MetricTooltip {...tooltipState} />}
     </div>
   );
 }

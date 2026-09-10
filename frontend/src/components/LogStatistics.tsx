@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from "axios";
+import { useFilterVersion } from "@/store/filterStore";
 
 // Helper function to format duration from seconds
 export const formatDuration = (seconds: number): string => {
@@ -57,7 +58,8 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch statistics when fileId changes
+  const filterVersion = useFilterVersion();
+
   useEffect(() => {
     if (!fileId) {
       setStats(null);
@@ -78,7 +80,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       }
     };
     fetchStats();
-  }, [fileId]);
+  }, [fileId, filterVersion]);
 
   // Loading state
   if (loading) {

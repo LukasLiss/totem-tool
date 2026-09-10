@@ -1,0 +1,721 @@
+/**
+ * Object-Centric Playout view.
+ *
+ * Loads an OCPN or OCCN model (from the corresponding editor session, a
+ * JSON file, or a built-in example), lets the user fix the number of
+ * objects per object type and the maximum occurrences per activity for
+ * one process execution, and then enumerates all object-centric variants
+ * the model allows within those limits ("wide" playout). Each variant can
+ * be exported as one process execution with its own objects, so the
+ * resulting OCEL has perfectly disconnected object components.
+ */
+
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  CircleDot,
+  Download,
+  FileJson,
+  FlaskConical,
+  FolderOpen,
+  Minus,
+  Play,
+  Plus,
+  Square,
+  Workflow,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { SelectedFileContext } from '@/contexts/SelectedFileContext';
+import {
+  extractAssetApiError,
+  listAssets,
+  type ProjectAsset,
+} from '@/api/assetsApi';
+import { assetToOccnModel } from '@/editors/shared/asset-format';
+import { downloadJson, openJsonFile, toFilename } from '@/editors/shared/io';
+import {
+  detectModelFormat,
+  parseOccnModelFile,
+  parseOcpnModelFile,
+  type OccnModelFile,
+  type OcpnModelFile,
+} from '@/editors/shared/model-types';
+import { loadEditorSession } from '@/editors/shared/sessionCache';
+import { exampleModel as ocpnExample } from '@/editors/ocpn/model';
+import { buildOccnExample } from '@/editors/occn/model';
+import { exportPlayoutOcel, runPlayout } from '@/api/playoutApi';
+import {
+  bumpAllLimits,
+  limitRowsFor,
+  variantsToJson,
+  type PlayoutModelSource,
+  type PlayoutRequest,
+  type PlayoutResult,
+  type PlayoutVariant,
+} from './model';
+
+const DEFAULT_TIMEOUT_S = 5;
+const MAX_STORED_VARIANTS = 2000;
+const MAX_STATES = 5_000_000;
+const MAX_LISTED_VARIANTS = 100;
+const FALLBACK_COLOR = '#64748b';
+
+/** Asset types the playout engine can execute. */
+const PLAYOUT_ASSET_TYPES: ProjectAsset['asset_type'][] = ['OCCN', 'OCPN'];
+
+export function PlayoutView() {
+  const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project as number | undefined;
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [selectedAssetId, setSelectedAssetId] = useState<string>('');
+  const [source, setSource] = useState<PlayoutModelSource | null>(null);
+  const [objectCounts, setObjectCounts] = useState<Record<string, number>>({});
+  const [rowLimits, setRowLimits] = useState<Record<string, number>>({});
+  const [timeoutS, setTimeoutS] = useState(DEFAULT_TIMEOUT_S);
+  const [running, setRunning] = useState(false);
+  const [elapsedS, setElapsedS] = useState(0);
+  const [result, setResult] = useState<PlayoutResult | null>(null);
+  /** Object counts as sent with the run that produced `result`. */
+  const [runObjectCounts, setRunObjectCounts] = useState<Record<string, number>>({});
+  const [exporting, setExporting] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const limitRows = useMemo(() => (source ? limitRowsFor(source) : []), [source]);
+  const typeColors = useMemo(() => {
+    const colors = new Map<string, string>();
+    for (const t of source?.model.objectTypes ?? []) colors.set(t.name, t.color ?? FALLBACK_COLOR);
+    return colors;
+  }, [source]);
+
+  const stopRun = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRunning(false);
+  }, []);
+  useEffect(() => stopRun, [stopRun]);
+
+  // Elapsed-seconds ticker while the backend request is in flight.
+  useEffect(() => {
+    if (!running) return;
+    setElapsedS(0);
+    const id = setInterval(() => setElapsedS((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+
+  const adoptSource = (next: PlayoutModelSource) => {
+    stopRun();
+    setSource(next);
+    setObjectCounts(Object.fromEntries(next.model.objectTypes.map((t) => [t.name, 1])));
+    setRowLimits(Object.fromEntries(limitRowsFor(next).map((row) => [row.key, 1])));
+    setResult(null);
+  };
+
+  // Load the current project's OCCN/OCPN model assets for the model picker.
+  useEffect(() => {
+    setAssets([]);
+    setSelectedAssetId('');
+    setAssetsError(null);
+    if (!projectId) return;
+    let cancelled = false;
+    setAssetsLoading(true);
+    listAssets({ projectId })
+      .then((data) => {
+        if (cancelled) return;
+        setAssets(
+          (Array.isArray(data) ? data : []).filter((asset) =>
+            PLAYOUT_ASSET_TYPES.includes(asset.asset_type),
+          ),
+        );
+      })
+      .catch((error) => {
+        if (!cancelled) setAssetsError(extractAssetApiError(error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setAssetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const loadFromAsset = (assetIdValue: string) => {
+    setSelectedAssetId(assetIdValue);
+    const asset = assets.find((a) => String(a.id) === assetIdValue);
+    if (!asset) return;
+    try {
+      if (asset.asset_type === 'OCPN') {
+        const parsed = parseOcpnModelFile(asset.content_json);
+        if (parsed.ok === false) {
+          toast.error(parsed.error);
+          return;
+        }
+        adoptSource({
+          format: 'ocpn',
+          model: { ...parsed.model, name: asset.name },
+        });
+      } else {
+        // Canonical OCCN asset JSON -> editor model file (markerGroups shape).
+        const model = assetToOccnModel(asset.content_json, asset.name);
+        adoptSource({ format: 'occn', model });
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to load the selected model asset.',
+      );
+    }
+  };
+
+  /** Adopt a model that did NOT come from the asset picker (clears its selection). */
+  const adoptExternalSource = (next: PlayoutModelSource) => {
+    setSelectedAssetId('');
+    adoptSource(next);
+  };
+
+  const loadFromEditor = (format: 'ocpn' | 'occn') => {
+    const cached = loadEditorSession<unknown>(format);
+    if (!cached) {
+      toast.error(
+        format === 'ocpn'
+          ? 'No model in the OC Petri Net editor yet — open the editor first or load a JSON file.'
+          : 'No model in the OC Causal Net editor yet — open the editor first or load a JSON file.',
+      );
+      return;
+    }
+    const parsed = format === 'ocpn' ? parseOcpnModelFile(cached) : parseOccnModelFile(cached);
+    if (parsed.ok === false) {
+      toast.error(parsed.error);
+      return;
+    }
+    adoptExternalSource(
+      format === 'ocpn'
+        ? { format, model: parsed.model as OcpnModelFile }
+        : { format, model: parsed.model as OccnModelFile },
+    );
+  };
+
+  const loadFromFile = async () => {
+    let raw: unknown;
+    try {
+      raw = await openJsonFile();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (raw === null) return;
+    const format = detectModelFormat(raw);
+    if (format === 'ocpn') {
+      const parsed = parseOcpnModelFile(raw);
+      if (parsed.ok === false) {
+        toast.error(parsed.error);
+        return;
+      }
+      adoptExternalSource({ format: 'ocpn', model: parsed.model });
+    } else if (format === 'occn') {
+      const parsed = parseOccnModelFile(raw);
+      if (parsed.ok === false) {
+        toast.error(parsed.error);
+        return;
+      }
+      adoptExternalSource({ format: 'occn', model: parsed.model });
+    } else if (format === 'totem-model') {
+      toast.error(
+        'TOTeM models describe type relations, not behavior — playout needs an OC Petri Net or OC Causal Net.',
+      );
+    } else {
+      toast.error('The file is not a valid OC Petri Net or OC Causal Net model.');
+    }
+  };
+
+  const run = async () => {
+    if (!source) return;
+    const totalObjects = Object.values(objectCounts).reduce((a, b) => a + b, 0);
+    if (totalObjects === 0) {
+      toast.error('At least one object is needed for a playout.');
+      return;
+    }
+    stopRun();
+    setResult(null);
+    setElapsedS(0);
+    setRunObjectCounts(objectCounts);
+    setRunning(true);
+
+    const request: PlayoutRequest = {
+      modelFormat: source.format,
+      model: source.model,
+      objectsPerType: objectCounts,
+      activityLimits: rowLimits,
+      timeoutS: Math.max(1, timeoutS),
+      maxStoredVariants: MAX_STORED_VARIANTS,
+      maxStates: MAX_STATES,
+    };
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const playoutResult = await runPlayout(request, controller.signal);
+      setResult(playoutResult);
+    } catch (err) {
+      if (!controller.signal.aborted) toast.error(apiErrorMessage(err));
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setRunning(false);
+      }
+    }
+  };
+
+  const exportOcel = async () => {
+    if (!source || !result || exporting) return;
+    setExporting(true);
+    try {
+      const ocel = await exportPlayoutOcel(result.variants);
+      downloadJson(`${toFilename(source.model.name, 'playout')}-playout-log`, ocel);
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const exportVariants = () => {
+    if (!source || !result) return;
+    downloadJson(
+      `${toFilename(source.model.name, 'playout')}-playout-variants`,
+      variantsToJson(result.variants, {
+        modelName: source.model.name,
+        modelFormat: source.format,
+        // The counts the run was started with — the inputs may have been
+        // edited since, but the metadata must describe this result.
+        objectsPerType: runObjectCounts,
+        activityLimits: result.effectiveActivityLimits,
+        variantCount: result.variantCount,
+        exhaustive: result.exhaustive,
+      }),
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-4 p-4 lg:p-6 max-w-5xl w-full mx-auto">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Object-Centric Playout</h1>
+        <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
+          Enumerates every distinct process execution (object-centric variant) an OC Petri Net or
+          OC Causal Net allows, for a fixed number of objects per type and a maximum number of
+          occurrences per activity. Executions that only differ by reordering independent events or
+          by renaming objects of the same type count as one variant. The result can be exported as
+          an OCEL 2.0 log in which every variant uses its own objects.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Model</CardTitle>
+          <CardDescription>
+            Select one of the project's stored models. Playout currently supports OC Causal Net
+            (OCCN) and OC Petri Net (OCPN) models, so only assets of those types are listed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={selectedAssetId}
+              onValueChange={loadFromAsset}
+              disabled={!projectId || assetsLoading || assets.length === 0}
+            >
+              <SelectTrigger className="w-[320px]" aria-label="Stored model">
+                <SelectValue
+                  placeholder={
+                    !projectId
+                      ? 'Select an event log to see stored models'
+                      : assetsLoading
+                        ? 'Loading model assets…'
+                        : assets.length === 0
+                          ? 'No OCCN/OCPN models in this project yet'
+                          : 'Select a stored model'
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {assets.map((asset) => (
+                  <SelectItem key={asset.id} value={String(asset.id)}>
+                    {asset.name} ({asset.asset_type === 'OCPN' ? 'OC Petri Net' : 'OC Causal Net'})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {assetsError && (
+              <span className="text-sm text-destructive">{assetsError}</span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Discovered models can be added to the store via "Save to assets" in the OCCN / OC
+            Petri Net views; the editors can save there too. Alternatively load a model from
+            another source:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => loadFromEditor('ocpn')}>
+              <CircleDot className="w-4 h-4" /> From OC Petri Net editor
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => loadFromEditor('occn')}>
+              <Workflow className="w-4 h-4" /> From OC Causal Net editor
+            </Button>
+            <Button variant="outline" size="sm" onClick={loadFromFile}>
+              <FolderOpen className="w-4 h-4" /> Load JSON
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => adoptExternalSource({ format: 'ocpn', model: ocpnExample() })}
+            >
+              <FlaskConical className="w-4 h-4" /> Example OCPN
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => adoptExternalSource({ format: 'occn', model: buildOccnExample() })}
+            >
+              <FlaskConical className="w-4 h-4" /> Example OCCN
+            </Button>
+          </div>
+          {source ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge variant="secondary">
+                {source.format === 'ocpn' ? 'OC Petri Net' : 'OC Causal Net'}
+              </Badge>
+              <span className="font-medium">{source.model.name}</span>
+              <span className="text-muted-foreground">·</span>
+              {source.model.objectTypes.map((t) => (
+                <span key={t.name} className="inline-flex items-center gap-1.5">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full inline-block"
+                    style={{ backgroundColor: t.color ?? FALLBACK_COLOR }}
+                  />
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No model loaded yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {source && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Limits per process execution</CardTitle>
+            <CardDescription>
+              Objects per object type and maximum occurrences per activity bound the search space
+              of one process execution.
+              {source.format === 'occn' &&
+                ' START/END pseudo activities are limited automatically to the number of objects of their type.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <h3 className="text-sm font-medium mb-2">Objects per type</h3>
+                <div className="flex flex-col gap-1.5">
+                  {source.model.objectTypes.map((t) => (
+                    <label key={t.name} className="flex items-center gap-2 text-sm">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: t.color ?? FALLBACK_COLOR }}
+                      />
+                      <span className="flex-1 truncate" title={t.name}>
+                        {t.name}
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={12}
+                        className="w-20 h-8"
+                        value={objectCounts[t.name] ?? 0}
+                        onChange={(e) =>
+                          setObjectCounts((prev) => ({
+                            ...prev,
+                            [t.name]: clamp(e.target.value, 0, 12),
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <h3 className="text-sm font-medium">Max occurrences per activity</h3>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <span>All</span>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="size-6"
+                      aria-label="Decrease all activity limits"
+                      data-testid="bump-all-down"
+                      disabled={limitRows.length === 0}
+                      onClick={() =>
+                        setRowLimits((prev) =>
+                          bumpAllLimits(
+                            prev,
+                            limitRows.map((row) => row.key),
+                            -1,
+                            0,
+                            20,
+                          ),
+                        )
+                      }
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="size-6"
+                      aria-label="Increase all activity limits"
+                      data-testid="bump-all-up"
+                      disabled={limitRows.length === 0}
+                      onClick={() =>
+                        setRowLimits((prev) =>
+                          bumpAllLimits(
+                            prev,
+                            limitRows.map((row) => row.key),
+                            1,
+                            0,
+                            20,
+                          ),
+                        )
+                      }
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </Button>
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {limitRows.map((row) => (
+                    <label key={row.key} className="flex items-center gap-2 text-sm">
+                      <span
+                        className={`flex-1 truncate ${row.silent ? 'text-muted-foreground italic' : ''}`}
+                        title={row.label}
+                      >
+                        {row.label}
+                      </span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={20}
+                        className="w-20 h-8"
+                        value={rowLimits[row.key] ?? 0}
+                        onChange={(e) =>
+                          setRowLimits((prev) => ({
+                            ...prev,
+                            [row.key]: clamp(e.target.value, 0, 20),
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 pt-1 border-t">
+              <label className="flex items-center gap-2 text-sm">
+                <span>Timeout</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={120}
+                  className="w-20 h-8"
+                  value={timeoutS}
+                  onChange={(e) => setTimeoutS(clamp(e.target.value, 1, 120))}
+                />
+                <span className="text-muted-foreground">seconds</span>
+              </label>
+              {running ? (
+                <Button variant="destructive" size="sm" onClick={stopRun}>
+                  <Square className="w-4 h-4" /> Cancel
+                </Button>
+              ) : (
+                <Button size="sm" onClick={run}>
+                  <Play className="w-4 h-4" /> Run playout
+                </Button>
+              )}
+              {running && (
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  Searching… {elapsedS}s
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {result && source && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base" data-testid="playout-summary">
+              {summaryLine(result)}
+            </CardTitle>
+            <CardDescription>
+              {result.completedRuns.toLocaleString()} complete executions ·{' '}
+              {result.statesExplored.toLocaleString()} states explored ·{' '}
+              {(result.elapsedMs / 1000).toFixed(result.elapsedMs < 10_000 ? 2 : 1)}s
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {result.warnings.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2 text-sm flex flex-col gap-1">
+                {result.warnings.map((w, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+                    <span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {result.variantCount === 0 && result.exhaustive && (
+              <p className="text-sm text-muted-foreground">
+                No complete process execution is possible within these limits. Try more objects,
+                higher activity limits, or check the model's{' '}
+                {source.format === 'ocpn' ? 'initial/final places' : 'marker groups'}.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportOcel}
+                disabled={result.variants.length === 0 || exporting}
+              >
+                <Download className="w-4 h-4" /> Export OCEL 2.0 log
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportVariants}
+                disabled={result.variants.length === 0}
+              >
+                <FileJson className="w-4 h-4" /> Export variants JSON
+              </Button>
+              {result.variants.length < result.variantCount && (
+                <span className="text-xs text-muted-foreground self-center">
+                  Exports contain the first {result.variants.length.toLocaleString()} variants.
+                </span>
+              )}
+            </div>
+            <VariantList variants={result.variants} typeColors={typeColors} />
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function clamp(value: string, min: number, max: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** Prefer the backend's {error} message, then the axios/Error message. */
+function apiErrorMessage(err: unknown): string {
+  const error = err as { response?: { data?: { error?: string } }; message?: string };
+  return error.response?.data?.error ?? error.message ?? String(err);
+}
+
+function summaryLine(result: PlayoutResult): string {
+  const n = result.variantCount.toLocaleString();
+  if (!result.exhaustive) {
+    const reason = result.timedOut ? 'timeout' : 'state limit';
+    return `At least ${n} object-centric variants (search stopped by ${reason})`;
+  }
+  if (result.approximateDedup) {
+    return `${n} object-centric variants (upper bound — highly symmetric executions may be counted twice)`;
+  }
+  return `${n} object-centric variant${result.variantCount === 1 ? '' : 's'} (exact)`;
+}
+
+function VariantList({
+  variants,
+  typeColors,
+}: {
+  variants: PlayoutVariant[];
+  typeColors: Map<string, string>;
+}) {
+  if (variants.length === 0) return null;
+  const listed = variants.slice(0, MAX_LISTED_VARIANTS);
+  return (
+    <div className="flex flex-col gap-2">
+      {listed.map((variant, i) => (
+        <div key={i} className="rounded-md border px-3 py-2">
+          <div className="text-xs text-muted-foreground mb-1.5 flex flex-wrap gap-x-3">
+            <span className="font-medium text-foreground">Variant {i + 1}</span>
+            <span>{variant.events.length} events</span>
+            <span>
+              {Object.entries(variant.objectCounts)
+                .filter(([, count]) => count > 0)
+                .map(([ot, count]) => `${count}× ${ot}`)
+                .join(', ')}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {variant.events.map((event, j) => (
+              <span
+                key={j}
+                className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs"
+              >
+                <span className="font-medium">{event.activity}</span>
+                <span className="inline-flex items-center gap-1">
+                  {Object.keys(event.objects)
+                    .sort()
+                    .flatMap((ot) =>
+                      event.objects[ot].map((obj) => (
+                        <span
+                          key={`${ot}-${obj}`}
+                          className="inline-flex items-center gap-1 rounded-sm bg-background border px-1 py-0.5"
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full inline-block"
+                            style={{ backgroundColor: typeColors.get(ot) ?? FALLBACK_COLOR }}
+                          />
+                          {obj}
+                        </span>
+                      )),
+                    )}
+                </span>
+              </span>
+            ))}
+            {variant.events.length === 0 && (
+              <span className="text-xs text-muted-foreground italic">
+                Empty execution (no visible events)
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+      {variants.length > listed.length && (
+        <p className="text-xs text-muted-foreground">
+          Showing the first {listed.length} of {variants.length.toLocaleString()} stored variants.
+        </p>
+      )}
+    </div>
+  );
+}

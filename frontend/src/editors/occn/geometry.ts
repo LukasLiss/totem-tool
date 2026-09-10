@@ -29,12 +29,44 @@ function borderPoint(box: Box, towards: XY, pad = 2): XY {
   return { x: c.x + dx * s, y: c.y + dy * s };
 }
 
+/** Base clearance of a self-loop above the node (marker labels need room). */
+const SELF_LOOP_BASE = 70;
+
+/**
+ * Self-loop over the top of the node: leaves the top edge right of center,
+ * arcs `SELF_LOOP_BASE + offset` above the node and re-enters left of center.
+ * `offset` must be non-negative (parallel self-loops stack upwards); t≈0.15
+ * lands on the ascending right side (output markers) and t≈0.85 on the
+ * descending left side (input markers), matching normal arcs.
+ */
+function selfLoopCubic(box: Box, offset: number): Cubic {
+  const cx = box.x + box.width / 2;
+  const top = box.y - 2;
+  const h = SELF_LOOP_BASE + Math.max(0, offset);
+  return {
+    p0: { x: cx + box.width / 4, y: top },
+    p1: { x: cx + box.width * 0.8, y: top - h },
+    p2: { x: cx - box.width * 0.8, y: top - h },
+    p3: { x: cx - box.width / 4, y: top },
+  };
+}
+
 /**
  * Cubic bezier for the arc source → target. `offset` is a signed perpendicular
  * offset (flow units) used to fan out parallel arcs between the same pair of
- * activities; 0 yields a straight line.
+ * activities; 0 yields a straight line. Coinciding boxes (a self-dependency,
+ * which discovered nets contain) yield a loop over the top of the node.
  */
 export function arcCubic(source: Box, target: Box, offset: number): Cubic {
+  if (
+    source === target ||
+    (source.x === target.x &&
+      source.y === target.y &&
+      source.width === target.width &&
+      source.height === target.height)
+  ) {
+    return selfLoopCubic(source, offset);
+  }
   const sc = centerOf(source);
   const tc = centerOf(target);
   const dx = tc.x - sc.x;

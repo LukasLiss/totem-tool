@@ -20,6 +20,8 @@ interface UseDottedChartDataArgs {
   viewport?: DottedChartViewport;
   sampleSeed?: number;
   debounceMs?: number;
+  filterEnabled?: boolean;
+  effectiveFilterVersion?: number;
 }
 
 export function useDottedChartData({
@@ -33,6 +35,8 @@ export function useDottedChartData({
   viewport,
   sampleSeed = 0,
   debounceMs = 300,
+  filterEnabled = false,
+  effectiveFilterVersion = 0,
 }: UseDottedChartDataArgs) {
   const [data, setData] = useState<DottedChartResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,8 +54,9 @@ export function useDottedChartData({
         maxPoints,
         viewport,
         sampleSeed,
+        effectiveFilterVersion,
       }),
-    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed]
+    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed, effectiveFilterVersion]
   );
 
   useEffect(() => {
@@ -83,7 +88,7 @@ export function useDottedChartData({
 
         const response = await axios.get<DottedChartResponse>(
           `/api/files/${fileId}/oc_dotted_chart/?${params.toString()}`,
-          { signal: controller.signal }
+          { signal: controller.signal, _skipGlobalFilter: !filterEnabled }
         );
         setData(response.data);
       } catch (err) {
