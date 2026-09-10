@@ -5,7 +5,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Link2, Copy } from "lucide-react";
+import { AlertCircle, Link2, Copy, TableProperties } from "lucide-react";
 import { toast } from "sonner";
 import {
   createQueryAsset,
@@ -51,6 +51,8 @@ export interface StoredQueryPickerDialogProps {
   onUseCopy?: (asset: ProjectAsset) => void;
   /** link the stored query (edits in the store apply here too) */
   onLink?: (asset: ProjectAsset) => void;
+  /** insert a reference (`FROM "name"`) so the query builds on the stored one */
+  onInsertReference?: (asset: ProjectAsset) => void;
 }
 
 export function StoredQueryPickerDialog({
@@ -59,6 +61,7 @@ export function StoredQueryPickerDialog({
   projectId,
   onUseCopy,
   onLink,
+  onInsertReference,
 }: StoredQueryPickerDialogProps) {
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [loading, setLoading] = useState(false);
@@ -95,8 +98,10 @@ export function StoredQueryPickerDialog({
           <DialogTitle>Stored queries</DialogTitle>
           <DialogDescription>
             {onLink
-              ? "Insert a copy of a stored query, or link it so that changes made in the query store apply here as well."
-              : "Insert a copy of a stored query."}
+              ? "Insert a copy of a stored query, link it so that changes made in the query store apply here as well, or reference it by name to build on its result."
+              : onInsertReference
+                ? "Insert a copy of a stored query, or reference it by name to build on its result."
+                : "Insert a copy of a stored query."}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto">
@@ -159,6 +164,21 @@ export function StoredQueryPickerDialog({
                         }}
                       >
                         <Link2 className="size-3.5" /> Link
+                      </Button>
+                    )}
+                    {onInsertReference && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1.5"
+                        title="Insert the query's name so you can SELECT FROM it"
+                        onClick={() => {
+                          onInsertReference(asset);
+                          onOpenChange(false);
+                        }}
+                      >
+                        <TableProperties className="size-3.5" /> Reference
                       </Button>
                     )}
                   </div>

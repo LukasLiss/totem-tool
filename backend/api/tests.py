@@ -2457,6 +2457,65 @@ class SqlQueryAssetApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class QueryReferenceResolutionTests(SimpleTestCase):
+    """Stored queries can be used like tables inside other queries."""
+
+    def test_unreferenced_query_is_returned_unchanged(self):
+        from .query_refs import resolve_query_references
+        stored = {"a": "SELECT 1 AS x"}
+        self.assertEqual(resolve_query_references("SELECT 2", stored), "SELECT 2")
+
+    def test_reference_becomes_cte(self):
+        from .query_refs import resolve_query_references
+        stored = {"Waiting times": "SELECT 1 AS w"}
+        out = resolve_query_references('SELECT w FROM "Waiting times"', stored)
+        self.assertEqual(out, 'WITH "Waiting times" AS (SELECT 1 AS w) SELECT w FROM "Waiting times"')
+
+    def test_bare_identifier_reference_is_case_insensitive(self):
+        from .query_refs import resolve_query_references
+        stored = {"waiting_times": "SELECT 1 AS w;"}
+        out = resolve_query_references("select w from Waiting_Times", stored)
+        self.assertTrue(out.startswith('WITH "waiting_times" AS (SELECT 1 AS w) select'))
+
+    def test_transitive_references_are_ordered(self):
+        from .query_refs import resolve_query_references
+        stored = {"avg": 'SELECT avg(d) AS a FROM "durations"', "durations": "SELECT 1 AS d"}
+        out = resolve_query_references('SELECT a FROM "avg"', stored)
+        self.assertEqual(
+            out,
+            'WITH "durations" AS (SELECT 1 AS d), "avg" AS (SELECT avg(d) AS a FROM "durations") SELECT a FROM "avg"',
+        )
+
+    def test_user_with_clause_is_merged(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1 AS d"}
+        out = resolve_query_references('-- c\nWITH t AS (SELECT d FROM base) SELECT * FROM t', stored)
+        self.assertEqual(out, 'WITH "base" AS (SELECT 1 AS d), t AS (SELECT d FROM base) SELECT * FROM t')
+
+    def test_references_in_strings_and_comments_are_ignored(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT 'base' -- base", stored), "SELECT 'base' -- base"
+        )
+
+    def test_reserved_table_names_are_never_references(self):
+        from .query_refs import resolve_query_references
+        stored = {"events": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT * FROM events", stored, reserved=("events",)),
+            "SELECT * FROM events",
+        )
+
+    def test_cycles_are_rejected(self):
+        from .query_refs import QueryReferenceError, resolve_query_references
+        stored = {"a": 'SELECT * FROM "b"', "b": 'SELECT * FROM "a"'}
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', stored)
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', {"a": 'SELECT 1'}, self_name="a")
+
+
 class LRUFileBasedCacheTests(SimpleTestCase):
     """Eviction policy of the result cache backend (Epic #71).
 
@@ -3496,6 +3555,39 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.client.force_authenticate(other)
         response = self._run("SELECT 1")
         self.assertEqual(response.status_code, 404)
+
+    def test_stored_queries_can_be_referenced_by_name(self):
+        ProjectAsset.objects.create(
+            project=self.project,
+            name="Activity counts",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1,
+                          "query": "SELECT activity, count(*) AS n FROM events GROUP BY activity"},
+        )
+        response = self._run('SELECT sum(n) AS total FROM "Activity counts"')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"total": 2}])
+
+    def test_circular_stored_queries_fail_cleanly(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="a", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "b"'},
+        )
+        ProjectAsset.objects.create(
+            project=self.project, name="b", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "a"'},
+        )
+        response = self._run('SELECT * FROM "a"')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Circular", response.data["error"])
+
+    def test_referenced_stored_query_cannot_escape_the_sandbox(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="evil", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT * FROM glob('/*')"},
+        )
+        response = self._run('SELECT * FROM "evil"')
+        self.assertEqual(response.status_code, 400)
 
     def _run_page(self, query, **paging):
         return self.client.post(

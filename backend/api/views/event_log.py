@@ -54,6 +54,7 @@ from ..serializers import (
     TotemConformanceRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
+from ..query_refs import QueryReferenceError, resolve_query_references
 from ._ocel_db import (
     _OCEL_DB_REGISTRY,
     _OCEL_DB_REGISTRY_LOCK,
@@ -1434,6 +1435,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         if not isinstance(query, str):
             return Response({"error": "Query must be a string"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Stored queries of the log's project can be referenced by name like
+        # tables; they are prepended as CTEs before validation and execution.
+        stored = {
+            asset.name: str((asset.content_json or {}).get("query") or "")
+            for asset in ProjectAsset.objects.filter(
+                project=user_file.project, asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        try:
+            query = resolve_query_references(
+                query.strip().rstrip(";"), stored, reserved=QUERY_BROWSER_TABLES
+            )
+        except QueryReferenceError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # Security check: exactly one statement, and it must be a SELECT.
         # A plain "starts with SELECT" check lets `SELECT 1; COPY ... TO ...`

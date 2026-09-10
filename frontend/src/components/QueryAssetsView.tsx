@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useContext, useEffect, useState } from "react";
-import { AlertCircle, FileCode2, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, BookOpen, FileCode2, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -49,6 +49,7 @@ import {
 } from "@/components/ui/table";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import SqlQueryEditor, { SQL_QUERY_DEFAULT } from "@/react_component/SqlQueryEditor";
+import { ExampleQueriesDialog } from "@/react_component/sql/ExampleQueriesDialog";
 
 export function QueryAssetsView({ initialAssetId }: { initialAssetId?: number }) {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -59,6 +60,7 @@ export function QueryAssetsView({ initialAssetId }: { initialAssetId?: number })
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<ProjectAsset | "new" | null>(null);
   const [assetToDelete, setAssetToDelete] = useState<ProjectAsset | null>(null);
+  const [examplesOpen, setExamplesOpen] = useState(false);
   const [openedInitial, setOpenedInitial] = useState(false);
 
   const loadAssets = useCallback(async () => {
@@ -106,10 +108,21 @@ export function QueryAssetsView({ initialAssetId }: { initialAssetId?: number })
                 stored query; editing it here updates every linked component.
               </p>
             </div>
-            <Button type="button" disabled={!projectId} onClick={() => setEditing("new")}>
-              <Plus />
-              New query
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!projectId}
+                onClick={() => setExamplesOpen(true)}
+              >
+                <BookOpen />
+                Add from examples
+              </Button>
+              <Button type="button" disabled={!projectId} onClick={() => setEditing("new")}>
+                <Plus />
+                New query
+              </Button>
+            </div>
           </div>
 
           {!projectId ? (
@@ -138,7 +151,7 @@ export function QueryAssetsView({ initialAssetId }: { initialAssetId?: number })
           ) : assets.length === 0 ? (
             <EmptyState
               title="No stored queries"
-              description="Create one here, or store a query from the SQL editor."
+              description="Add one from the examples, create one here, or store a query from the SQL editor."
             />
           ) : (
             <Card className="overflow-hidden py-0">
@@ -209,6 +222,15 @@ export function QueryAssetsView({ initialAssetId }: { initialAssetId?: number })
               setEditing(null);
               await loadAssets();
             }}
+          />
+
+          <ExampleQueriesDialog
+            open={examplesOpen}
+            onOpenChange={setExamplesOpen}
+            projectId={projectId}
+            fileId={fileId}
+            existingNames={assets.map((a) => a.name)}
+            onAdded={loadAssets}
           />
 
           <DeleteQueryDialog

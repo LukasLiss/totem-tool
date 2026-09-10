@@ -42,6 +42,7 @@ import {
   Play,
   Plus,
   Save,
+  TableProperties,
   Unlink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -50,7 +51,12 @@ import {
   getQueryColumns,
   type TableSchema,
 } from "@/api/queryApi";
-import { queryAssetSql, type ProjectAsset } from "@/api/assetsApi";
+import {
+  listQueryAssets,
+  queryAssetDescription,
+  queryAssetSql,
+  type ProjectAsset,
+} from "@/api/assetsApi";
 import { SqlHighlightedTextarea } from "./sql/SqlHighlightedTextarea";
 import { columnReference, quoteIdentifierIfNeeded } from "./sql/sqlIdentifiers";
 import { useStoredQuery } from "./sql/useStoredQuery";
@@ -159,7 +165,12 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   const [running, setRunning] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<"load" | "reference">("load");
   const [saveOpen, setSaveOpen] = useState(false);
+  const [storedAssets, setStoredAssets] = useState<ProjectAsset[]>([]);
+  const [storedRefresh, setStoredRefresh] = useState(0);
+  const [expandedStored, setExpandedStored] = useState<number | null>(null);
+  const [storedColumns, setStoredColumns] = useState<Record<number, string[] | "loading" | { error: string }>>({});
   const [saveTarget, setSaveTarget] = useState<ProjectAsset | null>(null);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const chipClickTimer = useRef<number | null>(null);
@@ -206,6 +217,46 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       alive = false;
     };
   }, [fileId]);
+
+  // Stored queries of the project: shown as chips so they can be referenced
+  // (`FROM "name"`) like tables. Refreshed after storing from this editor.
+  useEffect(() => {
+    if (!projectId || !isEditMode) {
+      setStoredAssets([]);
+      return;
+    }
+    let alive = true;
+    listQueryAssets(projectId)
+      .then((assets) => {
+        if (alive) setStoredAssets(Array.isArray(assets) ? assets : []);
+      })
+      .catch(() => {
+        if (alive) setStoredAssets([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectId, isEditMode, storedRefresh]);
+
+  /** columns of a stored query, discovered by running it once with LIMIT 1 */
+  const discoverStoredColumns = useCallback(
+    (asset: ProjectAsset) => {
+      if (!fileId) return;
+      setStoredColumns((prev) => (prev[asset.id] ? prev : { ...prev, [asset.id]: "loading" }));
+      runSqlQuery(fileId, `SELECT * FROM ${quoteIdentifierIfNeeded(asset.name)}`, {
+        offset: 0,
+        limit: 1,
+      })
+        .then((page) => setStoredColumns((prev) => ({ ...prev, [asset.id]: page.columns })))
+        .catch((e) =>
+          setStoredColumns((prev) => ({
+            ...prev,
+            [asset.id]: { error: e instanceof Error ? e.message : String(e) },
+          }))
+        );
+    },
+    [fileId]
+  );
 
   const run = useCallback(
     async (q: string = query) => {
@@ -319,6 +370,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   const insertTable = (table: string) => insertAtCaret(quoteIdentifierIfNeeded(table));
   const insertColumn = (table: string, column: string) =>
     insertAtCaret(columnReference(query, table, column));
+  const insertReference = (asset: ProjectAsset) =>
+    insertAtCaret(quoteIdentifierIfNeeded(asset.name));
 
   const useStoredCopy = (asset: ProjectAsset) => {
     patchQuery(queryAssetSql(asset));
@@ -562,6 +615,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   const expandedTable = schema.find((t) => t.name === expanded) ?? null;
   const storeEnabled = Boolean(projectId);
+  const expandedStoredAsset =
+    storedAssets.find((a) => a.id === expandedStored && a.id !== linkedQuery?.id) ?? null;
 
   return (
     <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
@@ -595,8 +650,21 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
               <DropdownMenuLabel className="text-[11px] text-muted-foreground">
                 Project query store
               </DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => setPickerOpen(true)}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setPickerMode("load");
+                  setPickerOpen(true);
+                }}
+              >
                 <FolderOpen className="size-3.5" /> Load or link a stored query…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setPickerMode("reference");
+                  setPickerOpen(true);
+                }}
+              >
+                <TableProperties className="size-3.5" /> Reference a stored query…
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -754,6 +822,117 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           </div>
         )}
 
+        {/* stored queries: usable like tables via their name */}
+        {storeEnabled && storedAssets.some((a) => a.id !== linkedQuery?.id) && (
+          <div className="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-3.5 py-2">
+            <span className="mr-1 text-xs font-semibold text-muted-foreground">Stored queries</span>
+            {storedAssets
+              .filter((a) => a.id !== linkedQuery?.id)
+              .map((a) => {
+                const active = expandedStored === a.id;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => {
+                      if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
+                      chipClickTimer.current = window.setTimeout(() => {
+                        setExpandedStored((prev) => (prev === a.id ? null : a.id));
+                        discoverStoredColumns(a);
+                        chipClickTimer.current = null;
+                      }, 220);
+                    }}
+                    onDoubleClick={() => {
+                      if (chipClickTimer.current != null) {
+                        clearTimeout(chipClickTimer.current);
+                        chipClickTimer.current = null;
+                      }
+                      insertReference(a);
+                    }}
+                    title="Click to see its columns, double-click to insert a reference (use it like a table)"
+                    className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
+                    style={
+                      active
+                        ? {
+                            background: "hsl(212,70%,92%)",
+                            borderColor: "hsl(212,55%,72%)",
+                            color: "hsl(212,70%,25%)",
+                          }
+                        : undefined
+                    }
+                  >
+                    {a.name}
+                  </button>
+                );
+              })}
+            <span className="ml-auto text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
+              SELECT … FROM "stored query" works like a table
+            </span>
+          </div>
+        )}
+
+        {expandedStoredAsset && (
+          <div className="border-b">
+            <div className="flex items-center gap-2 px-4 pb-1 pt-2">
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+              <span className="font-mono text-[13px] font-medium">{expandedStoredAsset.name}</span>
+              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                {queryAssetDescription(expandedStoredAsset) || "stored query"}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 gap-1 px-2 text-[11px]"
+                onClick={() => insertReference(expandedStoredAsset)}
+              >
+                <Plus className="size-3" /> insert reference
+              </Button>
+            </div>
+            <pre className="mx-4 mb-2 max-h-20 overflow-auto rounded border bg-muted/30 px-2 py-1 font-mono text-[11px] text-muted-foreground">
+              {queryAssetSql(expandedStoredAsset)}
+            </pre>
+            {(() => {
+              const cols = storedColumns[expandedStoredAsset.id];
+              if (!fileId) {
+                return (
+                  <p className="px-4 pb-3 text-[11px] text-muted-foreground">
+                    select an event log to see the query's columns
+                  </p>
+                );
+              }
+              if (!cols || cols === "loading") {
+                return <p className="px-4 pb-3 text-[11px] text-muted-foreground">loading columns…</p>;
+              }
+              if (!Array.isArray(cols)) {
+                return <p className="px-4 pb-3 text-[11px] text-destructive">{cols.error}</p>;
+              }
+              return (
+                <div className="grid grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
+                  {cols.map((c) => (
+                    <div
+                      key={c}
+                      onDoubleClick={() => insertColumn(expandedStoredAsset.name, c)}
+                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"
+                    >
+                      <span className="font-mono text-[12.5px]">{c}</span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="ml-auto size-5 rounded-[5px] border font-mono text-[11px]"
+                        style={{ color: "hsl(212,92%,45%)", borderColor: "hsl(212,60%,85%)" }}
+                        onClick={() => insertColumn(expandedStoredAsset.name, c)}
+                        aria-label={`insert ${c}`}
+                      >
+                        <Plus className="size-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
         {/* your result | expected result — side-by-side once the widget is
             wide enough (@container), stacked otherwise so a small widget
             never forces both panes to be unreadably narrow */}
@@ -811,8 +990,9 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
             open={pickerOpen}
             onOpenChange={setPickerOpen}
             projectId={projectId}
-            onUseCopy={useStoredCopy}
-            onLink={onLinkChange ? linkStored : undefined}
+            onUseCopy={pickerMode === "load" ? useStoredCopy : undefined}
+            onLink={pickerMode === "load" && onLinkChange ? linkStored : undefined}
+            onInsertReference={pickerMode === "reference" ? insertReference : undefined}
           />
           <SaveStoredQueryDialog
             open={saveOpen}
@@ -822,6 +1002,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
             defaultName={name}
             existing={saveTarget}
             onSaved={(asset) => {
+              setStoredRefresh((n) => n + 1);
               // Storing a fresh copy from a linked editor re-links to the new
               // asset so "update" targets it from now on.
               if (onLinkChange && linked) onLinkChange(toLinkedQuery(asset));
