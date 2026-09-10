@@ -7,6 +7,8 @@ signals) are re-exported here so ``api.views.<name>`` keeps working.
 
 from ._ocel_db import (
     _OCEL_DB_REGISTRY,
+    _activities_with_counts,
+    _rewrite_ocel_db_file,
     _OCEL_DB_REGISTRY_LOCK,
     _OCEL_OBJECT_TYPES_REGISTRY,
     _build_ocel_db_from_path,
@@ -16,7 +18,7 @@ from ._ocel_db import (
     _object_types,
     _with_ocel_db,
 )
-from ._filters import _parse_filter_params, _should_use_cache
+from ._filters import _effective_object_types, _parse_filter_params, _should_use_cache
 from ._process_view import _parse_process_area_params, _process_area_cache_params
 from .assets import ImageAssetViewSet, ProjectAssetViewSet
 from .dashboards import DashboardViewSet
@@ -32,7 +34,7 @@ from .misc import (
 from .ocdfg import NewOCDFGViewSet, OCDFGViewSet
 from .occn import OCCNViewSet, _occn_base_cache
 from .playout import playout, playout_export_ocel
-from .variants import variants
+from .variants import _layout_shim, variants
 
 __all__ = [
     "EventLogViewSet",
@@ -62,6 +64,10 @@ __all__ = [
     "_get_or_load_ocel_db",
     "_object_types",
     "_with_ocel_db",
+    "_activities_with_counts",
+    "_rewrite_ocel_db_file",
+    "_effective_object_types",
+    "_layout_shim",
     "_parse_filter_params",
     "_should_use_cache",
     "_parse_process_area_params",

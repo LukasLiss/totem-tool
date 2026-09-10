@@ -1290,6 +1290,7 @@ function NewOCDFGVariantsVisualizer({
             {data == null && fileId != null && (
               <SaveModelAssetButton
                 fileId={fileId}
+                filterEnabled={filterEnabled}
                 modelType="OCDFG"
                 filterEnabled={filterEnabled}
                 disabled={dfgData == null}

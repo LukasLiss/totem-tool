@@ -33,10 +33,16 @@ vi.mock("@/api/occnConformanceApi", async () => {
   return {
     ...actual,
     getOCCNReplayUnitDetail: vi.fn(),
+    getEventLogEventColumns: vi.fn(),
     getEventLogObjectTypes: vi.fn(),
     runOCCNConformance: vi.fn(),
   };
 });
+
+const defaultOptions = {
+  executionColumn: null,
+  restrictToModelObjectTypes: false,
+};
 
 vi.mock("@/components/ui/sidebar", () => ({ SidebarTrigger: () => null }));
 
@@ -271,7 +277,8 @@ describe("OCCN conformance workflow integration", () => {
       asset.id,
       CONNECTED_COMPONENTS_REPLAY_STRATEGY,
       null,
-      1_000
+      1_000,
+      defaultOptions
     );
 
     fireEvent.click(
@@ -373,7 +380,8 @@ describe("OCCN conformance workflow integration", () => {
         asset.id,
         LEADING_OBJECT_REPLAY_STRATEGY,
         "Order",
-        1_000
+        1_000,
+        defaultOptions
       )
     );
     expect(screen.getByRole("combobox", { name: "Replay unit strategy" }).textContent)
@@ -394,7 +402,8 @@ describe("OCCN conformance workflow integration", () => {
         asset.id,
         CONNECTED_COMPONENTS_REPLAY_STRATEGY,
         null,
-        1_000
+        1_000,
+        defaultOptions
       )
     );
   });

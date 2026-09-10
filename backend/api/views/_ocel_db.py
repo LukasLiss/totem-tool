@@ -69,6 +69,19 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
+# Per-file locks that outlive the connection objects. `_with_ocel_db` takes
+# this lock *before* looking the connection up, so a writer that has to close
+# and reopen the file (`_rewrite_ocel_db_file`) can swap the registry entry
+# without a reader ending up on a closed connection.
+_OCEL_DB_LOCKS: dict[int, threading.RLock] = {}
+
+
+def _ocel_file_lock(pk: int) -> threading.RLock:
+    with _OCEL_DB_REGISTRY_LOCK:
+        lock = _OCEL_DB_LOCKS.get(pk)
+        if lock is None:
+            lock = _OCEL_DB_LOCKS[pk] = threading.RLock()
+    return lock
 
 
 def _open_ocel_db_with_retry(path: str) -> OcelDuckDB:
@@ -146,9 +159,44 @@ def _with_ocel_db(user_file):
         with _with_ocel_db(user_file) as db:
             totem = totemDiscovery_db(db)
     """
-    db = _get_or_load_ocel_db(user_file)
-    with db.lock:
-        yield db
+    with _ocel_file_lock(int(user_file.pk)):
+        db = _get_or_load_ocel_db(user_file)
+        with db.lock:
+            yield db
+
+
+def _rewrite_ocel_db_file(user_file, mutate):
+    """
+    Let ``mutate(path)`` write to the event log's DuckDB file.
+
+    The registry only ever holds read-only connections, and DuckDB refuses a
+    read-write open while a read-only handle on the same file exists in the
+    process. So: take the per-file lock, drop and close the registry
+    connection, run the mutation, and reopen. Readers queued on the lock pick
+    up the fresh connection afterwards; the results cache misses by itself
+    because its keys include the file's mtime and size.
+
+    Reentrant with ``_with_ocel_db`` (same RLock), so a view can compute with
+    the old connection and then rewrite the file in one critical section.
+    """
+    pk = int(user_file.pk)
+    with _ocel_file_lock(pk):
+        with _OCEL_DB_REGISTRY_LOCK:
+            old_db = _OCEL_DB_REGISTRY.pop(pk, None)
+        if old_db is not None:
+            try:
+                old_db.close()
+            except Exception:
+                pass
+        try:
+            return mutate(user_file.file.path)
+        finally:
+            # Reopen eagerly so a failed mutation still leaves a usable
+            # connection behind and the next reader does not pay for the open.
+            try:
+                _get_or_load_ocel_db(user_file)
+            except Exception:
+                pass
 
 
 @contextmanager

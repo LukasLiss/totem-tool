@@ -227,6 +227,11 @@ class VariantsComponent(DashboardComponent):
     extraction = models.CharField(max_length=32, default="leading_1hop", null=True, blank=True)
     iso = models.CharField(max_length=32, default="wl+vf2", null=True, blank=True)
     timeout_s = models.FloatField(default=10.0, null=True, blank=True)
+    # Resource-aware extraction: which object types are business objects and
+    # which activities are business activities. Stored as JSON lists; empty
+    # lists mean "not chosen yet".
+    business_object_types = models.JSONField(default=list, blank=True)
+    business_activities = models.JSONField(default=list, blank=True)
 
 
 class ProcessAreaComponent(DashboardComponent):

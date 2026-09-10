@@ -2,12 +2,34 @@ import axios from "axios";
 
 export const CONNECTED_COMPONENTS_REPLAY_STRATEGY = "connected_components" as const;
 export const LEADING_OBJECT_REPLAY_STRATEGY = "leading_object" as const;
+/** Replay one unit per precomputed process execution stored in an events column. */
+export const STORED_COLUMN_REPLAY_STRATEGY = "stored_column" as const;
 export const DEFAULT_OCCN_MAX_STATES = 1_000;
 export const MAX_OCCN_MAX_STATES = 15_000;
 
 export type OCCNReplayUnitStrategy =
   | typeof CONNECTED_COMPONENTS_REPLAY_STRATEGY
-  | typeof LEADING_OBJECT_REPLAY_STRATEGY;
+  | typeof LEADING_OBJECT_REPLAY_STRATEGY
+  | typeof STORED_COLUMN_REPLAY_STRATEGY;
+
+/** Options that apply on top of the replay-unit strategy. */
+export interface OCCNReplayOptions {
+  /** Events column with process execution ids (stored-column strategy only). */
+  executionColumn?: string | null;
+  /**
+   * Project every event onto the object types of the selected model before
+   * building replay units, so objects the model leaves out (e.g. a shared
+   * worker resource) do not make every unit non-fitting.
+   */
+  restrictToModelObjectTypes?: boolean;
+}
+
+/** One non-fixed column of the events table (attribute or stored execution ids). */
+export interface EventColumnInfo {
+  name: string;
+  non_null_count: number;
+  distinct_count: number;
+}
 
 export type OCCNReplayStatus =
   | "fitting"
@@ -37,6 +59,8 @@ export interface OCCNConformanceResponse {
   asset_id: number;
   replay_unit_strategy: OCCNReplayUnitStrategy;
   leading_object_type: string | null;
+  execution_column?: string | null;
+  restrict_to_model_object_types?: boolean;
   max_states: number;
   fitness: number | null;
   coverage: number;
@@ -71,15 +95,18 @@ export interface OCCNReplayUnitDetailResponse {
   unit_id: string;
   replay_unit_strategy: OCCNReplayUnitStrategy;
   leading_object_type: string | null;
+  execution_column?: string | null;
   event_count: number;
   object_types: string[];
   pagination: OCCNReplayUnitDetailPagination;
   events: OCCNReplayUnitDetailEvent[];
 }
 
-export interface OCCNReplayUnitDetailRequestOptions {
+export interface OCCNReplayUnitDetailRequestOptions extends OCCNReplayOptions {
   replayUnitStrategy?: OCCNReplayUnitStrategy;
   leadingObjectType?: string | null;
+  /** Needed to reproduce a projection onto the model's object types. */
+  assetId?: number | null;
   offset?: number;
   limit?: number;
 }
@@ -94,15 +121,22 @@ export async function runOCCNConformance(
   replayUnitStrategy: OCCNReplayUnitStrategy =
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   leadingObjectType: string | null = null,
-  maxStates: number = DEFAULT_OCCN_MAX_STATES
+  maxStates: number = DEFAULT_OCCN_MAX_STATES,
+  options: OCCNReplayOptions = {}
 ): Promise<OCCNConformanceResponse> {
-  const request: Record<string, number | string> = {
+  const request: Record<string, number | string | boolean> = {
     asset_id: assetId,
     replay_unit_strategy: replayUnitStrategy,
     max_states: maxStates,
   };
   if (replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY) {
     request.leading_object_type = leadingObjectType ?? "";
+  }
+  if (replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY) {
+    request.execution_column = options.executionColumn ?? "";
+  }
+  if (options.restrictToModelObjectTypes) {
+    request.restrict_to_model_object_types = true;
   }
   const { data } = await axios.post<OCCNConformanceResponse>(
     `${FILES_URL}${eventLogId}/occn_conformance/`,
@@ -120,6 +154,17 @@ export async function getEventLogObjectTypes(
   return data.map((entry) => (typeof entry === "string" ? entry : entry.name));
 }
 
+/** The non-fixed columns of the events table, for the stored-column strategy. */
+export async function getEventLogEventColumns(
+  eventLogId: number
+): Promise<EventColumnInfo[]> {
+  const { data } = await axios.get<EventColumnInfo[]>(
+    `${FILES_URL}${eventLogId}/event_columns/`,
+    { _skipGlobalFilter: true }
+  );
+  return data;
+}
+
 export async function getOCCNReplayUnitDetail(
   eventLogId: number,
   unitId: string,
@@ -135,6 +180,13 @@ export async function getOCCNReplayUnitDetail(
   };
   if (replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY) {
     params.leading_object_type = options.leadingObjectType ?? "";
+  }
+  if (replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY) {
+    params.execution_column = options.executionColumn ?? "";
+  }
+  if (options.restrictToModelObjectTypes) {
+    params.restrict_to_model_object_types = "true";
+    if (options.assetId) params.asset_id = options.assetId;
   }
   const { data } = await axios.get<OCCNReplayUnitDetailResponse>(
     `${FILES_URL}${eventLogId}/occn_replay_unit_detail/`,

@@ -1316,6 +1316,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_not_called()
 
@@ -1537,6 +1539,8 @@ class OCCNConformanceApiTests(TestCase):
                 "asset_id": self.occn_asset.pk,
                 "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                 "leading_object_type": None,
+                "execution_column": None,
+                "restrict_to_model_object_types": False,
                 "max_states": 5_000,
                 **result.to_dict(),
             },
@@ -1547,6 +1551,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_called_once()
         deserialized_occn, called_units = fitness.call_args.args
@@ -1760,6 +1766,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             db,
             strategy=LEADING_OBJECT_REPLAY_STRATEGY,
             leading_object_type="Order",
+            execution_column=None,
+            object_types=None,
         )
 
     def test_extraction_failure_returns_server_error(self):
@@ -1853,6 +1861,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
                 {
                     "strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                     "leading_object_type": None,
+                    "execution_column": None,
+                    "object_types": None,
                 },
             )
 
@@ -3704,6 +3714,80 @@ class SaveDiscoveredModelApiTests(APITestCase):
             {"name": name, "model_type": model_type, "params": params or {}},
             format="json",
         )
+
+    # The paper example: order o1 with items i1/i2; "pick item" is item-only.
+    ORDER_ONLY_QUERY = "?object_types=order&activities=place%20order,complete%20order"
+
+    def test_saved_totem_respects_the_global_filter(self):
+        response = self._save("TOTEM", "Filtered TOTeM", {"tau": 0.0}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered TOTeM")
+        self.assertEqual(asset.content_json["tempgraph"]["nodes"], ["order"])
+        self.assertEqual(
+            asset.metadata["global_filter"],
+            {"object_types": ["order"], "activities": ["place order", "complete order"]},
+        )
+
+        unfiltered = self._save("TOTEM", "Full TOTeM", {"tau": 0.0})
+        self.assertEqual(unfiltered.status_code, 201, unfiltered.data)
+        full = ProjectAsset.objects.get(project=self.project, name="Full TOTeM")
+        self.assertEqual(full.content_json["tempgraph"]["nodes"], ["item", "order"])
+        self.assertNotIn("global_filter", full.metadata)
+
+    def test_saved_occn_respects_the_global_filter(self):
+        response = self._save("OCCN", "Filtered OCCN", {}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OCCN").content_json
+        self.assertEqual(content["object_types"], ["order"])
+        self.assertNotIn("pick item", content["activities"])
+        self.assertNotIn("START_item", content["activities"])
+
+        # ... and matches what the OCCN component displays under that filter.
+        shown = self.client.get(
+            "/api/occn/",
+            {"file_id": self.log.pk, "object_types": "order", "activities": "place order,complete order"},
+        )
+        self.assertEqual(shown.status_code, 200, shown.data)
+        shown_activities = {a["id"] for a in shown.json()["activities"]}
+        self.assertEqual(set(content["activities"]), shown_activities)
+
+    def test_saved_ocpn_respects_the_global_filter(self):
+        response = self._save("OCPN", "Filtered OCPN", {"timeout_s": 30}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN").content_json
+        self.assertEqual([ot["name"] for ot in content["objectTypes"]], ["order"])
+        labels = sorted(t["label"] for t in content["transitions"] if not t.get("silent"))
+        self.assertEqual(labels, ["complete order", "place order"])
+
+        # A filtered save must not be served from the unfiltered cache entry.
+        unfiltered = self._save("OCPN", "Full OCPN", {"timeout_s": 30})
+        self.assertEqual(unfiltered.status_code, 201, unfiltered.data)
+        full = ProjectAsset.objects.get(project=self.project, name="Full OCPN").content_json
+        self.assertEqual([ot["name"] for ot in full["objectTypes"]], ["item", "order"])
+
+    def test_saved_ocdfg_respects_the_global_filter(self):
+        response = self._save("OCDFG", "Filtered OC-DFG", {}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OC-DFG").content_json
+        self.assertEqual(content["object_types"], ["order"])
+        self.assertEqual(content["activities"], ["complete order", "place order"])
+
+    def test_component_object_types_are_narrowed_by_the_global_filter(self):
+        # The component's own selection is intersected with the global filter.
+        response = self._save(
+            "OCDFG", "Narrowed", {"object_types": ["item", "order"]}, "?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Narrowed").content_json
+        self.assertEqual(content["object_types"], ["order"])
+
+        # A stale selection outside the filter falls back to the filter itself.
+        response = self._save(
+            "OCDFG", "Stale selection", {"object_types": ["item"]}, "?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Stale selection").content_json
+        self.assertEqual(content["object_types"], ["order"])
 
     def test_save_totem_creates_asset(self):
         response = self._save("TOTEM", "Discovered TOTeM", {"tau": 0.8})

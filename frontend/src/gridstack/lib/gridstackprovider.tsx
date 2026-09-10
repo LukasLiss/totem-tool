@@ -266,6 +266,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           extraction: (node as any).extraction ?? 'leading_1hop',
           iso: (node as any).iso ?? 'wl+vf2',
           timeout_s: (node as any).timeout_s ?? 10.0,
+          business_object_types: (node as any).business_object_types ?? [],
+          business_activities: (node as any).business_activities ?? [],
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -455,6 +457,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             extraction: item.extraction,
             iso: item.iso,
             timeout_s: item.timeout_s,
+            business_object_types: item.business_object_types,
+            business_activities: item.business_activities,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -513,6 +517,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
               (node as any).iso = item.iso;                 // For VariantsComponent advanced settings
               (node as any).timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
+              (node as any).business_object_types = item.business_object_types; // VariantsComponent resource-aware
+              (node as any).business_activities = item.business_activities;     // VariantsComponent resource-aware
               // LogStatisticsComponent properties
               (node as any).show_num_events = item.show_num_events;
               (node as any).show_num_activities = item.show_num_activities;

@@ -34,7 +34,7 @@ Subclasses (each adds component-specific config fields):
 | `NumberofEventsComponent` | `color` (default `"blue"`) | `"NumberofEventsComponent"` / `"NumberOfEventsComponent"` (both appear in code — see §8 caveat) |
 | `TextBoxComponent` | `text` (TextField), `font_size` (default 14) | `"TextBoxComponent"` |
 | `ImageComponent` | `image` (ImageField, upload_to=`project_directory_path`) | `"ImageComponent"` |
-| `VariantsComponent` | `automatic_loading`, `leading_object_type`, `extraction` (default `"leading_1hop"`), `iso` (default `"wl+vf2"`), `timeout_s` (default 10.0) | `"VariantsComponent"` |
+| `VariantsComponent` | `automatic_loading`, `leading_object_type`, `extraction` (default `"leading_1hop"`; also `"resource_aware"`), `iso` (default `"wl+vf2"`), `timeout_s` (default 10.0), `business_object_types` / `business_activities` (JSON lists) | `"VariantsComponent"` |
 | `ProcessAreaComponent` | — (no extra fields) | `"ProcessAreaComponent"` |
 | `LogStatisticsComponent` | `show_num_events`, `show_num_activities`, `show_num_objects`, `show_num_object_types` (all default True), `show_earliest_timestamp`, `show_newest_timestamp`, `show_duration` (default False) | `"LogStatisticsComponent"` |
 | `OCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True) | `"OCDFGComponent"` |
@@ -102,6 +102,8 @@ Subclasses (each adds component-specific config fields):
 | `GET /api/new-ocdfg/?file_id=` | `NewOCDFGViewSet` | `IsAuthenticated` |
 | `GET /api/occn/?file_id=` | `OCCNViewSet` | `IsAuthenticated` |
 | `GET /api/variants/?file_id=` | `variants` | `IsAuthenticated` |
+| `GET /api/files/<pk>/event_columns/` | `views_process_executions.event_columns` | `IsAuthenticated` |
+| `POST /api/files/<pk>/process_executions/` | `views_process_executions.process_executions` | `IsAuthenticated` |
 | `POST /api/playout/` | `playout` | `IsAuthenticated` |
 | `POST /api/playout/export-ocel/` | `playout_export_ocel` | `IsAuthenticated` |
 | `DELETE /api/delete-data/` | `delete_user_data` | `IsAuthenticated` |
@@ -170,6 +172,7 @@ with _with_ocel_db(user_file) as db:
 - **Mandatory** for any view running queries/algorithms. DuckDB connections allow only one active query; algorithms create connection-scoped TEMP TABLEs, so concurrent use on one connection corrupts state / SIGSEGVs the worker. The dashboard fires 4 endpoints in parallel — this is not theoretical.
 - No TTL — connections live for the worker's lifetime.
 - `_get_or_load_ocel_db` uses double-checked locking for first load.
+- The lock `_with_ocel_db` takes first is the per-file `_OCEL_DB_LOCKS[pk]` (an RLock that outlives the connection object); `db.lock` is taken inside it. `_rewrite_ocel_db_file(user_file, mutate)` uses that to close the read-only registry connection, let `mutate(path)` write to the DuckDB file (e.g. `write_event_columns_to_file`) and reopen — DuckDB refuses a read-write open while a read-only handle exists in the process.
 - Helpers: `_object_types(db)` (sorted distinct types), `_optional_int(value)`, `_layout_shim(db)` (SimpleNamespace with `obj_type_map` for `calculate_layout`).
 
 ### OCCN caching
@@ -182,7 +185,9 @@ with _with_ocel_db(user_file) as db:
 
 ### Success
 - ViewSets: standard DRF list/detail/pagination shapes.
-- `variants` → `{"variants": [{"id", "support", "signature", "signature_hash", "graph": {"nodes", "edges", "objects"}}], "object_types": [...]}`
+- `variants` → `{"variants": [{"id", "support", "signature", "signature_hash", "case_ids", "graph": {"nodes", "edges", "objects"}}], "object_types": [...], "extraction", "leading_type", "business_object_types", "business_activities"}`. Extraction params (`extraction`, `leading_type`, repeated `business_object_types` / `business_activities`) are parsed by `api/variant_params.py`, shared with the process-execution endpoint.
+- `process_executions` (POST) → `{"execution_column", "variant_column", "execution_count", "total_event_count", "assigned_event_count", "ambiguous_event_count", "unassigned_event_count", "variant_count", "variants" | null, ...}`; writes the columns into the DuckDB file through `_rewrite_ocel_db_file` (see §5). `event_columns` → `[{"name", "non_null_count", "distinct_count"}]`. Documented in `docs/RESOURCE_AWARE_VARIANTS.md`.
+- `occn_conformance` / `occn_replay_unit_detail` additionally accept `replay_unit_strategy="stored_column"` + `execution_column`, and `restrict_to_model_object_types` (detail needs `asset_id` then).
 - `ocdfg` → `{"dfg": <networkx node_link_data serialized with edges=\"links\">, "all_nodes": [...], optional "filter_error", "trace_variants"}`
 - `new-ocdfg` → `{"dfg": {...}, "all_nodes": [...], "variant_counts": {...}}`
 - `occn` → serialized OCCN dict from `totem_lib.serialize_occn`
@@ -274,6 +279,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 
 - `docs/MODEL_ASSETS.md` — canonical TOTeM v1 / OCCN v1 model-asset JSON formats, `/api/assets/` behavior, and the 7-step checklist for adding a new asset type.
 - `docs/MODEL_EDITORS.md` — the three visual editors (TOTeM, OCCN, OCPN) and their **editor-side** JSON formats (`format: "totem-model" | "occn" | "ocpn"`) — these are what `/api/playout/` receives in `model`, distinct from the canonical asset-store format.
+- `docs/RESOURCE_AWARE_VARIANTS.md` — resource-aware extraction, stored process-execution columns, OCCN conformance on stored columns, process-area filter action.
 - `docs/PLAYOUT.md` — playout semantics (canonical ordering, exact vs. lower/upper-bound counts, silent-transition budgets), backend request/response contract, and where the engine lives in `totem_lib/playout/`.
 - `docs/OCCN_PRECISION.md` — math behind the OCCN context-based precision metric.
 - `docs/OC_DOTTED_CHART.md` — dotted-chart sampling contract.

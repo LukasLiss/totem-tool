@@ -17,7 +17,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Dict, Iterator, List, Literal, Optional
+from typing import Dict, Iterable, Iterator, List, Literal, Optional, Set
 
 import networkx as nx
 import polars as pl
@@ -29,7 +29,7 @@ from . import iso_strategies as _iso
 from .ocvariants import Variant, Variants
 
 
-Extraction = Literal["leading_1hop", "leading_bfs", "connected"]
+Extraction = Literal["leading_1hop", "leading_bfs", "connected", "resource_aware"]
 IsoStrategy = Literal[
     "db_signature", "trace", "signature", "wl", "wl+vf2", "exact"
 ]
@@ -103,6 +103,11 @@ JOIN event_object eo ON co.obj_id = eo.obj_id
 # case_edges: global EOG (consecutive events for one object) restricted to
 # pairs whose both endpoints fall inside the same case
 # (= eog.subgraph(case_event_ids)). One row per inducing object.
+#
+# `{case_object_join}` is empty for the classic extractions (every object may
+# induce an edge as long as both events belong to the case) and restricts the
+# inducing object to the case's own objects for the resource-aware extraction,
+# where the resource is deliberately *not* part of the execution.
 _CREATE_CASE_EDGES_SQL = """
 CREATE OR REPLACE TEMP TABLE case_edges AS
 WITH obj_rn AS (
@@ -126,7 +131,21 @@ FROM global_eog g
 JOIN case_events ce1 ON g.src = ce1.event_id
 JOIN case_events ce2 ON g.tgt = ce2.event_id
                     AND ce1.case_id = ce2.case_id
+{case_object_join}
 """
+
+_CASE_OBJECT_JOIN_SQL = (
+    "JOIN case_objs co ON co.case_id = ce1.case_id AND co.obj_id = g.obj_id"
+)
+
+
+def _create_case_edges(conn, *, restrict_to_case_objects: bool) -> None:
+    """Materialise ``case_edges`` (see ``_CREATE_CASE_EDGES_SQL``)."""
+    conn.execute(
+        _CREATE_CASE_EDGES_SQL.format(
+            case_object_join=_CASE_OBJECT_JOIN_SQL if restrict_to_case_objects else ""
+        )
+    )
 
 _NODES_SQL = """
 SELECT ce.case_id, ce.event_id, e.activity, e.timestamp_unix
@@ -152,19 +171,31 @@ def find_variants(
     *,
     extraction: Extraction = "leading_1hop",
     leading_type: Optional[str] = None,
+    business_object_types: Optional[Iterable[str]] = None,
+    business_activities: Optional[Iterable[str]] = None,
     iso: IsoStrategy = "wl+vf2",
     timeout_s: Optional[float] = 10.0,
     verbose: bool = True,
+    cases: Optional[Dict[str, Set[str]]] = None,
 ) -> Variants:
     """
     Discover object-centric variants from an OcelDuckDB.
 
     :param ocel_db: A populated OcelDuckDB instance.
     :param extraction: Process-execution extraction technique.
-        - "leading_1hop": case = leading object ∪ direct neighbours (fast).
-        - "leading_bfs":  paper Definition 6 — BFS with per-type distance pruning.
-        - "connected":    paper Definition 5 — one case per connected component.
-    :param leading_type: Required for "leading_*" extraction; ignored for "connected".
+        - "leading_1hop":   case = leading object ∪ direct neighbours (fast).
+        - "leading_bfs":    paper Definition 6 — BFS with per-type distance pruning.
+        - "connected":      paper Definition 5 — one case per connected component.
+        - "resource_aware": one case per connected component of the *business
+                            objects*, where two business objects are connected
+                            iff they share an event of a *business activity*.
+                            Resources (object types that are not business
+                            objects) never merge executions and do not induce
+                            edges in the variant graphs.
+    :param leading_type: Required for "leading_*" extraction; ignored otherwise.
+    :param business_object_types: Required for "resource_aware"; ignored otherwise.
+    :param business_activities: Optional for "resource_aware" (``None`` = every
+        activity connects business objects); ignored otherwise.
     :param iso: Equivalence-class (graph isomorphism) strategy.
         - "db_signature": SQL multiset signature. Cheapest, may over-merge.
         - "trace":        SQL timestamp-ordered sequence of
@@ -179,10 +210,18 @@ def find_variants(
         pure-Python iso loops abort between cases; `TimeoutError` is raised.
         Pass `None` to disable (used by offline evaluation scripts).
     :param verbose: Show per-step progress bars in the terminal.
+    :param cases: Pre-extracted ``case_id -> object ids`` (e.g. from
+        :func:`~.process_executions.extract_process_executions`). When given,
+        the extraction step is skipped and ``extraction`` only decides how the
+        case graphs are built.
     :return: Variants sorted by support descending.
     """
-    if extraction in ("leading_1hop", "leading_bfs") and leading_type is None:
+    if extraction in ("leading_1hop", "leading_bfs") and leading_type is None and cases is None:
         raise ValueError(f"extraction='{extraction}' requires leading_type")
+    if extraction == "resource_aware" and not business_object_types and cases is None:
+        raise ValueError("extraction='resource_aware' requires business_object_types")
+    if extraction not in _ext.EXTRACTIONS:
+        raise ValueError(f"unknown extraction: {extraction!r}")
 
     _bar_kw = dict(dynamic_ncols=True, leave=True, disable=not verbose)
 
@@ -198,6 +237,9 @@ def find_variants(
             return _find_variants_inner(
                 ocel_db, conn, extraction, leading_type, iso,
                 cancel_event, _bar_kw, _msg, total_t0,
+                business_object_types=business_object_types,
+                business_activities=business_activities,
+                cases=cases,
             )
         except TimeoutError:
             raise
@@ -227,52 +269,37 @@ def _find_variants_inner(
     _bar_kw: dict,
     _msg,
     total_t0: float,
+    *,
+    business_object_types: Optional[Iterable[str]] = None,
+    business_activities: Optional[Iterable[str]] = None,
+    cases: Optional[Dict[str, Set[str]]] = None,
 ) -> Variants:
     """The actual `find_variants` body — split out so the timeout context
     manager wraps the whole thing cleanly."""
 
-    # ---- Step 1: object graph ----
-    with _tqdm(
-        total=1,
-        desc="[1/4] building object graph",
-        unit="graph",
-        bar_format="{desc} {bar} {elapsed}",
-        **_bar_kw,
-    ) as pb:
-        object_graph, obj_type = _ext.build_object_graph(conn)
-        n_obj = object_graph.number_of_nodes()
-        n_comp = nx.number_connected_components(object_graph)
-        pb.set_postfix_str(f"{n_obj:,} objects · {n_comp:,} component(s)")
-        pb.update(1)
-
-    # ---- Step 1b: extract cases ----
-    _extract_label = (
-        f"[1/4] extracting ({extraction}"
-        + (f" · {leading_type}" if leading_type else "")
-        + ")"
-    )
-    with _tqdm(
-        total=0,
-        desc=_extract_label,
-        unit="obj",
-        bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}, {rate_fmt}]",
-        **_bar_kw,
-    ) as pb:
-        if extraction == "leading_1hop":
-            cases = _ext.extract_leading_1hop(
-                conn, object_graph, leading_type, _progress_bar=pb
+    # ---- Step 1: extract cases (unless the caller already did) ----
+    if cases is None:
+        _extract_label = (
+            f"[1/4] extracting ({extraction}"
+            + (f" · {leading_type}" if leading_type else "")
+            + ")"
+        )
+        with _tqdm(
+            total=0,
+            desc=_extract_label,
+            unit="obj",
+            bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}, {rate_fmt}]",
+            **_bar_kw,
+        ) as pb:
+            cases = _ext.extract_cases(
+                conn,
+                extraction,
+                leading_type=leading_type,
+                business_object_types=business_object_types,
+                business_activities=business_activities,
+                _progress_bar=pb,
             )
-        elif extraction == "leading_bfs":
-            cases = _ext.extract_leading_bfs(
-                conn, object_graph, obj_type, leading_type, _progress_bar=pb
-            )
-        elif extraction == "connected":
-            cases = _ext.extract_connected_components(object_graph)
-            pb.reset(total=len(cases))
-            pb.update(len(cases))
-        else:
-            raise ValueError(f"unknown extraction: {extraction!r}")
-        pb.set_postfix_str(f"→ {len(cases):,} cases")
+            pb.set_postfix_str(f"→ {len(cases):,} cases")
 
     if not cases:
         return Variants([])
@@ -294,7 +321,9 @@ def _find_variants_inner(
         pb.set_postfix_str("case_events ✓")
         pb.update(1)
 
-        conn.execute(_CREATE_CASE_EDGES_SQL)
+        _create_case_edges(
+            conn, restrict_to_case_objects=(extraction == "resource_aware")
+        )
         pb.set_postfix_str("case_edges ✓")
         pb.update(1)
 
@@ -576,6 +605,7 @@ def _format_variants(
                 support=len(members),
                 executions=executions,
                 graph=rep_graph,
+                case_ids=list(members),
             )
         )
         if _progress_bar is not None:

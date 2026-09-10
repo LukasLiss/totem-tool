@@ -18,6 +18,8 @@ import { mapTypesToColors, textColorForBackground } from '../utils/objectColors'
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
 import { MetricTooltip } from './MetricTooltip';
+import { useProcessAreaStore } from '../store/processAreaStore';
+import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -45,6 +47,8 @@ type ProcessAreaDefinition = {
   level: number;
   label: string;
   objectTypes: string[];
+  /** Activities the backend assigned to this area (not claimed by a lower one). */
+  activities: string[];
 };
 
 type ProcessLayer = {
@@ -4951,6 +4955,7 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
         ? mlpaArea.objectTypes[0]
         : mlpaArea.objectTypes.join(' & '),
       objectTypes: mlpaArea.objectTypes,
+      activities: mlpaArea.eventTypes ?? [],
     })),
   }));
 }
@@ -5793,6 +5798,18 @@ function TotemVisualizer({
       });
       if (!isCurrent()) return;
       setRawTotem(payload);
+      // Share the result so other components (the Variants Explorer's
+      // resource-aware mode) can pick one of these areas without recomputing.
+      const numericFileId = Number(eventLogId);
+      if (Number.isFinite(numericFileId) && numericFileId > 0) {
+        useProcessAreaStore.getState().publish({
+          fileId: numericFileId,
+          algorithm,
+          filtered: filterEnabled,
+          areas: buildLayersFromBackend(payload).flatMap((layer) => layer.areas),
+          objectTypeToActivities: payload.object_type_to_event_types ?? {},
+        });
+      }
     } catch (err) {
       if (!isCurrent()) return;
       console.error('[TotemVisualizer] Failed to load Totem data', err);
@@ -6770,6 +6787,7 @@ function TotemVisualizer({
                           return (
                             <div
                               key={area.id}
+                              className="group/process-area"
                               style={{
                                 gridColumn: `${startColumn + 1} / span ${spanColumns}`,
                                 // Every area of a layer belongs on the layer's
@@ -6819,6 +6837,12 @@ function TotemVisualizer({
                                   cursor: 'pointer',
                                   zIndex: 2,
                                 }}
+                              />
+                              <ProcessAreaFilterAction
+                                fileId={eventLogId}
+                                area={area}
+                                detailedView={detailedOcdfgView}
+                                objectTypeToActivities={rawTotem?.object_type_to_event_types ?? {}}
                               />
                               {sortedObjectTypes.length > 0 ? (
                                 sortedObjectTypes.map((objectType) => {

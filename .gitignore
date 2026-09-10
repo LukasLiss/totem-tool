@@ -9,6 +9,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 *.md
 !docs/MODEL_ASSETS.md
 !docs/OCCN_REPLAY_FITNESS.md
+!docs/RESOURCE_AWARE_VARIANTS.md
 !docs/EDGE_CASE_TAXONOMY.md
 !totem_lib/test_data/edge_cases/README.md
 *.txt

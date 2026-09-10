@@ -11,9 +11,11 @@ declare module 'gridstack' {
     image?: string;
     automatic_loading?: boolean;
     leading_object_type?: string;
-    extraction?: 'leading_1hop' | 'leading_bfs' | 'connected';
+    extraction?: 'leading_1hop' | 'leading_bfs' | 'connected' | 'resource_aware';
     iso?: 'db_signature' | 'trace' | 'signature' | 'wl' | 'wl+vf2' | 'exact';
     timeout_s?: number;
+    business_object_types?: string[];
+    business_activities?: string[];
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;

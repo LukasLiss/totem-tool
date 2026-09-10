@@ -38,7 +38,8 @@ The normalized contract is deterministic:
 - objectless events remain available to the connected-components strategy;
 - replay units contain visible log events only.
 
-Two extraction strategies are implemented.
+Three extraction strategies are implemented, and every strategy can be
+combined with a projection onto the model's object types (see below).
 
 ### Connected components (`connected_components`)
 
@@ -73,6 +74,34 @@ Leading-object replay is useful for investigating whether a deviation affects
 all or only some objects of a selected type. Its aggregate fitness has a
 different denominator from connected-component fitness and the two values must
 not be compared as if they described the same replay-unit population.
+
+### Stored process executions (`stored_column`)
+
+This strategy requires `execution_column`, the name of a column of the
+`events` table that holds precomputed process execution ids -- typically
+written by the Variants Explorer (see `RESOURCE_AWARE_VARIANTS.md`). Every
+distinct value becomes one replay unit with the id `stored_column:<value>`;
+events without a value belong to no unit. Because a stored column assigns
+at most one id per event, the units partition the events that carry an id.
+
+Unlike connected components, the population of units is decided by whoever
+wrote the column -- for example a resource-aware extraction in which a
+shared worker does not merge executions.
+
+### Projection onto the model's object types
+
+`extract_occn_replay_units(..., object_types=[...])` drops every object whose
+type is not listed from the events before units are built; events left
+without objects are dropped entirely. The backend exposes this as
+`restrict_to_model_object_types`, which uses the object types of the selected
+OCCN. It exists because replay matches bindings against *exactly* the
+observed objects of an event: a model that deliberately leaves out a shared
+worker resource would otherwise report every event touching the worker as
+non-fitting at `START_worker`.
+
+The projection changes the unit population of the connected-components
+strategy as well (a projected-away resource no longer connects anything), so
+results with and without projection are not comparable.
 
 ## Public API
 
@@ -240,8 +269,10 @@ The request body accepts:
 | Field | Requirement |
 | --- | --- |
 | `asset_id` | Required positive ID of an OCCN model asset. |
-| `replay_unit_strategy` | Optional; defaults to `connected_components`. |
-| `leading_object_type` | Required only for `leading_object`; rejected for `connected_components`. |
+| `replay_unit_strategy` | Optional; `connected_components` (default), `leading_object` or `stored_column`. |
+| `leading_object_type` | Required only for `leading_object`; rejected otherwise. |
+| `execution_column` | Required only for `stored_column`; rejected otherwise. Must be a non-fixed column of the log's `events` table. |
+| `restrict_to_model_object_types` | Optional boolean (default `false`); project events onto the model's object types before building units. |
 | `max_states` | Optional integer from `1000` through `15000`; defaults to `1000`. |
 
 The backend requires the model asset to be visible to the current user, belong
@@ -269,9 +300,12 @@ infer this list from the model asset.
 `GET /api/files/{event_log_id}/occn_replay_unit_detail/`
 
 The query must identify `unit_id` and use the same
-`replay_unit_strategy`/`leading_object_type` combination as the conformance
-run. `offset` defaults to `0`; `limit` defaults to `50` and may range from `1`
-through `250`.
+`replay_unit_strategy` / `leading_object_type` / `execution_column` /
+`restrict_to_model_object_types` combination as the conformance run; with
+the projection enabled it must also carry the `asset_id` the run used.
+`offset` defaults to `0`; `limit` defaults to `50` and may range from `1`
+through `250`. `GET /api/files/{event_log_id}/event_columns/` lists the
+columns available for `execution_column`.
 
 The endpoint deterministically extracts the replay units again, resolves the
 requested unit ID, and returns a bounded page of ordered visible events. Each
@@ -292,6 +326,10 @@ Before replay, the user selects the replay-unit strategy and a state limit:
 - `Standard` maps to `connected_components`;
 - `Leading object type` maps to `leading_object` and loads the available object
   types from the event log;
+- `Stored process executions` maps to `stored_column` and loads the event
+  columns of the log; a log with exactly one candidate column preselects it;
+- `Ignore object types missing from the model` maps to
+  `restrict_to_model_object_types` and applies to every strategy;
 - the state-limit slider ranges from `1000` through `15000` in steps of `100`;
 - raising the limit above `1000` displays a warning about potentially much
   longer computation time.

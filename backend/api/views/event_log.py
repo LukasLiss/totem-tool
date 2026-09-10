@@ -37,6 +37,7 @@ from totem_lib.totem import (
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
 from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
+from totem_lib.ocel.event_columns import list_event_columns
 from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import (
@@ -66,6 +67,7 @@ from ._ocel_db import (
     _with_ocel_db,
 )
 from ._filters import (
+    _effective_object_types,
     _filtered_event_counts,
     _filtered_object_counts,
     _filtered_timestamp_range,
@@ -540,6 +542,79 @@ class EventLogViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @staticmethod
+    def _resolve_occn_asset(request, user_file, asset_id):
+        """Load an OCCN asset the user may use with ``user_file``.
+
+        Returns ``(asset, occn, None)`` or ``(None, None, error_response)``.
+        """
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return None, None, Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return None, None, Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCCN:
+            return None, None, Response(
+                {"asset_id": "Model asset must have type OCCN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            occn = occn_from_dict(asset.content_json)
+        except (AssertionError, TypeError, ValueError) as exc:
+            return None, None, Response(
+                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return asset, occn, None
+
+    @staticmethod
+    def _replay_unit_request_error(db, validated):
+        """Validate strategy options against the loaded log (400 response or None)."""
+        leading_object_type = validated.get("leading_object_type")
+        if leading_object_type is not None and leading_object_type not in _object_types(db):
+            return Response(
+                {"leading_object_type": "Object type does not exist in the event log."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        execution_column = validated.get("execution_column")
+        if execution_column is not None and execution_column not in list_event_columns(db.conn):
+            return Response(
+                {
+                    "execution_column": (
+                        "Column does not exist on the events table of the event log."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return None
+
+    @staticmethod
+    def _extract_replay_units(db, validated, occn):
+        """Run replay-unit extraction with the validated strategy options."""
+        return extract_occn_replay_units(
+            db,
+            strategy=validated["replay_unit_strategy"],
+            leading_object_type=validated.get("leading_object_type"),
+            execution_column=validated.get("execution_column"),
+            object_types=(
+                sorted(occn.object_types)
+                if validated.get("restrict_to_model_object_types")
+                else None
+            ),
+        )
+
     @action(detail=True, methods=["post"])
     def occn_conformance(self, request, pk=None):
         """Check one stored OCCN asset against this event log."""
@@ -558,63 +633,25 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        asset_id = request_serializer.validated_data["asset_id"]
-        try:
-            asset = ProjectAsset.objects.get(
-                pk=asset_id,
-                project__users=request.user,
-            )
-        except ProjectAsset.DoesNotExist:
-            return Response(
-                {"asset_id": "Model asset not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if asset.project_id != user_file.project_id:
-            return Response(
-                {"asset_id": "Model asset must belong to the event log project."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if asset.asset_type != ProjectAsset.AssetType.OCCN:
-            return Response(
-                {"asset_id": "Model asset must have type OCCN."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            occn = occn_from_dict(asset.content_json)
-        except (AssertionError, TypeError, ValueError) as exc:
-            return Response(
-                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
+        validated = request_serializer.validated_data
+        asset, occn, error = self._resolve_occn_asset(
+            request, user_file, validated["asset_id"]
         )
-        max_states = request_serializer.validated_data["max_states"]
+        if error is not None:
+            return error
+
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        execution_column = validated.get("execution_column")
+        max_states = validated["max_states"]
         try:
             fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
                 with _filter_shadow(db, fp):
-                    if (
-                        leading_object_type is not None
-                        and leading_object_type not in _object_types(db)
-                    ):
-                        return Response(
-                            {
-                                "leading_object_type": (
-                                    "Object type does not exist in the event log."
-                                )
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    replay_units = extract_occn_replay_units(
-                        db,
-                        strategy=replay_unit_strategy,
-                        leading_object_type=leading_object_type,
-                    )
+                    error = self._replay_unit_request_error(db, validated)
+                    if error is not None:
+                        return error
+                    replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
@@ -639,6 +676,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": execution_column,
+                "restrict_to_model_object_types": bool(
+                    validated.get("restrict_to_model_object_types")
+                ),
                 "max_states": max_states,
                 **result.to_dict(),
             },
@@ -665,38 +706,33 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
-        )
+        validated = request_serializer.validated_data
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        occn = None
+        if validated.get("restrict_to_model_object_types"):
+            # The projection needs the model; the serializer guarantees the
+            # asset id is present in that case.
+            _asset, occn, error = self._resolve_occn_asset(
+                request, user_file, validated["asset_id"]
+            )
+            if error is not None:
+                return error
         try:
             fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
                 with _filter_shadow(db, fp):
-                    if (
-                        leading_object_type is not None
-                        and leading_object_type not in _object_types(db)
-                    ):
-                        return Response(
-                            {
-                                "leading_object_type": (
-                                    "Object type does not exist in the event log."
-                                )
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    replay_units = extract_occn_replay_units(
-                        db,
-                        strategy=replay_unit_strategy,
-                        leading_object_type=leading_object_type,
-                    )
+                    error = self._replay_unit_request_error(db, validated)
+                    if error is not None:
+                        return error
+                    replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        unit_id = request_serializer.validated_data["unit_id"]
+        unit_id = validated["unit_id"]
         replay_unit = next(
             (unit for unit in replay_units if unit.unit_id == unit_id),
             None,
@@ -724,6 +760,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "unit_id": replay_unit.unit_id,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": validated.get("execution_column"),
                 "event_count": total_count,
                 "object_types": list(replay_unit.object_types),
                 "pagination": {
@@ -1044,7 +1081,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         fp = _parse_filter_params(request)
-        is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+        is_filtered = bool(fp)
         fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
 
         object_type_filter = None
@@ -1058,11 +1095,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 t.strip() for t in raw_object_types.split(",") if t.strip()
             ) or None
 
-        # A global object-type filter overrides the component's own type
-        # selection — the read endpoints behave the same way (the globally
-        # injected query param wins), so the stored model matches the view.
-        if "object_types" in fp:
-            object_type_filter = sorted(fp["object_types"]) or None
+        # The component only ever shows types inside the global filter, so the
+        # effective selection is the intersection (empty intersection => the
+        # global filter wins), matching what the read endpoints do.
+        object_type_filter = _effective_object_types(
+            object_type_filter, fp.get("object_types")
+        )
 
         try:
             if model_type == ProjectAsset.AssetType.TOTEM:
@@ -1086,10 +1124,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 # discovery parameters; time/activity filters need a fresh
                 # discovery over the filter shadow (the shared base cache is
                 # keyed only by file + object types).
-                has_event_filter = any(
-                    k in fp for k in ("after", "before", "activities")
-                )
-                if has_event_filter:
+                if is_filtered:
                     parameters = (
                         {"object_types": object_type_filter}
                         if object_type_filter

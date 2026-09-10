@@ -6,9 +6,12 @@ from rest_polymorphic.serializers import PolymorphicSerializer
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     LEADING_OBJECT_REPLAY_STRATEGY,
+    REPLAY_UNIT_STRATEGIES,
+    STORED_COLUMN_REPLAY_STRATEGY,
     validate_occn_dict,
     validate_totem_dict,
 )
+from totem_lib.ocel.event_columns import EventColumnError, validate_event_column_name
 from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
@@ -21,11 +24,21 @@ class TotemConformanceRequestSerializer(serializers.Serializer):
 
 
 class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
+    """Replay-unit options shared by the conformance and detail endpoints.
+
+    * ``leading_object_type`` -- required by, and only valid for, the
+      leading-object strategy.
+    * ``execution_column`` -- name of an events column holding precomputed
+      process execution ids; required by, and only valid for, the
+      stored-column strategy.
+    * ``restrict_to_model_object_types`` -- project every event onto the
+      object types of the OCCN before building replay units, so objects the
+      model deliberately leaves out (e.g. a shared worker resource) do not
+      make every unit non-fitting. Valid for every strategy.
+    """
+
     replay_unit_strategy = serializers.ChoiceField(
-        choices=(
-            CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-            LEADING_OBJECT_REPLAY_STRATEGY,
-        ),
+        choices=REPLAY_UNIT_STRATEGIES,
         default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     )
     leading_object_type = serializers.CharField(
@@ -33,10 +46,26 @@ class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
         required=False,
         trim_whitespace=True,
     )
+    execution_column = serializers.CharField(
+        allow_blank=False,
+        allow_null=True,
+        required=False,
+        trim_whitespace=True,
+    )
+    restrict_to_model_object_types = serializers.BooleanField(default=False)
+
+    def validate_execution_column(self, value):
+        if value is None:
+            return None
+        try:
+            return validate_event_column_name(value)
+        except EventColumnError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def validate(self, attrs):
         strategy = attrs["replay_unit_strategy"]
         leading_object_type = attrs.get("leading_object_type")
+        execution_column = attrs.get("execution_column")
         if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
             if leading_object_type is None:
                 raise serializers.ValidationError(
@@ -52,6 +81,25 @@ class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
                 {
                     "leading_object_type": (
                         "This field is only supported for the leading-object "
+                        "replay strategy."
+                    )
+                }
+            )
+        if strategy == STORED_COLUMN_REPLAY_STRATEGY:
+            if execution_column is None:
+                raise serializers.ValidationError(
+                    {
+                        "execution_column": (
+                            "This field is required for the stored-column "
+                            "replay strategy."
+                        )
+                    }
+                )
+        elif execution_column is not None:
+            raise serializers.ValidationError(
+                {
+                    "execution_column": (
+                        "This field is only supported for the stored-column "
                         "replay strategy."
                     )
                 }
@@ -74,6 +122,21 @@ class OCCNReplayUnitDetailRequestSerializer(
     unit_id = serializers.CharField(allow_blank=False, trim_whitespace=True)
     offset = serializers.IntegerField(min_value=0, default=0)
     limit = serializers.IntegerField(min_value=1, max_value=250, default=50)
+    # Only needed to reproduce a projection onto the model's object types.
+    asset_id = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("restrict_to_model_object_types") and "asset_id" not in attrs:
+            raise serializers.ValidationError(
+                {
+                    "asset_id": (
+                        "This field is required when restricting replay units "
+                        "to the model's object types."
+                    )
+                }
+            )
+        return attrs
 
 
 class EventLogSerializer(serializers.ModelSerializer):
