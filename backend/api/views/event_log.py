@@ -1448,9 +1448,34 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if statements[0].type != duckdb.StatementType.SELECT:
             return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Optional paging: ``limit`` rows starting at ``offset``. Without an
+        # explicit limit the historical cap applies. Fetch one extra row to
+        # report whether another page exists.
+        raw_offset = request.data.get("offset")
+        raw_limit = request.data.get("limit")
+        try:
+            offset = 0 if raw_offset is None else int(raw_offset)
+            limit = EXECUTE_QUERY_MAX_ROWS if raw_limit is None else int(raw_limit)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "offset and limit must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if offset < 0 or limit < 1:
+            return Response(
+                {"error": "offset must be >= 0 and limit >= 1"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        limit = min(limit, EXECUTE_QUERY_MAX_ROWS)
+
         # Cap the result size so a `SELECT * FROM event_object` on a large log
-        # cannot exhaust worker memory. Fetch one extra row to report truncation.
-        wrapped = f"SELECT * FROM ({query}) AS _user_query LIMIT {EXECUTE_QUERY_MAX_ROWS + 1}"
+        # cannot exhaust worker memory. Note that paging an unordered query is
+        # only stable if the query itself has an ORDER BY; the editor tells
+        # users so.
+        wrapped = (
+            f"SELECT * FROM ({query}) AS _user_query "
+            f"LIMIT {limit + 1} OFFSET {offset}"
+        )
 
         # Run in a throwaway sandbox connection rather than on the shared
         # registry connection: DuckDB's read-only mode protects the database
@@ -1471,11 +1496,21 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        truncated = len(rows) > EXECUTE_QUERY_MAX_ROWS
-        rows = rows[:EXECUTE_QUERY_MAX_ROWS]
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         data = [dict(zip(columns, row)) for row in rows]
         return Response(
-            {"data": data, "columns": columns, "truncated": truncated, "max_rows": EXECUTE_QUERY_MAX_ROWS},
+            {
+                "data": data,
+                "columns": columns,
+                "offset": offset,
+                "limit": limit,
+                "has_more": has_more,
+                # Kept for older clients: "truncated" used to mean "more rows
+                # than the cap exist".
+                "truncated": has_more,
+                "max_rows": limit,
+            },
             status=status.HTTP_200_OK,
         )
 

@@ -76,8 +76,12 @@ import {
 import { ChevronDown } from 'lucide-react';
 import SqlQueryEditor, {
   SQL_QUERY_DEFAULT,
+  type LinkedQuery,
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
+import KpiComponent from './sql-widgets/KpiComponent';
+import BarChartComponent from './sql-widgets/BarChartComponent';
+import ScatterPlotComponent from './sql-widgets/ScatterPlotComponent';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 
 function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
@@ -149,7 +153,8 @@ interface ComponentProps {
     // SqlQueryComponent properties
     name?: string;
     query?: string;
-    expected_result?: string | null;
+    query_asset?: number | null;
+    query_asset_name?: string | null;
     row_limit?: number;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
@@ -1850,17 +1855,34 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
   const value: SqlQueryConfig = {
     name: node.name ?? "",
     query: node.query ?? SQL_QUERY_DEFAULT,
-    expectedResult: node.expected_result ?? null,
     rowLimit: node.row_limit ?? 25,
   };
+  // The grid host does not re-render this tree on onUpdate, so the link is
+  // mirrored in local state (same reason SqlQueryEditor keeps its own text).
+  const [linkedQuery, setLinkedQuery] = useState<LinkedQuery | null>(
+    node.query_asset
+      ? { id: node.query_asset, name: node.query_asset_name ?? `stored query #${node.query_asset}` }
+      : null
+  );
+  useEffect(() => {
+    setLinkedQuery(
+      node.query_asset
+        ? { id: node.query_asset, name: node.query_asset_name ?? `stored query #${node.query_asset}` }
+        : null
+    );
+  }, [node.query_asset, node.query_asset_name]);
 
   const handleChange = (patch: Partial<SqlQueryConfig>) => {
     const update: Record<string, unknown> = {};
     if (patch.name !== undefined) update.name = patch.name;
     if (patch.query !== undefined) update.query = patch.query;
-    if (patch.expectedResult !== undefined) update.expected_result = patch.expectedResult;
     if (patch.rowLimit !== undefined) update.row_limit = patch.rowLimit;
     onUpdate?.(update as any);
+  };
+
+  const handleLinkChange = (link: LinkedQuery | null) => {
+    setLinkedQuery(link);
+    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null } as any);
   };
 
   return (
@@ -1869,6 +1891,9 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
       onChange={handleChange}
       isEditMode={isEditMode}
       fileId={selectedFile?.id}
+      projectId={selectedFile?.project}
+      linkedQuery={linkedQuery}
+      onLinkChange={handleLinkChange}
     />
   );
 };
@@ -1891,4 +1916,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   PieChartComponent,
   OCCNComponent,
   SqlQueryComponent,
+  KpiComponent: KpiComponent as unknown as React.FC<ComponentProps>,
+  BarChartComponent: BarChartComponent as unknown as React.FC<ComponentProps>,
+  ScatterPlotComponent: ScatterPlotComponent as unknown as React.FC<ComponentProps>,
 };

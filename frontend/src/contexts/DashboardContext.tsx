@@ -8,7 +8,8 @@ export type AnalysisComponent =
   | "dottedChart"
   | "occn"
   | "ocPetriNet"
-  | "totemMiner";
+  | "totemMiner"
+  | "sqlQuery";
 export type ConformanceComponent = "totem" | "occn";
 
 export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";
@@ -17,6 +18,7 @@ export type ViewMode =
   | { type: "overview" }
   | { type: "modelAssets" }
   | { type: "imageAssets" }
+  | { type: "queryAssets"; openAssetId?: number }
   | { type: "analysis"; component: AnalysisComponent }
   | { type: "conformance"; component: ConformanceComponent; assetId?: number }
   | { type: "editor"; component: EditorComponent; openAssetId?: number }

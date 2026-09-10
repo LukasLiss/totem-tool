@@ -1,20 +1,21 @@
 /**
  * SqlQueryEditor — standalone SQL editor + table/column browser + result
- * viewer for a file's OCEL data (DuckDB, SELECT-only). See
- * Claude_design/README.md for the full behavioral spec this follows.
+ * viewer for a file's OCEL data (DuckDB, SELECT-only).
  *
  * This is a plain, dashboard-agnostic React component: it owns no
  * persistence itself. A caller supplies the current `value` and an
  * `onChange` to receive patches (e.g. the dashboard's SqlQueryComponent in
  * componentMap.tsx wires this up to a GridStack widget node), so it can
  * just as well be embedded in a dialog, a panel, or any other page.
+ *
+ * Results are paged: the first `rowLimit` rows load on Run, further pages
+ * load lazily as the table is scrolled (or via "Load more").
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -24,22 +25,58 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ChevronDown, Database, Play, Plus, X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  BookmarkPlus,
+  ChevronDown,
+  Database,
+  FolderOpen,
+  Link2,
+  Play,
+  Plus,
+  Save,
+  Unlink,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   executeQuery as runSqlQuery,
   getQueryColumns,
   type TableSchema,
 } from "@/api/queryApi";
+import { queryAssetSql, type ProjectAsset } from "@/api/assetsApi";
+import { SqlHighlightedTextarea } from "./sql/SqlHighlightedTextarea";
+import { columnReference, quoteIdentifierIfNeeded } from "./sql/sqlIdentifiers";
+import { useStoredQuery } from "./sql/useStoredQuery";
+import { SaveStoredQueryDialog, StoredQueryPickerDialog } from "./sql/StoredQueryDialogs";
+import { toLinkedQuery, type LinkedQuery } from "./sql/linkedQuery";
+
+export type { LinkedQuery } from "./sql/linkedQuery";
 
 export interface SqlQueryConfig {
-  /** what other widgets could bind to (name-based source lookup — not wired to any consumer yet) */
+  /** display name of the query (widget title in view mode) */
   name: string;
   query: string;
-  /** optional human annotation of the expected result shape; absent/null hides the pane */
-  expectedResult?: string | null;
-  /** rows rendered in the result table, default 25 */
+  /** rows per page of the result table, default 25 */
   rowLimit?: number;
+}
+
+/**
+ * What a consumer of the query expects the result to look like. Provided by
+ * components that ask the user for a query (KPI, bar chart, …); the editor
+ * only displays it, it is never edited here.
+ */
+export interface ExpectedResult {
+  description?: string;
+  columns?: string[];
+  /** example rows, in `columns` order */
+  rows?: unknown[][];
 }
 
 export interface SqlQueryEditorProps {
@@ -49,13 +86,25 @@ export interface SqlQueryEditorProps {
   isEditMode: boolean;
   /** the OCEL file to query against; omit to disable running (schema falls back to a static list) */
   fileId?: number;
+  /** project whose query store the editor can save to / load from; omit to hide the store menu */
+  projectId?: number;
+  /** read-only description of the result a consumer expects; omit to hide the pane */
+  expectedResult?: ExpectedResult | null;
+  /** stored query this editor is linked to (its text is shown and run) */
+  linkedQuery?: LinkedQuery | null;
+  /** called when the user links / unlinks a stored query; omit to disable linking */
+  onLinkChange?: (link: LinkedQuery | null) => void;
+  /** hide the query-name input (e.g. when a dialog already names the query) */
+  hideName?: boolean;
   className?: string;
 }
 
 export const SQL_QUERY_DEFAULT =
   "SELECT activity, count(*) AS n FROM events GROUP BY activity";
 
-const SQL_SELECT_ONLY = /^\s*(--[^\n]*\n\s*)*(select|with)\b/i;
+const SQL_PAGE_SIZES = [25, 50, 100, 500] as const;
+
+const SQL_SELECT_ONLY = /^\s*(--[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*(select|with)\b/i;
 
 const SQL_FALLBACK_SCHEMA: TableSchema[] = [
   { name: "events", columns: [] },
@@ -66,16 +115,32 @@ const SQL_FALLBACK_SCHEMA: TableSchema[] = [
 ];
 
 interface SqlQueryResult {
-  data: Record<string, unknown>[];
+  rows: Record<string, unknown>[];
   columns: string[];
+  hasMore: boolean;
+  /** wall time of the first page */
   ms: number;
 }
+
+const formatCell = (v: unknown) =>
+  v == null ? (
+    <span className="text-muted-foreground">NULL</span>
+  ) : typeof v === "number" ? (
+    v.toLocaleString()
+  ) : (
+    String(v)
+  );
 
 const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   value,
   onChange,
   isEditMode,
   fileId,
+  projectId,
+  expectedResult = null,
+  linkedQuery = null,
+  onLinkChange,
+  hideName = false,
   className,
 }) => {
   const rowLimit = value.rowLimit ?? 25;
@@ -87,21 +152,27 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   // host never re-renders this tree in response to onChange.
   const [name, setName] = useState(value.name ?? "");
   const [query, setQuery] = useState(value.query ?? SQL_QUERY_DEFAULT);
-  const [expectedResult, setExpectedResult] = useState<string | null>(
-    value.expectedResult ?? null
-  );
   const [schema, setSchema] = useState<TableSchema[]>(SQL_FALLBACK_SCHEMA);
   const [expanded, setExpanded] = useState<string | null>("events");
   const [result, setResult] = useState<SqlQueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveTarget, setSaveTarget] = useState<ProjectAsset | null>(null);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const chipClickTimer = useRef<number | null>(null);
+  const runSeq = useRef(0);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // A double-click fires two "click" events before "dblclick", so a naive
-  // onClick would toggle the column browser open then immediately closed
-  // (or vice versa) on every double-click. Defer the single-click action so
-  // a following dblclick within the window can cancel it.
+  // Linked stored query: its text replaces the local one while linked.
+  const stored = useStoredQuery(linkedQuery?.id);
+  const linked = Boolean(linkedQuery);
+  const storedQueryText = stored.asset ? queryAssetSql(stored.asset) : null;
+  const dirtyAgainstStore = linked && storedQueryText != null && storedQueryText !== query;
+
   useEffect(() => {
     return () => {
       if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
@@ -112,11 +183,11 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     setName(value.name ?? "");
   }, [value.name]);
   useEffect(() => {
-    setQuery(value.query ?? SQL_QUERY_DEFAULT);
-  }, [value.query]);
+    if (!linked) setQuery(value.query ?? SQL_QUERY_DEFAULT);
+  }, [value.query, linked]);
   useEffect(() => {
-    setExpectedResult(value.expectedResult ?? null);
-  }, [value.expectedResult]);
+    if (storedQueryText != null) setQuery(storedQueryText);
+  }, [storedQueryText]);
 
   useEffect(() => {
     if (!fileId) {
@@ -139,6 +210,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   const run = useCallback(
     async (q: string = query) => {
       if (!q.trim()) return;
+      const seq = ++runSeq.current;
       if (!fileId) {
         setResult(null);
         setError("Select an event log to run queries against.");
@@ -152,24 +224,73 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       setRunning(true);
       const t0 = performance.now();
       try {
-        const { data, columns } = await runSqlQuery(fileId, q);
-        setResult({ data, columns, ms: Math.round(performance.now() - t0) });
+        const page = await runSqlQuery(fileId, q, { offset: 0, limit: rowLimit });
+        if (seq !== runSeq.current) return;
+        setResult({
+          rows: page.data,
+          columns: page.columns,
+          hasMore: page.hasMore,
+          ms: Math.round(performance.now() - t0),
+        });
         setError(null);
+        scrollRef.current?.scrollTo({ top: 0 });
       } catch (e) {
+        if (seq !== runSeq.current) return;
         setResult(null);
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        setRunning(false);
+        if (seq === runSeq.current) setRunning(false);
       }
     },
-    [query, fileId]
+    [query, fileId, rowLimit]
   );
 
-  // View mode auto-runs; edit-mode authoring runs are explicit (Run / ⌘↵).
+  const loadMore = useCallback(async () => {
+    if (!fileId || !result?.hasMore || loadingMore || running) return;
+    const seq = runSeq.current;
+    setLoadingMore(true);
+    try {
+      const page = await runSqlQuery(fileId, query, {
+        offset: result.rows.length,
+        limit: rowLimit,
+      });
+      if (seq !== runSeq.current) return;
+      setResult((prev) =>
+        prev
+          ? { ...prev, rows: prev.rows.concat(page.data), hasMore: page.hasMore }
+          : prev
+      );
+    } catch (e) {
+      if (seq !== runSeq.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (seq === runSeq.current) setLoadingMore(false);
+    }
+  }, [fileId, result, loadingMore, running, query, rowLimit]);
+
+  // Lazy loading: fetch the next page when the sentinel below the last row
+  // scrolls into view.
   useEffect(() => {
-    if (!isEditMode) void run(query);
+    const el = sentinelRef.current;
+    if (!el || !result?.hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore();
+      },
+      { root: scrollRef.current, rootMargin: "120px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [result, loadMore]);
+
+  // View mode auto-runs; edit-mode authoring runs are explicit (Run / ⌘↵).
+  // While linked, wait for the stored text before running anything.
+  useEffect(() => {
+    if (isEditMode) return;
+    if (linked && storedQueryText == null) return;
+    void run(linked ? storedQueryText ?? "" : query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditMode, query, fileId]);
+  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit]);
 
   const patchName = (v: string) => {
     setName(v);
@@ -179,22 +300,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     setQuery(v);
     onChange({ query: v });
   };
-  const patchExpectedResult = (v: string | null) => {
-    setExpectedResult(v);
-    onChange({ expectedResult: v });
-  };
-
-  /** alias used for `table` in the current query, if any */
-  const aliasFor = (table: string) => {
-    const m = query.match(
-      new RegExp(`\\b(?:from|join)\\s+${table}\\s+(?:as\\s+)?([a-z_]\\w*)`, "i")
-    );
-    if (m && !/^(where|group|order|limit|join|left|inner|on|having)$/i.test(m[1])) {
-      return m[1];
-    }
-    return new RegExp(`\\b(?:from|join)\\s+${table}\\b`, "i").test(query)
-      ? table
-      : null;
+  const patchRowLimit = (v: number) => {
+    onChange({ rowLimit: v });
   };
 
   /** insert `text` at the editor's caret (replacing any selection) */
@@ -209,18 +316,30 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     });
   };
 
-  const insertColumn = (table: string, column: string) => {
-    const alias = aliasFor(table);
-    insertAtCaret(alias ? `${alias}.${column}` : column);
+  const insertTable = (table: string) => insertAtCaret(quoteIdentifierIfNeeded(table));
+  const insertColumn = (table: string, column: string) =>
+    insertAtCaret(columnReference(query, table, column));
+
+  const useStoredCopy = (asset: ProjectAsset) => {
+    patchQuery(queryAssetSql(asset));
+    if (!name && !hideName) patchName(asset.name);
+  };
+  const linkStored = (asset: ProjectAsset) => {
+    onLinkChange?.(toLinkedQuery(asset));
+    setQuery(queryAssetSql(asset));
+    onChange({ query: queryAssetSql(asset) });
+    if (!name && !hideName) patchName(asset.name);
+  };
+  const unlink = () => {
+    onLinkChange?.(null);
+    onChange({ query });
   };
 
-  const rows = useMemo(() => result?.data.slice(0, rowLimit) ?? [], [result, rowLimit]);
   const numericCols = useMemo(() => {
     const cols = result?.columns ?? [];
+    const rows = result?.rows ?? [];
     return new Set(
-      cols.filter((c) =>
-        (result?.data ?? []).every((r) => r[c] == null || typeof r[c] === "number")
-      )
+      cols.filter((c) => rows.every((r) => r[c] == null || typeof r[c] === "number"))
     );
   }, [result]);
 
@@ -229,7 +348,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     : error
       ? "failed"
       : result
-        ? `${result.data.length.toLocaleString()} rows · ${result.columns.length} cols · ${result.ms} ms`
+        ? `${result.rows.length.toLocaleString()} rows${result.hasMore ? "+" : ""} · ${result.columns.length} cols · ${result.ms} ms`
         : "—";
 
   const errorBox = (
@@ -249,91 +368,157 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     </div>
   );
 
+  const headCellStyle = (i: number, n: number, strong = false): React.CSSProperties => ({
+    color: "hsl(240,3.8%,46.1%)",
+    background: strong ? "hsl(240,4.8%,95%)" : "hsl(240,4.8%,97%)",
+    padding: "7px 14px",
+    borderRight: i < n - 1 ? "1px solid hsl(240,5.9%,90%)" : undefined,
+  });
+  const bodyCellStyle = (j: number, n: number): React.CSSProperties => ({
+    padding: "7px 14px",
+    borderBottom: "1px solid hsl(240,5.9%,95%)",
+    borderRight: j < n - 1 ? "1px solid hsl(240,5.9%,95%)" : undefined,
+  });
+
   /**
    * `alignNumeric` right-aligns numeric columns (the edit-mode "Your
-   * result" pane, matching the design spec). Display mode passes false —
-   * all columns left-aligned — per request, for a more uniform look.
+   * result" pane). Display mode passes false — all columns left-aligned —
+   * for a more uniform look.
    */
-  const renderResultTable = (alignNumeric: boolean) => (
-    <div className="overflow-auto" style={{ scrollbarGutter: "stable" }}>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {(result?.columns ?? []).map((c, i) => (
-              <TableHead
-                key={c}
-                className={cn(
-                  "whitespace-nowrap text-left font-mono text-[11px]",
-                  alignNumeric && numericCols.has(c) && "text-right"
-                )}
-                style={{
-                  color: "hsl(240,3.8%,46.1%)",
-                  background: "hsl(240,4.8%,97%)",
-                  padding: "7px 14px",
-                  borderRight:
-                    i < (result?.columns.length ?? 0) - 1
-                      ? "1px solid hsl(240,5.9%,90%)"
-                      : undefined,
-                }}
-              >
-                {c}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r, i) => (
-            <TableRow key={i}>
-              {(result?.columns ?? []).map((c, j) => (
-                <TableCell
+  const renderResultTable = (alignNumeric: boolean) => {
+    const columns = result?.columns ?? [];
+    const rows = result?.rows ?? [];
+    return (
+      <>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {columns.map((c, i) => (
+                <TableHead
                   key={c}
                   className={cn(
-                    "overflow-hidden text-ellipsis whitespace-nowrap text-left text-[12.5px]",
-                    numericCols.has(c) && "font-mono",
+                    "whitespace-nowrap text-left font-mono text-[11px]",
                     alignNumeric && numericCols.has(c) && "text-right"
                   )}
-                  style={{
-                    padding: "7px 14px",
-                    borderBottom: "1px solid hsl(240,5.9%,95%)",
-                    borderRight:
-                      j < (result?.columns.length ?? 0) - 1
-                        ? "1px solid hsl(240,5.9%,95%)"
-                        : undefined,
-                  }}
+                  style={headCellStyle(i, columns.length)}
                 >
-                  {r[c] == null ? (
-                    <span className="text-muted-foreground">NULL</span>
-                  ) : typeof r[c] === "number" ? (
-                    (r[c] as number).toLocaleString()
-                  ) : (
-                    String(r[c])
-                  )}
-                </TableCell>
+                  {c}
+                </TableHead>
               ))}
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      {result && result.data.length === 0 && (
-        <p className="px-4 py-6 text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
-          no rows returned
-        </p>
-      )}
-      {result && result.data.length > 0 && rows.length < result.data.length && (
-        <p className="px-4 py-2 text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
-          showing first {rows.length} of {result.data.length.toLocaleString()} rows
-        </p>
-      )}
-      {result && result.data.length > 0 && rows.length >= result.data.length && (
-        <p className="px-4 py-2 text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
-          end of result
-        </p>
-      )}
-      {!result && !running && !error && (
-        <p className="px-4 py-6 text-xs text-muted-foreground">Run a query to see results.</p>
-      )}
-    </div>
-  );
+          </TableHeader>
+          <TableBody>
+            {rows.map((r, i) => (
+              <TableRow key={i}>
+                {columns.map((c, j) => (
+                  <TableCell
+                    key={c}
+                    className={cn(
+                      "overflow-hidden text-ellipsis whitespace-nowrap text-left text-[12.5px]",
+                      numericCols.has(c) && "font-mono",
+                      alignNumeric && numericCols.has(c) && "text-right"
+                    )}
+                    style={bodyCellStyle(j, columns.length)}
+                  >
+                    {formatCell(r[c])}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {result && rows.length === 0 && (
+          <p className="px-4 py-6 text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
+            no rows returned
+          </p>
+        )}
+        {result && rows.length > 0 && result.hasMore && (
+          <div
+            ref={sentinelRef}
+            className="flex items-center gap-3 px-4 py-2 text-[11px]"
+            style={{ color: "hsl(240,4%,60%)" }}
+          >
+            <span>
+              {rows.length.toLocaleString()} rows loaded · more available
+            </span>
+            <button
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="rounded border px-2 py-0.5 font-medium text-foreground hover:bg-accent disabled:opacity-50"
+            >
+              {loadingMore ? "loading…" : `Load ${rowLimit} more`}
+            </button>
+          </div>
+        )}
+        {result && rows.length > 0 && !result.hasMore && (
+          <p className="px-4 py-2 text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
+            end of result · {rows.length.toLocaleString()} rows
+          </p>
+        )}
+        {!result && !running && !error && (
+          <p className="px-4 py-6 text-xs text-muted-foreground">Run a query to see results.</p>
+        )}
+      </>
+    );
+  };
+
+  const renderExpectedResult = () => {
+    if (!expectedResult) return null;
+    const columns = expectedResult.columns ?? [];
+    const rows = expectedResult.rows ?? [];
+    return (
+      <div className="flex min-h-[140px] flex-col bg-muted/20 @[560px]:min-h-0">
+        <div className="flex min-w-0 items-center gap-2 border-b bg-muted/40 px-3 py-2">
+          <span className="shrink-0 whitespace-nowrap text-xs font-semibold">
+            Expected result
+          </span>
+          <span className="min-w-0 flex-1 truncate whitespace-nowrap text-[11px] text-muted-foreground">
+            what the consuming component reads from your query
+          </span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
+          {expectedResult.description && (
+            <p className="px-4 pb-2 pt-3 text-xs text-muted-foreground">
+              {expectedResult.description}
+            </p>
+          )}
+          {columns.length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {columns.map((c, i) => (
+                    <TableHead
+                      key={c}
+                      className="whitespace-nowrap text-left font-mono text-[11px]"
+                      style={headCellStyle(i, columns.length, true)}
+                    >
+                      {c}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow key={i}>
+                    {columns.map((c, j) => (
+                      <TableCell
+                        key={c}
+                        className="whitespace-nowrap text-left text-[12.5px]"
+                        style={bodyCellStyle(j, columns.length)}
+                      >
+                        {formatCell(r[j])}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   /* ------------------------------------------------------------ view mode */
 
@@ -342,8 +527,13 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
         <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-3">
           <CardTitle className="min-w-0 flex-1 truncate text-sm">
-            {name || "SQL query"}
+            {name || linkedQuery?.name || "SQL query"}
           </CardTitle>
+          {linked && (
+            <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]" title={`linked to stored query "${linkedQuery?.name}"`}>
+              <Link2 className="size-3" /> linked
+            </Badge>
+          )}
           <Badge
             variant="outline"
             className="shrink-0 whitespace-nowrap font-mono text-[10px]"
@@ -352,10 +542,17 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           </Badge>
         </CardHeader>
         <CardContent
+          ref={scrollRef}
           className="flex-1 overflow-auto p-0 pr-3 pl-3"
           style={{ scrollbarGutter: "stable" }}
         >
-          {error ? errorBox : renderResultTable(false)}
+          {stored.error ? (
+            <p className="px-4 py-6 text-xs text-destructive">{stored.error}</p>
+          ) : error ? (
+            errorBox
+          ) : (
+            renderResultTable(false)
+          )}
         </CardContent>
       </Card>
     );
@@ -364,12 +561,13 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   /* ------------------------------------------------------------ edit mode */
 
   const expandedTable = schema.find((t) => t.name === expanded) ?? null;
+  const storeEnabled = Boolean(projectId);
 
   return (
     <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
       <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-2.5">
         <span
-          className="h-2 w-2 rounded-[2px]"
+          className="h-2 w-2 shrink-0 rounded-[2px]"
           style={{
             background:
               !running && !error && result ? "hsl(142,71%,45%)" : "hsl(240,5.9%,88%)",
@@ -377,31 +575,92 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         />
         <Database className="size-4 shrink-0 text-muted-foreground" />
         <CardTitle className="shrink-0 whitespace-nowrap text-sm">SQL Editor</CardTitle>
-        <Input
-          value={name}
-          onChange={(e) => patchName(e.target.value)}
-          placeholder="query name"
-          className="h-7 w-[190px] min-w-[60px] shrink font-mono text-[11px]"
-        />
+        {!hideName && (
+          <Input
+            value={name}
+            onChange={(e) => patchName(e.target.value)}
+            placeholder="query name"
+            className="h-7 w-[190px] min-w-[60px] shrink font-mono text-[11px]"
+          />
+        )}
+        {storeEnabled && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 gap-1.5 px-2 text-xs">
+                <FolderOpen className="size-3.5" /> Queries
+                <ChevronDown className="size-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+                Project query store
+              </DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => setPickerOpen(true)}>
+                <FolderOpen className="size-3.5" /> Load or link a stored query…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => {
+                  setSaveTarget(null);
+                  setSaveOpen(true);
+                }}
+                disabled={!query.trim()}
+              >
+                <BookmarkPlus className="size-3.5" /> Store as new query…
+              </DropdownMenuItem>
+              {linked && stored.asset && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setSaveTarget(stored.asset);
+                    setSaveOpen(true);
+                  }}
+                  disabled={!query.trim()}
+                >
+                  <Save className="size-3.5" /> Update "{stored.asset.name}"…
+                </DropdownMenuItem>
+              )}
+              {linked && (
+                <DropdownMenuItem onSelect={unlink}>
+                  <Unlink className="size-3.5" /> Unlink (keep a local copy)
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        {linked && (
+          <Badge
+            variant="secondary"
+            className="min-w-0 shrink gap-1 truncate text-[10px]"
+            title={`linked to stored query "${linkedQuery?.name}"`}
+          >
+            <Link2 className="size-3 shrink-0" />
+            <span className="truncate">{stored.asset?.name ?? linkedQuery?.name}</span>
+            {dirtyAgainstStore && <span className="shrink-0 text-amber-600">· unsaved</span>}
+          </Badge>
+        )}
         <span className="ml-auto min-w-0 flex-1 truncate whitespace-nowrap text-right text-[11px] text-muted-foreground">
           DuckDB · SELECT-only
         </span>
       </CardHeader>
 
       <CardContent className="@container flex min-h-0 flex-1 flex-col gap-0 overflow-y-auto p-0">
-        <Textarea
+        {stored.error && (
+          <p className="border-b bg-destructive/5 px-3.5 py-1.5 text-xs text-destructive">
+            {stored.error} Unlink to keep editing the local copy.
+          </p>
+        )}
+        <SqlHighlightedTextarea
           ref={editorRef}
           value={query}
-          onChange={(e) => patchQuery(e.target.value)}
+          onChange={patchQuery}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
               void run();
             }
           }}
-          spellCheck={false}
           placeholder={SQL_QUERY_DEFAULT}
-          className="min-h-[132px] resize-none rounded-none border-0 border-b bg-[hsl(240,20%,99%)] font-mono text-[13px] leading-[22px] focus-visible:ring-0"
+          className="min-h-[132px] shrink-0 border-b bg-[hsl(240,20%,99%)]"
         />
 
         {/* table chips */}
@@ -414,6 +673,9 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
                 key={t.name}
                 type="button"
                 onClick={() => {
+                  // A double-click fires two "click" events before "dblclick",
+                  // so defer the single-click toggle and let a following
+                  // dblclick within the window cancel it.
                   if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
                   chipClickTimer.current = window.setTimeout(() => {
                     setExpanded((prev) => (prev === t.name ? null : t.name));
@@ -425,7 +687,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
                     clearTimeout(chipClickTimer.current);
                     chipClickTimer.current = null;
                   }
-                  insertAtCaret(t.name);
+                  insertTable(t.name);
                 }}
                 title="Click to browse columns, double-click to insert the table name"
                 className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
@@ -498,23 +760,32 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         <div
           className={cn(
             "grid min-h-[160px] flex-1",
-            expectedResult != null ? "@[560px]:grid-cols-2" : "grid-cols-1"
+            expectedResult ? "@[560px]:grid-cols-2" : "grid-cols-1"
           )}
         >
           <div className="flex min-h-[140px] flex-col border-b @[560px]:min-h-0 @[560px]:border-b-0 @[560px]:border-r">
             <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
               <span className="text-xs font-semibold">Your result</span>
               <span className="text-[11px] text-muted-foreground">{statusCaption}</span>
-              <div className="ml-auto flex items-center gap-3">
-                {expectedResult == null && (
-                  <button
-                    type="button"
-                    onClick={() => patchExpectedResult("")}
-                    className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  page
+                  <select
+                    value={rowLimit}
+                    onChange={(e) => patchRowLimit(Number(e.target.value))}
+                    className="h-6 rounded border bg-background px-1 font-mono text-[11px] text-foreground"
+                    aria-label="rows per page"
                   >
-                    + expected result
-                  </button>
-                )}
+                    {SQL_PAGE_SIZES.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                    {!SQL_PAGE_SIZES.includes(rowLimit as (typeof SQL_PAGE_SIZES)[number]) && (
+                      <option value={rowLimit}>{rowLimit}</option>
+                    )}
+                  </select>
+                </label>
                 <Button size="sm" className="h-7 gap-1.5 px-3" disabled={running} onClick={() => void run()}>
                   <Play className="size-3" /> Run
                   <span className="font-mono text-[10px] opacity-60">⌘↵</span>
@@ -522,6 +793,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
               </div>
             </div>
             <div
+              ref={scrollRef}
               className="min-h-0 flex-1 overflow-auto pr-2"
               style={{ scrollbarGutter: "stable" }}
             >
@@ -529,35 +801,34 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
             </div>
           </div>
 
-          {expectedResult != null && (
-            <div className="flex min-h-[140px] flex-col bg-muted/20 @[560px]:min-h-0">
-              <div className="flex min-w-0 items-center gap-2 border-b bg-muted/40 px-3 py-2">
-                <span className="shrink-0 whitespace-nowrap text-xs font-semibold">
-                  Expected result
-                </span>
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap text-[11px] text-muted-foreground">
-                  optional annotation · shown to consumers
-                </span>
-                <button
-                  type="button"
-                  onClick={() => patchExpectedResult(null)}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                  aria-label="Remove expected result"
-                  title="Remove expected result"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-              <Textarea
-                value={expectedResult}
-                onChange={(e) => patchExpectedResult(e.target.value)}
-                placeholder="Describe the shape consumers should expect, e.g. one row per activity with an integer count."
-                className="m-3 min-h-[80px] w-auto text-xs"
-              />
-            </div>
-          )}
+          {renderExpectedResult()}
         </div>
       </CardContent>
+
+      {storeEnabled && (
+        <>
+          <StoredQueryPickerDialog
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            projectId={projectId}
+            onUseCopy={useStoredCopy}
+            onLink={onLinkChange ? linkStored : undefined}
+          />
+          <SaveStoredQueryDialog
+            open={saveOpen}
+            onOpenChange={setSaveOpen}
+            projectId={projectId}
+            query={query}
+            defaultName={name}
+            existing={saveTarget}
+            onSaved={(asset) => {
+              // Storing a fresh copy from a linked editor re-links to the new
+              // asset so "update" targets it from now on.
+              if (onLinkChange && linked) onLinkChange(toLinkedQuery(asset));
+            }}
+          />
+        </>
+      )}
     </Card>
   );
 };

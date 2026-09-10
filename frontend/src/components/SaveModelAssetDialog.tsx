@@ -19,7 +19,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-const MODEL_TYPE_LABELS: Record<AssetType, string> = {
+const MODEL_TYPE_LABELS: Partial<Record<AssetType, string>> = {
   TOTEM: 'TOTeM model',
   OCCN: 'OC Causal Net',
   OCPN: 'OC Petri Net',
@@ -68,7 +68,7 @@ export function SaveModelAssetButton({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const typeLabel = MODEL_TYPE_LABELS[modelType];
+  const typeLabel = MODEL_TYPE_LABELS[modelType] ?? modelType;
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
