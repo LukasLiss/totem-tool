@@ -30,6 +30,20 @@ except ImportError:
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Where the app writes: database, uploaded logs, result cache.
+#
+# In a packaged desktop build BASE_DIR resolves *inside* the app bundle (under
+# PyInstaller's _internal/), which is wrong in three ways: Program Files needs
+# admin rights on Windows, a second user account cannot write there at all, and
+# on macOS writing into a signed .app invalidates its code signature so
+# Gatekeeper may refuse to launch it.
+#
+# Electron therefore passes its per-user data directory via TOTEM_DATA_DIR
+# (~/Library/Application Support/TOTeM-Tool, %APPDATA%\TOTeM-Tool). Falling back
+# to BASE_DIR leaves development and the server deployment exactly as before.
+DATA_DIR = Path(os.environ.get('TOTEM_DATA_DIR') or BASE_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -135,7 +149,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': DATA_DIR / 'db.sqlite3',
         }
     }
 
@@ -228,13 +242,13 @@ SIMPLE_JWT = {
      'BLACKLIST_AFTER_ROTATION': True
 }
 
-MEDIA_ROOT = BASE_DIR / "user_files"
+MEDIA_ROOT = DATA_DIR / "user_files"
 MEDIA_URL = "/files/"
 
 # ---------------------------------------------------------------------------
 # Request result cache (filesystem-backed, size-capped)  — Epic #71
 # ---------------------------------------------------------------------------
-RESULT_CACHE_DIR = BASE_DIR / "cache" / "results"
+RESULT_CACHE_DIR = DATA_DIR / "cache" / "results"
 RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("TOTEM_CACHE_MAX_ENTRIES", "300"))
 
 CACHES = {

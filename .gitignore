@@ -222,6 +222,14 @@ build/
 dist/
 out/
 
+# ...except the app icon. electron-builder looks for it at electron/build/icon.png
+# by convention, so it is a source asset rather than build output. Without these
+# negations the generic build/ rule above keeps it out of the repo, and every
+# build that is not on the machine that created it falls back to the default
+# Electron logo.
+!electron/build/
+!electron/build/icon.png
+
 # Compressed files
 *.zip
 *.tar.gz

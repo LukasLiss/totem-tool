@@ -111,14 +111,21 @@ node scripts/run-python.js -m pytest totem_lib/tests/test_foo.py::test_bar
 
 ## 🏗️ Building the Application
 
-To create the standalone Windows Executable (`.exe`), pyinstaller needs to be in the active environment (e.g. by installing `backend/requirements-dev.txt`). Run the following from root:
+PyInstaller must be in the active environment (install `backend/requirements-dev.txt`), and
+`electron/` needs its own `npm install`. Then, from the repo root:
 
 ```bash
-# This script builds Backend (PyInstaller), Frontend (Vite), and packages them with Electron.
-npm run build-all
+# Builds Backend (PyInstaller), Frontend (Vite), and packages them with Electron.
+npm run build-all        # Windows → electron/dist/TOTeM-Tool-Setup-<version>.exe
+npm run build-all-mac    # macOS   → electron/dist/TOTeM-Tool-<version>.dmg
 ```
 
-The output will be in `electron/dist/`.
+Each installer must be built **on** its target OS — PyInstaller bundles a platform-specific
+Python interpreter and cannot cross-compile.
+
+See **[docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md)** for prerequisites, where the packaged app
+stores user data, how to test a build, and the packaging pitfalls that only show up in an
+installed app.
 
 ---
 
