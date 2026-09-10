@@ -17,6 +17,10 @@ from ..models import EventLog
 from ..cache_utils import get_cached_result, set_cached_result
 from ._ocel_db import OcelDuckDB, _filter_shadow, _object_types, _with_ocel_db
 from ._filters import _parse_filter_params, _should_use_cache
+# Bounds for the client-supplied discovery watchdog (seconds).
+MIN_TIMEOUT_S = 1.0
+MAX_TIMEOUT_S = 300.0
+
 
 
 def _layout_shim(db: OcelDuckDB):
@@ -86,8 +90,11 @@ def variants(request):
         )
     try:
         timeout_s = float(request.query_params.get("timeout_s", "10.0"))
-        if timeout_s <= 0:
-            timeout_s = None  # disable
+        if timeout_s != timeout_s:  # NaN
+            raise ValueError("timeout_s must be a number")
+        # Clamp server-side: <= 0 used to disable the watchdog entirely,
+        # which let one request pin a worker indefinitely.
+        timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
     except (TypeError, ValueError):
         timeout_s = 10.0
 

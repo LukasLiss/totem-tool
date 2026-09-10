@@ -91,6 +91,8 @@ backend/static/
 # Python distribution / packaging
 .Python
 build/
+# Electron packaging assets (icons, entitlements) are tracked on purpose
+!electron/build/
 develop-eggs/
 dist/
 downloads/
@@ -219,6 +221,7 @@ temp/
 
 # Build directories
 build/
+!electron/build/
 dist/
 out/
 

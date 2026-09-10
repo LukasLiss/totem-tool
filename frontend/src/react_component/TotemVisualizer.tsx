@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion } from '@/store/filterStore';
 
 import { Badge } from '@/components/ui/badge';
@@ -299,7 +300,15 @@ type LayoutInfo = {
 };
 
 type DetailSide = 'left' | 'right';
-type Rect = { id: string; left: number; right: number; top: number; bottom: number };
+type Rect = {
+  id?: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width?: number;
+  height?: number;
+};
 type DetailLayoutNode = {
   id: string;
   areaId: string;
@@ -347,11 +356,7 @@ type ProcessAreaMetrics = {
   detailMinDistance: number;
 };
 
-const DEFAULT_BACKEND = (
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
-  'http://localhost:8000'
-).replace(/\/$/, '');
+const DEFAULT_BACKEND = API_BASE_URL;
 const DEFAULT_PROCESS_AREA_SCALE = 0.9;
 const MIN_PROCESS_AREA_SCALE = 0.2;
 const MAX_PROCESS_AREA_SCALE = 1.2;
@@ -1097,7 +1102,9 @@ function assignPort(
   constraints: PortConstraints,
   positions: Record<string, NodePosition>,
   isSourceAttachment: boolean,
-): HorizontalSlot | VerticalSlot {
+  // Unconstrained edges get a fractional offset along the side (-1..1) so that
+  // several ports on one side are spread out instead of stacking on a slot.
+): HorizontalSlot | VerticalSlot | number {
   const constraintKey = edge.id + (isSourceAttachment ? '-source' : '-target');
 
   // If this edge has a constraint, return it

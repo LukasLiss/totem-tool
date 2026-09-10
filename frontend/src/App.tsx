@@ -9,7 +9,6 @@ import { SelectedFileContext } from "./contexts/SelectedFileContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
-import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
 import { Toaster } from "sonner";
@@ -121,7 +120,6 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
             <Route path="/overview" element={<ProcessOverview />} />
-            <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
             <Route path="/settings" element={<SettingsView />} />
             <Route

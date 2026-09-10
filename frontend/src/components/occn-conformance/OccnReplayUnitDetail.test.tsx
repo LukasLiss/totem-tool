@@ -44,6 +44,7 @@ function detailResponse(
     file_id: 12,
     unit_id: "connected_components:000001",
     replay_unit_strategy: CONNECTED_COMPONENTS_REPLAY_STRATEGY,
+    leading_object_type: null,
     event_count: 3,
     object_types: ["Item", "Order"],
     pagination: {

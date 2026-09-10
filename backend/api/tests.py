@@ -3845,3 +3845,202 @@ class ImageAssetApiTests(APITestCase):
         listed = self.client.get("/api/image-assets/")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.data, [])
+
+
+# ---------------------------------------------------------------------------
+# Release hardening: legacy image upload validation, timeout clamping and the
+# shared cache-clear endpoint.
+# ---------------------------------------------------------------------------
+
+import os as _os
+import tempfile as _tempfile
+
+from django.core.files.uploadedfile import SimpleUploadedFile as _SimpleUploadedFile
+from django.test import override_settings as _override_settings
+
+from .models import Dashboard as _Dashboard, ImageComponent as _ImageComponent
+
+_LEGACY_IMAGE_MEDIA_ROOT = _tempfile.mkdtemp(prefix="totem-test-legacy-image-")
+
+_PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f"
+    b"\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@_override_settings(MEDIA_ROOT=_LEGACY_IMAGE_MEDIA_ROOT)
+class LegacyImageComponentUploadTests(TestCase):
+    """The legacy per-component image upload must apply the same type/size
+    rules as the asset store, and ``save_layout`` must not accept arbitrary
+    ``image`` paths."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="img-owner")
+        self.project = Project.objects.create(name="ImgProject")
+        self.project.users.add(self.user)
+        self.other_project = Project.objects.create(name="OtherProject")
+        self.dashboard = _Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.component = _ImageComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=2, h=2,
+            component_name="ImageComponent",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _upload(self, filename, content, content_type):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/components/{self.component.pk}/image/",
+            {"image": _SimpleUploadedFile(filename, content, content_type=content_type)},
+            format="multipart",
+        )
+
+    def test_png_upload_is_accepted(self):
+        response = self._upload("pic.png", _PNG_1x1, "image/png")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.component.refresh_from_db()
+        self.assertTrue(self.component.image.name.endswith(".png"))
+
+    def test_non_image_type_is_rejected(self):
+        response = self._upload("evil.exe", b"MZ\x90\x00", "application/octet-stream")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported image type", response.data["error"])
+        self.component.refresh_from_db()
+        self.assertFalse(self.component.image)
+
+    def test_oversized_image_is_rejected(self):
+        big = _PNG_1x1 + b"\x00" * (10 * 1024 * 1024 + 1)
+        response = self._upload("huge.png", big, "image/png")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10 MB", response.data["error"])
+
+    def _save_layout(self, image):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [{
+                "x": 0, "y": 0, "w": 2, "h": 2,
+                "component_name": "ImageComponent",
+                "image": image,
+            }]},
+            format="json",
+        )
+
+    def _component(self):
+        return _ImageComponent.objects.get(dashboard=self.dashboard)
+
+    def test_save_layout_keeps_existing_project_upload(self):
+        project_dir = _os.path.join(_LEGACY_IMAGE_MEDIA_ROOT, self.project.name)
+        _os.makedirs(project_dir, exist_ok=True)
+        with open(_os.path.join(project_dir, "existing.png"), "wb") as fh:
+            fh.write(_PNG_1x1)
+
+        response = self._save_layout(f"/files/{self.project.name}/existing.png")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(self._component().image.name, f"{self.project.name}/existing.png")
+
+    def test_save_layout_drops_missing_and_foreign_paths(self):
+        other_dir = _os.path.join(_LEGACY_IMAGE_MEDIA_ROOT, self.other_project.name)
+        _os.makedirs(other_dir, exist_ok=True)
+        with open(_os.path.join(other_dir, "theirs.png"), "wb") as fh:
+            fh.write(_PNG_1x1)
+
+        for bad in (
+            f"/files/{self.project.name}/does-not-exist.png",
+            f"/files/{self.other_project.name}/theirs.png",
+            "/files/../../etc/passwd",
+            "/etc/passwd",
+            "../../secret.png",
+        ):
+            response = self._save_layout(bad)
+            self.assertEqual(response.status_code, 200, (bad, response.data))
+            self.assertFalse(self._component().image, bad)
+
+
+class TimeoutClampTests(TestCase):
+    """``timeout_s`` is clamped server-side to [1, 300]; <= 0 no longer
+    disables the watchdog."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="timeout-user")
+        self.project = Project.objects.create(name="TimeoutProject")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _log(self):
+        media = _tempfile.mkdtemp(prefix="totem-test-timeout-")
+        filename = f"paper-example-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(_os.path.join(media, filename))
+        return media, EventLog.objects.create(project=self.project, file=filename)
+
+    def _timeouts_seen(self, target, url, query):
+        """Patch the discovery function so it raises TimeoutError; the view
+        then reports the (clamped) ``timeout_s`` it used in its 408 body."""
+        def fake(*args, **kwargs):
+            raise TimeoutError("test timeout")
+
+        with patch(target, side_effect=fake):
+            response = self.client.get(url, query)
+        self.assertEqual(response.status_code, 408, response.content)
+        return response.json()["timeout_s"]
+
+    def test_discover_ocpn_clamps_timeout(self):
+        media, log = self._log()
+        with _override_settings(MEDIA_ROOT=media):
+            views._OCEL_DB_REGISTRY.clear()
+            for raw, expected in (("0", 1.0), ("-5", 1.0), ("0.2", 1.0),
+                                  ("30", 30.0), ("100000", 300.0)):
+                seen = self._timeouts_seen(
+                    "api.views.event_log.discover_ocpn_db",
+                    f"/api/files/{log.pk}/discover_ocpn/",
+                    {"timeout_s": raw},
+                )
+                self.assertEqual(seen, expected, raw)
+
+    def test_variants_clamps_timeout(self):
+        media, log = self._log()
+        with _override_settings(MEDIA_ROOT=media):
+            views._OCEL_DB_REGISTRY.clear()
+            cache.clear()
+            for raw, expected in (("0", 1.0), ("-1", 1.0), ("10", 10.0), ("999", 300.0)):
+                seen = self._timeouts_seen(
+                    "api.views.variants.find_variants",
+                    "/api/variants/",
+                    {"file_id": log.pk, "timeout_s": raw, "leading_type": "order"},
+                )
+                self.assertEqual(seen, expected, raw)
+
+
+class CacheClearPermissionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="cache-user")
+        self.staff = User.objects.create_user(username="cache-staff", is_staff=True)
+
+    def test_anonymous_is_rejected(self):
+        self.assertEqual(self.client.post("/api/cache/clear/").status_code, 401)
+
+    @_override_settings(LOCAL_MODE=False)
+    def test_regular_user_cannot_clear_shared_cache(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 403)
+
+    @_override_settings(LOCAL_MODE=False)
+    def test_staff_can_clear(self):
+        self.client.force_authenticate(user=self.staff)
+        with patch("api.cache_utils.clear_all_cache") as clear:
+            response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 200)
+        clear.assert_called_once()
+
+    @_override_settings(LOCAL_MODE=True)
+    def test_local_mode_lets_the_single_user_clear(self):
+        self.client.force_authenticate(user=self.user)
+        with patch("api.cache_utils.clear_all_cache") as clear:
+            response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 200)
+        clear.assert_called_once()

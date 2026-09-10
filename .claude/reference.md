@@ -108,7 +108,7 @@ Subclasses (each adds component-specific config fields):
 
 ---
 
-## 4. ViewSet Patterns (`backend/api/views.py`)
+## 4. ViewSet Patterns (`backend/api/views/` package)
 
 ### ViewSet anatomy (all three ViewSets follow the same shape)
 ```python
@@ -194,7 +194,7 @@ with _with_ocel_db(user_file) as db:
 
 ### Errors — Custom View & Computation Error Responses
 
-Custom function-based views in `api/views.py` format error responses with an `"error"` string key (e.g., `{"error": "File not found or access denied"}`). Note that standard DRF error responses differ:
+Custom function-based views in the `api/views/` package format error responses with an `"error"` string key (e.g., `{"error": "File not found or access denied"}`). Note that standard DRF error responses differ:
 - Authentication and permission failures return `{"detail": "..."}`.
 - Serializer validation errors return field-keyed error dicts (e.g., `{"name": ["This field is required."]}` or `{"non_field_errors": [...]}`).
 - ViewSet parameter validation errors (such as invalid `asset_type` filter choices) return field-keyed errors (e.g., `{"asset_type": [...]}`).
