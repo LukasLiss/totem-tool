@@ -1292,7 +1292,6 @@ function NewOCDFGVariantsVisualizer({
                 fileId={fileId}
                 filterEnabled={filterEnabled}
                 modelType="OCDFG"
-                filterEnabled={filterEnabled}
                 disabled={dfgData == null}
                 iconOnly
                 className="rounded-full h-9 w-9"

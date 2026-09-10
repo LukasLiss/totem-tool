@@ -357,7 +357,6 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
               filterEnabled={filterEnabled}
               modelType="OCPN"
               params={{ timeout_s: timeoutS }}
-              filterEnabled={filterEnabled}
               disabled={!model}
             />
             {objectTypes.length > 0 && (

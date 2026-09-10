@@ -112,7 +112,6 @@ export default function TotemMiner({
             filterEnabled={filterEnabled}
             modelType="TOTEM"
             params={{ tau }}
-            filterEnabled={filterEnabled}
             disabled={!fileId}
           />
         </div>

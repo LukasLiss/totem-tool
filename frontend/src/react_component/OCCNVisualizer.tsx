@@ -667,7 +667,6 @@ function OCCNVisualizer({
                     .map((t) => t.trim())
                     .filter(Boolean),
                 }}
-                filterEnabled={filterEnabled}
                 disabled={loading || net == null}
                 iconOnly
                 className="rounded-full h-9 w-9"
