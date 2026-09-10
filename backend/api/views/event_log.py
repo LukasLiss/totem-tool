@@ -21,6 +21,7 @@ from django.core.cache import cache
 
 from totem_lib.dfg import NewOCDFGDb
 from totem_lib import (
+    discover_occn,
     extract_occn_replay_units,
     occn_from_dict,
     occn_replay_fitness,
@@ -35,6 +36,7 @@ from totem_lib.totem import (
 )
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import (
@@ -280,13 +282,19 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
+        # Filter params belong in the cache key: without them a filtered and
+        # an unfiltered request would share one entry and serve each other's
+        # results.
+        fp = _parse_filter_params(request)
+        is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+        cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
+
         if _should_use_cache(request):
-            cached = get_cached_result(user_file, "noe")
+            cached = get_cached_result(user_file, "noe", cache_params)
             if cached is not None:
                 return Response(cached, status=status.HTTP_200_OK)
 
         try:
-            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
                 processed, _ = _filtered_event_counts(fp, db)
         except Exception as e:
@@ -295,7 +303,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        set_cached_result(user_file, "noe", processed)
+        set_cached_result(user_file, "noe", processed, cache_params)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -407,7 +415,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             fp = _parse_filter_params(request)
             is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
-            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+            filter_cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
 
             if _should_use_cache(request):
                 cached = get_cached_result(user_file, "discover_totem", filter_cache_params)
@@ -511,8 +519,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
+            # Conformance runs against the same view of the log the rest of
+            # the tool shows: honor an active global filter.
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                result = conformance_of_totem(totem, db)
+                with _filter_shadow(db, fp):
+                    result = conformance_of_totem(totem, db)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate TOTeM conformance: {exc}"},
@@ -583,24 +595,26 @@ class EventLogViewSet(viewsets.ModelViewSet):
         )
         max_states = request_serializer.validated_data["max_states"]
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
+                with _filter_shadow(db, fp):
+                    if (
+                        leading_object_type is not None
+                        and leading_object_type not in _object_types(db)
+                    ):
+                        return Response(
+                            {
+                                "leading_object_type": (
+                                    "Object type does not exist in the event log."
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    replay_units = extract_occn_replay_units(
+                        db,
+                        strategy=replay_unit_strategy,
+                        leading_object_type=leading_object_type,
                     )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
@@ -656,24 +670,26 @@ class EventLogViewSet(viewsets.ModelViewSet):
             "leading_object_type"
         )
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
+                with _filter_shadow(db, fp):
+                    if (
+                        leading_object_type is not None
+                        and leading_object_type not in _object_types(db)
+                    ):
+                        return Response(
+                            {
+                                "leading_object_type": (
+                                    "Object type does not exist in the event log."
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    replay_units = extract_occn_replay_units(
+                        db,
+                        strategy=replay_unit_strategy,
+                        leading_object_type=leading_object_type,
                     )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
@@ -995,6 +1011,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
         - OCPN:  ``timeout_s`` (float), ``object_types``
         - OCDFG: ``object_types``
 
+        The global filter (query params ``after`` / ``before`` /
+        ``activities`` / ``object_types``, appended by the frontend when the
+        requesting component has the global filter enabled) is applied exactly
+        like on the corresponding read endpoints, so the stored model matches
+        what the component displays.
+
         Discovery reuses the same caches as the corresponding read endpoints,
         so saving right after viewing a discovered model is cheap. The
         resulting canonical JSON is validated and stored through the regular
@@ -1021,6 +1043,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        fp = _parse_filter_params(request)
+        is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+        fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
+
         object_type_filter = None
         raw_object_types = params.get("object_types")
         if isinstance(raw_object_types, list):
@@ -1032,6 +1058,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 t.strip() for t in raw_object_types.split(",") if t.strip()
             ) or None
 
+        # A global object-type filter overrides the component's own type
+        # selection — the read endpoints behave the same way (the globally
+        # injected query param wins), so the stored model matches the view.
+        if "object_types" in fp:
+            object_type_filter = sorted(fp["object_types"]) or None
+
         try:
             if model_type == ProjectAsset.AssetType.TOTEM:
                 try:
@@ -1040,7 +1072,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     tau = 0.0
                 tau = min(1.0, max(0.0, tau))
                 with _with_ocel_db(user_file) as db:
-                    totem = totemDiscovery_db(db, tau=tau)
+                    with _filter_shadow(db, fp):
+                        totem = totemDiscovery_db(db, tau=tau)
                 content_json = totem_to_dict(totem)
 
             elif model_type == ProjectAsset.AssetType.OCCN:
@@ -1049,7 +1082,29 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     threshold = 0.0
                 threshold = min(1.0, max(0.0, threshold))
-                base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
+                # Mirror the OCCN read endpoint: object types go through the
+                # discovery parameters; time/activity filters need a fresh
+                # discovery over the filter shadow (the shared base cache is
+                # keyed only by file + object types).
+                has_event_filter = any(
+                    k in fp for k in ("after", "before", "activities")
+                )
+                if has_event_filter:
+                    parameters = (
+                        {"object_types": object_type_filter}
+                        if object_type_filter
+                        else None
+                    )
+                    with _with_ocel_db(user_file) as db:
+                        with _filter_shadow(db, fp_non_types):
+                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    base_occn = discover_occn(
+                        ocel_pm4py,
+                        relativeOccuranceThreshold=0.0,
+                        parameters=parameters,
+                    )
+                else:
+                    base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
                 if base_occn is None:
                     return Response(
                         {"error": "Failed to discover OCCN"},
@@ -1072,30 +1127,44 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
                 except (TypeError, ValueError):
                     timeout_s = 30.0
-                # Same cache key as discover_ocpn, so a save right after
-                # viewing reuses the already-discovered net.
+                # Same cache key as discover_ocpn (including the filter
+                # suffix), so a save right after viewing reuses the
+                # already-discovered net — filtered and unfiltered runs never
+                # share an entry.
                 types_key = ",".join(object_type_filter) if object_type_filter else "all"
                 ocpn_cache_key = (
                     f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
                 )
+                if is_filtered:
+                    filter_suffix = sha1(
+                        json.dumps(fp, sort_keys=True).encode()
+                    ).hexdigest()[:8]
+                    ocpn_cache_key = f"{ocpn_cache_key}_{filter_suffix}"
                 cached_result = cache.get(ocpn_cache_key)
                 if cached_result and cached_result.get("ocpn"):
                     content_json = cached_result["ocpn"]
                 else:
                     with _with_ocel_db(user_file) as db:
-                        content_json = discover_ocpn_db(
-                            db,
-                            object_types=object_type_filter,
-                            timeout_s=timeout_s,
-                            name=os.path.splitext(
-                                os.path.basename(user_file.file.name)
-                            )[0],
-                        )
+                        with _filter_shadow(db, fp):
+                            content_json = discover_ocpn_db(
+                                db,
+                                object_types=object_type_filter,
+                                timeout_s=timeout_s,
+                                name=os.path.splitext(
+                                    os.path.basename(user_file.file.name)
+                                )[0],
+                            )
                     cache.set(ocpn_cache_key, {"ocpn": content_json}, timeout=3600)
 
             else:  # OCDFG
                 with _with_ocel_db(user_file) as db:
-                    graph = NewOCDFGDb.from_ocel_db(db, object_types=object_type_filter)
+                    # Mirror the new-ocdfg read endpoint: object types go
+                    # through the library parameter, the rest through the
+                    # filter shadow.
+                    with _filter_shadow(db, fp_non_types):
+                        graph = NewOCDFGDb.from_ocel_db(
+                            db, object_types=object_type_filter
+                        )
                 object_types = set()
                 activities = []
                 for node in graph.nodes:
@@ -1154,6 +1223,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     "source": "discovery",
                     "event_log_id": user_file.pk,
                     "params": params,
+                    # Traceability: the global filter the model was mined under.
+                    **({"global_filter": fp} if is_filtered else {}),
                 },
             },
             context={"request": request},
@@ -1176,7 +1247,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             fp = _parse_filter_params(request)
             is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
-            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+            filter_cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
 
             if _should_use_cache(request):
                 cached = get_cached_result(user_file, "statistics", filter_cache_params)

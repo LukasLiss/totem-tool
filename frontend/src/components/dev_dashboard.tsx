@@ -21,9 +21,9 @@ import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
   const { setViewMode } = useContext(DashboardContext);
-  const [ocdfgFilterEnabled, setOcdfgFilterEnabled] = useState(false);
-  const [occnFilterEnabled, setOccnFilterEnabled] = useState(false);
-  const [variantsFilterEnabled, setVariantsFilterEnabled] = useState(false);
+  const [ocdfgFilterEnabled, setOcdfgFilterEnabled] = useState(true);
+  const [occnFilterEnabled, setOccnFilterEnabled] = useState(true);
+  const [variantsFilterEnabled, setVariantsFilterEnabled] = useState(true);
 
   return (
     <div>

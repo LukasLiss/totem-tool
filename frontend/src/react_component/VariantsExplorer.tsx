@@ -170,7 +170,7 @@ export default function VariantsExplorer({
   filterEnabled: filterEnabledProp,
 }: VariantsExplorerProps) {
   const filterVersion = useFilterVersion();
-  const filterEnabled = filterEnabledProp ?? false;
+  const filterEnabled = filterEnabledProp ?? true;
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Component state
