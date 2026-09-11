@@ -234,7 +234,7 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
     _sqlite_bulk_objects(conn, obj_types, type_cols_map, obj_attr_cols, graceful)
     _sqlite_bulk_o2o(conn)
 
-    conn.execute("DETACH src")
+    # conn.execute("DETACH src") # detaching `src` early gives error because it is referenced in `if strict_mode` block
 
     if strict_mode:
         errors = []
@@ -255,7 +255,9 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
             conn.close()
             raise OCELValidationException(errors)
 
-    if graceful:
+  conn.execute("DETACH src")
+
+  if graceful:
         _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
