@@ -174,7 +174,7 @@ export default function OCHandoverExplorer({
   const [animIsPlaying, setAnimIsPlaying] = useState(false);
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
-  const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("fade");
+  const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
   const animScrubRef = useRef<((t: number) => void) | null>(null);
