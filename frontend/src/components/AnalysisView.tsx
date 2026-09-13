@@ -18,6 +18,10 @@ import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import OCPNVisualizer from "@/react_component/OCPNVisualizer";
 import TotemMiner from "@/react_component/TotemMiner";
+import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
+import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
@@ -178,6 +182,9 @@ export function AnalysisView() {
           </div>
         );
 
+      case 'orgaMining':
+        return <OrgaMiningView fileId={selectedFile?.id} />;
+
       default:
         return null;
     }
@@ -193,3 +200,38 @@ export function AnalysisView() {
 }
 
 export default AnalysisView;
+
+const SLIDES = [
+  { key: "orga",     label: "Resource-Activity Matrix" },
+  { key: "handover", label: "OC Handover of Work" },
+] as const;
+
+function OrgaMiningView({ fileId }: { fileId?: number }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  return (
+    <div className="w-full max-w-7xl flex flex-col gap-3">
+      <div className="flex items-center justify-between px-1">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setActiveIdx(i => (i + SLIDES.length - 1) % SLIDES.length)}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <span className="text-sm font-medium text-muted-foreground">
+          {SLIDES[activeIdx].label}
+        </span>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setActiveIdx(i => (i + 1) % SLIDES.length)}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className={activeIdx !== 0 ? "hidden" : undefined}><OrgaMiningExplorer fileId={fileId} /></div>
+      <div className={activeIdx !== 1 ? "hidden" : undefined}><OCHandoverExplorer fileId={fileId} /></div>
+    </div>
+  );
+}

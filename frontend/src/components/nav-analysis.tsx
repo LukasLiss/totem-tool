@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot } from "lucide-react"
+import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot, Users } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -24,6 +24,7 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
   { id: 'occn', label: 'OCCN', icon: Workflow },
   { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
+  { id: 'orgaMining', label: 'Orga Mining', icon: Users },
 ];
 
 export function NavAnalysis() {
