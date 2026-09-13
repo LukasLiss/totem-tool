@@ -2716,8 +2716,18 @@ def _build_ocel_from_path(path: str):
         log = ObjectCentricEventLog(events=load_events_from_json(path), objects=load_objects_from_json(path))
     elif ext == ".xml":
         log = ObjectCentricEventLog(events=load_events_from_xml(path), objects=load_objects_from_xml(path))
+    elif ext == ".duckdb":
+        from totem_lib.ocel.importer_duckdb import (
+            load_events_from_duckdb, load_objects_from_duckdb,
+            load_object_attributes_from_duckdb,
+        )
+        log = ObjectCentricEventLog(
+            events=load_events_from_duckdb(path),
+            objects=load_objects_from_duckdb(path),
+            object_attributes=load_object_attributes_from_duckdb(path),
+        )
     else:
-        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml")
+        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .duckdb")
     return log
 
 
