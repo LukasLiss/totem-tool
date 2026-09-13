@@ -1,13 +1,11 @@
 import ELK from 'elkjs/lib/elk.bundled.js';
 
+import { TOTEM_NODE_HEIGHT, totemNodeWidth } from '@/components/totem/totemTheme';
 import type { XY } from '@/editors/shared/model-types';
 
 import type { TotemRelationEdgeType, TotemTypeNodeType } from './types';
 
 const elk = new ELK();
-
-const DEFAULT_WIDTH = 150;
-const DEFAULT_HEIGHT = 56;
 
 function circleLayout(nodes: TotemTypeNodeType[]): Record<string, XY> {
   const radius = Math.max(220, nodes.length * 55);
@@ -42,8 +40,8 @@ export async function layoutTotemGraph(
       },
       children: nodes.map((node) => ({
         id: node.id,
-        width: node.measured?.width ?? DEFAULT_WIDTH,
-        height: node.measured?.height ?? DEFAULT_HEIGHT,
+        width: node.measured?.width ?? totemNodeWidth(node.data.name),
+        height: node.measured?.height ?? TOTEM_NODE_HEIGHT,
       })),
       edges: edges.map((edge) => ({
         id: edge.id,
