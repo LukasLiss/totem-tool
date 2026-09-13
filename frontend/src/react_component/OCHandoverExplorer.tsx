@@ -653,7 +653,7 @@ export default function OCHandoverExplorer({
     <Wrapper className="w-full">
       {!embedded && (
         <CardHeader className="pb-2">
-          <CardTitle className="text-lg">OC Handover of Work</CardTitle>
+          <CardTitle className="text-lg">Object-Centric Handover of Work</CardTitle>
         </CardHeader>
       )}
 
@@ -664,30 +664,6 @@ export default function OCHandoverExplorer({
 
         {fileId && objectTypes.length > 0 && (
           <div className="flex items-center gap-6 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Tooltip delayDuration={600}>
-                <TooltipTrigger asChild>
-                  <span className="text-lg font-semibold cursor-default">Method:</span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-[220px] text-xs">
-                  Object-Centric uses all object types directly. Flattened projects the log onto a single object type.
-                </TooltipContent>
-              </Tooltip>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="min-w-[150px] justify-between">
-                    {method === "oc" ? "Object-Centric" : "Flattened"}
-                    <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[180px]">
-                  <DropdownMenuRadioGroup value={method} onValueChange={v => setMethod(v as Method)}>
-                    <DropdownMenuRadioItem value="oc">Object-Centric</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="flattened">Flattened</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
             <div className="flex items-center gap-2">
               <Tooltip delayDuration={600}>
                 <TooltipTrigger asChild>
@@ -938,7 +914,7 @@ export default function OCHandoverExplorer({
                 disabled={!clusterInfo}
               />
               <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
-                Use OrgaMining clusters
+                Use Organizational Units
               </Label>
             </div>
             {clusterInfo && (

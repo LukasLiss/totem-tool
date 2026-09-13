@@ -301,7 +301,7 @@ export default function OrgaMiningExplorer({
     <Wrapper className="w-full">
       {!embedded && (
         <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Profile Matrix</CardTitle>
+          <CardTitle className="text-lg">Resource Profiling</CardTitle>
         </CardHeader>
       )}
 

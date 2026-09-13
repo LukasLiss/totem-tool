@@ -202,8 +202,8 @@ export function AnalysisView() {
 export default AnalysisView;
 
 const SLIDES = [
-  { key: "orga",     label: "Resource-Activity Matrix" },
-  { key: "handover", label: "OC Handover of Work" },
+  { key: "orga",     label: "Resource Profiling" },
+  { key: "handover", label: "Object-Centric Handover of Work" },
 ] as const;
 
 function OrgaMiningView({ fileId }: { fileId?: number }) {
