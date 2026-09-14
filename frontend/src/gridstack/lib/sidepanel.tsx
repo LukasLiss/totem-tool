@@ -234,11 +234,16 @@ const SidePanel: React.FC = () => {
   }, [grid]);
 
   return (
-    <div className="sidepanel col-md-2 d-none d-md-block p-2 max-h-screen overflow-y-auto">
-      <div id="trash" className="sidepanel-item flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+    // Two rows: the drop target stays put, the component list scrolls under
+    // it. Deleting means dragging a widget onto the target, which is
+    // impossible while it can scroll out of sight.
+    <div className="sidepanel col-md-2 d-none d-md-block p-2 max-h-screen flex flex-col">
+      <div id="trash" className="sidepanel-item shrink-0 flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/trash-icon.svg" width="50" height="50"/>
         <div>Drop here to remove!</div>
       </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
 
       <div className="grid-stack-item sidepanel-item text-box flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/textbox-icon.svg" width="100" height="50"/>
@@ -371,6 +376,7 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
         <div>Pie Chart</div>
+      </div>
       </div>
     </div>
   );
