@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot } from "lucide-react"
+import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -24,6 +24,8 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'ocdfg', label: 'OC-DFG', icon: Network },
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
+  // Added on main after the order in #360 was agreed, so it goes last.
+  { id: 'sqlQuery', label: 'SQL Queries', icon: Database },
 ];
 
 export function NavAnalysis() {

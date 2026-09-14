@@ -68,6 +68,8 @@ const ASSET_LABELS: Record<AssetType, string> = {
   OCCN: 'OCCN',
   OCPN: 'OC Petri Net',
   OCDFG: 'OC-DFG',
+  // Stored SQL queries share the asset store but have no model editor.
+  QUERY: 'SQL query',
 };
 
 const assetLabel = (assetType: AssetType) => ASSET_LABELS[assetType] ?? assetType;

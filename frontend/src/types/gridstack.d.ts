@@ -46,8 +46,23 @@ declare module 'gridstack' {
     query?: string;
     // SqlQueryComponent
     name?: string;
-    expected_result?: string | null;
     row_limit?: number;
+    // SQL-driven widgets: link to a stored query (QUERY project asset)
+    query_asset?: number | null;
+    query_asset_name?: string | null;
+    // KpiComponent
+    prefix?: string;
+    suffix?: string;
+    decimals?: number;
+    // BarChartComponent
+    horizontal?: boolean;
+    show_values?: boolean;
+    // ScatterPlotComponent
+    x_column?: string;
+    y_column?: string;
+    series_column?: string;
+    x_label?: string;
+    y_label?: string;
     ring_text?: string;
     chart_type?: string;
     title?: string;

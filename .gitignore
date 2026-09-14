@@ -268,3 +268,6 @@ backend/cache/*
 # ====================
 
 Claude_design
+
+# Locally generated Django/JWT signing key (settings._local_secret_key)
+.secret_key

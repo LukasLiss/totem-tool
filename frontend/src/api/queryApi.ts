@@ -15,9 +15,22 @@ export interface TableSchema {
 export interface QueryResultShape {
   data: Record<string, unknown>[];
   columns: string[];
-  /** the backend capped the result set; `maxRows` says where */
+  /** more rows exist beyond this page (`offset + limit`) */
+  hasMore: boolean;
+  /** first row index of this page (0-based) */
+  offset: number;
+  /** page size the server actually applied (clamped to its cap) */
+  limit: number;
+  /** @deprecated alias of `hasMore`, kept for older callers */
   truncated?: boolean;
   maxRows?: number;
+}
+
+export interface QueryPageOptions {
+  /** first row to return (0-based), default 0 */
+  offset?: number;
+  /** rows per page; omitted = the server cap (10 000) */
+  limit?: number;
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
@@ -48,16 +61,22 @@ export async function getQueryColumns(fileId: number): Promise<TableSchema[]> {
  */
 export async function executeQuery(
   fileId: number,
-  query: string
+  query: string,
+  page: QueryPageOptions = {}
 ): Promise<QueryResultShape> {
   try {
-    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, {
-      query,
-    });
+    const body: Record<string, unknown> = { query };
+    if (page.offset !== undefined) body.offset = page.offset;
+    if (page.limit !== undefined) body.limit = page.limit;
+    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, body);
+    const hasMore = Boolean(data.has_more ?? data.truncated ?? false);
     return {
       data: data.data ?? [],
       columns: data.columns ?? [],
-      truncated: data.truncated ?? false,
+      hasMore,
+      offset: data.offset ?? page.offset ?? 0,
+      limit: data.limit ?? data.max_rows ?? page.limit ?? 0,
+      truncated: hasMore,
       maxRows: data.max_rows,
     };
   } catch (err) {
