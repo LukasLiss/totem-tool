@@ -237,11 +237,16 @@ export function useProjectAssetBridge({
                 }
               }}
             />
-            <DialogFooter className="gap-2 sm:justify-between">
+            {/* The update button carries the asset's name, which can be long
+                enough to push the row past the dialog. DialogContent is a grid,
+                so the footer needs min-w-0 before it will shrink below its
+                content, and buttons are shrink-0 by default — hence the chain
+                of min-w-0 down to the span that finally truncates the name. */}
+            <DialogFooter className="min-w-0 gap-2 sm:justify-between">
               <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>
                 Cancel
               </Button>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 gap-2">
                 {openedAsset && (
                   <Button
                     variant="outline"
@@ -252,14 +257,21 @@ export function useProjectAssetBridge({
                   </Button>
                 )}
                 <Button
+                  className="min-w-0 shrink"
+                  title={openedAsset ? `Update "${openedAsset.name}"` : undefined}
                   onClick={() => void (openedAsset ? updateExisting() : saveAsNew())}
                   disabled={saving}
                 >
-                  {saving
-                    ? 'Saving…'
-                    : openedAsset
-                      ? `Update "${openedAsset.name}"`
-                      : 'Save'}
+                  {saving ? (
+                    'Saving…'
+                  ) : openedAsset ? (
+                    <>
+                      Update
+                      <span className="min-w-0 truncate">"{openedAsset.name}"</span>
+                    </>
+                  ) : (
+                    'Save'
+                  )}
                 </Button>
               </div>
             </DialogFooter>
