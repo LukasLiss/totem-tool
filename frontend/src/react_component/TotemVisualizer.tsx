@@ -5828,7 +5828,6 @@ function TotemVisualizer({
       }
     } catch (err) {
       if (!isCurrent()) return;
-      console.error('[TotemVisualizer] Failed to load Totem data', err);
       const message =
         axios.isAxiosError(err) && err.response?.data?.error
           ? String(err.response.data.error)
@@ -5925,7 +5924,6 @@ function TotemVisualizer({
           setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
         }
       } catch (err) {
-        console.error('[TotemVisualizer] Failed to load detail OCDFG', err);
         setDetailError((prev) => ({
           ...prev,
           [areaId]: err instanceof Error ? err.message : 'Failed to load OCDFG',

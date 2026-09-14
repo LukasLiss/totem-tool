@@ -59,7 +59,6 @@ export function useDottedChartOptions(fileId?: number) {
       .then((response) => setOptions(response.data))
       .catch((err) => {
         if (axios.isCancel(err) || controller.signal.aborted) return;
-        console.error("Failed to fetch OC dotted chart options:", err);
         setOptions(DEFAULT_DOTTED_CHART_OPTIONS);
         setError("Failed to load chart options");
       })

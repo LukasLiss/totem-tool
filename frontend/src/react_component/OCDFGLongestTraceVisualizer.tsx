@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ShieldIcon, BugIcon, ZapIcon, Sun } from 'lucide-react';
+import { toast } from 'sonner';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -49,7 +50,6 @@ function resolveHeightValue(height: string | number) {
 }
 
 function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLongestTraceVisualizerProps) {
-  console.log('[OCDFGLongestTraceVisualizer] Component mounted!');
 
   const layoutKey = useId();
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -424,7 +424,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         initialAvailabilityRef.current = null;
         layoutTraceLimitRef.current = null;
       })
-      .catch(console.error);
+      .catch(() => toast.error('Longest trace could not be loaded'));
   }, [fitView]);
 
   useEffect(() => {
@@ -488,7 +488,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         offset: { x: LEGEND_TOTAL, y: 0 },
         duration: 200
       } as any));
-    }).catch(console.error);
+    }).catch(() => toast.error('Longest trace layout failed'));
   }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey, showDebugOverlays, shiftForLegend]);
 
   useEffect(() => {

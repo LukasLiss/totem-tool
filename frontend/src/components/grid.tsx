@@ -116,34 +116,25 @@ const GridContent: React.FC = () => {
   }, [isEditMode, registerNavigationGuard, hasUnsavedChanges]);
 
   useEffect(() => {
-    console.log("Dashboard changed to:", selectedDashboard);
 
     const loadSelectedDashboard = async () => {
-      console.log("Starting to load dashboard layout");
 
       // Completely reset the grid instance
-      console.log("Resetting grid instance");
       resetGrid();
 
       if (!selectedDashboard) {
-        console.log("No dashboard selected, staying blank");
         return;
       }
       
       try {
-        console.log("Fetching layout for dashboard:", selectedDashboard);
         const response = await getLayout(selectedDashboard);
-        console.log("Layout response:", response);
         
         if (Array.isArray(response) && response.length > 0) {
-          console.log("Loading layout with", response.length, "components");
           // Small delay to ensure grid is fully initialized after reset
           setTimeout(() => loadLayout(response), 50);
         } else {
-          console.log("No layout to load or empty response");
         }
-      } catch (error) {
-        console.error("Failed to load layout:", error);
+      } catch {
         toast.error("Dashboard layout could not be loaded");
       }
     };
@@ -157,14 +148,11 @@ const GridContent: React.FC = () => {
       return;
     }
     const layout = getGridLayout();
-    console.log('Layout to save:', layout);
     try {
-      const response = await saveLayout(selectedDashboard, layout);
-      console.log('Save response:', response); // Debug: Check API response
+      await saveLayout(selectedDashboard, layout);
       savedLayoutRef.current = layoutFingerprint(layout);
       toast.success("Layout saved!");
-    } catch (error) {
-      console.error('Save failed:', error); // Debug: Check for errors
+    } catch {
       toast.error("Save failed!");
     }
   };
@@ -180,7 +168,6 @@ const GridContent: React.FC = () => {
   };
 
   const handleLog = async () => {
-    console.log("Current layout:", getGridLayout());
   };
 
   /**
@@ -197,8 +184,7 @@ const GridContent: React.FC = () => {
     try {
       const response = await getLayout(selectedDashboard);
       loadLayout(Array.isArray(response) ? response : []);
-    } catch (error) {
-      console.error("Failed to reload layout:", error);
+    } catch {
       toast.error("Dashboard layout could not be reloaded");
     }
   }, [selectedDashboard, resetGrid, loadLayout]);
@@ -317,7 +303,6 @@ const Grid: React.FC = () => {
   const { selectedFile } = useContext(SelectedFileContext); // 👈 ADD THIS
   const { viewMode } = useContext(DashboardContext);
   const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
-  console.log("selectedFile passed to GridProvider:", selectedFile);
   return (
   <SidebarInset>
     <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>

@@ -10,7 +10,6 @@ const SidePanel: React.FC = () => {
   const { grid } = useGrid();
 
   useEffect(() => {
-    console.log("Setting up drag-in for grid:", grid);
     if (!grid) return;
 
     GridStack.setupDragIn(
@@ -230,7 +229,6 @@ const SidePanel: React.FC = () => {
       }]
     );
 
-    console.log("Drag-in setup complete");
   }, [grid]);
 
   return (

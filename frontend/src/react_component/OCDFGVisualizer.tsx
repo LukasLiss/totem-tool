@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, BugIcon, ZapIcon, Sun } from 'lucide-react';
+import { toast } from 'sonner';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -280,7 +281,6 @@ function OCDFGVisualizer({
   showControls = true,
   initialInteractionLocked = true,
 }: OCDFGVisualizerProps) {
-  console.log('[OCDFGVisualizer] Longest Trace Mode - Component mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -609,9 +609,9 @@ function OCDFGVisualizer({
           setDfgData({ nodes: [], links: [] });
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
-          console.error('[OCDFGVisualizer] Failed to load OCDFG data', err);
+          toast.error('OC-DFG could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -963,7 +963,7 @@ function OCDFGVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(console.error);
+    }).catch(() => toast.error('OC-DFG layout failed'));
   }, [
     typeVisibility,
     typeTraceLimit,

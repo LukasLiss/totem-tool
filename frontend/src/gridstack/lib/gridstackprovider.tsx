@@ -9,6 +9,7 @@ import React, {
 import ReactDOM from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
 import { componentMap } from "../../components/componentMap";
+import { toast } from "sonner";
 
 // Minimum grid cell size (w, h) per component type. Falls back to DEFAULT_MIN_SIZE
 // for any component_name not listed here. Enforced by GridStack itself, so users
@@ -100,7 +101,6 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
   useEffect(() => {
-    console.log('GridProvider useEffect - isEditMode changed to:', isEditMode);
     // Update renderCB with current isEditMode
     GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
       const component_name = (w as any).component_name || el.dataset.componentName;
@@ -130,17 +130,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
-      console.log('Grid setStatic called with:', !isEditMode);
       // Re-render all components with updated isEditMode
       const items = document.querySelectorAll('.grid-stack-item');
-      console.log('Found grid items to re-render:', items.length);
-      items.forEach((item, index) => {
-        console.log(`Re-rendering item ${index}`);
+      items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as any)._reactRoot;
         const node = (contentEl as any).gridstackNode;
         const component_name = (node as any)?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
-        console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         // Self-heal widgets whose node predates the min-size feature (e.g. loaded
         // from an older saved layout) — grows them up to the minimum if needed.
         if (node) {
@@ -149,7 +145,6 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         }
         const Component = componentMap[component_name];
         if (root && Component && node) {
-          console.log(`Re-rendering component for item ${index}`);
           root.render(
             <Component
               node={node}
@@ -162,17 +157,19 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               }}
             />
           );
-        } else {
-          console.log(`Skipping re-render for item ${index} - missing root, Component, or node`);
         }
       });
-    } else {
-      console.log('No grid instance to update');
     }
   }, [isEditMode, grid, selectedFile, dashboardId]);
 
   // Implement addWidget to add new widgets with generated component_id
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
+  // `grid` state lags a render behind the mount effect that creates the
+  // instance, while gridRef is set synchronously. Shadowing it with the ref
+  // keeps these callbacks off a null instance — the cause of the
+  // "Cannot read properties of null (reading 'getGridItems')" errors that
+  // fired on every dashboard load.
+    const grid = gridRef.current;
     if (!grid) return;
     const newId = generateComponentId();
     const { minW, minH } = getMinSize(componentName);
@@ -198,35 +195,28 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   };
 
   const resetGrid = () => {
-    console.log("Resetting grid completely");
+    const grid = gridRef.current;
     try {
       // Clear all widgets and reset the grid state without destroying
       if (grid) {
-        console.log("Clearing all widgets");
         grid.removeAll(true);
         
         // Clear the DOM manually to ensure clean state
-        if (gridRef.current) {
-          console.log("Clearing DOM");
+        if (grid.el) {
           grid.el.innerHTML = '';
         }
-        
-        console.log("Grid reset complete - kept instance");
-      } else {
-        console.log("No grid instance to reset");
       }
-    } catch (error) {
-      console.warn("Error resetting grid:", error);
-      // If reset fails, try to recreate the grid
+    } catch {
+      // Reset failed — rebuild the instance from scratch.
       try {
         if (gridRef.current) {
           grid.el.innerHTML = '';
           const newGrid = GridStack.init(gridOptions, grid.el);
+          gridRef.current = newGrid;
           setGrid(newGrid);
-          console.log("Grid recreated after reset failure");
         }
-      } catch (recreateError) {
-        console.error("Failed to recreate grid:", recreateError);
+      } catch {
+        // Nothing left to try; the grid stays as it is.
       }
     }
   };
@@ -357,50 +347,35 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   };
 
   const loadLayout = (layout: any[]) => {
-    console.log("loadLayout called with:", layout);
-    
-    if (!gridRef.current) {
-      console.log("No grid container found");
+    const grid = gridRef.current;
+    if (!grid) {
       return;
     }
-    
+
     if (!Array.isArray(layout)) {
-      console.error("loadLayout received invalid layout:", layout);
-      // Try to reset the grid if it's in a bad state
+      // Nothing loadable — leave an empty grid rather than a half-built one.
       try {
-        if (grid) grid.removeAll(false);
-      } catch (error) {
-        console.warn("Error clearing grid:", error);
+        grid.removeAll(false);
+      } catch {
         resetGrid();
       }
       return;
     }
     
-    console.log("Clearing grid before loading new layout");
     try {
       grid.removeAll(true);
-    } catch (error) {
-      console.warn("Error clearing grid, resetting:", error);
+    } catch {
       resetGrid();
       // After reset, try again
-      if (grid) {
-        try {
-          grid.removeAll(true);
-        } catch (retryError) {
-          console.error("Failed to clear grid even after reset:", retryError);
-          return;
-        }
+      try {
+        grid.removeAll(true);
+      } catch {
+        return;
       }
     }
     
-    // Check DOM after clearing
-    const gridContainer = document.querySelector('.grid-stack');
-    console.log("DOM elements after clear:", gridContainer?.children.length || 0);
-    
     if (layout.length > 0) {
-      console.log("Adding", layout.length, "widgets");
-      layout.forEach((item, index) => {
-        console.log(`Adding widget ${index}:`, item);
+      layout.forEach((item) => {
         let content = "";
         if (item.component_name === "NumberofEventsComponent") {
           content = "Number of Events";
@@ -582,17 +557,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           if (widgetEl) {
             widgetEl.dataset.componentName = item.component_name;
           }
-          console.log("Widget added:", widgetEl);
-        } catch (error) {
-          console.error(`Error adding widget ${index}:`, error);
+        } catch {
+          // One widget the grid refuses must not take the rest down with it.
+          toast.error("A dashboard component could not be placed");
         }
       });
-    } else {
-      console.log("No widgets to add");
     }
-    
-    // Final check
-    console.log("Final DOM elements:", gridContainer?.children.length || 0);
   };
 
   return (

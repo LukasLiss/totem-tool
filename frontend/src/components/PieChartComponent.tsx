@@ -90,7 +90,6 @@ const PieChartComponent: React.FC<ComponentProps> = ({
         setAvailableColumns([]);
       }
     } catch (err) {
-      console.error('Error executing query:', err);
       setError(err instanceof Error ? err.message : 'Failed to execute query');
       setAvailableColumns([]);
     } finally {
@@ -124,7 +123,6 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           setChartData([]);
         }
       } catch (err) {
-        console.error('Error fetching chart data:', err);
         setError(err instanceof Error ? err.message : 'Failed to fetch chart data');
         setChartData([]);
       } finally {

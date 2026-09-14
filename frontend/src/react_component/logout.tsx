@@ -20,9 +20,8 @@ export const Logout = () => {
             { _skipAuthRefresh: true, _skipGlobalFilter: true }
           );
         }
-      } catch (e) {
+      } catch {
         // Token may already be expired/blacklisted — still log out locally.
-        console.warn("Server-side logout failed", e);
       } finally {
         localStorage.clear();
         delete axios.defaults.headers.common["Authorization"];

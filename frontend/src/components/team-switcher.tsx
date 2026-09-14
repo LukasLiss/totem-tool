@@ -71,8 +71,8 @@ export function Switcher() {
       const response: ProjectFile[] = await getUserFiles();
       setFiles(response);
       return response;
-    } catch (error) {
-      console.error(error);
+    } catch {
+      toast.error("Projects could not be loaded");
       return [];
     }
   }, []);
@@ -111,8 +111,7 @@ export function Switcher() {
         );
       }
       setProjectToRename(null);
-    } catch (error) {
-      console.error("Rename failed:", error);
+    } catch {
       toast.error("Project could not be renamed");
     } finally {
       setIsSubmitting(false);
@@ -131,8 +130,7 @@ export function Switcher() {
         setViewMode({ type: "overview" });
       }
       setProjectToDelete(null);
-    } catch (error) {
-      console.error("Delete failed:", error);
+    } catch {
       toast.error("Project could not be deleted");
     } finally {
       setIsSubmitting(false);

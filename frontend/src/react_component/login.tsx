@@ -59,11 +59,9 @@ export const Login = () => {
     localStorage.setItem('refresh_token', data.refresh);
 
 
-    console.log("Login successful");
     //window.history.back();
     navigate(from, { replace: true });
-  } catch (error) {
-    console.error("Login failed:", error);
+  } catch {
     alert("Invalid credentials or server error.");
   }
 

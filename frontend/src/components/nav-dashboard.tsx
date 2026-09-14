@@ -60,7 +60,6 @@ export function NavDashboard({
 
 
   const { selectedFile } = useContext(SelectedFileContext);
-  console.log("NavDashboard received dashboards:", dashboards);
   const handleAddDashboard = async () => {
     if (!selectedFile?.project) return;
     try {
@@ -68,8 +67,7 @@ export function NavDashboard({
       await refreshDashboards();   // ✅ ask parent to reload dashboards
       setOpen(false);              // ✅ close dialog
       setDashboardname("");        // ✅ reset input field
-    } catch (error: unknown) {
-    console.error("Upload failed:", error);
+    } catch {
     toast.error("Dashboard could not be created");
   }
 };
@@ -83,8 +81,7 @@ export function NavDashboard({
     setOpenRename(false);
     setDashboardname("");
     setDashboardToRename(null); // reset
-  } catch (error: unknown) {
-    console.error("Rename failed:", error);
+  } catch {
     toast.error("Dashboard could not be renamed");
   }
 };
@@ -97,8 +94,7 @@ export function NavDashboard({
       await refreshDashboards();
       setOpenDelete(false);
       setDashboardToDelete(null); // reset
-    } catch (error: unknown) {
-      console.error("Delete failed:", error);
+    } catch {
       toast.error("Dashboard could not be deleted");
     }
   };
@@ -130,7 +126,6 @@ export function NavDashboard({
                     <SidebarMenuSubItem key={dashboard.id}>
                       <SidebarMenuSubButton className="flex w-full items-center justify-between"
                       onClick={() => {
-                        console.log("Dashboard clicked:", dashboard);
                         setViewMode({ type: 'dashboard', id: dashboard.id });
                       }}>
                         <span className="flex-1 truncate"
@@ -180,14 +175,9 @@ export function NavDashboard({
                       </SidebarMenuSubButton>
                       <DialogContent className="sm:max-w-[425px]">
                           <form
-                            onSubmit={async (e) => {
+                            onSubmit={(e) => {
                               e.preventDefault();
-                              try {
-                                await handleAddDashboard();
-                                setOpen(false); // ✅ close only after success
-                              } catch (err) {
-                                console.error("Upload failed:", err);
-                              }
+                              handleAddDashboard();
                             }}
                           >
                             <DialogHeader>
@@ -228,14 +218,9 @@ export function NavDashboard({
     <Dialog open={openRename} onOpenChange={setOpenRename}>
         <DialogContent className="sm:max-w-[425px]">
           <form
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              try {
-                await handleChangeName();
-                setOpenRename(false); // ✅ close only after success
-              } catch (err) {
-                console.error("Rename failed:", err);
-              }
+              handleChangeName();
             }}
           >
             <DialogHeader>
@@ -270,14 +255,9 @@ export function NavDashboard({
       <Dialog open={openDelete} onOpenChange={setOpenDelete}>
         <DialogContent className="sm:max-w-[425px]">
           <form
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              try {
-                await handleDeleteDashboard();
-                setOpenDelete(false); // ✅ close only after success
-              } catch (err) {
-                console.error("Delete failed:", err);
-              }
+              handleDeleteDashboard();
             }}
           >
             <DialogHeader>

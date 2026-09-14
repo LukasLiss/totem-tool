@@ -50,6 +50,7 @@ import {
 } from '@/editors/occn/types';
 import OccnOverflowBadges from './OccnOverflowBadges';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { toast } from 'sonner';
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -181,7 +182,6 @@ function OCCNVisualizer({
       })
       .catch((err) => {
         if (cancelled) return;
-        console.error('Failed to load OCCN', err);
         setNet(null);
         setError(err?.response?.data?.error ?? 'Failed to discover the OCCN for this file.');
       })
@@ -222,8 +222,9 @@ function OCCNVisualizer({
         edgeNodeGap: 60,
       },
     )
-      .catch((err) => {
-        console.error('OCCN layout failed, rendering unpositioned nodes', err);
+      .catch(() => {
+        // Fall back to unpositioned nodes rather than an empty canvas.
+        toast.error('OCCN layout failed');
         return {} as Record<string, { x: number; y: number }>;
       })
       .then((positions) => {
