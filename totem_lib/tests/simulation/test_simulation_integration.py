@@ -32,9 +32,9 @@ HOUR = 3600
 
 
 def _cd(value: float) -> dict:
-    """A degenerate (single-value) cooldown histogram: ``sample_cooldown`` always
-    returns ``value``, keeping cooldown-driven runs deterministic in tests."""
-    return {"bin_edges": [float(value), float(value)], "bin_counts": [1]}
+    """A single-sample cooldown entry: ``sample_cooldown`` always returns
+    ``value``, keeping cooldown-driven runs deterministic in tests."""
+    return {"samples": [float(value)]}
 
 
 # --- test scaffolding ---

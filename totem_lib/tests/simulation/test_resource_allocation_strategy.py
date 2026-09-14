@@ -12,9 +12,9 @@ def _flat_calendar(prob: float) -> dict:
 
 
 def _cd(value: float) -> dict:
-    """A degenerate (single-value) cooldown histogram: sampling always returns
-    ``value``, so cooldown-dependent replays stay deterministic in tests."""
-    return {"bin_edges": [float(value), float(value)], "bin_counts": [1]}
+    """A single-sample cooldown entry: sampling always returns ``value``, so
+    cooldown-dependent replays stay deterministic in tests."""
+    return {"samples": [float(value)]}
 
 
 def test_fifo_strategy():

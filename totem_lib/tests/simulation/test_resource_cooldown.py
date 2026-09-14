@@ -1,13 +1,10 @@
 import datetime as dt
-
-from tests.assets.ocel_helpers import (
-    make_ocel as _make_ocel,
-    event as _event,
-    obj as _object,
-)
-from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 import random
 
+from tests.assets.ocel_helpers import event as _event
+from tests.assets.ocel_helpers import make_ocel as _make_ocel
+from tests.assets.ocel_helpers import obj as _object
+from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 from totem_lib.simulation.utils.resource_statistics import (
     resource_cooldown_distribution,
     sample_cooldown,
@@ -142,7 +139,7 @@ def test_multiple_resources_same_type_aggregated():
 
     stats = result["Load"]["Forklift"]
     assert stats["sample_count"] == 2
-    assert sum(stats["bin_counts"]) == 2
+    assert sorted(stats["samples"]) == [100.0, 200.0]
     assert stats["min_duration_s"] == 100
     assert stats["max_duration_s"] == 200
 
@@ -253,7 +250,7 @@ def test_multiple_intervals_same_activity_aggregated():
 
     stats = result["Load"]["Forklift"]
     assert stats["sample_count"] == 2
-    assert sum(stats["bin_counts"]) == 2
+    assert sorted(stats["samples"]) == [100.0, 200.0]
     assert stats["min_duration_s"] == 100
     assert stats["max_duration_s"] == 200
 
@@ -318,11 +315,11 @@ def test_cooldown_calendar_missing_type_falls_back_to_wallclock():
     assert result["Load"]["Worker"]["max_duration_s"] == expected
 
 
-# --- empirical histogram + sampling ---
+# --- empirical samples + bootstrap sampling ---
 
 
-def test_histogram_single_value_is_degenerate_bin():
-    """One interval yields a zero-width bin and sampling returns that value."""
+def test_sample_cooldown_single_value_is_constant():
+    """One interval yields one sample and sampling always returns that value."""
     ocel = _make_ocel(
         [
             _event("e1", "Load", 0, ["r1"]),
@@ -331,14 +328,13 @@ def test_histogram_single_value_is_degenerate_bin():
         [_object("r1", "Worker")],
     )
     entry = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])["Load"]["Worker"]
-    assert entry["bin_edges"] == [100.0, 100.0]
-    assert entry["bin_counts"] == [1]
+    assert entry["samples"] == [100.0]
     rng = random.Random(0)
     assert all(sample_cooldown(entry, rng) == 100.0 for _ in range(20))
 
 
-def test_sample_cooldown_draws_within_observed_range():
-    """Samples from a multi-interval histogram stay within [min, max]."""
+def test_sample_cooldown_draws_only_observed_values():
+    """Draws are a bootstrap of the observed samples: only seen values occur."""
     ocel = _make_ocel(
         [
             _event("e1", "Load", 0, ["r1"]),
@@ -352,37 +348,13 @@ def test_sample_cooldown_draws_within_observed_range():
     )
     entry = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])["Load"]["Worker"]
     assert entry["sample_count"] == 3
-    assert sum(entry["bin_counts"]) == 3
+    assert sorted(entry["samples"]) == [100.0, 300.0, 900.0]
     rng = random.Random(0)
-    draws = [sample_cooldown(entry, rng) for _ in range(200)]
-    assert all(100.0 <= d <= 900.0 for d in draws)
+    draws = {sample_cooldown(entry, rng) for _ in range(200)}
+    assert draws == {100.0, 300.0, 900.0}
 
 
 def test_sample_cooldown_empty_entry_is_zero():
-    """An entry without a histogram yields no cooldown."""
+    """An entry without samples yields no cooldown."""
     assert sample_cooldown({}) == 0.0
-    assert sample_cooldown({"bin_edges": [], "bin_counts": []}) == 0.0
-
-
-def test_sample_cooldown_range_restricts_draw():
-    """A [select_min_s, select_max_s] band excludes values outside it."""
-    entry = {
-        "bin_edges": [0.0, 100.0, 200.0, 300.0],
-        "bin_counts": [10, 10, 10],
-        "select_min_s": 100.0,
-        "select_max_s": 200.0,
-    }
-    rng = random.Random(0)
-    draws = [sample_cooldown(entry, rng) for _ in range(300)]
-    assert all(100.0 <= d <= 200.0 for d in draws)
-
-
-def test_sample_cooldown_empty_range_is_zero():
-    """A band that overlaps no bin mass yields no cooldown."""
-    entry = {
-        "bin_edges": [0.0, 100.0],
-        "bin_counts": [5],
-        "select_min_s": 200.0,
-        "select_max_s": 300.0,
-    }
-    assert sample_cooldown(entry) == 0.0
+    assert sample_cooldown({"samples": []}) == 0.0

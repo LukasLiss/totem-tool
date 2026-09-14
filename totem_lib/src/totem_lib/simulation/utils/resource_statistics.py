@@ -14,38 +14,6 @@ ALLOCATION_STRATEGIES = [
     "LIFO",
 ]  # TODO: consider adding more complex strategies(round-robin,...)
 
-_COOLDOWN_HISTOGRAM_BINS = 20
-
-
-def _build_cooldown_histogram(
-    durations: list[float], n_bins: int = _COOLDOWN_HISTOGRAM_BINS
-) -> tuple[list[float], list[int]]:
-    """Bin observed cooldown durations into an empirical histogram.
-
-    Args:
-        durations: Observed cooldown durations in seconds (at least one).
-        n_bins: Maximum number of equal-width bins.
-
-    Returns:
-        ``(bin_edges, bin_counts)`` with ``len(bin_edges) == len(bin_counts) + 1``.
-        A degenerate range (all durations equal) yields a single zero-width bin
-        ``([v, v], [n])`` so a draw always returns ``v``.
-    """
-    low = float(min(durations))
-    high = float(max(durations))
-    if high <= low:
-        return [low, low], [len(durations)]
-    n = max(1, min(n_bins, len(durations)))
-    width = (high - low) / n
-    edges = [low + i * width for i in range(n + 1)]
-    counts = [0] * n
-    for d in durations:
-        idx = int((d - low) / width)
-        if idx >= n:  # d == high falls into the last bin
-            idx = n - 1
-        counts[idx] += 1
-    return edges, counts
-
 
 def resource_cooldown_distribution(
     ocel,
@@ -76,8 +44,7 @@ def resource_cooldown_distribution(
         dict: {
             activity: {
                 resource_type: {
-                    "bin_edges":      list[float],  # len == len(bin_counts) + 1
-                    "bin_counts":     list[int],    # empirical histogram weights
+                    "samples":        list[float],  # observed cooldowns in seconds
                     "min_duration_s": float,
                     "max_duration_s": float,
                     "sample_count":   int,
@@ -127,10 +94,8 @@ def resource_cooldown_distribution(
 
     result: dict[str, dict] = defaultdict(dict)
     for (activity, resource_type), durations in finished_intervals.items():
-        edges, counts = _build_cooldown_histogram(durations)
         result[activity][resource_type] = {
-            "bin_edges": edges,
-            "bin_counts": counts,
+            "samples": [float(d) for d in durations],
             "min_duration_s": min(durations),
             "max_duration_s": max(durations),
             "sample_count": len(durations),
@@ -142,69 +107,23 @@ def resource_cooldown_distribution(
 def sample_cooldown(entry: dict, rng: random.Random = random) -> float:
     """Draw a cooldown (seconds) from an empirical cooldown-distribution entry.
 
-    The draw is a non-parametric bootstrap from the entry's histogram
-    (``bin_edges`` + ``bin_counts``): a bin is chosen with probability
-    proportional to its count and a value is drawn uniformly inside it. No
-    distributional shape is assumed.
-
-    An optional ``[select_min_s, select_max_s]`` interval (set when the user
-    trims the range in the UI) restricts the draw to that band: bins are clipped
-    to the interval and weighted by their overlap, then renormalised — i.e.
-    values outside the band are excluded, not capped. An entry without a usable
-    histogram (empty or all-zero bins), or an interval containing no samples,
-    yields ``0.0`` — i.e. no cooldown.
+    The draw is a non-parametric bootstrap: one of the entry's observed
+    ``samples`` is picked uniformly at random. No distributional shape is
+    assumed and no binning is applied. An entry without samples yields ``0.0``
+    — i.e. no cooldown.
 
     Args:
         entry: One ``{resource_type: stats}`` value from
-            ``resource_cooldown_distribution`` (or a frontend override of it).
+            ``resource_cooldown_distribution``.
         rng: Random source; pass a seeded ``random.Random`` for reproducibility.
 
     Returns:
         A non-negative cooldown in seconds.
     """
-    edges = entry.get("bin_edges")
-    counts = entry.get("bin_counts")
-    if not edges or not counts:
+    samples = entry.get("samples") if entry else None
+    if not samples:
         return 0.0
-
-    lo = entry.get("select_min_s")
-    hi = entry.get("select_max_s")
-    lo = float(edges[0]) if lo is None else float(lo)
-    hi = float(edges[-1]) if hi is None else float(hi)
-    if hi < lo:
-        lo, hi = hi, lo
-
-    # Clip each bin to [lo, hi]; a bin contributes its overlap fraction of the
-    # count and is drawn from uniformly within the overlapping sub-range.
-    segments: list[tuple[float, float, float]] = []  # (weight, low, high)
-    total = 0.0
-    for i, count in enumerate(counts):
-        if count <= 0:
-            continue
-        e0, e1 = edges[i], edges[i + 1]
-        if e1 <= e0:  # zero-width (degenerate / all-equal) bin at value e0
-            if lo <= e0 <= hi:
-                segments.append((count, e0, e0))
-                total += count
-            continue
-        a = max(e0, lo)
-        b = min(e1, hi)
-        if b <= a:
-            continue
-        weight = count * (b - a) / (e1 - e0)
-        segments.append((weight, a, b))
-        total += weight
-
-    if total <= 0:
-        return 0.0
-    threshold = rng.uniform(0.0, total)
-    cumulative = 0.0
-    for weight, low, high in segments:
-        cumulative += weight
-        if threshold <= cumulative:
-            return rng.uniform(low, high) if high > low else float(low)
-    _, low, high = segments[-1]
-    return rng.uniform(low, high) if high > low else float(low)
+    return float(rng.choice(samples))
 
 
 def calculate_resource_allocation_strategy(
@@ -236,11 +155,11 @@ def calculate_resource_allocation_strategy(
     Args:
         ocel: ObjectCentricEventLog — typically the filtered OCEL (contains process_area_resources in _attributes).
         resource_cooldowns: The resource cooldown distribution, structured as
-                            {activity: {resource_type: {"bin_edges": [...],
-                            "bin_counts": [...], ...}}}. Each replay step draws a
-                            cooldown from the empirical histogram via
-                            ``sample_cooldown`` to schedule when a resource
-                            becomes idle again. A missing entry means cooldown 0.
+                            {activity: {resource_type: {"samples": [...], ...}}}.
+                            Each replay step draws a cooldown from the observed
+                            samples via ``sample_cooldown`` to schedule when a
+                            resource becomes idle again. A missing entry means
+                            cooldown 0.
         resource_type_map: Optional. A dict mapping resource_id -> resource_type, used to resolve
                            the type of resources in process_area_resources. Needed, as algorithm also runs on filtered OCELs
                            where the resource types are no longer directly visible

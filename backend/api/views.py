@@ -30,6 +30,7 @@ from totem_lib.ocel.exporter import build_ocel2_json
 from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration
 from totem_lib.simulation.evaluation.runtime import Timer as EvalTimer
 from .simulation_evaluation import build_evaluation_payload, compute_graph_edit_distance
+from .simulation_cooldowns import apply_cooldown_selection, serialize_cooldowns
 from totem_lib.simulation.utils.process_area import ProcessArea
 from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
@@ -2499,7 +2500,9 @@ def _apply_simulation_overrides(simulation_model, overrides):
     # --- Model-level overrides (not variant-keyed) ---
     cooldowns = overrides.get("cooldowns")
     if cooldowns is not None:
-        simulation_model.resource_cooldown_distribution = cooldowns
+        apply_cooldown_selection(
+            simulation_model.resource_cooldown_distribution, cooldowns
+        )
 
     allocation = overrides.get("allocation_strategy")
     if allocation is not None:
@@ -3215,18 +3218,7 @@ def get_simulation_details(request):
         cooldown_dist = compute_resource_cooldown(
             ocel, resource_types, activities, calendars=serialized_type_calendars
         )
-        serialized_cooldowns = {}
-        for act, type_stats in cooldown_dist.items():
-            serialized_cooldowns[act] = {
-                res_type: {
-                    "bin_edges": [round(e, 2) for e in stats["bin_edges"]],
-                    "bin_counts": stats["bin_counts"],
-                    "min_duration_s": round(stats["min_duration_s"], 2),
-                    "max_duration_s": round(stats["max_duration_s"], 2),
-                    "sample_count": stats["sample_count"],
-                }
-                for res_type, stats in type_stats.items()
-            }
+        serialized_cooldowns = serialize_cooldowns(cooldown_dist)
 
         # Compute resource allocation strategy
         allocation_strategy = calculate_resource_allocation_strategy(
