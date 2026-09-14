@@ -66,10 +66,12 @@ const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, { key: "schema" | "format"; val
   OCDFG: { key: "schema", value: "ocdfg" },
 };
 
-// Only these types have an asset-store-connected editor today.
+// Every model type has an editor that can load an asset from the store.
 const EDITOR_COMPONENT_BY_TYPE: Partial<Record<AssetType, EditorComponent>> = {
   TOTEM: "totem",
   OCCN: "occn",
+  OCPN: "ocpn",
+  OCDFG: "ocdfg",
 };
 
 // Only these types can run conformance checking.
