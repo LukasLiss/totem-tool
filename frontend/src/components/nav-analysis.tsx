@@ -18,12 +18,12 @@ import { DashboardContext, AnalysisComponent } from "@/contexts/DashboardContext
 
 const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarChart3 }[] = [
   { id: 'processArea', label: 'Process Area', icon: BarChart3 },
+  { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
+  { id: 'occn', label: 'OCCN', icon: Workflow },
+  { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
   { id: 'ocdfg', label: 'OC-DFG', icon: Network },
   { id: 'variants', label: 'Variants', icon: GitBranch },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
-  { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
-  { id: 'occn', label: 'OCCN', icon: Workflow },
-  { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
 ];
 
 export function NavAnalysis() {
