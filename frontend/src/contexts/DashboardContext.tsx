@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useState } from "react";
+import React, { createContext, useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export type AnalysisComponent =
@@ -23,14 +23,25 @@ export type ViewMode =
   | { type: "playout" }
   | { type: "dashboard"; id: number };
 
+/**
+ * Veto over a pending view change. Return true to let it through, false to
+ * block it — a blocking guard is expected to ask the user and re-issue the
+ * navigation itself once they agree. Used by the dashboard's edit mode so
+ * unsaved layout changes are not dropped silently.
+ */
+export type NavigationGuard = (next: ViewMode) => boolean;
+
 type DashboardContextType = {
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
+  /** Install the guard, or pass null to remove it. Only one can be active. */
+  registerNavigationGuard?: (guard: NavigationGuard | null) => void;
 };
 
 export const DashboardContext = createContext<DashboardContextType>({
   viewMode: { type: "overview" },
   setViewMode: () => {},
+  registerNavigationGuard: () => {},
 });
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -38,6 +49,14 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [viewMode, setViewModeState] = useState<ViewMode>({ type: "overview" });
   const navigate = useNavigate();
+  const navigationGuard = useRef<NavigationGuard | null>(null);
+
+  const registerNavigationGuard = useCallback(
+    (guard: NavigationGuard | null) => {
+      navigationGuard.current = guard;
+    },
+    []
+  );
 
   // Selecting any view from the navbar also navigates to the main process
   // view. This ensures full-page routes like Settings close automatically
@@ -45,6 +64,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   // no-op, so this is safe to call unconditionally.
   const setViewMode = useCallback(
     (mode: ViewMode) => {
+      if (navigationGuard.current && !navigationGuard.current(mode)) return;
       setViewModeState(mode);
       navigate("/overview");
     },
@@ -52,7 +72,9 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   return (
-    <DashboardContext.Provider value={{ viewMode, setViewMode }}>
+    <DashboardContext.Provider
+      value={{ viewMode, setViewMode, registerNavigationGuard }}
+    >
       {children}
     </DashboardContext.Provider>
   );
