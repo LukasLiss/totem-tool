@@ -40,6 +40,7 @@ import {
   type XY,
 } from '@/editors/shared/model-types';
 import { loadEditorSession, saveEditorSession } from '@/editors/shared/sessionCache';
+import { useProjectAssetBridge } from '@/editors/shared/useProjectAssetBridge';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { ArcConnectionLine, edgeTypes } from './ArcEdge';
@@ -990,6 +991,24 @@ function OcdfgEditorInner() {
     }
   }, [nodes, edges, record, fitView]);
 
+  const bridge = useProjectAssetBridge({
+    assetType: 'OCDFG',
+    modelName,
+    serializeAsset: () => ocdfgModelToAsset(serializeRef.current()),
+    onOpen: (content, assetName) => {
+      const parsed = parseOcdfgModelFile(assetToOcdfgModel(content, assetName));
+      if (parsed.ok === false) {
+        toast.error(parsed.error);
+        return;
+      }
+      // Keep the current model reachable via undo, as importing a file does.
+      record();
+      applyModel(parsed.model, { fit: true });
+      for (const warning of parsed.warnings ?? []) toast.info(warning);
+      toast.success(`Loaded "${parsed.model.name}".`);
+    },
+  });
+
   // -------------------------------------------------------------------------
 
   return (
@@ -1001,6 +1020,8 @@ function OcdfgEditorInner() {
       onNew={handleNew}
       onImport={handleImport}
       onExport={handleExport}
+      onSaveToProject={bridge.available ? bridge.onSaveToProject : undefined}
+      onOpenFromProject={bridge.available ? bridge.onOpenFromProject : undefined}
       onAutoLayout={handleAutoLayout}
       onLoadExample={handleLoadExample}
       undo={{ onClick: handleUndo, disabled: !history.canUndo }}
@@ -1097,6 +1118,7 @@ function OcdfgEditorInner() {
           </div>
         )}
       </div>
+      {bridge.dialogs}
     </EditorShell>
   );
 }

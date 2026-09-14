@@ -46,7 +46,11 @@ type UseProjectAssetBridgeArgs = {
   modelName: string;
   /** Build the canonical asset JSON for the current model. */
   serializeAsset: () => Record<string, unknown>;
-  /** Load a stored asset's content into the editor. */
+  /**
+   * Load a stored asset's content into the editor. The editor announces the
+   * result itself — it is the only one that knows whether the content parsed —
+   * so the bridge stays quiet on success.
+   */
   onOpen: (content: Record<string, unknown>, name: string) => void;
 };
 
@@ -59,7 +63,14 @@ type UseProjectAssetBridge = {
   dialogs: React.ReactNode;
 };
 
-const assetLabel = (assetType: AssetType) => (assetType === 'TOTEM' ? 'TOTeM' : 'OCCN');
+const ASSET_LABELS: Record<AssetType, string> = {
+  TOTEM: 'TOTeM',
+  OCCN: 'OCCN',
+  OCPN: 'OC Petri Net',
+  OCDFG: 'OC-DFG',
+};
+
+const assetLabel = (assetType: AssetType) => ASSET_LABELS[assetType] ?? assetType;
 
 export function useProjectAssetBridge({
   assetType,
@@ -106,7 +117,6 @@ export function useProjectAssetBridge({
       try {
         const asset = await getAsset(targetId);
         loadIntoEditor(asset);
-        toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(extractAssetApiError(error).message);
       }
@@ -195,7 +205,6 @@ export function useProjectAssetBridge({
       setOpenOpen(false);
       try {
         loadIntoEditor(asset);
-        toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Could not open the asset.');
       }
