@@ -2953,37 +2953,88 @@ function computeEdgeSegments(
 
     let startPoint: Point2D;
     let collisionPoint: Point2D;
+    // Area-detail edges only: the axis the connector leaves along, and the
+    // routed waypoints used when a straight run would cross something.
+    let detailAxis: 'horizontal' | 'vertical' = 'horizontal';
+    let detailDetour: Point2D[] | null = null;
 
     if (isAreaDetailEdge) {
-      // Handle area detail edges as before
-      const memberIds = areaAnchorMembers?.[edge.from] ?? [];
-      const memberCenters = memberIds
-        .map((member) => positions[member])
-        .filter((value): value is NodePosition => Boolean(value));
-      const averageMemberCenterY =
-        memberCenters.length > 0
-          ? memberCenters.reduce((sum, node) => sum + node.centerY, 0) / memberCenters.length
-          : sourceCenter.y;
-      const sourceHalfHeight = Math.max(source.height / 2 - 6, 1);
-      const clampedSourceY = Math.max(
-        sourceCenter.y - sourceHalfHeight,
-        Math.min(sourceCenter.y + sourceHalfHeight, averageMemberCenterY),
-      );
-      const targetHalfHeight = Math.max(target.height / 2 - 6, 1);
-      const clampedTargetY = Math.max(
-        targetCenter.y - targetHalfHeight,
-        Math.min(targetCenter.y + targetHalfHeight, clampedSourceY),
-      );
+      // Leave from the sides that actually face each other, at the nearest
+      // point on each side. The connector used to exit sideways whatever the
+      // detail box's direction, which is how it ended up cutting across the
+      // diagram to reach a box sitting above or below.
+      const sourceHalfWidth = Math.max(source.width, 1) / 2;
+      const sourceHalfHeight = Math.max(source.height, 1) / 2;
+      const targetHalfWidth = Math.max(target.width, 1) / 2;
+      const targetHalfHeight = Math.max(target.height, 1) / 2;
+      const clamp = (value: number, min: number, max: number) =>
+        Math.max(min, Math.min(max, value));
+      // Keep the anchor off the very corner of each box.
+      const inset = 10;
 
-      const horizontalDirection = targetCenter.x >= sourceCenter.x ? 1 : -1;
-      startPoint = {
-        x: sourceCenter.x + (Math.max(source.width, 1) / 2) * horizontalDirection,
-        y: clampedSourceY,
-      };
-      collisionPoint = {
-        x: targetCenter.x - (Math.max(target.width, 1) / 2) * horizontalDirection,
-        y: clampedTargetY,
-      };
+      const gapX =
+        Math.abs(targetCenter.x - sourceCenter.x) - (sourceHalfWidth + targetHalfWidth);
+      const gapY =
+        Math.abs(targetCenter.y - sourceCenter.y) - (sourceHalfHeight + targetHalfHeight);
+      detailAxis = gapY > gapX ? 'vertical' : 'horizontal';
+
+      if (detailAxis === 'vertical') {
+        const downwards = targetCenter.y >= sourceCenter.y;
+        startPoint = {
+          x: clamp(
+            targetCenter.x,
+            sourceCenter.x - sourceHalfWidth + inset,
+            sourceCenter.x + sourceHalfWidth - inset,
+          ),
+          y: sourceCenter.y + (downwards ? sourceHalfHeight : -sourceHalfHeight),
+        };
+        collisionPoint = {
+          x: clamp(
+            sourceCenter.x,
+            targetCenter.x - targetHalfWidth + inset,
+            targetCenter.x + targetHalfWidth - inset,
+          ),
+          y: targetCenter.y + (downwards ? -targetHalfHeight : targetHalfHeight),
+        };
+      } else {
+        const rightwards = targetCenter.x >= sourceCenter.x;
+        startPoint = {
+          x: sourceCenter.x + (rightwards ? sourceHalfWidth : -sourceHalfWidth),
+          y: clamp(
+            targetCenter.y,
+            sourceCenter.y - sourceHalfHeight + inset,
+            sourceCenter.y + sourceHalfHeight - inset,
+          ),
+        };
+        collisionPoint = {
+          x: targetCenter.x + (rightwards ? -targetHalfWidth : targetHalfWidth),
+          y: clamp(
+            sourceCenter.y,
+            targetCenter.y - targetHalfHeight + inset,
+            targetCenter.y + targetHalfHeight - inset,
+          ),
+        };
+      }
+
+      // A straight run is what we want, but not through other boxes. The area
+      // the connector starts from is excluded by its own id, not the anchor's.
+      const owningArea = edge.from.replace(/::anchor$/, '');
+      const detailExcludeIds = [edge.from, edge.to, owningArea];
+      const straightCrossings = routeCrossesObstacles(
+        [startPoint, collisionPoint],
+        spatialIndex,
+        detailExcludeIds,
+      );
+      if (straightCrossings.length > 0) {
+        const routed = findBestRoute(source, target, edge.from, edge.to, spatialIndex);
+        if (
+          routeCrossesObstacles(routed.waypoints, spatialIndex, detailExcludeIds).length === 0
+        ) {
+          detailDetour = routed.waypoints;
+          startPoint = routed.waypoints[0];
+          collisionPoint = routed.waypoints[routed.waypoints.length - 1];
+        }
+      }
     } else if (treatAsStraight) {
       // Handle straight edges
       if (straightSlots) {
@@ -3238,15 +3289,22 @@ function computeEdgeSegments(
 
     let path: string;
     if (isAreaDetailEdge) {
-      const deltaX = endX - startX;
-      const horizontalDistance = Math.max(1, Math.abs(deltaX));
-      const arcMagnitude = Math.max(Math.min(horizontalDistance * 0.42, 130), 26);
-      const direction = deltaX >= 0 ? 1 : -1;
-      const c1x = startX + direction * arcMagnitude;
-      const c1y = startY;
-      const c2x = endX - direction * arcMagnitude * 0.65;
-      const c2y = endY;
-      path = `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`;
+      if (detailDetour) {
+        path = buildCurvedPathFromWaypoints(detailDetour);
+      } else {
+        // Ease out along whichever axis the connector leaves on, so a box
+        // above or below gets a vertical curve instead of a sideways detour.
+        const alongX = detailAxis === 'horizontal';
+        const delta = alongX ? endX - startX : endY - startY;
+        const distance = Math.max(1, Math.abs(delta));
+        const arcMagnitude = Math.max(Math.min(distance * 0.42, 130), 26);
+        const direction = delta >= 0 ? 1 : -1;
+        const c1x = alongX ? startX + direction * arcMagnitude : startX;
+        const c1y = alongX ? startY : startY + direction * arcMagnitude;
+        const c2x = alongX ? endX - direction * arcMagnitude * 0.65 : endX;
+        const c2y = alongX ? endY : endY - direction * arcMagnitude * 0.65;
+        path = `M ${startX} ${startY} C ${c1x} ${c1y} ${c2x} ${c2y} ${endX} ${endY}`;
+      }
     } else if (routeWaypoints && routeWaypoints.length > 2) {
       // Multi-segment route: use smooth curved path through waypoints
       // For parallel edges, we need to handle the truncation for bars
@@ -6661,6 +6719,7 @@ function TotemVisualizer({
 
               {/* Foreground SVG for anchor-to-detail connection arcs */}
               <svg
+                className="totem-detail-svg"
                 width={contentSize.width}
                 height={contentSize.height}
                 viewBox={`0 0 ${contentSize.width} ${contentSize.height}`}
