@@ -46,6 +46,7 @@ from .lru_filecache import LRUFileBasedCache
 from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
 from .views import _parse_process_area_params, _process_area_cache_params, EventLogViewSet
+from .views._ocel_db import _OCEL_DB_REGISTRY, _OCEL_DB_REGISTRY_LOCK
 
 
 def valid_totem_content_json():
@@ -507,6 +508,135 @@ class EventLogReplaceIsNotAllowedTests(TestCase):
             self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.event_log.refresh_from_db()
         self.assertEqual(self.event_log.file.name, "keep.duckdb")
+
+
+class ProjectRenameAndDeleteTests(TestCase):
+    """The project switcher's rename and delete actions (issue #360, item 15)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="owner")
+        self.other = User.objects.create_user(username="colleague")
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+        self.project = Project.objects.create(name="ocel2-p2p_owner")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(
+            project=self.project, file="log.duckdb"
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _log_on_disk(self):
+        """Give the event log a real file under a throwaway MEDIA_ROOT."""
+        path = os.path.join(self.media, "log.duckdb")
+        with open(path, "wb") as handle:
+            handle.write(b"not really duckdb")
+        return path
+
+    def test_rename_sets_display_name_and_leaves_the_slug_alone(self):
+        response = self.client.patch(
+            f"/api/files/{self.event_log.pk}/rename/",
+            {"name": "Purchase-to-pay study"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["display_name"], "Purchase-to-pay study")
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.display_name, "Purchase-to-pay study")
+        # `name` is a directory name for image uploads and must not follow.
+        self.assertEqual(self.project.name, "ocel2-p2p_owner")
+
+    def test_rename_rejects_an_empty_name(self):
+        for value in ("", "   "):
+            response = self.client.patch(
+                f"/api/files/{self.event_log.pk}/rename/",
+                {"name": value},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.display_name, "")
+
+    def test_rename_rejects_a_name_over_the_field_limit(self):
+        limit = Project._meta.get_field("display_name").max_length
+        response = self.client.patch(
+            f"/api/files/{self.event_log.pk}/rename/",
+            {"name": "x" * (limit + 1)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rename_is_refused_for_someone_elses_project(self):
+        self.client.force_authenticate(user=self.other)
+        response = self.client.patch(
+            f"/api/files/{self.event_log.pk}/rename/",
+            {"name": "mine now"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_delete_removes_the_project_and_the_file_on_disk(self):
+        path = self._log_on_disk()
+        with self.settings(MEDIA_ROOT=self.media):
+            response = self.client.delete(f"/api/files/{self.event_log.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(EventLog.objects.filter(pk=self.event_log.pk).exists())
+        self.assertFalse(Project.objects.filter(pk=self.project.pk).exists())
+        self.assertFalse(os.path.exists(path))
+
+    def test_delete_evicts_the_cached_duckdb_connection(self):
+        path = self._log_on_disk()
+        pk = int(self.event_log.pk)
+
+        class FakeDb:
+            closed = False
+
+            def close(self):
+                FakeDb.closed = True
+
+        with _OCEL_DB_REGISTRY_LOCK:
+            _OCEL_DB_REGISTRY[pk] = FakeDb()
+        self.addCleanup(lambda: _OCEL_DB_REGISTRY.pop(pk, None))
+
+        with self.settings(MEDIA_ROOT=self.media):
+            self.client.delete(f"/api/files/{self.event_log.pk}/")
+
+        self.assertTrue(FakeDb.closed)
+        self.assertNotIn(pk, _OCEL_DB_REGISTRY)
+
+    def test_delete_of_a_shared_project_only_drops_the_membership(self):
+        self.project.users.add(self.other)
+        path = self._log_on_disk()
+
+        with self.settings(MEDIA_ROOT=self.media):
+            response = self.client.delete(f"/api/files/{self.event_log.pk}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.project.refresh_from_db()
+        self.assertEqual(list(self.project.users.all()), [self.other])
+        self.assertTrue(EventLog.objects.filter(pk=self.event_log.pk).exists())
+        self.assertTrue(os.path.exists(path))
+        # Gone from the owner's listing all the same.
+        self.assertEqual(self.client.get("/api/files/").data, [])
+
+    def test_delete_keeps_a_project_that_still_has_another_log(self):
+        sibling = EventLog.objects.create(project=self.project, file="other.duckdb")
+        path = self._log_on_disk()
+
+        with self.settings(MEDIA_ROOT=self.media):
+            self.client.delete(f"/api/files/{self.event_log.pk}/")
+
+        self.assertTrue(Project.objects.filter(pk=self.project.pk).exists())
+        self.assertTrue(EventLog.objects.filter(pk=sibling.pk).exists())
+        self.assertFalse(os.path.exists(path))
+
+    def test_listing_exposes_the_display_name(self):
+        self.project.display_name = "Purchase-to-pay study"
+        self.project.save(update_fields=["display_name"])
+        response = self.client.get("/api/files/")
+        self.assertEqual(
+            response.data[0]["display_name"], "Purchase-to-pay study"
+        )
 
 
 class DeleteUserDataTests(TestCase):
