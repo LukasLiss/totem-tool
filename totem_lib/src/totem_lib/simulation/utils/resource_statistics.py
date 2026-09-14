@@ -217,9 +217,12 @@ def calculate_resource_allocation_strategy(
     Analyzes the event log to determine the most likely resource allocation strategy per resource type.
 
     The algorithm replays the event log chronologically and maintains an idle queue per resource type,
-    ordered by the time each resource last became free. For each event, it
-    checks at which position in the idle queue the actually assigned resource sits:
-    position 0 → FIFO, last position → LIFO, anywhere else → random.
+    ordered by the time each resource last became free. For each event and resource
+    type, it checks which positions of the idle queue the assigned resources occupy:
+    the k front-most positions → FIFO, the k back-most → LIFO, any other
+    combination → random. An event may consume several resources of the same type;
+    it is then scored once, and only when all of them are in the idle queue. Every
+    assigned resource leaves the queue and re-enters it with its own cooldown.
 
     When ``calendars`` is given, the replay is made consistent with the calendar in
     two ways, matching what the playout allocation actually sees:
@@ -277,13 +280,13 @@ def calculate_resource_allocation_strategy(
             continue
 
         # Group resources by type
-        resources_by_type: dict[str, str] = {}
-        for rid in resources:
+        resources_by_type: dict[str, list[str]] = defaultdict(list)
+        for rid in dict.fromkeys(resources):
             rt = resource_type_map.get(rid)
-            if rt and rt not in resources_by_type:
-                resources_by_type[rt] = rid
+            if rt:
+                resources_by_type[rt].append(rid)
 
-        for rt, actual_rid in resources_by_type.items():
+        for rt, actual_rids in resources_by_type.items():
             calendar = calendars.get(rt)
             # A type that is never present at this clock hour (probability 0) cannotbe a candidate
             type_present = (
@@ -299,30 +302,41 @@ def calculate_resource_allocation_strategy(
                 else []
             )
             candidate_ids = [rid for _, rid in candidates]
+            position_of = {rid: i for i, rid in enumerate(candidate_ids)}
 
-            if actual_rid in candidate_ids:
-                pos = candidate_ids.index(actual_rid)
+            # Only a fully idle pick is evidence about the strategy: if one of the
+            # assigned resources was not in the queue, the replay disagrees with
+            # the log and the positions say nothing
+            positions = sorted(
+                position_of[rid] for rid in actual_rids if rid in position_of
+            )
+            if len(positions) == len(actual_rids):
+                k = len(positions)
                 n = len(candidate_ids)
-                if n == 1 or pos == 0:
+                if positions == list(range(k)):
                     scores[rt]["FIFO"] += 1
-                elif pos == n - 1:
+                elif positions == list(range(n - k, n)):
                     scores[rt]["LIFO"] += 1
                 else:
                     scores[rt]["random"] += 1
 
-            # Reschedule resource: remove old entry, add with updated availability
+            # Reschedule resources: remove old entries, add with updated availability
+            taken = set(actual_rids)
             idle_queue[rt] = [
-                (ts, rid) for ts, rid in idle_queue[rt] if rid != actual_rid
+                (ts, rid) for ts, rid in idle_queue[rt] if rid not in taken
             ]
-            cooldown = sample_cooldown(resource_cooldowns.get(activity, {}).get(rt, {}))
-            # The cooldown is calendar-discounted working time; convert it back to
-            # the wall-clock second the resource becomes idle again under the calendar.
-            available_at = (
-                wall_clock_end_for_available(calendar, int(timestamp), cooldown)
-                if calendar
-                else int(timestamp + cooldown)
-            )
-            idle_queue[rt].append((available_at, actual_rid))
+            for rid in actual_rids:
+                cooldown = sample_cooldown(
+                    resource_cooldowns.get(activity, {}).get(rt, {})
+                )
+                # The cooldown is calendar-discounted working time; convert it back to
+                # the wall-clock second the resource becomes idle again under the calendar.
+                available_at = (
+                    wall_clock_end_for_available(calendar, int(timestamp), cooldown)
+                    if calendar
+                    else int(timestamp + cooldown)
+                )
+                idle_queue[rt].append((available_at, rid))
 
     # Pick the strategy with the highest score per resource type
     result: dict[str, str] = {}

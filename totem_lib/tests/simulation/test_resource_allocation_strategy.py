@@ -25,7 +25,9 @@ def test_fifo_strategy():
         [
             _event("e1", "A", 0, [], ["r1"]),
             _event("e2", "A", 10, [], ["r2"]),
-            _event("e3", "A", 100, [], ["r1"]),  # r1 is at pos=0 (earliest freed) → FIFO
+            _event(
+                "e3", "A", 100, [], ["r1"]
+            ),  # r1 is at pos=0 (earliest freed) → FIFO
         ],
         [obj("r1", "Worker"), obj("r2", "Worker")],
     )
@@ -222,4 +224,101 @@ def test_calendar_offshift_type_not_scored():
     )
 
 
-# TODO: Add test for handling, when resource is in usage but Events require it
+# --- multiple resources of one type per event ---
+def _four_workers():
+    """Four workers freed at t=0/10/20/30, so the idle queue is [r1, r2, r3, r4]."""
+    return (
+        [
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
+            _event("e3", "A", 20, [], ["r3"]),
+            _event("e4", "A", 30, [], ["r4"]),
+        ],
+        [obj(f"r{i}", "Worker") for i in range(1, 5)],
+    )
+
+
+def test_multi_front_positions_score_fifo():
+    """
+    One event consumes two workers at once. Queue is [r1, r2, r3, r4]; the event
+    takes the two front-most (positions 0,1) → FIFO.
+    """
+    events, objects = _four_workers()
+    events.append(_event("e5", "A", 100, [], ["r1", "r2"]))
+    result = calculate_resource_allocation_strategy(make_ocel(events, objects))
+    assert result["Worker"] == "FIFO"
+
+
+def test_multi_back_positions_score_lifo():
+    """
+    Queue is [r1, r2, r3, r4]; the event takes the two back-most
+    (positions 2,3) → LIFO.
+    """
+    events, objects = _four_workers()
+    events.append(_event("e5", "A", 100, [], ["r3", "r4"]))
+    result = calculate_resource_allocation_strategy(make_ocel(events, objects))
+    assert result["Worker"] == "LIFO"
+
+
+def test_multi_mixed_positions_score_random():
+    """
+    Queue is [r1, r2, r3, r4]; the event takes positions 0 and 2 — neither the
+    front block nor the back block → random.
+    """
+    events, objects = _four_workers()
+    events.append(_event("e5", "A", 100, [], ["r1", "r3"]))
+    result = calculate_resource_allocation_strategy(make_ocel(events, objects))
+    assert result["Worker"] == "random"
+
+
+def test_multi_every_assigned_resource_gets_a_cooldown():
+    """
+    All resources an event consumes leave the idle queue and re-enter it with
+    their own cooldown — not just the first one.
+
+    Queue state walkthrough:
+      e1 t=0:   r1 first use, unscored.            Queue: r1@0
+      e2 t=10:  r2 first use, unscored.            Queue: r1@0, r2@10
+      e3 t=20:  r3 first use, unscored.            Queue: r1@0, r2@10, r3@20
+      e4 t=100: "Big" takes r1+r2 from [r1,r2,r3] → positions 0,1 → FIFO.
+                Both go on a 1000s cooldown.       Queue: r3@20, r1@1100, r2@1100
+      e5 t=200: only r3 is idle → n=1 → FIFO.      Queue: r1@1100, r2@1100, r3@200
+      e6 t=300: only r3 is idle → n=1 → FIFO.
+    Scores: FIFO=3 → FIFO.
+
+    Were r2 left in the queue at @10, e5 and e6 would see it as free and score r3
+    as the last of two candidates → LIFO=2 against FIFO=1, flipping the result.
+    """
+    cooldowns = {"Big": {"Worker": _cd(1000)}, "Small": {"Worker": _cd(0)}}
+    ocel = make_ocel(
+        [
+            _event("e1", "Small", 0, [], ["r1"]),
+            _event("e2", "Small", 10, [], ["r2"]),
+            _event("e3", "Small", 20, [], ["r3"]),
+            _event("e4", "Big", 100, [], ["r1", "r2"]),
+            _event("e5", "Small", 200, [], ["r3"]),
+            _event("e6", "Small", 300, [], ["r3"]),
+        ],
+        [obj("r1", "Worker"), obj("r2", "Worker"), obj("r3", "Worker")],
+    )
+    result = calculate_resource_allocation_strategy(ocel, resource_cooldowns=cooldowns)
+    assert result["Worker"] == "FIFO"
+
+
+def test_multi_partial_candidacy_not_scored():
+    """
+    An event requires a resource the replay still considers busy: r2 is on a
+    1000s cooldown from e2 when e3 claims r1 and r2 together. Only r1 is in the
+    queue, so the queue positions are not evidence about the strategy and the
+    event goes unscored.
+    """
+    cooldowns = {"Big": {"Worker": _cd(1000)}, "Small": {"Worker": _cd(0)}}
+    ocel = make_ocel(
+        [
+            _event("e1", "Small", 0, [], ["r1"]),
+            _event("e2", "Big", 10, [], ["r2"]),
+            _event("e3", "Small", 100, [], ["r1", "r2"]),
+        ],
+        [obj("r1", "Worker"), obj("r2", "Worker")],
+    )
+    assert calculate_resource_allocation_strategy(ocel, cooldowns) == {}
