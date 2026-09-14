@@ -88,6 +88,10 @@ class ProjectAsset(models.Model):
         OCCN = "OCCN", "OCCN"
         OCPN = "OCPN", "OCPN"
         OCDFG = "OCDFG", "OC-DFG"
+        # A stored SQL query (content_json: {"schema": "sql-query", "version": 1,
+        # "query": "...", "description": "..."}). Dashboard components can link
+        # one so that editing the stored query updates every consumer.
+        QUERY = "QUERY", "SQL Query"
 
     project = models.ForeignKey(
         Project,
@@ -281,17 +285,31 @@ class FilterStackComponent(DashboardComponent):
     filter_stack_json = models.JSONField(default=list, blank=True)
 
 
+def _query_asset_field():
+    """FK to a stored SQL query (``ProjectAsset`` of type QUERY).
+
+    When set, the component runs the asset's current query instead of its
+    own ``query`` text, so editing the stored query updates every consumer.
+    Deleting the asset unlinks the component (SET_NULL) and its last local
+    ``query`` text takes over again.
+    """
+    return models.ForeignKey(
+        ProjectAsset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+
 class SqlQueryComponent(DashboardComponent):
-    # What other widgets could bind to (name-based source lookup — not wired
-    # to any consumer yet, reserved for a follow-up).
+    # Display name of the query (shown as the widget title in view mode).
     name = models.CharField(max_length=100, blank=True, default="")
     query = models.TextField(
         default="SELECT activity, count(*) AS n FROM events GROUP BY activity"
     )
-    # Optional human annotation of the expected result shape; null means the
-    # "Expected result" pane is not shown at all (equivalent of the design's
-    # `expectedResult === undefined`).
-    expected_result = models.TextField(null=True, blank=True, default=None)
+    query_asset = _query_asset_field()
+    # Rows fetched per page of the result table.
     row_limit = models.PositiveIntegerField(default=25)
 
 
@@ -318,6 +336,7 @@ class NewOCDFGComponent(DashboardComponent):
 
 class PieChartComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM events LIMIT 10")
+    query_asset = _query_asset_field()
     ring_text = models.CharField(max_length=200, blank=True, default="")
     chart_type = models.CharField(max_length=20, default="donut")
     title = models.CharField(max_length=200, blank=True, default="")
@@ -325,6 +344,49 @@ class PieChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     show_legend = models.BooleanField(default=True)
     show_tooltip = models.BooleanField(default=True)
+
+
+class KpiComponent(DashboardComponent):
+    """A single number computed by a SQL query (first row, one column)."""
+
+    title = models.CharField(max_length=200, blank=True, default="")
+    query = models.TextField(default="SELECT count(*) AS value FROM events")
+    query_asset = _query_asset_field()
+    # Column holding the value; empty means "the first column of the result".
+    value_column = models.CharField(max_length=100, blank=True, default="")
+    # Free text rendered before / after the number (e.g. "€", "events").
+    prefix = models.CharField(max_length=50, blank=True, default="")
+    suffix = models.CharField(max_length=50, blank=True, default="")
+    decimals = models.PositiveSmallIntegerField(default=0)
+
+
+class BarChartComponent(DashboardComponent):
+    """One bar per result row: a label column and a numeric value column."""
+
+    title = models.CharField(max_length=200, blank=True, default="")
+    query = models.TextField(
+        default="SELECT activity AS label, count(*) AS value FROM events GROUP BY activity ORDER BY value DESC"
+    )
+    query_asset = _query_asset_field()
+    label_column = models.CharField(max_length=100, blank=True, default="")
+    value_column = models.CharField(max_length=100, blank=True, default="")
+    horizontal = models.BooleanField(default=False)
+    show_values = models.BooleanField(default=False)
+
+
+class ScatterPlotComponent(DashboardComponent):
+    """One point per result row: numeric x/y columns, optional series column."""
+
+    title = models.CharField(max_length=200, blank=True, default="")
+    query = models.TextField(
+        default="SELECT count(*) AS x, count(DISTINCT activity) AS y FROM events"
+    )
+    query_asset = _query_asset_field()
+    x_column = models.CharField(max_length=100, blank=True, default="")
+    y_column = models.CharField(max_length=100, blank=True, default="")
+    series_column = models.CharField(max_length=100, blank=True, default="")
+    x_label = models.CharField(max_length=100, blank=True, default="")
+    y_label = models.CharField(max_length=100, blank=True, default="")
 
 
 class OCPNComponent(DashboardComponent):

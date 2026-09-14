@@ -2381,6 +2381,141 @@ class ProjectAssetApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
+class SqlQueryAssetApiTests(TestCase):
+    """Stored SQL queries live in the project asset store as QUERY assets."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="query-user")
+        self.project = Project.objects.create(name="Query project")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _create(self, content_json, name="Events per activity"):
+        return self.client.post(
+            "/api/assets/",
+            {
+                "project": self.project.pk,
+                "name": name,
+                "asset_type": ProjectAsset.AssetType.QUERY,
+                "content_json": content_json,
+            },
+            format="json",
+        )
+
+    def test_create_query_asset(self):
+        response = self._create(
+            {
+                "schema": "sql-query",
+                "version": 1,
+                "query": "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                "description": "one row per activity",
+            }
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        asset = ProjectAsset.objects.get(pk=response.data["id"])
+        self.assertEqual(asset.asset_type, ProjectAsset.AssetType.QUERY)
+        self.assertEqual(asset.content_json["query"].split()[0], "SELECT")
+
+    def test_query_asset_requires_schema_and_query(self):
+        response = self._create({"query": "SELECT 1"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self._create({"schema": "sql-query", "version": 1, "query": "   "})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self._create({"schema": "sql-query", "version": 2, "query": "SELECT 1"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_list_filters_query_assets(self):
+        self._create({"schema": "sql-query", "version": 1, "query": "SELECT 1"}, name="q")
+        ProjectAsset.objects.create(
+            project=self.project,
+            name="model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        response = self.client.get(
+            f"/api/assets/?project={self.project.pk}&asset_type=QUERY"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([a["name"] for a in response.data], ["q"])
+
+    def test_patch_query_text_is_revalidated(self):
+        created = self._create({"schema": "sql-query", "version": 1, "query": "SELECT 1"})
+        asset_id = created.data["id"]
+        response = self.client.patch(
+            f"/api/assets/{asset_id}/",
+            {"content_json": {"schema": "sql-query", "version": 1, "query": "SELECT 2"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(ProjectAsset.objects.get(pk=asset_id).content_json["query"], "SELECT 2")
+        response = self.client.patch(
+            f"/api/assets/{asset_id}/",
+            {"content_json": {"schema": "sql-query", "version": 1}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class QueryReferenceResolutionTests(SimpleTestCase):
+    """Stored queries can be used like tables inside other queries."""
+
+    def test_unreferenced_query_is_returned_unchanged(self):
+        from .query_refs import resolve_query_references
+        stored = {"a": "SELECT 1 AS x"}
+        self.assertEqual(resolve_query_references("SELECT 2", stored), "SELECT 2")
+
+    def test_reference_becomes_cte(self):
+        from .query_refs import resolve_query_references
+        stored = {"Waiting times": "SELECT 1 AS w"}
+        out = resolve_query_references('SELECT w FROM "Waiting times"', stored)
+        self.assertEqual(out, 'WITH "Waiting times" AS (SELECT 1 AS w) SELECT w FROM "Waiting times"')
+
+    def test_bare_identifier_reference_is_case_insensitive(self):
+        from .query_refs import resolve_query_references
+        stored = {"waiting_times": "SELECT 1 AS w;"}
+        out = resolve_query_references("select w from Waiting_Times", stored)
+        self.assertTrue(out.startswith('WITH "waiting_times" AS (SELECT 1 AS w) select'))
+
+    def test_transitive_references_are_ordered(self):
+        from .query_refs import resolve_query_references
+        stored = {"avg": 'SELECT avg(d) AS a FROM "durations"', "durations": "SELECT 1 AS d"}
+        out = resolve_query_references('SELECT a FROM "avg"', stored)
+        self.assertEqual(
+            out,
+            'WITH "durations" AS (SELECT 1 AS d), "avg" AS (SELECT avg(d) AS a FROM "durations") SELECT a FROM "avg"',
+        )
+
+    def test_user_with_clause_is_merged(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1 AS d"}
+        out = resolve_query_references('-- c\nWITH t AS (SELECT d FROM base) SELECT * FROM t', stored)
+        self.assertEqual(out, 'WITH "base" AS (SELECT 1 AS d), t AS (SELECT d FROM base) SELECT * FROM t')
+
+    def test_references_in_strings_and_comments_are_ignored(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT 'base' -- base", stored), "SELECT 'base' -- base"
+        )
+
+    def test_reserved_table_names_are_never_references(self):
+        from .query_refs import resolve_query_references
+        stored = {"events": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT * FROM events", stored, reserved=("events",)),
+            "SELECT * FROM events",
+        )
+
+    def test_cycles_are_rejected(self):
+        from .query_refs import QueryReferenceError, resolve_query_references
+        stored = {"a": 'SELECT * FROM "b"', "b": 'SELECT * FROM "a"'}
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', stored)
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', {"a": 'SELECT 1'}, self_name="a")
+
+
 class LRUFileBasedCacheTests(SimpleTestCase):
     """Eviction policy of the result cache backend (Epic #71).
 
@@ -2984,6 +3119,132 @@ class DashboardAuthorizationAndLayoutTests(TestCase):
         self.assertEqual(layout.data[0]["filter_stack_json"], rules)
 
 
+class SqlDashboardComponentsLayoutTests(TestCase):
+    """Round-trip of the SQL-driven widgets (KPI, bar chart, scatter plot,
+    SQL editor, pie chart) including links to stored query assets."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="sql-dash-owner")
+        self.other = User.objects.create_user(username="sql-dash-other")
+        self.project = Project.objects.create(name="Mine")
+        self.project.users.add(self.user)
+        self.foreign_project = Project.objects.create(name="Theirs")
+        self.foreign_project.users.add(self.other)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.query_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="stored",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT 1 AS value"},
+        )
+        self.foreign_query_asset = ProjectAsset.objects.create(
+            project=self.foreign_project,
+            name="foreign",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT 2 AS value"},
+        )
+        self.model_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+
+    def _layout(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(response.status_code, 200)
+        return {item["component_name"]: item for item in response.data}
+
+    def test_new_components_round_trip(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "title": "Events", "query": "SELECT count(*) AS value FROM events",
+                 "value_column": "value", "prefix": "", "suffix": " ev", "decimals": 2},
+                {"x": 2, "y": 0, "w": 4, "h": 4, "component_name": "BarChartComponent",
+                 "title": "Per activity", "query": "SELECT activity AS label, count(*) AS value FROM events GROUP BY activity",
+                 "label_column": "label", "value_column": "value", "horizontal": True, "show_values": True},
+                {"x": 6, "y": 0, "w": 4, "h": 4, "component_name": "ScatterPlotComponent",
+                 "title": "xy", "query": "SELECT 1 AS x, 2 AS y, 'a' AS s",
+                 "x_column": "x", "y_column": "y", "series_column": "s", "x_label": "X", "y_label": "Y"},
+                {"x": 0, "y": 4, "w": 6, "h": 6, "component_name": "SqlQueryComponent",
+                 "name": "raw", "query": "SELECT * FROM events", "row_limit": 50},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+
+        kpi = layout["KpiComponent"]
+        self.assertEqual(kpi["title"], "Events")
+        self.assertEqual(kpi["value_column"], "value")
+        self.assertEqual(kpi["suffix"], " ev")
+        self.assertEqual(kpi["decimals"], 2)
+        self.assertIsNone(kpi["query_asset"])
+
+        bar = layout["BarChartComponent"]
+        self.assertEqual(bar["label_column"], "label")
+        self.assertTrue(bar["horizontal"])
+        self.assertTrue(bar["show_values"])
+
+        scatter = layout["ScatterPlotComponent"]
+        self.assertEqual(scatter["series_column"], "s")
+        self.assertEqual(scatter["y_label"], "Y")
+
+        sql = layout["SqlQueryComponent"]
+        self.assertEqual(sql["row_limit"], 50)
+        self.assertNotIn("expected_result", sql)
+
+    def test_linked_query_asset_is_kept_when_it_belongs_to_the_project(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "query": "SELECT 0", "query_asset": self.query_asset.pk},
+                {"x": 0, "y": 2, "w": 4, "h": 4, "component_name": "PieChartComponent",
+                 "query": "SELECT 0", "query_asset": str(self.query_asset.pk)},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+        self.assertEqual(layout["KpiComponent"]["query_asset"], self.query_asset.pk)
+        self.assertEqual(layout["PieChartComponent"]["query_asset"], self.query_asset.pk)
+
+    def test_foreign_or_non_query_assets_are_unlinked(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "query": "SELECT 0", "query_asset": self.foreign_query_asset.pk},
+                {"x": 0, "y": 2, "w": 4, "h": 4, "component_name": "BarChartComponent",
+                 "query": "SELECT 0", "query_asset": self.model_asset.pk},
+                {"x": 0, "y": 6, "w": 4, "h": 4, "component_name": "ScatterPlotComponent",
+                 "query": "SELECT 0", "query_asset": "not-an-id"},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+        self.assertIsNone(layout["KpiComponent"]["query_asset"])
+        self.assertIsNone(layout["BarChartComponent"]["query_asset"])
+        self.assertIsNone(layout["ScatterPlotComponent"]["query_asset"])
+
+    def test_deleting_a_stored_query_unlinks_components(self):
+        self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+              "query": "SELECT 0", "query_asset": self.query_asset.pk}]
+        )
+        self.assertEqual(self.client.delete(f"/api/assets/{self.query_asset.pk}/").status_code, 204)
+        self.assertIsNone(self._layout()["KpiComponent"]["query_asset"])
+
+
 class ProcessAreaComponentPersistenceTests(TestCase):
     """
     Dashboard round-trip for the Process Area component's discovery settings.
@@ -3294,6 +3555,78 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.client.force_authenticate(other)
         response = self._run("SELECT 1")
         self.assertEqual(response.status_code, 404)
+
+    def test_stored_queries_can_be_referenced_by_name(self):
+        ProjectAsset.objects.create(
+            project=self.project,
+            name="Activity counts",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1,
+                          "query": "SELECT activity, count(*) AS n FROM events GROUP BY activity"},
+        )
+        response = self._run('SELECT sum(n) AS total FROM "Activity counts"')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"total": 2}])
+
+    def test_circular_stored_queries_fail_cleanly(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="a", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "b"'},
+        )
+        ProjectAsset.objects.create(
+            project=self.project, name="b", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "a"'},
+        )
+        response = self._run('SELECT * FROM "a"')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Circular", response.data["error"])
+
+    def test_referenced_stored_query_cannot_escape_the_sandbox(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="evil", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT * FROM glob('/*')"},
+        )
+        response = self._run('SELECT * FROM "evil"')
+        self.assertEqual(response.status_code, 400)
+
+    def _run_page(self, query, **paging):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/",
+            {"query": query, **paging},
+            format="json",
+        )
+
+    def test_pages_are_served_with_offset_and_limit(self):
+        query = "SELECT activity FROM events ORDER BY activity"
+        first = self._run_page(query, offset=0, limit=1)
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual([r["activity"] for r in first.data["data"]], ["create order"])
+        self.assertTrue(first.data["has_more"])
+        self.assertEqual(first.data["offset"], 0)
+        self.assertEqual(first.data["limit"], 1)
+
+        second = self._run_page(query, offset=1, limit=1)
+        self.assertEqual([r["activity"] for r in second.data["data"]], ["ship order"])
+        self.assertFalse(second.data["has_more"])
+
+        beyond = self._run_page(query, offset=5, limit=1)
+        self.assertEqual(beyond.data["data"], [])
+        self.assertFalse(beyond.data["has_more"])
+        # Columns are still reported for an empty page so the table header
+        # survives scrolling past the end.
+        self.assertEqual(beyond.data["columns"], ["activity"])
+
+    def test_paging_parameters_are_validated(self):
+        response = self._run_page("SELECT 1", offset=-1)
+        self.assertEqual(response.status_code, 400)
+        response = self._run_page("SELECT 1", limit=0)
+        self.assertEqual(response.status_code, 400)
+        response = self._run_page("SELECT 1", limit="lots")
+        self.assertEqual(response.status_code, 400)
+        # Over-large limits are clamped to the server cap rather than rejected.
+        response = self._run_page("SELECT 1", limit=10**9)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["limit"], views.event_log.EXECUTE_QUERY_MAX_ROWS)
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)

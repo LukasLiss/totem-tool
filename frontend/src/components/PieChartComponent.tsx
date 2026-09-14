@@ -1,15 +1,18 @@
 "use client"
 
 import React, { useState, useEffect } from 'react';
-import { Label, Pie, PieChart } from "recharts";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label as PieLabel, Pie, PieChart } from "recharts";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
-import { executeQuery } from '../api/fileApi';
 import { GridStackNode } from 'gridstack';
+import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
+import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
+import { ColumnInput, QuerySection } from "@/components/sql-widgets/shared";
+import { linkedQueryOf, useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
+import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
+
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -17,6 +20,8 @@ interface ComponentProps {
     component_id: number;
     component_name?: string;
     query?: string;
+    query_asset?: number | null;
+    query_asset_name?: string | null;
     ring_text?: string;
     chart_type?: 'pie' | 'donut';
     title?: string;
@@ -28,7 +33,7 @@ interface ComponentProps {
   onUpdate?: (updates: Partial<GridStackNode> & Record<string, any>) => void;
   isEditMode?: boolean;
   dashboardId: number;
-  selectedFile?: { id: number; [key: string]: any };
+  selectedFile?: { id: number; project?: number; [key: string]: any };
 }
 
 const PieChartComponent: React.FC<ComponentProps> = ({
@@ -39,21 +44,17 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 }) => {
   // State for edit mode
   const [query, setQuery] = useState(node.query || '');
+  const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
   const [ringText, setRingText] = useState(node.ring_text || '');
   const [chartType, setChartType] = useState<'pie' | 'donut'>(node.chart_type || 'donut');
   const [title, setTitle] = useState(node.title || '');
   const [labelColumn, setLabelColumn] = useState(node.label_column || '');
   const [valueColumn, setValueColumn] = useState(node.value_column || '');
 
-  // State for view mode
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [availableColumns, setAvailableColumns] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   // Sync with node when it changes
   useEffect(() => {
     setQuery(node.query || '');
+    setLinked(linkedQueryOf(node));
     setRingText(node.ring_text || '');
     setChartType(node.chart_type || 'donut');
     setTitle(node.title || '');
@@ -61,86 +62,42 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setValueColumn(node.value_column || '');
   }, [node]);
 
-  // Fetch available columns when file changes (not on query change)
-  useEffect(() => {
-    if (!selectedFile?.id || !isEditMode) {
-      setAvailableColumns([]);
-      return;
-    }
-    // Don't auto-fetch columns - wait for user to click execute button
-    setAvailableColumns([]);
-  }, [selectedFile?.id, isEditMode]);
+  const fileId = selectedFile?.id;
+  const projectId = selectedFile?.project;
+  const discovery = useColumnDiscovery(fileId, query, linked?.id);
+  const availableColumns = discovery.columns;
 
-  // Manual query execution function
-  const executeQueryManually = async () => {
-    if (!selectedFile?.id || !query.trim()) {
-      setError('Please select a file and enter a query');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      // Execute query to get column information
-      const result = await executeQuery(selectedFile.id, query);
-      if (result.data && result.columns) {
-        setAvailableColumns(result.columns);
-      } else {
-        setAvailableColumns([]);
-      }
-    } catch (err) {
-      console.error('Error executing query:', err);
-      setError(err instanceof Error ? err.message : 'Failed to execute query');
-      setAvailableColumns([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Fetch chart data for view mode
-  useEffect(() => {
-    const fetchChartData = async () => {
-      if (!selectedFile?.id || !query.trim() || !labelColumn || !valueColumn) {
-        setChartData([]);
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const result = await executeQuery(selectedFile.id, query);
-
-        if (result.data && Array.isArray(result.data)) {
-          // Transform data for recharts
-          const transformedData = result.data.map((row: any, index: number) => ({
+  // View mode: run the (local or linked) query and shape rows for recharts.
+  const data = useSqlQueryData({
+    fileId,
+    query,
+    queryAssetId: linked?.id,
+    enabled: !isEditMode && Boolean(labelColumn && valueColumn),
+    limit: 500,
+  });
+  const isLoading = data.loading;
+  const error = data.error;
+  const chartData = React.useMemo(
+    () =>
+      labelColumn && valueColumn
+        ? data.rows.map((row, index): Record<string, unknown> => ({
             [labelColumn]: row[labelColumn],
-            [valueColumn]: parseFloat(row[valueColumn]) || 0,
-            fill: `var(--chart-${(index % 5) + 1})`
-          }));
-          setChartData(transformedData);
-        } else {
-          setChartData([]);
-        }
-      } catch (err) {
-        console.error('Error fetching chart data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch chart data');
-        setChartData([]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (!isEditMode && selectedFile?.id && query.trim() && labelColumn && valueColumn) {
-      fetchChartData();
-    }
-  }, [selectedFile?.id, query, labelColumn, valueColumn, isEditMode]);
+            [valueColumn]: parseFloat(String(row[valueColumn])) || 0,
+            fill: `var(--chart-${(index % 5) + 1})`,
+          }))
+        : [],
+    [data.rows, labelColumn, valueColumn]
+  );
 
   // Handlers for edit mode changes
   const handleQueryChange = (value: string) => {
     setQuery(value);
     onUpdate?.({ query: value });
+  };
+
+  const handleLinkChange = (link: LinkedQuery | null) => {
+    setLinked(link);
+    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
   };
 
   const handleRingTextChange = (value: string) => {
@@ -178,7 +135,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     };
 
     chartData.forEach((item, index) => {
-      const key = item[labelColumn];
+      const key = String(item[labelColumn]);
       config[key] = {
         label: key,
         color: `var(--chart-${(index % 5) + 1})`,
@@ -189,7 +146,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   }, [chartData, labelColumn, valueColumn]);
 
   const totalValue = React.useMemo(() => {
-    return chartData.reduce((acc, curr) => acc + (curr[valueColumn] || 0), 0);
+    return chartData.reduce((acc, curr) => acc + (Number(curr[valueColumn]) || 0), 0);
   }, [chartData, valueColumn]);
 
   if (isEditMode) {
@@ -207,53 +164,35 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             placeholder="Enter chart title"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">SQL Query</label>
-            <Textarea
-              value={query}
-              onChange={(e) => handleQueryChange(e.target.value)}
-              placeholder="SELECT name AS label, count AS value FROM data"
-              rows={4}
-            />
-          <div className="flex justify-center gap-2 mt-2">
-            <Button
-              onClick={executeQueryManually}
-              disabled={isLoading || !query.trim()}
-              size="sm"
-              >
-              {isLoading ? 'Executing...' : 'Execute Query'}
-            </Button>
-          </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Click "Execute Query" to see available columns and test your query
-            </p>
-          </div>
-          {availableColumns.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium mb-1">Available Columns</label>
-              <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
-                {availableColumns.join(', ')}
-              </div>
-            </div>
-          )}
+          <QuerySection
+            widgetId={node.component_id}
+            query={query}
+            onQueryChange={handleQueryChange}
+            linkedQuery={linked}
+            onLinkChange={handleLinkChange}
+            fileId={fileId}
+            projectId={projectId}
+            expectedResult={PIE_CHART_EXPECTED_RESULT}
+            editorTitle="Pie chart query"
+            discovery={discovery}
+          />
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Label Column</label>
-              <Input
-                value={labelColumn}
-                onChange={(e) => handleLabelColumnChange(e.target.value)}
-                placeholder={availableColumns.length > 0 ? `e.g., ${availableColumns[0]}` : "Execute query first"}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Value Column</label>
-              <Input
-                value={valueColumn}
-                onChange={(e) => handleValueColumnChange(e.target.value)}
-                placeholder={availableColumns.length > 1 ? `e.g., ${availableColumns[1]}` : "Execute query first"}
-              />
-            </div>
+            <ColumnInput
+              id={`pie-label-${node.component_id}`}
+              label="Label column"
+              value={labelColumn}
+              onChange={handleLabelColumnChange}
+              columns={availableColumns}
+              placeholder={availableColumns[0] ? `e.g. ${availableColumns[0]}` : "detect columns first"}
+            />
+            <ColumnInput
+              id={`pie-value-${node.component_id}`}
+              label="Value column"
+              value={valueColumn}
+              onChange={handleValueColumnChange}
+              columns={availableColumns}
+              placeholder={availableColumns[1] ? `e.g. ${availableColumns[1]}` : "detect columns first"}
+            />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Chart Type</label>
@@ -356,7 +295,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               strokeWidth={5}
             >
               {chartType === 'donut' && ringText && (
-                <Label
+                <PieLabel
                   content={({ viewBox }) => {
                     if (viewBox && "cx" in viewBox && "cy" in viewBox) {
                       return (

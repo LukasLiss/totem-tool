@@ -172,3 +172,48 @@ def validate_ocdfg_asset_dict(data):
         layout is None or isinstance(layout, dict),
         '"layout" must be an object when present.',
     )
+
+
+# --------------------------------------------------------------------------
+# Stored SQL queries
+# --------------------------------------------------------------------------
+
+SQL_QUERY_ASSET_SCHEMA = "sql-query"
+SQL_QUERY_ASSET_VERSION = 1
+SQL_QUERY_MAX_LENGTH = 20_000
+
+
+def validate_sql_query_asset_dict(data):
+    """Validate the ``content_json`` of a QUERY project asset.
+
+    Shape::
+
+        {"schema": "sql-query", "version": 1,
+         "query": "SELECT ...", "description": "optional free text"}
+
+    Only the structure is checked here; whether the SQL actually runs is
+    decided by the sandboxed ``execute_query`` endpoint at execution time
+    (it rejects anything but a single SELECT).
+    """
+    _require(isinstance(data, dict), "Query asset JSON must be an object.")
+    _require(
+        data.get("schema") == SQL_QUERY_ASSET_SCHEMA,
+        f'Query asset JSON must declare "schema": "{SQL_QUERY_ASSET_SCHEMA}".',
+    )
+    version = data.get("version", SQL_QUERY_ASSET_VERSION)
+    _require(
+        version == SQL_QUERY_ASSET_VERSION,
+        f"Unsupported query asset version: {version!r}.",
+    )
+    query = data.get("query")
+    _require(isinstance(query, str) and query.strip(), "Query asset needs a non-empty \"query\" string.")
+    _require(
+        len(query) <= SQL_QUERY_MAX_LENGTH,
+        f"Query text must be at most {SQL_QUERY_MAX_LENGTH} characters.",
+    )
+    description = data.get("description", "")
+    _require(
+        description is None or isinstance(description, str),
+        'Query asset "description" must be a string.',
+    )
+    return data

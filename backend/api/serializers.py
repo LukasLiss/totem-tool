@@ -12,10 +12,14 @@ from totem_lib import (
     validate_totem_dict,
 )
 from totem_lib.ocel.event_columns import EventColumnError, validate_event_column_name
-from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
+from .asset_formats import (
+    validate_ocdfg_asset_dict,
+    validate_ocpn_asset_dict,
+    validate_sql_query_asset_dict,
+)
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent
 from django.db.models import Max
 
 
@@ -283,6 +287,7 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
             ProjectAsset.AssetType.OCCN: validate_occn_dict,
             ProjectAsset.AssetType.OCPN: validate_ocpn_asset_dict,
             ProjectAsset.AssetType.OCDFG: validate_ocdfg_asset_dict,
+            ProjectAsset.AssetType.QUERY: validate_sql_query_asset_dict,
         }
         validator = schema_validators.get(asset_type)
         if validator is None:
@@ -539,6 +544,24 @@ class SqlQueryComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 
+class KpiComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = KpiComponent
+        fields = "__all__"
+
+
+class BarChartComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = BarChartComponent
+        fields = "__all__"
+
+
+class ScatterPlotComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = ScatterPlotComponent
+        fields = "__all__"
+
+
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -557,4 +580,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         PieChartComponent: PieChartComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
         SqlQueryComponent: SqlQueryComponentSerializer,
+        KpiComponent: KpiComponentSerializer,
+        BarChartComponent: BarChartComponentSerializer,
+        ScatterPlotComponent: ScatterPlotComponentSerializer,
     }

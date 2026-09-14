@@ -26,6 +26,9 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
   SqlQueryComponent: { minW: 4, minH: 5 },
   PieChartComponent: { minW: 2, minH: 6 },
+  KpiComponent: { minW: 2, minH: 2 },
+  BarChartComponent: { minW: 3, minH: 3 },
+  ScatterPlotComponent: { minW: 3, minH: 3 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -325,12 +328,44 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           name: (node as any).name ?? "",
           query: (node as any).query ?? "SELECT activity, count(*) AS n FROM events GROUP BY activity",
-          expected_result: (node as any).expected_result ?? null,
+          query_asset: (node as any).query_asset ?? null,
           row_limit: (node as any).row_limit ?? 25,
+        };
+      } else if (component_name === "KpiComponent") {
+        props = {
+          title: (node as any).title ?? "",
+          query: (node as any).query ?? "",
+          query_asset: (node as any).query_asset ?? null,
+          value_column: (node as any).value_column ?? "",
+          prefix: (node as any).prefix ?? "",
+          suffix: (node as any).suffix ?? "",
+          decimals: (node as any).decimals ?? 0,
+        };
+      } else if (component_name === "BarChartComponent") {
+        props = {
+          title: (node as any).title ?? "",
+          query: (node as any).query ?? "",
+          query_asset: (node as any).query_asset ?? null,
+          label_column: (node as any).label_column ?? "",
+          value_column: (node as any).value_column ?? "",
+          horizontal: (node as any).horizontal ?? false,
+          show_values: (node as any).show_values ?? false,
+        };
+      } else if (component_name === "ScatterPlotComponent") {
+        props = {
+          title: (node as any).title ?? "",
+          query: (node as any).query ?? "",
+          query_asset: (node as any).query_asset ?? null,
+          x_column: (node as any).x_column ?? "",
+          y_column: (node as any).y_column ?? "",
+          series_column: (node as any).series_column ?? "",
+          x_label: (node as any).x_label ?? "",
+          y_label: (node as any).y_label ?? "",
         };
       } else if (component_name === "PieChartComponent") {
         props = {
           query: (node as any).query ?? '',
+          query_asset: (node as any).query_asset ?? null,
           ring_text: (node as any).ring_text ?? '',
           chart_type: (node as any).chart_type ?? 'donut',
           title: (node as any).title ?? '',
@@ -432,6 +467,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "SQL Editor";
         } else if (item.component_name === "PieChartComponent") {
           content = "Pie Chart";
+        } else if (item.component_name === "KpiComponent") {
+          content = "KPI (by SQL)";
+        } else if (item.component_name === "BarChartComponent") {
+          content = "Bar Chart (by SQL)";
+        } else if (item.component_name === "ScatterPlotComponent") {
+          content = "Scatter Plot (by SQL)";
         } else {
           content = "Unknown";
         }
@@ -509,8 +550,19 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             // SqlQueryComponent properties (`query` is already set above,
             // shared with PieChartComponent)
             name: item.name,
-            expected_result: item.expected_result,
+            query_asset: item.query_asset,
             row_limit: item.row_limit,
+            // KpiComponent / BarChartComponent / ScatterPlotComponent
+            prefix: item.prefix,
+            suffix: item.suffix,
+            decimals: item.decimals,
+            horizontal: item.horizontal,
+            show_values: item.show_values,
+            x_column: item.x_column,
+            y_column: item.y_column,
+            series_column: item.series_column,
+            x_label: item.x_label,
+            y_label: item.y_label,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -574,8 +626,19 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               // SqlQueryComponent properties
               (node as any).name = item.name;
               (node as any).query = item.query;
-              (node as any).expected_result = item.expected_result;
+              (node as any).query_asset = item.query_asset;
               (node as any).row_limit = item.row_limit;
+              // KpiComponent / BarChartComponent / ScatterPlotComponent
+              (node as any).prefix = item.prefix;
+              (node as any).suffix = item.suffix;
+              (node as any).decimals = item.decimals;
+              (node as any).horizontal = item.horizontal;
+              (node as any).show_values = item.show_values;
+              (node as any).x_column = item.x_column;
+              (node as any).y_column = item.y_column;
+              (node as any).series_column = item.series_column;
+              (node as any).x_label = item.x_label;
+              (node as any).y_label = item.y_label;
             }
           }
           // Set data attribute for persistence
