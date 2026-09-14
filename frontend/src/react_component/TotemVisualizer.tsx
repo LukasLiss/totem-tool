@@ -17,7 +17,7 @@ import { RefreshCcw } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph } from './OCDFGVisualizer';
-import { MetricTooltip } from './MetricTooltip';
+import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
 
@@ -215,6 +215,9 @@ type NodePosition = {
 type EdgeSegment = {
   id: string;
   relation: RelationType;
+  /** Object types the relation runs between, for the hover card. */
+  from?: string;
+  to?: string;
   path: string;
   bars?: Array<{ x1: number; y1: number; x2: number; y2: number }>;
   capPath?: string;
@@ -223,7 +226,6 @@ type EdgeSegment = {
   debugWaypoints?: Array<{ x: number; y: number }>; // For debugging
   crossesNode?: boolean;
   crossingPoints?: Array<{ x: number; y: number }>;
-  metrics?: { frequency?: number | null; avg_lead_time?: number | null } | null;
   renderStart?: Point2D;
   renderEnd?: Point2D;
 };
@@ -358,6 +360,16 @@ type ProcessAreaMetrics = {
   edgeStrokeScale: number;
   detailCollisionPadding: number;
   detailMinDistance: number;
+};
+
+/** How the temporal relations are named in the hover card. */
+const RELATION_LABELS: Record<RelationType, string> = {
+  D: 'During (D)',
+  I: 'Precedes (I)',
+  P: 'Parallel (P)',
+  // Never reaches a tooltip: 'A' is the internal area-to-detail connector and
+  // those segments are filtered out of the primary edge layer.
+  A: 'Area detail',
 };
 
 const DEFAULT_BACKEND = API_BASE_URL;
@@ -3320,6 +3332,8 @@ function computeEdgeSegments(
     const segment: EdgeSegment = {
       id: edge.id,
       relation: edge.relation,
+      from: edge.from,
+      to: edge.to,
       path,
       color: edge.color,
       debugWaypoints: routeWaypoints ? [...routeWaypoints] : [startPoint, collisionPoint],
@@ -5073,7 +5087,9 @@ function TotemVisualizer({
     setAppliedParams(seededParams);
   }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
-  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+  const [tooltipState, setTooltipState] = useState<
+    { x: number; y: number; title?: string; rows: TooltipRow[] } | null
+  >(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
@@ -6493,14 +6509,20 @@ function TotemVisualizer({
                       key={`${edge.id}-primary`}
                       style={{ pointerEvents: 'auto' }}
                       onMouseEnter={(e) => {
-                        if (edge.metrics) {
-                          setTooltipState({
-                            x: e.clientX,
-                            y: e.clientY,
-                            metrics: edge.metrics,
-                            label: 'Relation: ' + (edge.relation || 'Unknown')
-                          });
-                        }
+                        setTooltipState({
+                          x: e.clientX,
+                          y: e.clientY,
+                          title:
+                            edge.from && edge.to
+                              ? `${edge.from} \u2192 ${edge.to}`
+                              : undefined,
+                          rows: [
+                            {
+                              label: 'Relation',
+                              value: RELATION_LABELS[edge.relation] ?? edge.relation,
+                            },
+                          ],
+                        });
                       }}
                       onMouseLeave={() => setTooltipState(null)}
                       onMouseMove={(e) => {
@@ -6671,7 +6693,11 @@ function TotemVisualizer({
             </>
           )}
 
-          <div style={{ position: 'relative', zIndex: 2 }}>
+          {/* The relation lines live in the SVG below this layer. Without
+              this, the layer's empty space would swallow every pointer event
+              and no relation could be hovered; the pieces that want events
+              take them back individually. */}
+          <div style={{ position: 'relative', zIndex: 2, pointerEvents: 'none' }}>
             {error && (
               <div
                 style={{
@@ -6686,6 +6712,8 @@ function TotemVisualizer({
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   gap: 12,
+                  // Carries a Retry button; the layer around it is inert.
+                  pointerEvents: 'auto',
                 }}
               >
                 <span>{error}</span>
@@ -6798,6 +6826,7 @@ function TotemVisualizer({
                                 // `prepareGridLayout` keeps the spans disjoint,
                                 // so pinning the row cannot overlap them.
                                 gridRow: 1,
+                                pointerEvents: 'auto',
                                 padding: `${processAreaPaddingY}px ${gridColumnGap / 2}px`,
                                 display: 'grid',
                                 gridTemplateColumns: templateColumns,
@@ -6853,10 +6882,30 @@ function TotemVisualizer({
                                   });
                                   const rawColumnIndex = (nodeColumns[objectType] ?? startColumn) - startColumn;
                                   const columnIndex = Math.max(0, Math.min(spanColumns - 1, rawColumnIndex));
+                                  const activities =
+                                    rawTotem?.object_type_to_event_types?.[objectType] ?? [];
                                   return (
                                     <span
                                       key={objectType}
                                       ref={(element) => assignNodeRef(objectType, element)}
+                                      onMouseEnter={(e) => {
+                                        setTooltipState({
+                                          x: e.clientX,
+                                          y: e.clientY,
+                                          title: objectType,
+                                          rows: [
+                                            { label: 'Activities', value: `${activities.length}` },
+                                            { label: 'Level', value: `${layer.level}` },
+                                            { label: 'Process area', value: area.label },
+                                          ],
+                                        });
+                                      }}
+                                      onMouseMove={(e) => {
+                                        setTooltipState((prev) =>
+                                          prev ? { ...prev, x: e.clientX, y: e.clientY } : null,
+                                        );
+                                      }}
+                                      onMouseLeave={() => setTooltipState(null)}
                                       style={{
                                         padding: `${objectNodePaddingY}px ${objectNodePaddingX}px`,
                                         borderRadius: objectNodeRadius,
@@ -7083,7 +7132,7 @@ function TotemVisualizer({
           </div>
         </div>
       )}
-      {tooltipState && <MetricTooltip {...tooltipState} />}
+      {tooltipState && <HoverTooltip {...tooltipState} />}
     </div>
   );
 
