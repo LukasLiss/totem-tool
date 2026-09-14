@@ -5,7 +5,7 @@ from tests.assets.ocel_helpers import event as _event
 from tests.assets.ocel_helpers import make_ocel as _make_ocel
 from tests.assets.ocel_helpers import obj as _object
 from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
-from totem_lib.simulation.utils.resource_statistics import (
+from totem_lib.simulation.utils.resource_cooldown import (
     resource_cooldown_distribution,
     sample_cooldown,
 )

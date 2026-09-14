@@ -1,9 +1,9 @@
 from tests.assets.ocel_helpers import event as _event
 from tests.assets.ocel_helpers import make_ocel, obj
-from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
-from totem_lib.simulation.utils.resource_statistics import (
+from totem_lib.simulation.utils.resource_allocation_strategy import (
     calculate_resource_allocation_strategy,
 )
+from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 
 
 def _flat_calendar(prob: float) -> dict:

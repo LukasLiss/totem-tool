@@ -15,6 +15,9 @@ from totem_lib.simulation.utils.basic_simulation_statistics import (
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     variant_arrival_distribution as compute_variant_arrival_distribution,
 )
+from totem_lib.simulation.utils.resource_allocation_strategy import (
+    calculate_resource_allocation_strategy,
+)
 from totem_lib.simulation.utils.resource_calendar import (
     availability_probability,
     discover_resource_calendars,
@@ -22,8 +25,7 @@ from totem_lib.simulation.utils.resource_calendar import (
 from totem_lib.simulation.utils.resource_constraints import (
     generate_resource_constraints,
 )
-from totem_lib.simulation.utils.resource_statistics import (
-    calculate_resource_allocation_strategy,
+from totem_lib.simulation.utils.resource_cooldown import (
     resource_cooldown_distribution,
     sample_cooldown,
 )
