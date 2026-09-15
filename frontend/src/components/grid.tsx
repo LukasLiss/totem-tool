@@ -9,11 +9,11 @@ import {
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
 import GridContainer from "../gridstack/lib/grid_container";
-import { useGrid } from "../gridstack/lib/gridstackprovider";
+import { useGrid } from "../gridstack/lib/gridContext";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import { useGridMode } from '../gridstack/lib/gridstackprovider';
+import { useGridMode } from '../gridstack/lib/gridContext';
 import {
   Save, Minus, Plus
 } from "lucide-react"

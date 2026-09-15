@@ -22,12 +22,13 @@ import {
   uploadImageAsset,
   type ImageAsset as ImageAssetInfo,
 } from '@/api/imageAssetsApi';
-import VariantsExplorer, {
+import VariantsExplorer from '@/react_component/VariantsExplorer';
+import {
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
-} from '@/react_component/VariantsExplorer';
+} from '@/react_component/variants/types';
 import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
 import ProcessArea from '@/react_component/ProcessArea';
@@ -38,7 +39,7 @@ import {
   PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
-} from '@/react_component/TotemVisualizer';
+} from '@/react_component/processAreaParams';
 import { ReactFlowProvider } from "@xyflow/react";
 import DottedChart from '@/react_component/DottedChart';
 import {
@@ -58,7 +59,6 @@ import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
-import PieChartComponent from './PieChartComponent';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -75,9 +75,6 @@ import SqlQueryEditor, {
   type LinkedQuery,
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
-import KpiComponent from './sql-widgets/KpiComponent';
-import BarChartComponent from './sql-widgets/BarChartComponent';
-import ScatterPlotComponent from './sql-widgets/ScatterPlotComponent';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 
 function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
@@ -161,7 +158,7 @@ export interface ComponentProps {
 
 
 // TextBoxComponent: Editable text with ShadCN UI
-const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
+export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
   //console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
   const [text, setText] = React.useState(node.text || 'Enter text here');
   // Sync local state with node.text when it changes (e.g., from loading or updates)
@@ -208,7 +205,7 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 
 
 // NumberOfEventsComponent: Static display with a button (customize as needed)
-const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
+export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
   const [processedResult, setProcessedResult] = useState(null);
 
   // Refetch when the global filter changes so the count follows the filter.
@@ -289,7 +286,7 @@ const IMAGE_ALIGNMENT_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'bottom right', label: 'Bottom right' },
 ];
 
-const ImageComponent: React.FC<ComponentProps> = ({
+export const ImageComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -563,7 +560,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
 
 
 // VariantsComponent: Wrapper for VariantsExplorer with configurable settings
-const VariantsComponent: React.FC<ComponentProps> = ({
+export const VariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -664,12 +661,12 @@ const VariantsComponent: React.FC<ComponentProps> = ({
 
   const handleBusinessObjectTypesChange = (value: string[]) => {
     setBusinessObjectTypes(value);
-    onUpdate?.({ business_object_types: value } as any);
+    onUpdate?.({ business_object_types: value });
   };
 
   const handleBusinessActivitiesChange = (value: string[]) => {
     setBusinessActivities(value);
-    onUpdate?.({ business_activities: value } as any);
+    onUpdate?.({ business_activities: value });
   };
 
   if (isEditMode) {
@@ -913,7 +910,7 @@ const PROCESS_AREA_PARAM_FIELDS: Array<{
   { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
 ];
 
-const ProcessAreaComponent: React.FC<ComponentProps> = ({
+export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1051,7 +1048,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 
 
 // TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
-const TotemMinerComponent: React.FC<ComponentProps> = ({
+export const TotemMinerComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
@@ -1088,7 +1085,7 @@ const TotemMinerComponent: React.FC<ComponentProps> = ({
 
 
 // LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
-const LogStatisticsComponent: React.FC<ComponentProps> = ({
+export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1213,7 +1210,7 @@ const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
 };
 
 // OCDottedChartComponent: Dashboard wrapper for Object-Centric Dotted Chart
-const OCDottedChartComponent: React.FC<ComponentProps> = ({
+export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1308,7 +1305,7 @@ function isBuiltinDottedChartAxis(
 
 
 // NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
-const NewOCDFGComponent: React.FC<ComponentProps> = ({
+export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1410,7 +1407,7 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 };
 
 
-const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
+export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1511,7 +1508,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 
 
 // OCCNComponent: Dashboard wrapper for the Object-Centric Causal Net (ELK layout)
-const OCCNComponent: React.FC<ComponentProps> = ({
+export const OCCNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1663,7 +1660,7 @@ const OCCNComponent: React.FC<ComponentProps> = ({
 // OCPNComponent: Dashboard wrapper for the OC Petri Net discovery view.
 // Settings: automatic loading (start discovery when the dashboard opens)
 // and the discovery timeout in seconds.
-const OCPNComponent: React.FC<ComponentProps> = ({
+export const OCPNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1763,7 +1760,7 @@ const OCPNComponent: React.FC<ComponentProps> = ({
 // behavior lives there; this just maps the GridStack node/onUpdate contract
 // onto SqlQueryEditor's plain value/onChange props.
 
-const SqlQueryComponent: React.FC<ComponentProps> = ({
+export const SqlQueryComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1790,16 +1787,16 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
   }, [node.query_asset, node.query_asset_name]);
 
   const handleChange = (patch: Partial<SqlQueryConfig>) => {
-    const update: Record<string, unknown> = {};
+    const update: Partial<GridStackNode> = {};
     if (patch.name !== undefined) update.name = patch.name;
     if (patch.query !== undefined) update.query = patch.query;
     if (patch.rowLimit !== undefined) update.row_limit = patch.rowLimit;
-    onUpdate?.(update as any);
+    onUpdate?.(update);
   };
 
   const handleLinkChange = (link: LinkedQuery | null) => {
     setLinkedQuery(link);
-    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null } as any);
+    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
   };
 
   return (
@@ -1816,23 +1813,5 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
 };
 
 
-// Component map for easy lookup
-export const componentMap: Record<string, React.FC<ComponentProps>> = {
-  TextBoxComponent,
-  NumberOfEventsComponent,
-  ImageComponent,
-  VariantsComponent,
-  ProcessAreaComponent,
-  TotemMinerComponent,
-  LogStatisticsComponent,
-  OCDottedChartComponent,
-  NewOCDFGComponent,
-  NewOCDFGVariantsComponent,
-  OCPNComponent,
-  PieChartComponent,
-  OCCNComponent,
-  SqlQueryComponent,
-  KpiComponent: KpiComponent as unknown as React.FC<ComponentProps>,
-  BarChartComponent: BarChartComponent as unknown as React.FC<ComponentProps>,
-  ScatterPlotComponent: ScatterPlotComponent as unknown as React.FC<ComponentProps>,
-};
+// Dashboard widget registry (component_name -> renderer) lives in
+// componentMapRegistry.ts — see the comment there for why it's split out.

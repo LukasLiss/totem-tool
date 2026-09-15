@@ -10,6 +10,7 @@ import {
   type OccnNodeData,
 } from './types';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function internalNodeBox(node: {
   internals: { positionAbsolute: { x: number; y: number } };
   measured?: { width?: number; height?: number };

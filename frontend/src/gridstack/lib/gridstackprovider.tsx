@@ -1,6 +1,4 @@
 import React, {
-  createContext,
-  useContext,
   useRef,
   useEffect,
   useState,
@@ -8,8 +6,10 @@ import React, {
 } from "react";
 import ReactDOM, { type Root } from "react-dom/client";
 import { GridStack, GridStackNode, GridStackOptions, GridStackWidget } from "gridstack";
-import { componentMap, type ComponentProps } from "../../components/componentMap";
+import { componentMap } from "../../components/componentMapRegistry";
+import type { ComponentProps } from "../../components/componentMap";
 import type { SelectedFile } from "../../contexts/SelectedFileContext";
+import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext";
 
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
@@ -40,37 +40,12 @@ const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 const getMinSize = (componentName?: string) =>
   (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
 
-type GridLayoutItem = Omit<GridStackWidget, 'id'> & { id?: number };
-
-interface GridContextValue {
-  grid: GridStack | null;
-  addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
-  getLayout: () => GridLayoutItem[];
-  loadLayout: (layout: GridLayoutItem[]) => void;
-  resetGrid: () => void;
-}
-
-const GridModeContext = createContext<{
-  isEditMode: boolean;
-  setIsEditMode: (mode: boolean) => void;
-}>({ isEditMode: false, setIsEditMode: () => {} });
-
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
   selectedFile?: SelectedFile | null;
   dashboardId?: number;
 }
-
-export const useGridMode = () => useContext(GridModeContext);
-
-const GridContext = createContext<GridContextValue | undefined>(undefined);
-
-export const useGrid = () => {
-  const ctx = useContext(GridContext);
-  if (!ctx) throw new Error("useGrid must be used inside GridProvider");
-  return ctx;
-};
 
 export const GridProvider: React.FC<GridProviderProps> = ({
   children,

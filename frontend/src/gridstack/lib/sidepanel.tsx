@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridContext";
 
 
 const SidePanel: React.FC = () => {

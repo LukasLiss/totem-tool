@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { GridStackNode } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridContext";
 
 interface DashboardGridProps {
   initialChildren?: GridStackNode[];

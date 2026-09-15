@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { FilterStackContext } from "./filterStackHooks";
 
 export type FilterType = "time_range" | "object_types" | "activity";
 
@@ -14,27 +15,6 @@ export type FilterRule = {
 };
 
 export type FilterRuleDraft = Omit<FilterRule, "id">;
-
-type FilterStackContextType = {
-  filters: FilterRule[];
-  addFilter: (rule: FilterRuleDraft) => void;
-  removeFilter: (id: string) => void;
-  /**
-   * Replace every rule of the given types with `rules` (other types stay).
-   * Returns the resulting rule list synchronously so callers can apply it
-   * right away.
-   */
-  replaceFilters: (types: FilterType[], rules: FilterRuleDraft[]) => FilterRule[];
-};
-
-const defaultCtx: FilterStackContextType = {
-  filters: [],
-  addFilter: () => {},
-  removeFilter: () => {},
-  replaceFilters: () => [],
-};
-
-export const FilterStackContext = createContext<FilterStackContextType>(defaultCtx);
 
 type FilterStackProviderProps = {
   children: ReactNode;
@@ -88,8 +68,4 @@ export function FilterStackProvider({
       {children}
     </FilterStackContext.Provider>
   );
-}
-
-export function useFilterStack() {
-  return useContext(FilterStackContext);
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { useGrid } from "./gridstackprovider"; // your provider hook
+import { useGrid } from "./gridContext"; // your provider hook
 
 /** Wrap your DashboardGrid with this so GridStack will reflow when container width changes. */
 const GridContainer: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => {
