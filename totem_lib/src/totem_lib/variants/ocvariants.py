@@ -24,11 +24,16 @@ class Variant:
         support: int,
         executions: List[List[EventId]],
         graph: nx.DiGraph,
+        case_ids: Optional[List[str]] = None,
     ):
         self.id = vid
         self.support = support
         self.executions = executions
         self.graph = graph  # representative graph
+        # Identifiers of the process executions (cases) grouped into this
+        # variant, parallel to `executions`. `None` for discovery paths that
+        # do not track case identity (the legacy polars implementation).
+        self.case_ids = case_ids
 
     def __iter__(self) -> Iterator[List[EventId]]:
         return iter(self.executions)

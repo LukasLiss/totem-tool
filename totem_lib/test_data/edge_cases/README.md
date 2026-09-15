@@ -3,7 +3,8 @@
 A curated set of small, deliberately-constructed OCEL 2.0 logs that each exercise one
 boundary / corner condition of the platform (empty log, dead object, cyclic dependencies,
 weird timestamps, ...). They are the test fixtures that harden every miner against
-degenerate input — see **Epic #200**.
+degenerate input — see **Epic #200** (corpus) and **Issue #296** (the crashes it found,
+since fixed).
 
 Each case ships in two formats:
 
@@ -67,7 +68,7 @@ pytest tests/edge_cases/ -v
 4. **Wire assertions** (only if non-default): the tests already run the new fixture through
    every miner asserting "does not raise". If your case is expected to *crash* a miner, add an
    entry to the matching `XFAIL_*` map in `test_edge_cases.py` (fixture stem →
-   `(reason, ExceptionType)`) and file a follow-up issue under Epic #200. If it has a specific
+   `(reason, ExceptionType)`) and file a follow-up issue for the fix. If it has a specific
    structural oracle (e.g. "yields exactly 2 variants"), add a targeted test at the bottom of
    that file.
 5. **Run** `pytest tests/edge_cases/ -v` and commit the new `.json` + `.duckdb` together.

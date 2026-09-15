@@ -1,22 +1,22 @@
-"use client"
+"use client";
 
 import { useState, useEffect, useContext } from "react";
-import {
-  Settings2,
-  ChevronRight, LogOut
-} from "lucide-react"
+import { Settings2, ChevronRight, LogOut } from "lucide-react";
 
-import { NavDashboard } from "@/components/nav-dashboard"
-import { Switcher } from "@/components/team-switcher"
+import { NavDashboard } from "@/components/nav-dashboard";
+import { Switcher } from "@/components/team-switcher";
 import {
   Sidebar,
   SidebarContent,
   SidebarHeader,
   SidebarFooter,
   SidebarMenuButton,
-} from "@/components/ui/sidebar"
-import { SelectedFileContext, type SelectedFile } from "../contexts/SelectedFileContext";
-import { getUserFiles } from "../api/fileApi"
+} from "@/components/ui/sidebar";
+import {
+  SelectedFileContext,
+  type SelectedFile,
+} from "../contexts/SelectedFileContext";
+import { getUserFiles } from "../api/fileApi";
 import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
 import { NavProject } from "./nav-project";
@@ -26,13 +26,23 @@ import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
 import { useNavigate } from "react-router-dom";
 
-export function AppSidebar() {
+// In the desktop build the only account is the auto-logged-in Guest, so
+// "Log out" would just drop the user's place and log them straight back in.
+const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+
+export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate();
-  const context = useContext(SelectedFileContext);
-  const selectedFile = context?.selectedFile;
+  // Hooks must run unconditionally; the context has a non-null default.
+  const { selectedFile } = useContext(SelectedFileContext);
   const [, setFiles] = useState<SelectedFile[]>([]);
   const [dashboards, setDashboards] = useState<
-    { id: number; project: number; name: string; order_in_project: number; created_at: string }[]
+    {
+      id: number;
+      project: number;
+      name: string;
+      order_in_project: number;
+      created_at: string;
+    }[]
   >([]);
 
   useEffect(() => {
@@ -67,15 +77,10 @@ export function AppSidebar() {
     fetchDashboards();
   }, [selectedFile]);
 
-  if (!context) {
-    console.error('SelectedFileContext not provided');
-    return null;
-  }
-
   return (
-    <Sidebar variant="inset" collapsible="icon">
+    <Sidebar variant="inset" collapsible="icon" {...props}>
       <SidebarHeader>
-        <Switcher/>
+        <Switcher />
       </SidebarHeader>
       <SidebarContent>
         <NavOverview />
@@ -100,17 +105,25 @@ export function AppSidebar() {
         <NavPlayout />
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenuButton tooltip="Settings" onClick={() => navigate("/settings")}>
-            <Settings2 />
-            <span>Settings</span>
-            <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+        <SidebarMenuButton
+          tooltip="Settings"
+          onClick={() => navigate("/settings")}
+        >
+          <Settings2 />
+          <span>Settings</span>
+          <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
         </SidebarMenuButton>
-        <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
+        {!LOCAL_MODE && (
+          <SidebarMenuButton
+            tooltip="Log out"
+            onClick={() => navigate("/logout")}
+          >
             <LogOut />
             <span>Log out</span>
             <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
-        </SidebarMenuButton>
+          </SidebarMenuButton>
+        )}
       </SidebarFooter>
     </Sidebar>
-  )
+  );
 }

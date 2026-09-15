@@ -29,8 +29,11 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   OCDottedChartComponent: { minW: 4, minH: 3 },
   NewOCDFGComponent: { minW: 4, minH: 4 },
   NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
-  SQLQueryComponent: { minW: 3, minH: 3 },
+  SqlQueryComponent: { minW: 4, minH: 5 },
   PieChartComponent: { minW: 2, minH: 6 },
+  KpiComponent: { minW: 2, minH: 2 },
+  BarChartComponent: { minW: 3, minH: 3 },
+  ScatterPlotComponent: { minW: 3, minH: 3 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -273,6 +276,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           extraction: node.extraction ?? 'leading_1hop',
           iso: node.iso ?? 'wl+vf2',
           timeout_s: node.timeout_s ?? 10.0,
+          business_object_types: node.business_object_types ?? [],
+          business_activities: node.business_activities ?? [],
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -321,9 +326,48 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           automatic_loading: node.automatic_loading ?? false,
           timeout_s: node.timeout_s ?? 30.0,
         };
+      } else if (component_name === "SqlQueryComponent") {
+        props = {
+          name: node.name ?? "",
+          query: node.query ?? "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+          query_asset: node.query_asset ?? null,
+          row_limit: node.row_limit ?? 25,
+        };
+      } else if (component_name === "KpiComponent") {
+        props = {
+          title: node.title ?? "",
+          query: node.query ?? "",
+          query_asset: node.query_asset ?? null,
+          value_column: node.value_column ?? "",
+          prefix: node.prefix ?? "",
+          suffix: node.suffix ?? "",
+          decimals: node.decimals ?? 0,
+        };
+      } else if (component_name === "BarChartComponent") {
+        props = {
+          title: node.title ?? "",
+          query: node.query ?? "",
+          query_asset: node.query_asset ?? null,
+          label_column: node.label_column ?? "",
+          value_column: node.value_column ?? "",
+          horizontal: node.horizontal ?? false,
+          show_values: node.show_values ?? false,
+        };
+      } else if (component_name === "ScatterPlotComponent") {
+        props = {
+          title: node.title ?? "",
+          query: node.query ?? "",
+          query_asset: node.query_asset ?? null,
+          x_column: node.x_column ?? "",
+          y_column: node.y_column ?? "",
+          series_column: node.series_column ?? "",
+          x_label: node.x_label ?? "",
+          y_label: node.y_label ?? "",
+        };
       } else if (component_name === "PieChartComponent") {
         props = {
           query: node.query ?? '',
+          query_asset: node.query_asset ?? null,
           ring_text: node.ring_text ?? '',
           chart_type: node.chart_type ?? 'donut',
           title: node.title ?? '',
@@ -419,8 +463,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "OC Petri Net";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
+        } else if (item.component_name === "SqlQueryComponent") {
+          content = "SQL Editor";
         } else if (item.component_name === "PieChartComponent") {
           content = "Pie Chart";
+        } else if (item.component_name === "KpiComponent") {
+          content = "KPI (by SQL)";
+        } else if (item.component_name === "BarChartComponent") {
+          content = "Bar Chart (by SQL)";
+        } else if (item.component_name === "ScatterPlotComponent") {
+          content = "Scatter Plot (by SQL)";
         } else {
           content = "Unknown";
         }
@@ -455,6 +507,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             extraction: item.extraction,
             iso: item.iso,
             timeout_s: item.timeout_s,
+            business_object_types: item.business_object_types,
+            business_activities: item.business_activities,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -493,6 +547,22 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             w_divergence: item.w_divergence,
             alpha: item.alpha,
             beta: item.beta,
+            // SqlQueryComponent properties (`query` is already set above,
+            // shared with PieChartComponent)
+            name: item.name,
+            query_asset: item.query_asset,
+            row_limit: item.row_limit,
+            // KpiComponent / BarChartComponent / ScatterPlotComponent
+            prefix: item.prefix,
+            suffix: item.suffix,
+            decimals: item.decimals,
+            horizontal: item.horizontal,
+            show_values: item.show_values,
+            x_column: item.x_column,
+            y_column: item.y_column,
+            series_column: item.series_column,
+            x_label: item.x_label,
+            y_label: item.y_label,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -513,6 +583,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.extraction = item.extraction;   // For VariantsComponent advanced settings
               node.iso = item.iso;                 // For VariantsComponent advanced settings
               node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
+              node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
+              node.business_activities = item.business_activities;     // VariantsComponent resource-aware
               // LogStatisticsComponent properties
               node.show_num_events = item.show_num_events;
               node.show_num_activities = item.show_num_activities;
@@ -551,6 +623,22 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.w_divergence = item.w_divergence;
               node.alpha = item.alpha;
               node.beta = item.beta;
+              // SqlQueryComponent properties
+              node.name = item.name;
+              node.query = item.query;
+              node.query_asset = item.query_asset;
+              node.row_limit = item.row_limit;
+              // KpiComponent / BarChartComponent / ScatterPlotComponent
+              node.prefix = item.prefix;
+              node.suffix = item.suffix;
+              node.decimals = item.decimals;
+              node.horizontal = item.horizontal;
+              node.show_values = item.show_values;
+              node.x_column = item.x_column;
+              node.y_column = item.y_column;
+              node.series_column = item.series_column;
+              node.x_label = item.x_label;
+              node.y_label = item.y_label;
             }
           }
           // Set data attribute for persistence

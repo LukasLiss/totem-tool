@@ -105,6 +105,9 @@ export function SettingsView() {
               <p className="text-muted-foreground text-sm mt-1">
                 Manage application settings and cache.
               </p>
+              <p className="text-muted-foreground text-xs mt-1">
+                TOTeM Tool version {__APP_VERSION__}
+              </p>
             </div>
             <Button
               variant="ghost"

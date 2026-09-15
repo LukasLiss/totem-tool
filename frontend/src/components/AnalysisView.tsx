@@ -17,11 +17,12 @@ import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import OCPNVisualizer from "@/react_component/OCPNVisualizer";
 import TotemMiner from "@/react_component/TotemMiner";
+import { SqlQueryAnalysis } from "@/components/SqlQueryAnalysis";
 
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
 
   if (viewMode.type !== "analysis") return null;
@@ -173,6 +174,17 @@ export function AnalysisView() {
               height={700}
               filterEnabled={filterEnabled}
               onToggleFilter={toggleFilter}
+            />
+          </div>
+        );
+
+      case 'sqlQuery':
+        return (
+          <div className="w-full max-w-7xl">
+            <SqlQueryAnalysis
+              fileId={selectedFile?.id}
+              projectId={selectedFile?.project}
+              height={760}
             />
           </div>
         );

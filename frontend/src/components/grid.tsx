@@ -58,6 +58,7 @@ const GridContent: React.FC = () => {
         }
       } catch (error) {
         console.error("Failed to load layout:", error);
+        toast.error("Dashboard layout could not be loaded");
       }
     };
     

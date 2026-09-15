@@ -18,7 +18,8 @@ import {
 } from "@/contexts/FilterStackContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
-import { useFilterStore } from "@/store/filterStore";
+import { useFilterStore, type FilterStats } from "@/store/filterStore";
+import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
 
 
 const PIPE_BG = "var(--secondary)";
@@ -375,15 +376,6 @@ function ApplyButton({
   );
 }
 
-type FilterStats = {
-  objectPct:    number;
-  eventPct:     number;
-  objectBefore: number;
-  objectAfter:  number;
-  eventBefore:  number;
-  eventAfter:   number;
-};
-
 const DEFAULT_STATS: FilterStats = {
   objectPct: 1, eventPct: 1,
   objectBefore: 0, objectAfter: 0,
@@ -401,9 +393,14 @@ export default function FilterChipStack() {
   const [editingRule,   setEditingRule]   = useState<FilterRule | undefined>();
   const [objectTypes,   setObjectTypes]   = useState<{ name: string; count: number }[]>([]);
   const [activities,    setActivities]    = useState<{ name: string; count: number }[]>([]);
-  const [stats,         setStats]         = useState<FilterStats>(DEFAULT_STATS);
   const [applying,      setApplying]      = useState(false);
-  const [appliedKey,    setAppliedKey]    = useState(JSON.stringify([]));
+  // The applied rules and the survival stats live in the filter store so
+  // other components (e.g. the process-area filter action) can apply a
+  // filter too and this header stays in sync.
+  const storeStats   = useFilterStore((s) => s.stats);
+  const appliedRules = useFilterStore((s) => s.appliedRules);
+  const stats: FilterStats = storeStats ?? DEFAULT_STATS;
+  const appliedKey = JSON.stringify(appliedRules);
 
 
   const [typeOrder,     setTypeOrder]     = useState<FilterType[]>(FILTER_TYPE_ORDER);
@@ -413,9 +410,8 @@ export default function FilterChipStack() {
 
 
   useEffect(() => {
-    setStats(DEFAULT_STATS);
-    setAppliedKey(JSON.stringify([]));
     useFilterStore.getState().clear();
+    useFilterStore.getState().setStats(null);
     if (!fileId) { setObjectTypes([]); setActivities([]); return; }
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
@@ -427,7 +423,7 @@ export default function FilterChipStack() {
     axios.get<{ num_objects: number; num_events: number }>(
       `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
     ).then(({ data }) => {
-      setStats({
+      useFilterStore.getState().setStats({
         objectPct:    1,
         eventPct:     1,
         objectBefore: data.num_objects,
@@ -481,38 +477,9 @@ export default function FilterChipStack() {
 
   async function applyFilters() {
     if (!fileId) return;
-    const activeFilters = filters.filter(f => f.enabled);
-    if (activeFilters.length === 0) {
-      useFilterStore.getState().clear();
-      setStats(prev => ({
-        ...prev,
-        objectPct: 1, eventPct: 1,
-        objectAfter: prev.objectBefore,
-        eventAfter: prev.eventBefore,
-      }));
-      setAppliedKey(currentKey);
-      return;
-    }
     setApplying(true);
     try {
-      const { data } = await axios.post<{
-        object_percentage:  number;
-        object_count_before: number;
-        object_count_after:  number;
-        event_percentage:   number;
-        event_count_before: number;
-        event_count_after:  number;
-      }>(`/api/files/${fileId}/apply_filters/`, { filters: activeFilters }, { _skipGlobalFilter: true });
-      setStats({
-        objectPct:    data.object_percentage,
-        eventPct:     data.event_percentage,
-        objectBefore: data.object_count_before,
-        objectAfter:  data.object_count_after,
-        eventBefore:  data.event_count_before,
-        eventAfter:   data.event_count_after,
-      });
-      useFilterStore.getState().setApplied(activeFilters);
-      setAppliedKey(currentKey);
+      await applyGlobalFilterRules(fileId, filters);
     } catch (err) {
       console.error("FilterChipStack: failed to apply filters", err);
     } finally {

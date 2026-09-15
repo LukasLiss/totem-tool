@@ -1,0 +1,553 @@
+{
+  "objectTypes": [
+    {
+      "name": "order",
+      "attributes": []
+    },
+    {
+      "name": "item",
+      "attributes": []
+    },
+    {
+      "name": "package",
+      "attributes": []
+    },
+    {
+      "name": "worker",
+      "attributes": []
+    }
+  ],
+  "eventTypes": [
+    {
+      "name": "close order",
+      "attributes": []
+    },
+    {
+      "name": "end shift",
+      "attributes": []
+    },
+    {
+      "name": "pack items",
+      "attributes": []
+    },
+    {
+      "name": "pick item",
+      "attributes": []
+    },
+    {
+      "name": "place order",
+      "attributes": []
+    },
+    {
+      "name": "ship package",
+      "attributes": []
+    },
+    {
+      "name": "start shift",
+      "attributes": []
+    }
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "type": "order",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i1",
+          "qualifier": "contains"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "contains"
+        }
+      ]
+    },
+    {
+      "id": "o2",
+      "type": "order",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i3",
+          "qualifier": "contains"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "contains"
+        }
+      ]
+    },
+    {
+      "id": "o3",
+      "type": "order",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i5",
+          "qualifier": "contains"
+        }
+      ]
+    },
+    {
+      "id": "o4",
+      "type": "order",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i6",
+          "qualifier": "contains"
+        }
+      ]
+    },
+    {
+      "id": "i1",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "i2",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "i3",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "i4",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "i5",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "i6",
+      "type": "item",
+      "attributes": [],
+      "relationships": []
+    },
+    {
+      "id": "p1",
+      "type": "package",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i1",
+          "qualifier": "packs"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "packs"
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "type": "package",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i3",
+          "qualifier": "packs"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "packs"
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "type": "package",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i5",
+          "qualifier": "packs"
+        },
+        {
+          "objectId": "i6",
+          "qualifier": "packs"
+        }
+      ]
+    },
+    {
+      "id": "w1",
+      "type": "worker",
+      "attributes": [],
+      "relationships": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e01",
+      "type": "start shift",
+      "time": "2026-03-02T08:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e02",
+      "type": "place order",
+      "time": "2026-03-02T09:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e03",
+      "type": "place order",
+      "time": "2026-03-02T10:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o2",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e04",
+      "type": "pick item",
+      "time": "2026-03-02T11:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e05",
+      "type": "pick item",
+      "time": "2026-03-02T12:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e06",
+      "type": "pack items",
+      "time": "2026-03-02T13:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p1",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e07",
+      "type": "ship package",
+      "time": "2026-03-02T14:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p1",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e08",
+      "type": "close order",
+      "time": "2026-03-02T15:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o1",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e09",
+      "type": "pick item",
+      "time": "2026-03-02T16:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "pack items",
+      "time": "2026-03-02T18:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p2",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "ship package",
+      "time": "2026-03-02T19:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p2",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "close order",
+      "time": "2026-03-02T20:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o2",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "place order",
+      "time": "2026-03-02T21:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o3",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "i5",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e15",
+      "type": "place order",
+      "time": "2026-03-02T22:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o4",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "i6",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "pick item",
+      "time": "2026-03-02T23:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i5",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e17",
+      "type": "pick item",
+      "time": "2026-03-03T00:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "i6",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e18",
+      "type": "pack items",
+      "time": "2026-03-03T01:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p3",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "i5",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i6",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e19",
+      "type": "ship package",
+      "time": "2026-03-03T02:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "p3",
+          "qualifier": "package"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e20",
+      "type": "close order",
+      "time": "2026-03-03T03:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o3",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e21",
+      "type": "close order",
+      "time": "2026-03-03T04:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "o4",
+          "qualifier": "order"
+        },
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    },
+    {
+      "id": "e22",
+      "type": "end shift",
+      "time": "2026-03-03T05:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "w1",
+          "qualifier": "worker"
+        }
+      ]
+    }
+  ]
+}

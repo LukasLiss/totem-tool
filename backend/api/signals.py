@@ -28,8 +28,16 @@ def delete_eventlog_file(sender, instance, **kwargs):
         db = _OCEL_DB_REGISTRY.pop(pk, None)
         _OCEL_OBJECT_TYPES_REGISTRY.pop(pk, None)
     if db is not None:
+        # Take the per-file lock so we never close the connection underneath
+        # an algorithm that is still running a query on it (DuckDB can abort
+        # the whole process in that case rather than raising).
+        lock = getattr(db, "lock", None)
         try:
-            db.conn.close()
+            if lock is not None:
+                with lock:
+                    db.conn.close()
+            else:
+                db.conn.close()
         except Exception:
             pass
 

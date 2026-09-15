@@ -488,6 +488,96 @@ class EventLogTotemDiscoveryApiTests(TestCase):
         self.assertEqual(response.data["version"], 1)
 
 
+class EventLogReplaceIsNotAllowedTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="no-replace-user")
+        self.project = Project.objects.create(name="No Replace")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(project=self.project, file="keep.duckdb")
+        self.client.force_authenticate(user=self.user)
+
+    def test_put_and_patch_are_rejected(self):
+        for method in (self.client.put, self.client.patch):
+            response = method(
+                f"/api/files/{self.event_log.pk}/",
+                {"file": SimpleUploadedFile("other.json", b"{}")},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.event_log.refresh_from_db()
+        self.assertEqual(self.event_log.file.name, "keep.duckdb")
+
+
+class DeleteUserDataTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="deleter")
+        self.other = User.objects.create_user(username="colleague")
+        self.own = Project.objects.create(name="own")
+        self.own.users.add(self.user)
+        self.shared = Project.objects.create(name="shared")
+        self.shared.users.add(self.user, self.other)
+        self.client.force_authenticate(user=self.user)
+
+    def test_requires_confirmation(self):
+        response = self.client.delete("/api/delete-data/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Project.objects.filter(pk=self.own.pk).exists())
+
+    def test_shared_projects_survive_for_other_members(self):
+        response = self.client.delete(
+            "/api/delete-data/", {"confirm": "DELETE"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(Project.objects.filter(pk=self.own.pk).exists())
+        self.shared.refresh_from_db()
+        self.assertEqual(list(self.shared.users.all()), [self.other])
+        self.assertEqual(response.data["deleted_projects"], 1)
+        self.assertEqual(response.data["left_shared_projects"], 1)
+
+
+class ApiInputValidationTests(TestCase):
+    """Client mistakes must be 400s, not 500s."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="validation-user")
+        self.project = Project.objects.create(name="Validation")
+        self.project.users.add(self.user)
+        self.event_log = EventLog.objects.create(project=self.project, file="v.duckdb")
+        self.client.force_authenticate(user=self.user)
+
+    def test_variants_with_non_integer_file_id_is_400(self):
+        response = self.client.get("/api/variants/?file_id=abc")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_dotted_chart_with_non_integer_time_bounds_is_400(self):
+        response = self.client.get(
+            f"/api/files/{self.event_log.pk}/oc_dotted_chart/?t_min=abc"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_filter_definition_is_400(self):
+        with patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())):
+            response = self.client.post(
+                f"/api/files/{self.event_log.pk}/apply_filters/",
+                {"filters": [{"type": "definitely-not-a-filter"}]},
+                format="json",
+            )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_long_upload_filename_yields_project_name_within_limit(self):
+        from .views.event_log import _project_name_for_upload
+
+        name = _project_name_for_upload("x" * 80 + ".json", self.user.username)
+        self.assertLessEqual(len(name), 30)
+        self.assertTrue(name.endswith(f"_{self.user.username}"))
+        self.assertEqual(
+            _project_name_for_upload("log.json", "bob"), "logjson_bob"
+        )
+
+
 class EventLogObjectTypesApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -1226,6 +1316,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_not_called()
 
@@ -1447,6 +1539,8 @@ class OCCNConformanceApiTests(TestCase):
                 "asset_id": self.occn_asset.pk,
                 "replay_unit_strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                 "leading_object_type": None,
+                "execution_column": None,
+                "restrict_to_model_object_types": False,
                 "max_states": 5_000,
                 **result.to_dict(),
             },
@@ -1457,6 +1551,8 @@ class OCCNConformanceApiTests(TestCase):
             db,
             strategy=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
             leading_object_type=None,
+            execution_column=None,
+            object_types=None,
         )
         fitness.assert_called_once()
         deserialized_occn, called_units = fitness.call_args.args
@@ -1670,6 +1766,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
             db,
             strategy=LEADING_OBJECT_REPLAY_STRATEGY,
             leading_object_type="Order",
+            execution_column=None,
+            object_types=None,
         )
 
     def test_extraction_failure_returns_server_error(self):
@@ -1763,6 +1861,8 @@ class OCCNReplayUnitDetailApiTests(TestCase):
                 {
                     "strategy": CONNECTED_COMPONENTS_REPLAY_STRATEGY,
                     "leading_object_type": None,
+                    "execution_column": None,
+                    "object_types": None,
                 },
             )
 
@@ -2279,6 +2379,141 @@ class ProjectAssetApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class SqlQueryAssetApiTests(TestCase):
+    """Stored SQL queries live in the project asset store as QUERY assets."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="query-user")
+        self.project = Project.objects.create(name="Query project")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _create(self, content_json, name="Events per activity"):
+        return self.client.post(
+            "/api/assets/",
+            {
+                "project": self.project.pk,
+                "name": name,
+                "asset_type": ProjectAsset.AssetType.QUERY,
+                "content_json": content_json,
+            },
+            format="json",
+        )
+
+    def test_create_query_asset(self):
+        response = self._create(
+            {
+                "schema": "sql-query",
+                "version": 1,
+                "query": "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                "description": "one row per activity",
+            }
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        asset = ProjectAsset.objects.get(pk=response.data["id"])
+        self.assertEqual(asset.asset_type, ProjectAsset.AssetType.QUERY)
+        self.assertEqual(asset.content_json["query"].split()[0], "SELECT")
+
+    def test_query_asset_requires_schema_and_query(self):
+        response = self._create({"query": "SELECT 1"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self._create({"schema": "sql-query", "version": 1, "query": "   "})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self._create({"schema": "sql-query", "version": 2, "query": "SELECT 1"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_list_filters_query_assets(self):
+        self._create({"schema": "sql-query", "version": 1, "query": "SELECT 1"}, name="q")
+        ProjectAsset.objects.create(
+            project=self.project,
+            name="model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        response = self.client.get(
+            f"/api/assets/?project={self.project.pk}&asset_type=QUERY"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([a["name"] for a in response.data], ["q"])
+
+    def test_patch_query_text_is_revalidated(self):
+        created = self._create({"schema": "sql-query", "version": 1, "query": "SELECT 1"})
+        asset_id = created.data["id"]
+        response = self.client.patch(
+            f"/api/assets/{asset_id}/",
+            {"content_json": {"schema": "sql-query", "version": 1, "query": "SELECT 2"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(ProjectAsset.objects.get(pk=asset_id).content_json["query"], "SELECT 2")
+        response = self.client.patch(
+            f"/api/assets/{asset_id}/",
+            {"content_json": {"schema": "sql-query", "version": 1}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class QueryReferenceResolutionTests(SimpleTestCase):
+    """Stored queries can be used like tables inside other queries."""
+
+    def test_unreferenced_query_is_returned_unchanged(self):
+        from .query_refs import resolve_query_references
+        stored = {"a": "SELECT 1 AS x"}
+        self.assertEqual(resolve_query_references("SELECT 2", stored), "SELECT 2")
+
+    def test_reference_becomes_cte(self):
+        from .query_refs import resolve_query_references
+        stored = {"Waiting times": "SELECT 1 AS w"}
+        out = resolve_query_references('SELECT w FROM "Waiting times"', stored)
+        self.assertEqual(out, 'WITH "Waiting times" AS (SELECT 1 AS w) SELECT w FROM "Waiting times"')
+
+    def test_bare_identifier_reference_is_case_insensitive(self):
+        from .query_refs import resolve_query_references
+        stored = {"waiting_times": "SELECT 1 AS w;"}
+        out = resolve_query_references("select w from Waiting_Times", stored)
+        self.assertTrue(out.startswith('WITH "waiting_times" AS (SELECT 1 AS w) select'))
+
+    def test_transitive_references_are_ordered(self):
+        from .query_refs import resolve_query_references
+        stored = {"avg": 'SELECT avg(d) AS a FROM "durations"', "durations": "SELECT 1 AS d"}
+        out = resolve_query_references('SELECT a FROM "avg"', stored)
+        self.assertEqual(
+            out,
+            'WITH "durations" AS (SELECT 1 AS d), "avg" AS (SELECT avg(d) AS a FROM "durations") SELECT a FROM "avg"',
+        )
+
+    def test_user_with_clause_is_merged(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1 AS d"}
+        out = resolve_query_references('-- c\nWITH t AS (SELECT d FROM base) SELECT * FROM t', stored)
+        self.assertEqual(out, 'WITH "base" AS (SELECT 1 AS d), t AS (SELECT d FROM base) SELECT * FROM t')
+
+    def test_references_in_strings_and_comments_are_ignored(self):
+        from .query_refs import resolve_query_references
+        stored = {"base": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT 'base' -- base", stored), "SELECT 'base' -- base"
+        )
+
+    def test_reserved_table_names_are_never_references(self):
+        from .query_refs import resolve_query_references
+        stored = {"events": "SELECT 1"}
+        self.assertEqual(
+            resolve_query_references("SELECT * FROM events", stored, reserved=("events",)),
+            "SELECT * FROM events",
+        )
+
+    def test_cycles_are_rejected(self):
+        from .query_refs import QueryReferenceError, resolve_query_references
+        stored = {"a": 'SELECT * FROM "b"', "b": 'SELECT * FROM "a"'}
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', stored)
+        with self.assertRaises(QueryReferenceError):
+            resolve_query_references('SELECT * FROM "a"', {"a": 'SELECT 1'}, self_name="a")
 
 
 class LRUFileBasedCacheTests(SimpleTestCase):
@@ -2807,6 +3042,209 @@ class ProcessAreaDiscoveryApiTests(TestCase):
         self.assertIsNotNone(get_cached_result(self.event_log, "discover_mlpa"))
 
 
+class DashboardAuthorizationAndLayoutTests(TestCase):
+    """Dashboards must stay inside projects the caller belongs to, and a bad
+    layout payload must not wipe the existing layout."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="dash-owner")
+        self.other = User.objects.create_user(username="dash-other")
+        self.project = Project.objects.create(name="Mine")
+        self.project.users.add(self.user)
+        self.foreign_project = Project.objects.create(name="Theirs")
+        self.foreign_project.users.add(self.other)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_cannot_create_dashboard_in_foreign_project(self):
+        response = self.client.post(
+            "/api/dashboard/",
+            {"project": self.foreign_project.pk, "name": "sneaky"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Dashboard.objects.filter(project=self.foreign_project).exists())
+
+    def test_create_with_unknown_project_is_400_not_500(self):
+        response = self.client.post(
+            "/api/dashboard/", {"project": 999999, "name": "x"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_move_dashboard_into_foreign_project(self):
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/",
+            {"project": self.foreign_project.pk},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.dashboard.refresh_from_db()
+        self.assertEqual(self.dashboard.project, self.project)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+
+    def test_invalid_layout_item_keeps_existing_components(self):
+        ok = self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "hi"}]
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+        bad = self._save([{"component_name": "TextBoxComponent"}])  # no x/y/w/h
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+        bad = self._save(["not-an-object"])
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.dashboard.components.count(), 1)
+
+    def test_filter_stack_component_round_trips(self):
+        rules = [{"kind": "activity", "values": ["a"]}]
+        response = self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "FilterStackComponent",
+              "filter_stack_json": rules}]
+        )
+        self.assertEqual(response.status_code, 200)
+        layout = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(layout.status_code, 200)
+        self.assertEqual(layout.data[0]["component_name"], "FilterStackComponent")
+        self.assertEqual(layout.data[0]["filter_stack_json"], rules)
+
+
+class SqlDashboardComponentsLayoutTests(TestCase):
+    """Round-trip of the SQL-driven widgets (KPI, bar chart, scatter plot,
+    SQL editor, pie chart) including links to stored query assets."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="sql-dash-owner")
+        self.other = User.objects.create_user(username="sql-dash-other")
+        self.project = Project.objects.create(name="Mine")
+        self.project.users.add(self.user)
+        self.foreign_project = Project.objects.create(name="Theirs")
+        self.foreign_project.users.add(self.other)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.query_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="stored",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT 1 AS value"},
+        )
+        self.foreign_query_asset = ProjectAsset.objects.create(
+            project=self.foreign_project,
+            name="foreign",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT 2 AS value"},
+        )
+        self.model_asset = ProjectAsset.objects.create(
+            project=self.project,
+            name="model",
+            asset_type=ProjectAsset.AssetType.TOTEM,
+            content_json=valid_totem_content_json(),
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+
+    def _layout(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(response.status_code, 200)
+        return {item["component_name"]: item for item in response.data}
+
+    def test_new_components_round_trip(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "title": "Events", "query": "SELECT count(*) AS value FROM events",
+                 "value_column": "value", "prefix": "", "suffix": " ev", "decimals": 2},
+                {"x": 2, "y": 0, "w": 4, "h": 4, "component_name": "BarChartComponent",
+                 "title": "Per activity", "query": "SELECT activity AS label, count(*) AS value FROM events GROUP BY activity",
+                 "label_column": "label", "value_column": "value", "horizontal": True, "show_values": True},
+                {"x": 6, "y": 0, "w": 4, "h": 4, "component_name": "ScatterPlotComponent",
+                 "title": "xy", "query": "SELECT 1 AS x, 2 AS y, 'a' AS s",
+                 "x_column": "x", "y_column": "y", "series_column": "s", "x_label": "X", "y_label": "Y"},
+                {"x": 0, "y": 4, "w": 6, "h": 6, "component_name": "SqlQueryComponent",
+                 "name": "raw", "query": "SELECT * FROM events", "row_limit": 50},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+
+        kpi = layout["KpiComponent"]
+        self.assertEqual(kpi["title"], "Events")
+        self.assertEqual(kpi["value_column"], "value")
+        self.assertEqual(kpi["suffix"], " ev")
+        self.assertEqual(kpi["decimals"], 2)
+        self.assertIsNone(kpi["query_asset"])
+
+        bar = layout["BarChartComponent"]
+        self.assertEqual(bar["label_column"], "label")
+        self.assertTrue(bar["horizontal"])
+        self.assertTrue(bar["show_values"])
+
+        scatter = layout["ScatterPlotComponent"]
+        self.assertEqual(scatter["series_column"], "s")
+        self.assertEqual(scatter["y_label"], "Y")
+
+        sql = layout["SqlQueryComponent"]
+        self.assertEqual(sql["row_limit"], 50)
+        self.assertNotIn("expected_result", sql)
+
+    def test_linked_query_asset_is_kept_when_it_belongs_to_the_project(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "query": "SELECT 0", "query_asset": self.query_asset.pk},
+                {"x": 0, "y": 2, "w": 4, "h": 4, "component_name": "PieChartComponent",
+                 "query": "SELECT 0", "query_asset": str(self.query_asset.pk)},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+        self.assertEqual(layout["KpiComponent"]["query_asset"], self.query_asset.pk)
+        self.assertEqual(layout["PieChartComponent"]["query_asset"], self.query_asset.pk)
+
+    def test_foreign_or_non_query_assets_are_unlinked(self):
+        response = self._save(
+            [
+                {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+                 "query": "SELECT 0", "query_asset": self.foreign_query_asset.pk},
+                {"x": 0, "y": 2, "w": 4, "h": 4, "component_name": "BarChartComponent",
+                 "query": "SELECT 0", "query_asset": self.model_asset.pk},
+                {"x": 0, "y": 6, "w": 4, "h": 4, "component_name": "ScatterPlotComponent",
+                 "query": "SELECT 0", "query_asset": "not-an-id"},
+            ]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        layout = self._layout()
+        self.assertIsNone(layout["KpiComponent"]["query_asset"])
+        self.assertIsNone(layout["BarChartComponent"]["query_asset"])
+        self.assertIsNone(layout["ScatterPlotComponent"]["query_asset"])
+
+    def test_deleting_a_stored_query_unlinks_components(self):
+        self._save(
+            [{"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "KpiComponent",
+              "query": "SELECT 0", "query_asset": self.query_asset.pk}]
+        )
+        self.assertEqual(self.client.delete(f"/api/assets/{self.query_asset.pk}/").status_code, 204)
+        self.assertIsNone(self._layout()["KpiComponent"]["query_asset"])
+
+
 class ProcessAreaComponentPersistenceTests(TestCase):
     """
     Dashboard round-trip for the Process Area component's discovery settings.
@@ -3042,6 +3480,7 @@ import duckdb as _duckdb
 
 from totem_lib.ocel.ocel_duckdb import create_ocel_schema
 from . import views as _views
+from .views.event_log import QUERY_BROWSER_TABLES
 
 
 def _write_minimal_duckdb_log(path: str) -> None:
@@ -3062,6 +3501,181 @@ def _write_minimal_duckdb_log(path: str) -> None:
     db = OcelDuckDB._from_prepared_connection(conn, [], [])
     db.save(path)
     db.close()
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class ExecuteQuerySandboxTests(APITestCase):
+    """The ad-hoc SQL endpoint must not reach the host filesystem."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("sql-user", password="pw")
+        self.project = Project.objects.create(name="sql-project")
+        self.project.users.add(self.user)
+        filename = f"sql-sandbox-{self._testMethodName}.duckdb"
+        _write_minimal_duckdb_log(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def _run(self, query):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/", {"query": query}, format="json"
+        )
+
+    def test_select_works_and_reports_truncation_flag(self):
+        response = self._run("SELECT activity FROM events ORDER BY activity;")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["columns"], ["activity"])
+        self.assertEqual(
+            [r["activity"] for r in response.data["data"]], ["create order", "ship order"]
+        )
+        self.assertFalse(response.data["truncated"])
+
+    def test_multiple_statements_are_rejected(self):
+        response = self._run("SELECT 1; SELECT 2")
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_select_statement_is_rejected(self):
+        response = self._run("COPY (SELECT 1) TO '/tmp/should-not-exist.csv'")
+        self.assertEqual(response.status_code, 400)
+        response = self._run("CREATE TABLE x AS SELECT 1")
+        self.assertEqual(response.status_code, 400)
+
+    def test_select_cannot_read_host_files(self):
+        response = self._run("SELECT * FROM glob('/*')")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertNotIn("data", response.data)
+        response = self._run("SELECT content FROM read_text('/etc/hosts')")
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_other_users_cannot_query_the_log(self):
+        other = User.objects.create_user("other-sql-user", password="pw")
+        self.client.force_authenticate(other)
+        response = self._run("SELECT 1")
+        self.assertEqual(response.status_code, 404)
+
+    def test_stored_queries_can_be_referenced_by_name(self):
+        ProjectAsset.objects.create(
+            project=self.project,
+            name="Activity counts",
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1,
+                          "query": "SELECT activity, count(*) AS n FROM events GROUP BY activity"},
+        )
+        response = self._run('SELECT sum(n) AS total FROM "Activity counts"')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"total": 2}])
+
+    def test_circular_stored_queries_fail_cleanly(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="a", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "b"'},
+        )
+        ProjectAsset.objects.create(
+            project=self.project, name="b", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": 'SELECT * FROM "a"'},
+        )
+        response = self._run('SELECT * FROM "a"')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Circular", response.data["error"])
+
+    def test_referenced_stored_query_cannot_escape_the_sandbox(self):
+        ProjectAsset.objects.create(
+            project=self.project, name="evil", asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": "SELECT * FROM glob('/*')"},
+        )
+        response = self._run('SELECT * FROM "evil"')
+        self.assertEqual(response.status_code, 400)
+
+    def _run_page(self, query, **paging):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/",
+            {"query": query, **paging},
+            format="json",
+        )
+
+    def test_pages_are_served_with_offset_and_limit(self):
+        query = "SELECT activity FROM events ORDER BY activity"
+        first = self._run_page(query, offset=0, limit=1)
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual([r["activity"] for r in first.data["data"]], ["create order"])
+        self.assertTrue(first.data["has_more"])
+        self.assertEqual(first.data["offset"], 0)
+        self.assertEqual(first.data["limit"], 1)
+
+        second = self._run_page(query, offset=1, limit=1)
+        self.assertEqual([r["activity"] for r in second.data["data"]], ["ship order"])
+        self.assertFalse(second.data["has_more"])
+
+        beyond = self._run_page(query, offset=5, limit=1)
+        self.assertEqual(beyond.data["data"], [])
+        self.assertFalse(beyond.data["has_more"])
+        # Columns are still reported for an empty page so the table header
+        # survives scrolling past the end.
+        self.assertEqual(beyond.data["columns"], ["activity"])
+
+    def test_paging_parameters_are_validated(self):
+        response = self._run_page("SELECT 1", offset=-1)
+        self.assertEqual(response.status_code, 400)
+        response = self._run_page("SELECT 1", limit=0)
+        self.assertEqual(response.status_code, 400)
+        response = self._run_page("SELECT 1", limit="lots")
+        self.assertEqual(response.status_code, 400)
+        # Over-large limits are clamped to the server cap rather than rejected.
+        response = self._run_page("SELECT 1", limit=10**9)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["limit"], views.event_log.EXECUTE_QUERY_MAX_ROWS)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class QueryColumnsEndpointTests(APITestCase):
+    """The SQL editor's schema browser."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("cols-user", password="pw")
+        self.project = Project.objects.create(name="cols-project")
+        self.project.users.add(self.user)
+        filename = f"sql-columns-{self._testMethodName}.duckdb"
+        _write_minimal_duckdb_log(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+        self.client.force_authenticate(self.user)
+
+    def _get(self, pk=None):
+        return self.client.get(f"/api/files/{pk or self.log.pk}/query_columns/")
+
+    def test_lists_every_exposed_table_with_columns_and_counts(self):
+        response = self._get()
+        self.assertEqual(response.status_code, 200, response.data)
+        tables = {t["name"]: t for t in response.data["tables"]}
+        self.assertEqual(set(tables), set(QUERY_BROWSER_TABLES))
+        events = tables["events"]
+        self.assertEqual(events["rowCount"], 2)
+        self.assertIn("activity", [c["name"] for c in events["columns"]])
+
+    def test_reports_structural_key_hints(self):
+        tables = {t["name"]: t for t in self._get().data["tables"]}
+        notes = {c["name"]: c["note"] for c in tables["event_object"]["columns"]}
+        self.assertEqual(notes["event_id"], "FK -> events")
+        self.assertEqual(notes["obj_id"], "FK -> objects")
+        event_notes = {c["name"]: c["note"] for c in tables["events"]["columns"]}
+        self.assertEqual(event_notes["event_id"], "PK")
+
+    def test_other_users_cannot_read_the_schema(self):
+        other = User.objects.create_user("other-cols-user", password="pw")
+        self.client.force_authenticate(other)
+        self.assertEqual(self._get().status_code, 404)
+
+    def test_non_duckdb_logs_are_rejected(self):
+        json_log = EventLog.objects.create(
+            project=self.project, file="not-converted.json"
+        )
+        response = self._get(pk=json_log.pk)
+        self.assertEqual(response.status_code, 400)
 
 
 class OcelDbConcurrencyTests(TestCase):
@@ -3479,12 +4093,86 @@ class SaveDiscoveredModelApiTests(APITestCase):
 
         self.client.force_authenticate(self.user)
 
-    def _save(self, model_type, name, params=None):
+    def _save(self, model_type, name, params=None, query=""):
         return self.client.post(
-            f"/api/files/{self.log.pk}/save_discovered_model/",
+            f"/api/files/{self.log.pk}/save_discovered_model/{query}",
             {"name": name, "model_type": model_type, "params": params or {}},
             format="json",
         )
+
+    # The paper example: order o1 with items i1/i2; "pick item" is item-only.
+    ORDER_ONLY_QUERY = "?object_types=order&activities=place%20order,complete%20order"
+
+    def test_saved_totem_respects_the_global_filter(self):
+        response = self._save("TOTEM", "Filtered TOTeM", {"tau": 0.0}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered TOTeM")
+        self.assertEqual(asset.content_json["tempgraph"]["nodes"], ["order"])
+        self.assertEqual(
+            asset.metadata["global_filter"],
+            {"object_types": ["order"], "activities": ["place order", "complete order"]},
+        )
+
+        unfiltered = self._save("TOTEM", "Full TOTeM", {"tau": 0.0})
+        self.assertEqual(unfiltered.status_code, 201, unfiltered.data)
+        full = ProjectAsset.objects.get(project=self.project, name="Full TOTeM")
+        self.assertEqual(full.content_json["tempgraph"]["nodes"], ["item", "order"])
+        self.assertNotIn("global_filter", full.metadata)
+
+    def test_saved_occn_respects_the_global_filter(self):
+        response = self._save("OCCN", "Filtered OCCN", {}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OCCN").content_json
+        self.assertEqual(content["object_types"], ["order"])
+        self.assertNotIn("pick item", content["activities"])
+        self.assertNotIn("START_item", content["activities"])
+
+        # ... and matches what the OCCN component displays under that filter.
+        shown = self.client.get(
+            "/api/occn/",
+            {"file_id": self.log.pk, "object_types": "order", "activities": "place order,complete order"},
+        )
+        self.assertEqual(shown.status_code, 200, shown.data)
+        shown_activities = {a["id"] for a in shown.json()["activities"]}
+        self.assertEqual(set(content["activities"]), shown_activities)
+
+    def test_saved_ocpn_respects_the_global_filter(self):
+        response = self._save("OCPN", "Filtered OCPN", {"timeout_s": 30}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN").content_json
+        self.assertEqual([ot["name"] for ot in content["objectTypes"]], ["order"])
+        labels = sorted(t["label"] for t in content["transitions"] if not t.get("silent"))
+        self.assertEqual(labels, ["complete order", "place order"])
+
+        # A filtered save must not be served from the unfiltered cache entry.
+        unfiltered = self._save("OCPN", "Full OCPN", {"timeout_s": 30})
+        self.assertEqual(unfiltered.status_code, 201, unfiltered.data)
+        full = ProjectAsset.objects.get(project=self.project, name="Full OCPN").content_json
+        self.assertEqual([ot["name"] for ot in full["objectTypes"]], ["item", "order"])
+
+    def test_saved_ocdfg_respects_the_global_filter(self):
+        response = self._save("OCDFG", "Filtered OC-DFG", {}, self.ORDER_ONLY_QUERY)
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Filtered OC-DFG").content_json
+        self.assertEqual(content["object_types"], ["order"])
+        self.assertEqual(content["activities"], ["complete order", "place order"])
+
+    def test_component_object_types_are_narrowed_by_the_global_filter(self):
+        # The component's own selection is intersected with the global filter.
+        response = self._save(
+            "OCDFG", "Narrowed", {"object_types": ["item", "order"]}, "?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Narrowed").content_json
+        self.assertEqual(content["object_types"], ["order"])
+
+        # A stale selection outside the filter falls back to the filter itself.
+        response = self._save(
+            "OCDFG", "Stale selection", {"object_types": ["item"]}, "?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        content = ProjectAsset.objects.get(project=self.project, name="Stale selection").content_json
+        self.assertEqual(content["object_types"], ["order"])
 
     def test_save_totem_creates_asset(self):
         response = self._save("TOTEM", "Discovered TOTeM", {"tau": 0.8})
@@ -3543,6 +4231,116 @@ class SaveDiscoveredModelApiTests(APITestCase):
         self.client.force_authenticate(outsider)
         response = self._save("OCPN", "Sneaky")
         self.assertEqual(response.status_code, 404)
+
+    # -- global filter -----------------------------------------------------
+    #
+    # The frontend appends the active global filter as query params to the
+    # save request (same mechanism as the discovery read endpoints); the
+    # stored model must be mined from the filtered log.
+
+    def test_totem_save_respects_global_object_type_filter(self):
+        response = self._save(
+            "TOTEM", "Filtered TOTeM", {"tau": 0.0}, query="?object_types=order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered TOTeM")
+        self.assertEqual(asset.content_json["tempgraph"]["nodes"], ["order"])
+        self.assertEqual(asset.metadata["global_filter"], {"object_types": ["order"]})
+
+    def test_ocpn_save_respects_global_object_type_filter(self):
+        response = self._save("OCPN", "Filtered OCPN", query="?object_types=order")
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN")
+        self.assertEqual(
+            [ot["name"] for ot in asset.content_json["objectTypes"]], ["order"]
+        )
+        labels = sorted(
+            t["label"] for t in asset.content_json["transitions"] if not t.get("silent")
+        )
+        self.assertEqual(labels, ["complete order", "place order"])
+
+    def test_ocpn_filtered_save_does_not_reuse_unfiltered_cache(self):
+        # Prime the unfiltered discovery cache, then save with a filter: the
+        # stored model must be the filtered one, not the cached full net.
+        unfiltered = self.client.get(f"/api/files/{self.log.pk}/discover_ocpn/")
+        self.assertEqual(unfiltered.status_code, 200)
+        response = self._save("OCPN", "Filtered OCPN 2", query="?object_types=order")
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCPN 2")
+        self.assertEqual(
+            [ot["name"] for ot in asset.content_json["objectTypes"]], ["order"]
+        )
+
+    def test_ocdfg_save_respects_global_activity_filter(self):
+        response = self._save(
+            "OCDFG", "Filtered OC-DFG", query="?activities=place%20order"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OC-DFG")
+        self.assertEqual(asset.content_json["activities"], ["place order"])
+
+    def test_occn_save_respects_global_activity_filter(self):
+        response = self._save(
+            "OCCN",
+            "Filtered OCCN",
+            {"relative_occurrence_threshold": 0.0},
+            query="?activities=place%20order,pick%20item",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        asset = ProjectAsset.objects.get(project=self.project, name="Filtered OCCN")
+        activities = asset.content_json["activities"]
+        self.assertIn("place order", activities)
+        self.assertNotIn("complete order", activities)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class FilteredCacheKeyTests(APITestCase):
+    """Filtered and unfiltered requests must never share a cache entry."""
+
+    def setUp(self):
+        cache.clear()
+        RESULTS_CACHE.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"paper-example-filter-cache-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def test_statistics_cache_is_filter_aware(self):
+        full = self.client.get(f"/api/files/{self.log.pk}/statistics/")
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.data["num_object_types"], 2)
+
+        filtered = self.client.get(
+            f"/api/files/{self.log.pk}/statistics/", {"object_types": "order"}
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data["num_object_types"], 1)
+
+        # The unfiltered entry must be untouched by the filtered request.
+        full_again = self.client.get(f"/api/files/{self.log.pk}/statistics/")
+        self.assertEqual(full_again.data["num_object_types"], 2)
+
+    def test_noe_cache_is_filter_aware(self):
+        full = self.client.get(f"/api/files/{self.log.pk}/NoE/")
+        self.assertEqual(full.status_code, 200)
+        self.assertEqual(full.data, 4)
+
+        filtered = self.client.get(
+            f"/api/files/{self.log.pk}/NoE/", {"activities": "pick item"}
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data, 2)
+
+        full_again = self.client.get(f"/api/files/{self.log.pk}/NoE/")
+        self.assertEqual(full_again.data, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -3626,3 +4424,202 @@ class ImageAssetApiTests(APITestCase):
         listed = self.client.get("/api/image-assets/")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.data, [])
+
+
+# ---------------------------------------------------------------------------
+# Release hardening: legacy image upload validation, timeout clamping and the
+# shared cache-clear endpoint.
+# ---------------------------------------------------------------------------
+
+import os as _os
+import tempfile as _tempfile
+
+from django.core.files.uploadedfile import SimpleUploadedFile as _SimpleUploadedFile
+from django.test import override_settings as _override_settings
+
+from .models import Dashboard as _Dashboard, ImageComponent as _ImageComponent
+
+_LEGACY_IMAGE_MEDIA_ROOT = _tempfile.mkdtemp(prefix="totem-test-legacy-image-")
+
+_PNG_1x1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f"
+    b"\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+@_override_settings(MEDIA_ROOT=_LEGACY_IMAGE_MEDIA_ROOT)
+class LegacyImageComponentUploadTests(TestCase):
+    """The legacy per-component image upload must apply the same type/size
+    rules as the asset store, and ``save_layout`` must not accept arbitrary
+    ``image`` paths."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="img-owner")
+        self.project = Project.objects.create(name="ImgProject")
+        self.project.users.add(self.user)
+        self.other_project = Project.objects.create(name="OtherProject")
+        self.dashboard = _Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.component = _ImageComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=2, h=2,
+            component_name="ImageComponent",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _upload(self, filename, content, content_type):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/components/{self.component.pk}/image/",
+            {"image": _SimpleUploadedFile(filename, content, content_type=content_type)},
+            format="multipart",
+        )
+
+    def test_png_upload_is_accepted(self):
+        response = self._upload("pic.png", _PNG_1x1, "image/png")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.component.refresh_from_db()
+        self.assertTrue(self.component.image.name.endswith(".png"))
+
+    def test_non_image_type_is_rejected(self):
+        response = self._upload("evil.exe", b"MZ\x90\x00", "application/octet-stream")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported image type", response.data["error"])
+        self.component.refresh_from_db()
+        self.assertFalse(self.component.image)
+
+    def test_oversized_image_is_rejected(self):
+        big = _PNG_1x1 + b"\x00" * (10 * 1024 * 1024 + 1)
+        response = self._upload("huge.png", big, "image/png")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10 MB", response.data["error"])
+
+    def _save_layout(self, image):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [{
+                "x": 0, "y": 0, "w": 2, "h": 2,
+                "component_name": "ImageComponent",
+                "image": image,
+            }]},
+            format="json",
+        )
+
+    def _component(self):
+        return _ImageComponent.objects.get(dashboard=self.dashboard)
+
+    def test_save_layout_keeps_existing_project_upload(self):
+        project_dir = _os.path.join(_LEGACY_IMAGE_MEDIA_ROOT, self.project.name)
+        _os.makedirs(project_dir, exist_ok=True)
+        with open(_os.path.join(project_dir, "existing.png"), "wb") as fh:
+            fh.write(_PNG_1x1)
+
+        response = self._save_layout(f"/files/{self.project.name}/existing.png")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(self._component().image.name, f"{self.project.name}/existing.png")
+
+    def test_save_layout_drops_missing_and_foreign_paths(self):
+        other_dir = _os.path.join(_LEGACY_IMAGE_MEDIA_ROOT, self.other_project.name)
+        _os.makedirs(other_dir, exist_ok=True)
+        with open(_os.path.join(other_dir, "theirs.png"), "wb") as fh:
+            fh.write(_PNG_1x1)
+
+        for bad in (
+            f"/files/{self.project.name}/does-not-exist.png",
+            f"/files/{self.other_project.name}/theirs.png",
+            "/files/../../etc/passwd",
+            "/etc/passwd",
+            "../../secret.png",
+        ):
+            response = self._save_layout(bad)
+            self.assertEqual(response.status_code, 200, (bad, response.data))
+            self.assertFalse(self._component().image, bad)
+
+
+class TimeoutClampTests(TestCase):
+    """``timeout_s`` is clamped server-side to [1, 300]; <= 0 no longer
+    disables the watchdog."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="timeout-user")
+        self.project = Project.objects.create(name="TimeoutProject")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _log(self):
+        media = _tempfile.mkdtemp(prefix="totem-test-timeout-")
+        filename = f"paper-example-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(_os.path.join(media, filename))
+        return media, EventLog.objects.create(project=self.project, file=filename)
+
+    def _timeouts_seen(self, target, url, query):
+        """Patch the discovery function so it raises TimeoutError; the view
+        then reports the (clamped) ``timeout_s`` it used in its 408 body."""
+        def fake(*args, **kwargs):
+            raise TimeoutError("test timeout")
+
+        with patch(target, side_effect=fake):
+            response = self.client.get(url, query)
+        self.assertEqual(response.status_code, 408, response.content)
+        return response.json()["timeout_s"]
+
+    def test_discover_ocpn_clamps_timeout(self):
+        media, log = self._log()
+        with _override_settings(MEDIA_ROOT=media):
+            views._OCEL_DB_REGISTRY.clear()
+            for raw, expected in (("0", 1.0), ("-5", 1.0), ("0.2", 1.0),
+                                  ("30", 30.0), ("100000", 300.0)):
+                seen = self._timeouts_seen(
+                    "api.views.event_log.discover_ocpn_db",
+                    f"/api/files/{log.pk}/discover_ocpn/",
+                    {"timeout_s": raw},
+                )
+                self.assertEqual(seen, expected, raw)
+
+    def test_variants_clamps_timeout(self):
+        media, log = self._log()
+        with _override_settings(MEDIA_ROOT=media):
+            views._OCEL_DB_REGISTRY.clear()
+            cache.clear()
+            for raw, expected in (("0", 1.0), ("-1", 1.0), ("10", 10.0), ("999", 300.0)):
+                seen = self._timeouts_seen(
+                    "api.views.variants.find_variants",
+                    "/api/variants/",
+                    {"file_id": log.pk, "timeout_s": raw, "leading_type": "order"},
+                )
+                self.assertEqual(seen, expected, raw)
+
+
+class CacheClearPermissionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="cache-user")
+        self.staff = User.objects.create_user(username="cache-staff", is_staff=True)
+
+    def test_anonymous_is_rejected(self):
+        self.assertEqual(self.client.post("/api/cache/clear/").status_code, 401)
+
+    @_override_settings(LOCAL_MODE=False)
+    def test_regular_user_cannot_clear_shared_cache(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 403)
+
+    @_override_settings(LOCAL_MODE=False)
+    def test_staff_can_clear(self):
+        self.client.force_authenticate(user=self.staff)
+        with patch("api.cache_utils.clear_all_cache") as clear:
+            response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 200)
+        clear.assert_called_once()
+
+    @_override_settings(LOCAL_MODE=True)
+    def test_local_mode_lets_the_single_user_clear(self):
+        self.client.force_authenticate(user=self.user)
+        with patch("api.cache_utils.clear_all_cache") as clear:
+            response = self.client.post("/api/cache/clear/")
+        self.assertEqual(response.status_code, 200)
+        clear.assert_called_once()

@@ -13,16 +13,25 @@ export type FilterRule = {
   params: TimeRangeParams | ObjectTypesParams | ActivityParams;
 };
 
+export type FilterRuleDraft = Omit<FilterRule, "id">;
+
 type FilterStackContextType = {
   filters: FilterRule[];
-  addFilter: (rule: Omit<FilterRule, "id">) => void;
+  addFilter: (rule: FilterRuleDraft) => void;
   removeFilter: (id: string) => void;
+  /**
+   * Replace every rule of the given types with `rules` (other types stay).
+   * Returns the resulting rule list synchronously so callers can apply it
+   * right away.
+   */
+  replaceFilters: (types: FilterType[], rules: FilterRuleDraft[]) => FilterRule[];
 };
 
 const defaultCtx: FilterStackContextType = {
   filters: [],
   addFilter: () => {},
   removeFilter: () => {},
+  replaceFilters: () => [],
 };
 
 export const FilterStackContext = createContext<FilterStackContextType>(defaultCtx);
@@ -33,12 +42,22 @@ type FilterStackProviderProps = {
   onChange?: (filters: FilterRule[]) => void;
 };
 
+function newRuleId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
 export function FilterStackProvider({
   children,
   initialFilters = [],
   onChange,
 }: FilterStackProviderProps) {
   const [filters, setFilters] = useState<FilterRule[]>(initialFilters);
+  // Mirror of `filters` so `replaceFilters` can return the new list without
+  // waiting for a re-render.
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
 
   const isFirstRender = useRef(true);
   useEffect(() => {
@@ -46,18 +65,25 @@ export function FilterStackProvider({
     onChange?.(filters);
   }, [filters, onChange]);
 
-  const addFilter = useCallback((rule: Omit<FilterRule, "id">) => {
-    const id = Math.random().toString(36).slice(2, 10);
-    setFilters(prev => [...prev, { ...rule, id }]);
+  const addFilter = useCallback((rule: FilterRuleDraft) => {
+    setFilters(prev => [...prev, { ...rule, id: newRuleId() }]);
   }, []);
 
   const removeFilter = useCallback((id: string) => {
     setFilters(prev => prev.filter(f => f.id !== id));
   }, []);
 
+  const replaceFilters = useCallback((types: FilterType[], rules: FilterRuleDraft[]) => {
+    const kept = filtersRef.current.filter(f => !types.includes(f.type));
+    const next = [...kept, ...rules.map(rule => ({ ...rule, id: newRuleId() }))];
+    filtersRef.current = next;
+    setFilters(next);
+    return next;
+  }, []);
+
   return (
     <FilterStackContext.Provider
-      value={{ filters, addFilter, removeFilter }}
+      value={{ filters, addFilter, removeFilter, replaceFilters }}
     >
       {children}
     </FilterStackContext.Provider>

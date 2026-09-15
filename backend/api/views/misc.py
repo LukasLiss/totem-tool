@@ -32,13 +32,27 @@ def delete_user_data(request):
         )
 
     user = request.user
-    projects = Project.objects.filter(users=user)
-    deleted_count = projects.count()
-    projects.delete()
+    deleted_count = 0
+    left_count = 0
+    for project in Project.objects.filter(users=user):
+        if project.users.exclude(pk=user.pk).exists():
+            # Shared project: other members keep their logs, dashboards and
+            # assets — only this user's membership is removed.
+            project.users.remove(user)
+            left_count += 1
+        else:
+            project.delete()
+            deleted_count += 1
+    UserSettings.objects.filter(user=user).delete()
 
     return Response(
         {
-            "detail": f"Deleted {deleted_count} project(s) and related data for user '{user.username}'."
+            "detail": (
+                f"Deleted {deleted_count} project(s) and related data for user "
+                f"'{user.username}'; left {left_count} shared project(s)."
+            ),
+            "deleted_projects": deleted_count,
+            "left_shared_projects": left_count,
         },
         status=status.HTTP_200_OK,
     )
@@ -59,8 +73,21 @@ def cache_stats(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def cache_clear(request):
-    """Clear the entire results cache."""
+    """Clear the entire results cache.
+
+    The cache is shared by every user of this server, so on a hosted
+    deployment only staff may wipe it. In LOCAL_MODE (the desktop app) the
+    single Guest user owns the whole installation and may always clear it.
+    """
+    from django.conf import settings
+
     from ..cache_utils import clear_all_cache
+
+    if not settings.LOCAL_MODE and not request.user.is_staff:
+        return Response(
+            {"error": "Only staff users may clear the shared results cache."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     clear_all_cache()
     return Response({"status": "cleared"})

@@ -1,4 +1,4 @@
-import { ChevronRight, Database, FolderKanban, Image as ImageIcon } from "lucide-react"
+import { ChevronRight, Database, FolderKanban, Image as ImageIcon, FileCode2 } from "lucide-react"
 import { useContext } from "react"
 
 import {
@@ -20,12 +20,15 @@ import { DashboardContext } from "@/contexts/DashboardContext"
 const projectItems = [
   { id: "modelAssets", label: "Model Assets", icon: Database },
   { id: "imageAssets", label: "Images", icon: ImageIcon },
+  { id: "queryAssets", label: "SQL Queries", icon: FileCode2 },
 ] as const;
 
 export function NavProject() {
   const { viewMode, setViewMode } = useContext(DashboardContext);
   const isProjectActive =
-    viewMode.type === "modelAssets" || viewMode.type === "imageAssets";
+    viewMode.type === "modelAssets" ||
+    viewMode.type === "imageAssets" ||
+    viewMode.type === "queryAssets";
 
   return (
     <SidebarGroup>

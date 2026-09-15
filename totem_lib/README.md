@@ -1,7 +1,31 @@
-# totem_lib
+# totem-lib
 
-Library for the TOTeM paper.
-Also includes a module for importing [OCEL 2.0](https://www.ocel-standard.org/) files.
+Object-centric process mining in Python: OCEL 2.0 import, TOTeM
+(Temporal Object Type Model) discovery and conformance checking, process
+areas, object-centric directly-follows graphs (OC-DFG), object-centric Petri
+nets (OCPN) and object-centric causal nets (OCCN).
+
+`totem-lib` is the analysis core of the
+[TOTeM Tool](https://github.com/LukasLiss/totem-tool); it has no web or UI
+dependencies and can be used on its own.
+
+## Installation
+
+```bash
+pip install totem-lib
+```
+
+Requires Python 3.10 or newer. All Python dependencies are installed
+automatically. The [Graphviz](https://graphviz.org/download/) system binary
+(`dot`) is only needed for rendering with `Totem.visualize()` and the other
+`visualize` helpers; import, discovery and conformance checking work without
+it.
+
+The `example_data/` and `test_data/` directories referenced in the examples
+below are not part of the wheel. Clone the
+[repository](https://github.com/LukasLiss/totem-tool) to get them, or point
+`import_ocel` at your own OCEL 2.0 file (`.sqlite`, `.json`, `.xml`, `.csv`
+or `.duckdb`).
 
 ## Example usage
 
@@ -94,12 +118,13 @@ Connected-component extraction can produce a very large unit when a few
 objects connect most of a log. Neither strategy groups units into variants.
 Timestamp ties are resolved by event ID because the supported storage backends
 do not expose a shared source-row index. See
-[`docs/OCCN_REPLAY_FITNESS.md`](../docs/OCCN_REPLAY_FITNESS.md) for the complete
+[`docs/OCCN_REPLAY_FITNESS.md`](https://github.com/LukasLiss/totem-tool/blob/main/docs/OCCN_REPLAY_FITNESS.md) for the complete
 strategy, replay, result, and limitation contract.
 
-## Installation
+## Development setup
 
-To set up a development environment for totem-lib, follow these steps. This is required for development only.
+To work on totem-lib itself (not needed for `pip install totem-lib`), clone the
+repository and follow these steps inside `totem_lib/`.
 
 ### 1. Create a Virtual Environment
 
@@ -143,6 +168,6 @@ The OCCN class and its conformance checking functions are adapted from [this rep
 
 The OCCN miner and visualizer are ported from the [OCCN-Miner](https://github.com/LukasLiss/OCCN-Miner), originally implemented by [Caspar Mensing](https://github.com/CasparMensing/OCFHM).
 
-Object-Centric Causal Nets are introduced in [Liss et al. (2025), _Object-Centric Causal Nets_, CAiSE 2025](https://doi.org/10.1007/978-3-031-94571-7_6). See [`examples/OCCN.md`](examples/OCCN.md) for a get-started guide.
+Object-Centric Causal Nets are introduced in [Liss et al. (2025), _Object-Centric Causal Nets_, CAiSE 2025](https://doi.org/10.1007/978-3-031-94571-7_6). See [`examples/OCCN.md`](https://github.com/LukasLiss/totem-tool/blob/main/totem_lib/examples/OCCN.md) for a get-started guide.
 
-The `process_areas` module implements chapter 4.1 of Moritz Schlegelmilch's bachelor thesis _Discovering Advanced Resource-Based Process Areas_ (PADS, RWTH Aachen, 2026), and is ported from its [reference implementation](https://github.com/moritzkschlegelmilch/Thesis). It extends the multi-level process area detection of [Liss & van der Aalst (2026), _Process Area Extraction by Multilevel Resource Detection for Object-Centric Process Mining_, BPM 2026](https://doi.org/10.1007/978-3-032-02867-9_13), which `mlpaDiscovery` implements. See [`examples/PROCESS_AREAS.md`](examples/PROCESS_AREAS.md) for a get-started guide.
+The `process_areas` module implements chapter 4.1 of Moritz Schlegelmilch's bachelor thesis _Discovering Advanced Resource-Based Process Areas_ (PADS, RWTH Aachen, 2026), and is ported from its [reference implementation](https://github.com/moritzkschlegelmilch/Thesis). It extends the multi-level process area detection of [Liss & van der Aalst (2026), _Process Area Extraction by Multilevel Resource Detection for Object-Centric Process Mining_, BPM 2026](https://doi.org/10.1007/978-3-032-02867-9_13), which `mlpaDiscovery` implements. See [`examples/PROCESS_AREAS.md`](https://github.com/LukasLiss/totem-tool/blob/main/totem_lib/examples/PROCESS_AREAS.md) for a get-started guide.

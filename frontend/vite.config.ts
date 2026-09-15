@@ -3,10 +3,20 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import pkg from "./package.json" with { type: "json" };
+
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   base: "/",
   plugins: [react(), tailwindcss()],
+  define: {
+    // Shown in Settings; keep the frontend version in sync with the release.
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
+  esbuild: {
+    // Several components log on every render; keep production bundles quiet.
+    drop: command === "build" ? ["console", "debugger"] : [],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -24,4 +34,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

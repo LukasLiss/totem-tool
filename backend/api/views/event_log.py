@@ -7,6 +7,9 @@ frontend can trigger against a stored event log is an ``@action`` here.
 import copy
 import json
 import os
+from contextlib import contextmanager
+
+import duckdb
 from hashlib import sha1
 
 from rest_framework import serializers, status, viewsets
@@ -18,6 +21,7 @@ from django.core.cache import cache
 
 from totem_lib.dfg import NewOCDFGDb
 from totem_lib import (
+    discover_occn,
     extract_occn_replay_units,
     occn_from_dict,
     occn_replay_fitness,
@@ -32,6 +36,8 @@ from totem_lib.totem import (
 )
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
+from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
+from totem_lib.ocel.event_columns import list_event_columns
 from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import (
@@ -48,6 +54,7 @@ from ..serializers import (
     TotemConformanceRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
+from ..query_refs import QueryReferenceError, resolve_query_references
 from ._ocel_db import (
     _OCEL_DB_REGISTRY,
     _OCEL_DB_REGISTRY_LOCK,
@@ -61,6 +68,7 @@ from ._ocel_db import (
     _with_ocel_db,
 )
 from ._filters import (
+    _effective_object_types,
     _filtered_event_counts,
     _filtered_object_counts,
     _filtered_timestamp_range,
@@ -75,11 +83,84 @@ from ._process_view import (
     _serialize_process_layers,
 )
 from .occn import _get_or_discover_base_occn
+# Bounds for the client-supplied discovery watchdog (seconds).
+MIN_TIMEOUT_S = 1.0
+MAX_TIMEOUT_S = 300.0
+
+
+
+# Upper bound on rows returned by the ad-hoc SQL endpoint.
+EXECUTE_QUERY_MAX_ROWS = 10_000
+
+# Tables the SQL editor's schema browser lists. Mirrors
+# totem_lib/src/totem_lib/ocel/ocel_duckdb.py:create_ocel_schema. Attribute
+# columns are VARCHAR whatever the source type was, so numeric work needs an
+# explicit cast (e.g. cost::DOUBLE).
+QUERY_BROWSER_TABLES = (
+    "events",
+    "objects",
+    "event_object",
+    "object_attribute_history",
+    "object_relations",
+)
+
+# Structural PK/FK hints, read straight off the schema DDL rather than guessed.
+QUERY_BROWSER_COLUMN_NOTES = {
+    ("events", "event_id"): "PK",
+    ("objects", "obj_id"): "PK",
+    ("event_object", "event_id"): "FK -> events",
+    ("event_object", "obj_id"): "FK -> objects",
+    ("object_attribute_history", "obj_id"): "FK -> objects",
+    ("object_relations", "source_obj_id"): "FK -> objects",
+    ("object_relations", "target_obj_id"): "FK -> objects",
+}
+
+
+@contextmanager
+def _sandboxed_query_connection(log_path: str):
+    """Yield a DuckDB connection that can only read the given log.
+
+    A fresh in-memory instance attaches the log file READ_ONLY (multiple
+    read-only openers of one file are allowed, so this coexists with the
+    registry connection), then `enable_external_access` is switched off.
+    That setting is one-way for the lifetime of the instance, which is why
+    this is not done on the long-lived registry connection (it relies on
+    DataFrame replacement scans, which the setting also disables).
+    """
+    conn = duckdb.connect(":memory:")
+    try:
+        escaped = log_path.replace("'", "''")
+        conn.execute(f"ATTACH '{escaped}' AS log (READ_ONLY)")
+        conn.execute("USE log")
+        conn.execute("SET enable_external_access = false")
+        yield conn
+    finally:
+        conn.close()
+
+
+# Upper bound on sampled points for the dotted chart endpoint.
+OC_DOTTED_CHART_MAX_POINTS = 50_000
+
+
+def _project_name_for_upload(file_name: str, username: str) -> str:
+    """Project.name is a CharField(max_length=30).
+
+    SQLite silently stores longer values but PostgreSQL raises DataError
+    (→ 500, with the uploaded file already on disk). Keep the user suffix
+    and trim the slug so the result always fits.
+    """
+    limit = Project._meta.get_field("name").max_length
+    suffix = f"_{username}"
+    return (slugify(file_name)[: max(1, limit - len(suffix))] + suffix)[:limit]
 
 
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
+    # No PUT/PATCH: the uploaded file is converted, validated and registered
+    # in `perform_create` only. Replacing it in place would skip conversion,
+    # leave the old file on disk and keep serving the stale DuckDB handle.
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
         return EventLog.objects.filter(project__users=self.request.user)
@@ -89,7 +170,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         user = self.request.user if self.request.user.is_authenticated else None
 
         file_name = serializer.validated_data["file"].name
-        project_name = f"{slugify(file_name)}_{user.username if user else 'anonymous'}"
+        project_name = _project_name_for_upload(file_name, user.username if user else "anonymous")
 
         project = Project.objects.create(name=project_name)
         if user:
@@ -227,13 +308,19 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
+        # Filter params belong in the cache key: without them a filtered and
+        # an unfiltered request would share one entry and serve each other's
+        # results.
+        fp = _parse_filter_params(request)
+        is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
+        cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
+
         if _should_use_cache(request):
-            cached = get_cached_result(user_file, "noe")
+            cached = get_cached_result(user_file, "noe", cache_params)
             if cached is not None:
                 return Response(cached, status=status.HTTP_200_OK)
 
         try:
-            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
                 processed, _ = _filtered_event_counts(fp, db)
         except Exception as e:
@@ -242,7 +329,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        set_cached_result(user_file, "noe", processed)
+        set_cached_result(user_file, "noe", processed, cache_params)
         return Response(processed, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -321,9 +408,14 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         filters_data = request.data.get("filters", [])
 
+        # Malformed filter definitions are a client error, not a server one.
+        try:
+            filter_stack = FilterStack.from_dict({"filters": filters_data})
+        except (ValueError, KeyError, TypeError) as e:
+            return Response({"error": f"Invalid filters: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             with _with_ocel_db(user_file) as db:
-                filter_stack = FilterStack.from_dict({"filters": filters_data})
                 _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
         except Exception as e:
             return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -349,7 +441,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             fp = _parse_filter_params(request)
             is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
-            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+            filter_cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
 
             if _should_use_cache(request):
                 cached = get_cached_result(user_file, "discover_totem", filter_cache_params)
@@ -453,8 +545,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
             )
 
         try:
+            # Conformance runs against the same view of the log the rest of
+            # the tool shows: honor an active global filter.
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                result = conformance_of_totem(totem, db)
+                with _filter_shadow(db, fp):
+                    result = conformance_of_totem(totem, db)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate TOTeM conformance: {exc}"},
@@ -468,6 +564,79 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,
+        )
+
+    @staticmethod
+    def _resolve_occn_asset(request, user_file, asset_id):
+        """Load an OCCN asset the user may use with ``user_file``.
+
+        Returns ``(asset, occn, None)`` or ``(None, None, error_response)``.
+        """
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return None, None, Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if asset.project_id != user_file.project_id:
+            return None, None, Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCCN:
+            return None, None, Response(
+                {"asset_id": "Model asset must have type OCCN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            occn = occn_from_dict(asset.content_json)
+        except (AssertionError, TypeError, ValueError) as exc:
+            return None, None, Response(
+                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return asset, occn, None
+
+    @staticmethod
+    def _replay_unit_request_error(db, validated):
+        """Validate strategy options against the loaded log (400 response or None)."""
+        leading_object_type = validated.get("leading_object_type")
+        if leading_object_type is not None and leading_object_type not in _object_types(db):
+            return Response(
+                {"leading_object_type": "Object type does not exist in the event log."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        execution_column = validated.get("execution_column")
+        if execution_column is not None and execution_column not in list_event_columns(db.conn):
+            return Response(
+                {
+                    "execution_column": (
+                        "Column does not exist on the events table of the event log."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return None
+
+    @staticmethod
+    def _extract_replay_units(db, validated, occn):
+        """Run replay-unit extraction with the validated strategy options."""
+        return extract_occn_replay_units(
+            db,
+            strategy=validated["replay_unit_strategy"],
+            leading_object_type=validated.get("leading_object_type"),
+            execution_column=validated.get("execution_column"),
+            object_types=(
+                sorted(occn.object_types)
+                if validated.get("restrict_to_model_object_types")
+                else None
+            ),
         )
 
     @action(detail=True, methods=["post"])
@@ -488,61 +657,25 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        asset_id = request_serializer.validated_data["asset_id"]
-        try:
-            asset = ProjectAsset.objects.get(
-                pk=asset_id,
-                project__users=request.user,
-            )
-        except ProjectAsset.DoesNotExist:
-            return Response(
-                {"asset_id": "Model asset not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if asset.project_id != user_file.project_id:
-            return Response(
-                {"asset_id": "Model asset must belong to the event log project."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if asset.asset_type != ProjectAsset.AssetType.OCCN:
-            return Response(
-                {"asset_id": "Model asset must have type OCCN."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            occn = occn_from_dict(asset.content_json)
-        except (AssertionError, TypeError, ValueError) as exc:
-            return Response(
-                {"asset_id": f"Stored OCCN model is invalid: {exc}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
+        validated = request_serializer.validated_data
+        asset, occn, error = self._resolve_occn_asset(
+            request, user_file, validated["asset_id"]
         )
-        max_states = request_serializer.validated_data["max_states"]
+        if error is not None:
+            return error
+
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        execution_column = validated.get("execution_column")
+        max_states = validated["max_states"]
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
+                with _filter_shadow(db, fp):
+                    error = self._replay_unit_request_error(db, validated)
+                    if error is not None:
+                        return error
+                    replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
@@ -567,6 +700,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "asset_id": asset.pk,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": execution_column,
+                "restrict_to_model_object_types": bool(
+                    validated.get("restrict_to_model_object_types")
+                ),
                 "max_states": max_states,
                 **result.to_dict(),
             },
@@ -593,36 +730,33 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        replay_unit_strategy = request_serializer.validated_data["replay_unit_strategy"]
-        leading_object_type = request_serializer.validated_data.get(
-            "leading_object_type"
-        )
+        validated = request_serializer.validated_data
+        replay_unit_strategy = validated["replay_unit_strategy"]
+        leading_object_type = validated.get("leading_object_type")
+        occn = None
+        if validated.get("restrict_to_model_object_types"):
+            # The projection needs the model; the serializer guarantees the
+            # asset id is present in that case.
+            _asset, occn, error = self._resolve_occn_asset(
+                request, user_file, validated["asset_id"]
+            )
+            if error is not None:
+                return error
         try:
+            fp = _parse_filter_params(request)
             with _with_ocel_db(user_file) as db:
-                if (
-                    leading_object_type is not None
-                    and leading_object_type not in _object_types(db)
-                ):
-                    return Response(
-                        {
-                            "leading_object_type": (
-                                "Object type does not exist in the event log."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                replay_units = extract_occn_replay_units(
-                    db,
-                    strategy=replay_unit_strategy,
-                    leading_object_type=leading_object_type,
-                )
+                with _filter_shadow(db, fp):
+                    error = self._replay_unit_request_error(db, validated)
+                    if error is not None:
+                        return error
+                    replay_units = self._extract_replay_units(db, validated, occn)
         except Exception as exc:
             return Response(
                 {"error": f"Failed to extract OCCN replay units: {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        unit_id = request_serializer.validated_data["unit_id"]
+        unit_id = validated["unit_id"]
         replay_unit = next(
             (unit for unit in replay_units if unit.unit_id == unit_id),
             None,
@@ -650,6 +784,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "unit_id": replay_unit.unit_id,
                 "replay_unit_strategy": replay_unit_strategy,
                 "leading_object_type": leading_object_type,
+                "execution_column": validated.get("execution_column"),
                 "event_count": total_count,
                 "object_types": list(replay_unit.object_types),
                 "pagination": {
@@ -830,8 +965,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             timeout_s = float(request.query_params.get("timeout_s", "30.0"))
-            if timeout_s <= 0:
-                timeout_s = None  # disable
+            if timeout_s != timeout_s:  # NaN
+                raise ValueError("timeout_s must be a number")
+            # Clamp server-side: <= 0 used to disable the watchdog entirely,
+            # which let one request pin a worker indefinitely.
+            timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
         except (TypeError, ValueError):
             timeout_s = 30.0
 
@@ -934,6 +1072,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
         - OCPN:  ``timeout_s`` (float), ``object_types``
         - OCDFG: ``object_types``
 
+        The global filter (query params ``after`` / ``before`` /
+        ``activities`` / ``object_types``, appended by the frontend when the
+        requesting component has the global filter enabled) is applied exactly
+        like on the corresponding read endpoints, so the stored model matches
+        what the component displays.
+
         Discovery reuses the same caches as the corresponding read endpoints,
         so saving right after viewing a discovered model is cheap. The
         resulting canonical JSON is validated and stored through the regular
@@ -960,6 +1104,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        fp = _parse_filter_params(request)
+        is_filtered = bool(fp)
+        fp_non_types = {k: v for k, v in fp.items() if k != "object_types"}
+
         object_type_filter = None
         raw_object_types = params.get("object_types")
         if isinstance(raw_object_types, list):
@@ -971,6 +1119,13 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 t.strip() for t in raw_object_types.split(",") if t.strip()
             ) or None
 
+        # The component only ever shows types inside the global filter, so the
+        # effective selection is the intersection (empty intersection => the
+        # global filter wins), matching what the read endpoints do.
+        object_type_filter = _effective_object_types(
+            object_type_filter, fp.get("object_types")
+        )
+
         try:
             if model_type == ProjectAsset.AssetType.TOTEM:
                 try:
@@ -979,7 +1134,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     tau = 0.0
                 tau = min(1.0, max(0.0, tau))
                 with _with_ocel_db(user_file) as db:
-                    totem = totemDiscovery_db(db, tau=tau)
+                    with _filter_shadow(db, fp):
+                        totem = totemDiscovery_db(db, tau=tau)
                 content_json = totem_to_dict(totem)
 
             elif model_type == ProjectAsset.AssetType.OCCN:
@@ -988,7 +1144,26 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     threshold = 0.0
                 threshold = min(1.0, max(0.0, threshold))
-                base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
+                # Mirror the OCCN read endpoint: object types go through the
+                # discovery parameters; time/activity filters need a fresh
+                # discovery over the filter shadow (the shared base cache is
+                # keyed only by file + object types).
+                if is_filtered:
+                    parameters = (
+                        {"object_types": object_type_filter}
+                        if object_type_filter
+                        else None
+                    )
+                    with _with_ocel_db(user_file) as db:
+                        with _filter_shadow(db, fp_non_types):
+                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    base_occn = discover_occn(
+                        ocel_pm4py,
+                        relativeOccuranceThreshold=0.0,
+                        parameters=parameters,
+                    )
+                else:
+                    base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
                 if base_occn is None:
                     return Response(
                         {"error": "Failed to discover OCCN"},
@@ -1004,34 +1179,51 @@ class EventLogViewSet(viewsets.ModelViewSet):
             elif model_type == ProjectAsset.AssetType.OCPN:
                 try:
                     timeout_s = float(params.get("timeout_s", 30.0))
-                    if timeout_s <= 0:
-                        timeout_s = None
+                    if timeout_s != timeout_s:  # NaN
+                        raise ValueError("timeout_s must be a number")
+                    # Clamp server-side: <= 0 used to disable the watchdog entirely,
+                    # which let one request pin a worker indefinitely.
+                    timeout_s = min(max(timeout_s, MIN_TIMEOUT_S), MAX_TIMEOUT_S)
                 except (TypeError, ValueError):
                     timeout_s = 30.0
-                # Same cache key as discover_ocpn, so a save right after
-                # viewing reuses the already-discovered net.
+                # Same cache key as discover_ocpn (including the filter
+                # suffix), so a save right after viewing reuses the
+                # already-discovered net — filtered and unfiltered runs never
+                # share an entry.
                 types_key = ",".join(object_type_filter) if object_type_filter else "all"
                 ocpn_cache_key = (
                     f"ocpn_discovery_{user_file.pk}_{sha1(types_key.encode()).hexdigest()}"
                 )
+                if is_filtered:
+                    filter_suffix = sha1(
+                        json.dumps(fp, sort_keys=True).encode()
+                    ).hexdigest()[:8]
+                    ocpn_cache_key = f"{ocpn_cache_key}_{filter_suffix}"
                 cached_result = cache.get(ocpn_cache_key)
                 if cached_result and cached_result.get("ocpn"):
                     content_json = cached_result["ocpn"]
                 else:
                     with _with_ocel_db(user_file) as db:
-                        content_json = discover_ocpn_db(
-                            db,
-                            object_types=object_type_filter,
-                            timeout_s=timeout_s,
-                            name=os.path.splitext(
-                                os.path.basename(user_file.file.name)
-                            )[0],
-                        )
+                        with _filter_shadow(db, fp):
+                            content_json = discover_ocpn_db(
+                                db,
+                                object_types=object_type_filter,
+                                timeout_s=timeout_s,
+                                name=os.path.splitext(
+                                    os.path.basename(user_file.file.name)
+                                )[0],
+                            )
                     cache.set(ocpn_cache_key, {"ocpn": content_json}, timeout=3600)
 
             else:  # OCDFG
                 with _with_ocel_db(user_file) as db:
-                    graph = NewOCDFGDb.from_ocel_db(db, object_types=object_type_filter)
+                    # Mirror the new-ocdfg read endpoint: object types go
+                    # through the library parameter, the rest through the
+                    # filter shadow.
+                    with _filter_shadow(db, fp_non_types):
+                        graph = NewOCDFGDb.from_ocel_db(
+                            db, object_types=object_type_filter
+                        )
                 object_types = set()
                 activities = []
                 for node in graph.nodes:
@@ -1090,6 +1282,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     "source": "discovery",
                     "event_log_id": user_file.pk,
                     "params": params,
+                    # Traceability: the global filter the model was mined under.
+                    **({"global_filter": fp} if is_filtered else {}),
                 },
             },
             context={"request": request},
@@ -1112,7 +1306,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         try:
             fp = _parse_filter_params(request)
             is_filtered = any(k in fp for k in ("after", "before", "activities", "object_types"))
-            filter_cache_params = {f"f_{k}": str(v) for k, v in fp.items()} if is_filtered else None
+            filter_cache_params = {f"f_{k}": str(v) for k, v in sorted(fp.items())} if is_filtered else None
 
             if _should_use_cache(request):
                 cached = get_cached_result(user_file, "statistics", filter_cache_params)
@@ -1155,17 +1349,20 @@ class EventLogViewSet(viewsets.ModelViewSet):
             row_max = _optional_int(request.query_params.get("row_max"))
             max_points = int(request.query_params.get("max_points", 3000))
             sample_seed = int(request.query_params.get("sample_seed", 0))
+            local_t_min = _optional_int(request.query_params.get("t_min"))
+            local_t_max = _optional_int(request.query_params.get("t_max"))
         except ValueError:
             return Response(
                 {
-                    "error": "row_min, row_max, max_points, and sample_seed must be integers"
+                    "error": "row_min, row_max, t_min, t_max, max_points, and sample_seed must be integers"
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Bound the sample size so a single request cannot pin the per-file
+        # lock (and worker memory) with an arbitrarily large scan.
+        max_points = max(1, min(max_points, OC_DOTTED_CHART_MAX_POINTS))
 
         fp = _parse_filter_params(request)
-        local_t_min = _optional_int(request.query_params.get("t_min"))
-        local_t_max = _optional_int(request.query_params.get("t_max"))
         global_after  = fp.get("after")
         global_before = fp.get("before")
         effective_t_min = max(v for v in [local_t_min, global_after]  if v is not None) if any(v is not None for v in [local_t_min, global_after])  else None
@@ -1236,18 +1433,150 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if not query:
             return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security check: only allow SELECT queries (read-only)
-        query_upper = query.strip().upper()
-        if not query_upper.startswith('SELECT'):
+        if not isinstance(query, str):
+            return Response({"error": "Query must be a string"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Stored queries of the log's project can be referenced by name like
+        # tables; they are prepended as CTEs before validation and execution.
+        stored = {
+            asset.name: str((asset.content_json or {}).get("query") or "")
+            for asset in ProjectAsset.objects.filter(
+                project=user_file.project, asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        try:
+            query = resolve_query_references(
+                query.strip().rstrip(";"), stored, reserved=QUERY_BROWSER_TABLES
+            )
+        except QueryReferenceError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security check: exactly one statement, and it must be a SELECT.
+        # A plain "starts with SELECT" check lets `SELECT 1; COPY ... TO ...`
+        # through, so parse with DuckDB and inspect the statement type.
+        query = query.strip().rstrip(";").strip()
+        try:
+            statements = duckdb.extract_statements(query)
+        except Exception as e:
+            return Response({"error": f"Invalid SQL: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(statements) != 1:
+            return Response({"error": "Exactly one SQL statement is allowed"}, status=status.HTTP_400_BAD_REQUEST)
+        if statements[0].type != duckdb.StatementType.SELECT:
             return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Optional paging: ``limit`` rows starting at ``offset``. Without an
+        # explicit limit the historical cap applies. Fetch one extra row to
+        # report whether another page exists.
+        raw_offset = request.data.get("offset")
+        raw_limit = request.data.get("limit")
         try:
-            with _with_ocel_db(user_file) as db:
-                cursor = db.conn.execute(query)
+            offset = 0 if raw_offset is None else int(raw_offset)
+            limit = EXECUTE_QUERY_MAX_ROWS if raw_limit is None else int(raw_limit)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "offset and limit must be integers"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if offset < 0 or limit < 1:
+            return Response(
+                {"error": "offset must be >= 0 and limit >= 1"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        limit = min(limit, EXECUTE_QUERY_MAX_ROWS)
+
+        # Cap the result size so a `SELECT * FROM event_object` on a large log
+        # cannot exhaust worker memory. Note that paging an unordered query is
+        # only stable if the query itself has an ORDER BY; the editor tells
+        # users so.
+        wrapped = (
+            f"SELECT * FROM ({query}) AS _user_query "
+            f"LIMIT {limit + 1} OFFSET {offset}"
+        )
+
+        # Run in a throwaway sandbox connection rather than on the shared
+        # registry connection: DuckDB's read-only mode protects the database
+        # file only, so user SQL could otherwise call read_text('/etc/passwd'),
+        # glob('/**') or ATTACH other files. The sandbox attaches the log
+        # read-only and then disables external access for good.
+        log_path = user_file.file.path
+        if os.path.splitext(log_path)[1].lower() != ".duckdb":
+            return Response(
+                {"error": "SQL queries are only available for converted (.duckdb) event logs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with _sandboxed_query_connection(log_path) as conn:
+                cursor = conn.execute(wrapped)
                 columns = [d[0] for d in cursor.description]
                 rows = cursor.fetchall()
         except Exception as e:
-            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"Query execution failed: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         data = [dict(zip(columns, row)) for row in rows]
-        return Response({"data": data, "columns": columns}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "data": data,
+                "columns": columns,
+                "offset": offset,
+                "limit": limit,
+                "has_more": has_more,
+                # Kept for older clients: "truncated" used to mean "more rows
+                # than the cap exist".
+                "truncated": has_more,
+                "max_rows": limit,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["get"])
+    def query_columns(self, request, pk=None):
+        """Schema of the tables the SQL editor may reference, for one log.
+
+        Feeds the editor's table/column browser. Runs through the same
+        sandbox as ``execute_query`` — it is only DESCRIBE plus a count, but
+        there is no reason to reach the filesystem for that either.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        log_path = user_file.file.path
+        if os.path.splitext(log_path)[1].lower() != ".duckdb":
+            return Response(
+                {"error": "SQL queries are only available for converted (.duckdb) event logs"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with _sandboxed_query_connection(log_path) as conn:
+                tables = []
+                for table in QUERY_BROWSER_TABLES:
+                    described = conn.execute(f'DESCRIBE "{table}"').fetchall()
+                    row_count = conn.execute(
+                        f'SELECT count(*) FROM "{table}"'
+                    ).fetchone()[0]
+                    tables.append(
+                        {
+                            "name": table,
+                            "columns": [
+                                {
+                                    "name": row[0],
+                                    "type": str(row[1]),
+                                    "note": QUERY_BROWSER_COLUMN_NOTES.get(
+                                        (table, row[0])
+                                    ),
+                                }
+                                for row in described
+                            ],
+                            "rowCount": int(row_count),
+                        }
+                    )
+        except Exception as e:
+            return Response(
+                {"error": f"Schema lookup failed: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({"tables": tables}, status=status.HTTP_200_OK)

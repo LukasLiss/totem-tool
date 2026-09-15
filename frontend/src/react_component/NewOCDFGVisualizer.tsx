@@ -247,7 +247,7 @@ function NewOCDFGVisualizer({
   onSizeChange,
   showControls = true,
   initialInteractionLocked = true,
-  filterEnabled = false,
+  filterEnabled = true,
 }: NewOCDFGVisualizerProps) {
   console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
@@ -1315,6 +1315,7 @@ function NewOCDFGVisualizer({
             {data == null && fileId != null && (
               <SaveModelAssetButton
                 fileId={fileId}
+                filterEnabled={filterEnabled}
                 modelType="OCDFG"
                 disabled={dfgData == null}
                 iconOnly

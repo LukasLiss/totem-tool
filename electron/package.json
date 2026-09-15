@@ -1,13 +1,13 @@
 {
   "name": "totem-tool",
   "version": "1.0.0",
-  "description": "TOTeM-Tool Desktop Application",
+  "description": "TOTeM Tool desktop application: object-centric process mining with a bundled local backend",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
     "build-win": "electron-builder --win",
-    "build-mac": "electron-builder --mac",
+    "build-mac": "electron-builder --mac --$(node -p process.arch)",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -25,32 +25,61 @@
       {
         "from": "resources/backend",
         "to": "backend"
-      },
-      {
-        "from": "resources/totem_lib",
-        "to": "totem_lib"
       }
     ],
     "win": {
-      "target": "dir",
-      "icon": "build/icon.png"
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "certificateSubjectName": "${env.WIN_CERT_SUBJECT_NAME}",
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      }
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity",
-      "icon": "build/icon.png"
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true,
+      "signIgnore": [
+        "\\.sqlite3?$",
+        "\\.zip$",
+        "\\.json$"
+      ]
     },
     "linux": {
       "icon": "build/icon.png"
     },
     "dmg": {
-      "artifactName": "${productName}-${version}.dmg"
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
-    "asar": false
+    "asar": false,
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    }
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "process mining",
+    "object-centric",
+    "OCEL",
+    "TOTeM"
+  ],
+  "author": {
+    "name": "Lukas Liss",
+    "email": "liss@pads.rwth-aachen.de"
+  },
+  "license": "MIT",
   "devDependencies": {
     "electron": "^37.2.3",
     "electron-builder": "^26.0.12",
@@ -59,5 +88,10 @@
   "dependencies": {
     "express": "^5.1.0",
     "tree-kill": "^1.2.2"
+  },
+  "homepage": "https://github.com/LukasLiss/totem-tool",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LukasLiss/totem-tool.git"
   }
 }

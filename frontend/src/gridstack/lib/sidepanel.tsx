@@ -34,7 +34,7 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', order: 0 }]
+      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], order: 0 }]
     );
 
     GridStack.setupDragIn(
@@ -170,16 +170,87 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
-      ".sidepanel .sqlquery-component",
+      ".sidepanel .sql-query-component",
       {
         helper: "clone",
         appendTo: "body",
       },
       [{
-        h: 6,
+        h: 8,
+        w: 10,
+        content: "SQL Editor",
+        component_name: "SqlQueryComponent",
+        name: "",
+        query: "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+        query_asset: null,
+        row_limit: 25,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .kpi-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 2,
+        w: 3,
+        content: "KPI (by SQL)",
+        component_name: "KpiComponent",
+        title: "",
+        query: "SELECT count(*) AS value FROM events",
+        query_asset: null,
+        value_column: "",
+        prefix: "",
+        suffix: "",
+        decimals: 0,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .bar-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 5,
         w: 6,
-        content: "SQL Query",
-        component_name: "SQLQueryComponent",
+        content: "Bar Chart (by SQL)",
+        component_name: "BarChartComponent",
+        title: "",
+        query: "SELECT activity AS label, count(*) AS value FROM events GROUP BY activity ORDER BY value DESC",
+        query_asset: null,
+        label_column: "",
+        value_column: "",
+        horizontal: false,
+        show_values: false,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .scatter-plot-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 5,
+        w: 6,
+        content: "Scatter Plot (by SQL)",
+        component_name: "ScatterPlotComponent",
+        title: "",
+        query: "SELECT count(*) AS x, count(DISTINCT activity) AS y, obj_id AS series\nFROM event_object JOIN events USING (event_id)\nGROUP BY obj_id LIMIT 500",
+        query_asset: null,
+        x_column: "",
+        y_column: "",
+        series_column: "",
+        x_label: "",
+        y_label: "",
         order: 0
       }]
     );
@@ -196,6 +267,7 @@ const SidePanel: React.FC = () => {
         content: "Pie Chart",
         component_name: "PieChartComponent",
         query: '',
+        query_asset: null,
         ring_text: '',
         chart_type: 'donut',
         title: '',
@@ -322,14 +394,84 @@ const SidePanel: React.FC = () => {
         <div>OC Petri Net</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/sql_query_icon.png" width="100" height="50"/>
-        <div>SQL Query</div>
+      <div className="grid-stack-item sidepanel-item sql-query-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="SQL Editor preview"
+          className="rounded-md bg-white"
+        >
+          <rect x="6" y="6" width="88" height="38" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
+          <line x1="6" y1="18" x2="94" y2="18" stroke="#475569" strokeWidth="2" />
+          <text x="12" y="15" fontSize="7" fill="#7c3aed" fontFamily="monospace">SELECT</text>
+          <text x="12" y="28" fontSize="6" fill="#334155" fontFamily="monospace">activity, count(*)</text>
+          <text x="12" y="38" fontSize="6" fill="#334155" fontFamily="monospace">FROM events</text>
+        </svg>
+        <div>SQL Editor</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
         <div>Pie Chart</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item kpi-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="KPI preview"
+          className="rounded-md bg-white"
+        >
+          <rect x="6" y="6" width="88" height="38" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
+          <text x="50" y="32" fontSize="18" fontWeight="700" fill="#1e293b" textAnchor="middle" fontFamily="sans-serif">12,345</text>
+          <text x="50" y="41" fontSize="6" fill="#64748b" textAnchor="middle" fontFamily="sans-serif">events</text>
+        </svg>
+        <div>KPI (by SQL)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item bar-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="Bar chart preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="14" y1="8" x2="14" y2="40" stroke="#475569" strokeWidth="2" />
+          <line x1="14" y1="40" x2="90" y2="40" stroke="#475569" strokeWidth="2" />
+          <rect x="22" y="14" width="10" height="26" rx="1" fill="#2563eb" />
+          <rect x="38" y="22" width="10" height="18" rx="1" fill="#2563eb" />
+          <rect x="54" y="10" width="10" height="30" rx="1" fill="#2563eb" />
+          <rect x="70" y="28" width="10" height="12" rx="1" fill="#2563eb" />
+        </svg>
+        <div>Bar Chart (by SQL)</div>
+      </div>
+
+      <div className="grid-stack-item sidepanel-item scatter-plot-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <svg
+          width="100"
+          height="50"
+          viewBox="0 0 100 50"
+          role="img"
+          aria-label="Scatter plot preview"
+          className="rounded-md bg-white"
+        >
+          <line x1="14" y1="8" x2="14" y2="40" stroke="#475569" strokeWidth="2" />
+          <line x1="14" y1="40" x2="90" y2="40" stroke="#475569" strokeWidth="2" />
+          <circle cx="26" cy="34" r="3" fill="#2563eb" />
+          <circle cx="34" cy="26" r="3" fill="#2563eb" />
+          <circle cx="45" cy="30" r="3" fill="#16a34a" />
+          <circle cx="52" cy="18" r="3" fill="#2563eb" />
+          <circle cx="63" cy="22" r="3" fill="#16a34a" />
+          <circle cx="72" cy="12" r="3" fill="#16a34a" />
+          <circle cx="82" cy="16" r="3" fill="#2563eb" />
+        </svg>
+        <div>Scatter Plot (by SQL)</div>
       </div>
     </div>
   );

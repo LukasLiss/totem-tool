@@ -9,17 +9,20 @@ from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 
 TEST_DATA = Path(__file__).parent.parent.parent / "test_data" / "small"
 
+# Resolve relative to this file so the suite also runs from the repo root.
+EXAMPLE_DATA = Path(__file__).parent.parent.parent / "example_data"
+
 OCEL_FILES = [
-    "example_data/ContainerLogistics.json",
-    "example_data/ContainerLogistics.sqlite",
-    "example_data/ContainerLogistics.xml",
-    "example_data/toy_example_ocel2.csv",
-    "example_data/ocel2-p2p.json",
+    str(EXAMPLE_DATA / "ContainerLogistics.json"),
+    str(EXAMPLE_DATA / "ContainerLogistics.sqlite"),
+    str(EXAMPLE_DATA / "ContainerLogistics.xml"),
+    str(EXAMPLE_DATA / "toy_example_ocel2.csv"),
+    str(EXAMPLE_DATA / "ocel2-p2p.json"),
 ]
 
 def id_fn(filepath):
     """Creates a clean name for the pytest output based on the filename."""
-    return filepath.split("/")[-1]
+    return Path(filepath).name
 
 @pytest.fixture(scope="module", params=OCEL_FILES, ids=id_fn)
 def loaded_ocel(request):

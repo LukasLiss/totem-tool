@@ -100,7 +100,7 @@ function OCCNVisualizer({
   initialThreshold = 0,
   objectTypes,
   showTitle = true,
-  filterEnabled = false,
+  filterEnabled = true,
   onToggleFilter = () => {},
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
@@ -659,6 +659,7 @@ function OCCNVisualizer({
             {data == null && fileId != null && (
               <SaveModelAssetButton
                 fileId={fileId}
+                filterEnabled={filterEnabled}
                 modelType="OCCN"
                 params={{
                   relative_occurrence_threshold: threshold,

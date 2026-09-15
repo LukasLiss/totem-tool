@@ -5,11 +5,15 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.conf import settings
+from django.db import transaction
+import os
 
 from ..models import (
     Dashboard,
     ImageAsset,
     Project,
+    ProjectAsset,
     NumberofEventsComponent,
     TextBoxComponent,
     ImageComponent,
@@ -20,12 +24,77 @@ from ..models import (
     NewOCDFGComponent,
     OCCNComponent,
     OCPNComponent,
-    SQLQueryComponent,
+    SqlQueryComponent,
     PieChartComponent,
+    KpiComponent,
+    BarChartComponent,
+    ScatterPlotComponent,
     TotemMinerComponent,
     FilterStackComponent,
 )
-from ..serializers import DashboardComponentPolymorphicSerializer, DashboardSerializer
+from ..serializers import (
+    DashboardComponentPolymorphicSerializer,
+    DashboardSerializer,
+    ImageAssetSerializer,
+)
+from rest_framework import serializers as drf_serializers
+
+
+def _validated_legacy_image_path(raw, project):
+    """Return ``raw`` (minus the ``/files/`` prefix) only if it names an existing
+    file under MEDIA_ROOT inside the project's own upload directory."""
+    if not raw or not isinstance(raw, str):
+        return None
+    rel = raw[len("/files/"):] if raw.startswith("/files/") else raw
+    rel = rel.lstrip("/")
+    if not rel or "\\" in rel or ".." in rel.split("/"):
+        return None
+    media_root = os.path.realpath(str(settings.MEDIA_ROOT))
+    project_dir = os.path.realpath(os.path.join(media_root, project.name))
+    candidate = os.path.realpath(os.path.join(media_root, rel))
+    if not candidate.startswith(project_dir + os.sep):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return os.path.relpath(candidate, media_root).replace(os.sep, "/")
+
+
+def _query_asset_for(item, dashboard, request):
+    """The stored query (``ProjectAsset`` of type QUERY) a layout item links.
+
+    Only assets of the dashboard's own project that the requesting user can
+    see are accepted; anything else silently unlinks (the component then
+    falls back to its local ``query`` text).
+    """
+    asset_id = item.get("query_asset")
+    if not asset_id:
+        return None
+    try:
+        asset_id = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    return ProjectAsset.objects.filter(
+        pk=asset_id,
+        project=dashboard.project,
+        project__users=request.user,
+        asset_type=ProjectAsset.AssetType.QUERY,
+    ).first()
+
+
+def _bounded_int(item, key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(item.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, lo), hi)
+
+
+def _string_list_field(item, key: str) -> list:
+    """A JSON list of strings from a layout item; anything else becomes []."""
+    value = item.get(key)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [v for v in value if isinstance(v, str) and v]
 
 
 class DashboardViewSet(viewsets.ModelViewSet):
@@ -40,9 +109,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        project_id = self.request.data.get("project")
-        project = Project.objects.get(id=project_id, users=self.request.user)
-        serializer.save(project=project)
+        # `project` is validated against the user's memberships by
+        # DashboardSerializer.validate_project.
+        serializer.save()
 
     @action(detail=True, methods=["PATCH"])
     def rename(self, request, pk=None):
@@ -73,10 +142,16 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "NewOCDFGComponent": NewOCDFGComponent,
         "NewOCDFGVariantsComponent": NewOCDFGComponent,
         "OCPNComponent": OCPNComponent,
-        "SQLQueryComponent": SQLQueryComponent,
+        "SqlQueryComponent": SqlQueryComponent,
         "PieChartComponent": PieChartComponent,
+        "KpiComponent": KpiComponent,
+        "BarChartComponent": BarChartComponent,
+        "ScatterPlotComponent": ScatterPlotComponent,
         "OCCNComponent": OCCNComponent,
+        "FilterStackComponent": FilterStackComponent,
     }
+
+    _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
 
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
@@ -98,6 +173,29 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 {"error": "layout must be a list"}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Validate the whole payload before touching the database so a bad
+        # item cannot leave the dashboard half-deleted.
+        for index, item in enumerate(layout):
+            if not isinstance(item, dict):
+                return Response(
+                    {"error": f"layout[{index}] must be an object"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            missing = [k for k in self._REQUIRED_LAYOUT_KEYS if k not in item]
+            if missing:
+                return Response(
+                    {"error": f"layout[{index}] is missing {', '.join(missing)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Replace the components atomically: either the new layout is stored
+        # in full, or the previous one is kept.
+        with transaction.atomic():
+            self._replace_components(dashboard, layout, request)
+
+        return Response({"status": "saved"})
+
+    def _replace_components(self, dashboard, layout, request):
         # Clear existing components
         dashboard.components.all().delete()
 
@@ -126,14 +224,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color=item.get("color", "blue"),
                 )
             elif component_name == "ImageComponent":
-                # Legacy image path, stripping /files/ prefix if present
-                image_path = item.get("image", None)
-                if (
-                    image_path
-                    and isinstance(image_path, str)
-                    and image_path.startswith("/files/")
-                ):
-                    image_path = image_path[7:]  # Remove '/files/' prefix
+                # Legacy image path: only keep it when it points at an
+                # existing upload of this dashboard's project. Anything else
+                # (arbitrary paths, other projects' files) is dropped.
+                image_path = _validated_legacy_image_path(
+                    item.get("image"), dashboard.project
+                )
 
                 # Image asset reference: only accept assets of this
                 # dashboard's project the user can actually see.
@@ -188,6 +284,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     extraction=item.get("extraction") or "leading_1hop",
                     iso=item.get("iso") or "wl+vf2",
                     timeout_s=item.get("timeout_s", 10.0),
+                    business_object_types=_string_list_field(item, "business_object_types"),
+                    business_activities=_string_list_field(item, "business_activities"),
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
@@ -300,15 +398,18 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     filter_stack_json=item.get('filter_stack_json', []),
                 )
-            elif component_name == 'SQLQueryComponent':
-                SQLQueryComponent.objects.create(
+            elif component_name == 'SqlQueryComponent':
+                SqlQueryComponent.objects.create(
                     dashboard=dashboard,
                     x=item['x'],
                     y=item['y'],
                     w=item['w'],
                     h=item['h'],
                     component_name=component_name,
-                    query=item.get('query', 'SELECT * FROM data LIMIT 10'),
+                    name=item.get('name', ''),
+                    query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    row_limit=_bounded_int(item, 'row_limit', 25, 1, 1000),
                 )
             # Add more as needed
             elif component_name == 'PieChartComponent':
@@ -320,6 +421,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item['h'],
                     component_name=component_name,
                     query=item.get('query', ''),
+                    query_asset=_query_asset_for(item, dashboard, request),
                     ring_text=item.get('ring_text', ''),
                     chart_type=item.get('chart_type', 'donut'),
                     title=item.get('title', ''),
@@ -327,6 +429,55 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_tooltip=item.get('show_tooltip', True),
                     label_column=item.get('label_column', ''),
                     value_column=item.get('value_column', ''),
+                )
+            elif component_name == 'KpiComponent':
+                KpiComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    value_column=item.get('value_column') or '',
+                    prefix=item.get('prefix') or '',
+                    suffix=item.get('suffix') or '',
+                    decimals=_bounded_int(item, 'decimals', 0, 0, 10),
+                )
+            elif component_name == 'BarChartComponent':
+                BarChartComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    label_column=item.get('label_column') or '',
+                    value_column=item.get('value_column') or '',
+                    horizontal=bool(item.get('horizontal', False)),
+                    show_values=bool(item.get('show_values', False)),
+                )
+            elif component_name == 'ScatterPlotComponent':
+                ScatterPlotComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    title=item.get('title') or '',
+                    query=item.get('query') or '',
+                    query_asset=_query_asset_for(item, dashboard, request),
+                    x_column=item.get('x_column') or '',
+                    y_column=item.get('y_column') or '',
+                    series_column=item.get('series_column') or '',
+                    x_label=item.get('x_label') or '',
+                    y_label=item.get('y_label') or '',
                 )
 
         return Response({"status": "saved"})
@@ -344,6 +495,14 @@ class DashboardViewSet(viewsets.ModelViewSet):
         if not image_file:
             return Response(
                 {"error": "No image file provided"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Same type/size rules as the image asset store.
+        try:
+            ImageAssetSerializer().validate_image(image_file)
+        except drf_serializers.ValidationError as exc:
+            return Response(
+                {"error": " ".join(str(d) for d in exc.detail)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

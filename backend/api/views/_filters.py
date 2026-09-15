@@ -22,6 +22,23 @@ def _optional_int(value):
     return int(value)
 
 
+def _effective_object_types(selected, global_types):
+    """
+    The object types a discovery should see.
+
+    ``selected`` is the component's own object-type selection, ``global_types``
+    the applied global filter's. The component only ever shows types inside
+    the global filter, so the result is the intersection; when that is empty
+    (the component still remembers types the filter removed) the global filter
+    wins, which is what the read endpoints end up doing as well.
+    """
+    selected = sorted({t for t in (selected or []) if t}) or None
+    global_types = sorted({t for t in (global_types or []) if t}) or None
+    if selected and global_types:
+        return sorted(set(selected) & set(global_types)) or global_types
+    return selected or global_types
+
+
 def _parse_filter_params(request):
     result = {}
     raw_ot = request.query_params.get("object_types", "")

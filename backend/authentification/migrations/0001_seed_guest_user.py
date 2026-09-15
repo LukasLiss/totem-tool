@@ -1,8 +1,15 @@
+from django.conf import settings
 from django.db import migrations
 from django.contrib.auth.hashers import make_password
 
 
 def seed_guest_user(apps, schema_editor):
+    # Only local/desktop installs (or explicit demo deployments) get the
+    # well-known Guest account. Hosted instances must create their own users.
+    # The post_migrate handler in authentification/apps.py keeps the account
+    # in sync on every `migrate` run, so this migration is just the initial seed.
+    if not getattr(settings, 'SEED_GUEST_USER', False):
+        return
     User = apps.get_model('auth', 'User')
     guest, _ = User.objects.get_or_create(
         username='Guest',
