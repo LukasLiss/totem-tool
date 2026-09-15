@@ -15,7 +15,7 @@ import {
   SidebarFooter,
   SidebarMenuButton,
 } from "@/components/ui/sidebar"
-import { SelectedFileContext } from "../contexts/SelectedFileContext";
+import { SelectedFileContext, type SelectedFile } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
@@ -30,8 +30,10 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const context = useContext(SelectedFileContext);
   const selectedFile = context?.selectedFile;
-  const [, setFiles] = useState<any[]>([]);
-  const [dashboards, setDashboards] = useState<any[]>([]);
+  const [, setFiles] = useState<SelectedFile[]>([]);
+  const [dashboards, setDashboards] = useState<
+    { id: number; project: number; name: string; order_in_project: number; created_at: string }[]
+  >([]);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -39,7 +41,7 @@ export function AppSidebar() {
         const response = await getUserFiles();
         const data = response.results || response;
         setFiles(Array.isArray(data) ? data : []);
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error(error);
         setFiles([]);
       }
@@ -57,7 +59,7 @@ export function AppSidebar() {
         const response = await getDashboards(selectedFile.project);
         const data = response.results || response;
         setDashboards(Array.isArray(data) ? data : []);
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error(error);
         setDashboards([]);
       }
@@ -88,7 +90,7 @@ export function AppSidebar() {
               const response = await getDashboards(selectedFile.project);
               const data = response.results || response;
               setDashboards(Array.isArray(data) ? data : []);
-            } catch (error: any) {
+            } catch (error: unknown) {
               console.error(error);
               setDashboards([]);
             }

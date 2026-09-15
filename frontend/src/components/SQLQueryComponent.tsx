@@ -5,6 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { executeQuery} from '@/api/fileApi';
 import { GridStackNode } from 'gridstack';
+import type { SelectedFile } from '@/contexts/SelectedFileContext';
+
+// SQL query rows have arbitrary, query-defined columns not knowable ahead of execution.
+type QueryRow = Record<string, unknown>;
 
 interface OCELQueryComponentProps {
   node: GridStackNode & {
@@ -15,7 +19,7 @@ interface OCELQueryComponentProps {
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean;
   dashboardId: number;
-  selectedFile?: { id: number; [key: string]: any };
+  selectedFile?: SelectedFile;
 }
 
 const OCELQueryComponent: React.FC<OCELQueryComponentProps> = ({
@@ -25,7 +29,7 @@ const OCELQueryComponent: React.FC<OCELQueryComponentProps> = ({
   selectedFile
 }) => {
   const [query, setQuery] = useState(node.query || 'SELECT * FROM events LIMIT 10');
-  const [results, setResults] = useState<{ data: any[]; columns: string[] } | null>(null);
+  const [results, setResults] = useState<{ data: QueryRow[]; columns: string[] } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,8 +63,8 @@ const OCELQueryComponent: React.FC<OCELQueryComponentProps> = ({
     try {
       const result = await executeQuery(token, selectedFile.id.toString(), query);
       setResults(result);
-    } catch (err: any) {
-      setError(err.message || 'Failed to execute query');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to execute query');
     } finally {
       setIsLoading(false);
     }

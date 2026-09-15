@@ -15,7 +15,7 @@ import { RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
-import type { OcdfgGraph } from './OCDFGVisualizer';
+import type { OcdfgGraph } from './NewOCDFGVisualizer';
 import { MetricTooltip } from './MetricTooltip';
 
 type MlpaLayerArea = {
@@ -4818,7 +4818,7 @@ function TotemVisualizer({
     setAppliedParams(seededParams);
   }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
-  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: { frequency?: number; avg_lead_time?: number }, label?: string } | null>(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
@@ -5559,14 +5559,14 @@ function TotemVisualizer({
 
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
-        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; error?: string } & Partial<OcdfgGraph>>(
+          `${backendBaseUrl}/api/new-ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
           { _skipGlobalFilter: !filterEnabled },
         );
-        if (payload?.filter_error || payload?.error) {
-          throw new Error(payload.filter_error || payload.error);
+        if (payload?.error) {
+          throw new Error(payload.error);
         }
-        const graph = payload?.dfg ?? { nodes: (payload as any)?.nodes, links: (payload as any)?.links };
+        const graph = payload?.dfg ?? { nodes: payload?.nodes, links: payload?.links };
         if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) {
           throw new Error('Invalid OCDFG payload');
         }
@@ -5584,6 +5584,7 @@ function TotemVisualizer({
             ? {
                 ...graph,
                 nodes: graph.nodes.map((node) => {
+                  const richNode = node as typeof node & { object_type?: string | null; role?: string | null };
                   const registerNode = registerNodes.find((n) => n.id === node.id);
                   const mergedTypes = Array.from(
                     new Set([...(node.types ?? []), ...((registerNode?.types as string[]) ?? [])]),
@@ -5591,35 +5592,17 @@ function TotemVisualizer({
                   return {
                     ...node,
                     types: mergedTypes,
-                    object_type: node.object_type ?? registerNode?.object_type ?? null,
-                    role: node.role ?? registerNode?.role ?? null,
+                    object_type: richNode.object_type ?? registerNode?.object_type ?? null,
+                    role: richNode.role ?? registerNode?.role ?? null,
                   };
                 }),
-                // Normalise links: map owners[0] → key so NewOCDFGVisualizer can identify object type
-                links: graph.links.map((link: any) => ({
-                  ...link,
-                  key: link.key ?? link.objtype ?? (Array.isArray(link.owners) ? link.owners[0] : undefined),
-                })),
-                // Include trace variants from backend
-                trace_variants: payload?.trace_variants,
               }
-            : {
-                ...graph,
-                // Normalise links: map owners[0] → key so NewOCDFGVisualizer can identify object type
-                links: graph.links.map((link: any) => ({
-                  ...link,
-                  key: link.key ?? link.objtype ?? (Array.isArray(link.owners) ? link.owners[0] : undefined),
-                })),
-                trace_variants: payload?.trace_variants,
-              };
+            : graph;
 
         setDetailCache((prev) => ({
           ...prev,
           [areaId]: enrichedGraph,
         }));
-        if (payload?.filter_error) {
-          setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
-        }
       } catch (err) {
         console.error('[TotemVisualizer] Failed to load detail OCDFG', err);
         setDetailError((prev) => ({

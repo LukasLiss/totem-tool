@@ -40,16 +40,14 @@ const OcdfgDefaultNode = memo(function OcdfgDefaultNode({
     [data?.colors],
   );
   const nodeTypes = useMemo(
-    () => Array.isArray((data as any)?.types)
-      ? ((data as any).types as unknown[])
-        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+    () => Array.isArray(data?.types)
+      ? data.types.filter((t): t is string => typeof t === 'string' && t.length > 0)
       : [],
     [data],
   );
   const typeOrder = useMemo(() => {
-    const explicit = Array.isArray((data as any)?.typeOrder)
-      ? ((data as any).typeOrder as unknown[])
-        .filter((t): t is string => typeof t === 'string' && t.length > 0)
+    const explicit = Array.isArray(data?.typeOrder)
+      ? data.typeOrder.filter((t): t is string => typeof t === 'string' && t.length > 0)
       : [];
     if (explicit.length > 0) return explicit;
     return Object.keys(colors).sort();

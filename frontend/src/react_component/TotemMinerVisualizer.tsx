@@ -491,7 +491,7 @@ function TotemMinerVisualizer({
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { _skipGlobalFilter: !filterEnabled } as any,
+        { _skipGlobalFilter: !filterEnabled },
       );
       setRawData(data);
     } catch (err) {
@@ -534,7 +534,7 @@ function TotemMinerVisualizer({
     const typeRelations = rawData.type_relations || [];
     const relationsData = rawData.relations_stats || [];
 
-    const relMap = new Map<string, any>();
+    const relMap = new Map<string, TotemRelationStat>();
     relationsData.forEach((rel) => {
       relMap.set(`${rel.from}→${rel.to}`, rel);
     });
@@ -999,7 +999,7 @@ function TotemMinerVisualizer({
       }
 
       return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW, bubbleLabel, bubbleAngle };
-    }).filter(Boolean) as any[];
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item));
 
     return (
       <>

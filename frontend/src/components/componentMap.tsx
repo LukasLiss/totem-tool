@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { GridStackNode } from 'gridstack';
+import type { SelectedFile } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { API_BASE_URL } from '@/config/api';
@@ -83,7 +84,7 @@ function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
 
 
 // Define props interface for components (extend as needed)
-interface ComponentProps {
+export interface ComponentProps {
   node: GridStackNode & {
     component_id: number;
     component_name?: string;
@@ -110,7 +111,7 @@ interface ComponentProps {
     show_earliest_timestamp?: boolean;
     show_newest_timestamp?: boolean;
     show_duration?: boolean;
-    // OCDFGComponent properties
+    // NewOCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
     // OCDottedChartComponent properties
@@ -138,7 +139,7 @@ interface ComponentProps {
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
   dashboardId: number;  // Added for API calls
-  selectedFile?: { id: number; [key: string]: any }; // Selected event log file
+  selectedFile?: SelectedFile; // Selected event log file
 }
 
 
@@ -315,17 +316,17 @@ const ImageComponent: React.FC<ComponentProps> = ({
     onUpdate?.({
       image_asset: asset?.id ?? null,
       image_asset_url: asset?.url ?? null,
-    } as any);
+    });
   };
 
   const handleFitChange = (value: string) => {
     setFit(value);
-    onUpdate?.({ image_fit: value } as any);
+    onUpdate?.({ image_fit: value });
   };
 
   const handleAlignmentChange = (value: string) => {
     setAlignment(value);
-    onUpdate?.({ image_alignment: value } as any);
+    onUpdate?.({ image_alignment: value });
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -511,7 +512,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
                   src={src}
                   alt="Preview"
                   className="h-full w-full"
-                  style={{ objectFit: fit as any, objectPosition: alignment }}
+                  style={{ objectFit: fit as React.CSSProperties['objectFit'], objectPosition: alignment }}
                 />
               </div>
             </div>
@@ -529,7 +530,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
           src={src}
           alt={selectedAsset?.name ?? 'Dashboard image'}
           className="h-full w-full"
-          style={{ objectFit: fit as any, objectPosition: alignment }}
+          style={{ objectFit: fit as React.CSSProperties['objectFit'], objectPosition: alignment }}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
@@ -597,31 +598,31 @@ const VariantsComponent: React.FC<ComponentProps> = ({
   // Handlers for form changes
   const handleAutomaticLoadingChange = (checked: boolean) => {
     setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked } as any);
+    onUpdate?.({ automatic_loading: checked });
   };
 
   const handleLeadingTypeChange = (value: string) => {
     setLeadingType(value);
-    onUpdate?.({ leading_object_type: value } as any);
+    onUpdate?.({ leading_object_type: value });
   };
 
   const handleExtractionChange = (value: string) => {
     const v = value as Extraction;
     setExtraction(v);
-    onUpdate?.({ extraction: v } as any);
+    onUpdate?.({ extraction: v });
   };
 
   const handleIsoChange = (value: string) => {
     const v = value as IsoStrategy;
     setIso(v);
-    onUpdate?.({ iso: v } as any);
+    onUpdate?.({ iso: v });
   };
 
   const handleTimeoutChange = (raw: string) => {
     const n = Number(raw);
     const safe = Number.isFinite(n) && n > 0 ? n : 10;
     setTimeoutS(safe);
-    onUpdate?.({ timeout_s: safe } as any);
+    onUpdate?.({ timeout_s: safe });
   };
 
   if (isEditMode) {
@@ -792,7 +793,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,
-            } as any);
+            });
           }}
         />
       </CardContent>
@@ -868,7 +869,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
         w_divergence: settings.params.wDivergence,
         alpha: settings.params.alpha,
         beta: settings.params.beta,
-      } as any);
+      });
     },
     [onUpdate],
   );
@@ -1023,31 +1024,31 @@ const LogStatisticsComponent: React.FC<ComponentProps> = ({
   // Handlers for toggle changes
   const handleShowNumEventsChange = (checked: boolean) => {
     setShowNumEvents(checked);
-    onUpdate?.({ show_num_events: checked } as any);
+    onUpdate?.({ show_num_events: checked });
   };
   const handleShowNumActivitiesChange = (checked: boolean) => {
     setShowNumActivities(checked);
-    onUpdate?.({ show_num_activities: checked } as any);
+    onUpdate?.({ show_num_activities: checked });
   };
   const handleShowNumObjectsChange = (checked: boolean) => {
     setShowNumObjects(checked);
-    onUpdate?.({ show_num_objects: checked } as any);
+    onUpdate?.({ show_num_objects: checked });
   };
   const handleShowNumObjectTypesChange = (checked: boolean) => {
     setShowNumObjectTypes(checked);
-    onUpdate?.({ show_num_object_types: checked } as any);
+    onUpdate?.({ show_num_object_types: checked });
   };
   const handleShowEarliestTimestampChange = (checked: boolean) => {
     setShowEarliestTimestamp(checked);
-    onUpdate?.({ show_earliest_timestamp: checked } as any);
+    onUpdate?.({ show_earliest_timestamp: checked });
   };
   const handleShowNewestTimestampChange = (checked: boolean) => {
     setShowNewestTimestamp(checked);
-    onUpdate?.({ show_newest_timestamp: checked } as any);
+    onUpdate?.({ show_newest_timestamp: checked });
   };
   const handleShowDurationChange = (checked: boolean) => {
     setShowDuration(checked);
-    onUpdate?.({ show_duration: checked } as any);
+    onUpdate?.({ show_duration: checked });
   };
 
   if (isEditMode) {
@@ -1109,83 +1110,6 @@ const LogStatisticsComponent: React.FC<ComponentProps> = ({
 };
 
 
-// OCDFGComponent: Dashboard wrapper for Object-Centric Directly Follows Graph
-const OCDFGComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
-  isEditMode = false,
-  selectedFile
-}) => {
-  const [filterEnabled, setFilterEnabled] = useState(false);
-  const [showControls, setShowControls] = useState(node.show_controls ?? true);
-  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-
-  useEffect(() => {
-    setShowControls(node.show_controls ?? true);
-    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
-  };
-
-  if (isEditMode) {
-    // EDIT MODE: Show configuration controls
-    return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OCDFG Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Directly Follows Graph (OCDFG) visualization.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-controls">Show Controls Panel</Label>
-            <Switch
-              id="show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // VIEW MODE: Render OCDFGVisualizer
-  return (
-    <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
-      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <ReactFlowProvider>
-          <NewOCDFGVisualizer
-            height="100%"
-            fileId={selectedFile?.id}
-            showControls={showControls}
-            initialInteractionLocked={initialInteractionLocked}
-            filterEnabled={filterEnabled}
-          />
-        </ReactFlowProvider>
-      </div>
-    </div>
-  );
-};
-
 const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   xAxis: { type: "time" },
   yAxis: { type: "activity" },
@@ -1214,7 +1138,7 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
       shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
       row_order: nextConfig.rowOrder,
       max_points: nextConfig.maxPoints,
-    } as any);
+    });
   };
 
   if (isEditMode) {
@@ -1310,17 +1234,17 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1412,17 +1336,17 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1524,27 +1448,27 @@ const OCCNComponent: React.FC<ComponentProps> = ({
   const handleThresholdChange = (value: number[]) => {
     const next = value[0] ?? 0;
     setThreshold(next);
-    onUpdate?.({ relative_occurrence_threshold: next } as any);
+    onUpdate?.({ relative_occurrence_threshold: next });
   };
 
   const handleObjectTypesChange = (value: string) => {
     setObjectTypes(value);
-    onUpdate?.({ object_types: value } as any);
+    onUpdate?.({ object_types: value });
   };
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1663,14 +1587,14 @@ const OCPNComponent: React.FC<ComponentProps> = ({
 
   const handleAutomaticLoadingChange = (checked: boolean) => {
     setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked } as any);
+    onUpdate?.({ automatic_loading: checked });
   };
 
   const handleTimeoutChange = (raw: string) => {
     const n = Number(raw);
     const safe = Number.isFinite(n) && n > 0 ? n : 30;
     setTimeoutS(safe);
-    onUpdate?.({ timeout_s: safe } as any);
+    onUpdate?.({ timeout_s: safe });
   };
 
   if (isEditMode) {
@@ -1732,7 +1656,7 @@ const OCPNComponent: React.FC<ComponentProps> = ({
         showControls={true}
         onTimeoutSChange={(t) => {
           setTimeoutS(t);
-          onUpdate?.({ timeout_s: t } as any);
+          onUpdate?.({ timeout_s: t });
         }}
       />
     </div>
@@ -1749,7 +1673,6 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ProcessAreaComponent,
   TotemMinerComponent,
   LogStatisticsComponent,
-  OCDFGComponent,
   OCDottedChartComponent,
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,

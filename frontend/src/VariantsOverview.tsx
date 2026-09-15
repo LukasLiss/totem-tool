@@ -71,7 +71,7 @@ export function VariantsOverview() {
               </div>
 
               {selectedFile && (
-                <p className="mb-2 text-sm text-muted-foreground">Currently selected: {String((selectedFile as any).file || (selectedFile as any).name || "").split("/").pop()}</p>
+                <p className="mb-2 text-sm text-muted-foreground">Currently selected: {String(selectedFile.file || selectedFile.name || "").split("/").pop()}</p>
               )}
 
               <VariantsExplorer fileId={selectedFile?.id} />

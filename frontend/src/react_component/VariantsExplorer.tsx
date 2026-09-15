@@ -266,7 +266,7 @@ export default function VariantsExplorer({
             setLeadingType(sortedTypes[0]);
           }
         }
-      } catch (e: any) {
+      } catch (e) {
         // Check again before setting error
         if (fileIdRef.current !== currentFileId) {
           return;  // File changed, don't show error from old file
@@ -274,7 +274,7 @@ export default function VariantsExplorer({
 
         if (!cancelled) {
           console.error("Failed to load object types:", e);
-          setErrorMsg(e?.message || "Failed to load object types");
+          setErrorMsg(e instanceof Error ? e.message : "Failed to load object types");
           setStatus("error");
         }
       }
@@ -343,7 +343,7 @@ export default function VariantsExplorer({
           setStatus(arr && arr.length ? "ready" : "empty");
           onVariantsLoad?.(arr ?? []);
         }
-      } catch (e: any) {
+      } catch (e) {
         // Check again before setting error
         if (fileIdRef.current !== currentFileId) {
           return;  // File changed, don't show error from old file
@@ -355,13 +355,15 @@ export default function VariantsExplorer({
           // when find_variants tripped its watchdog. Surface a specific
           // message so the user knows what to change instead of seeing a
           // generic error.
-          const d = e?.response?.data;
-          if (e?.response?.status === 408 && d?.code === "timeout") {
+          const d = axios.isAxiosError(e)
+            ? (e.response?.data as { code?: string; timeout_s?: number; hint?: string } | undefined)
+            : undefined;
+          if (axios.isAxiosError(e) && e.response?.status === 408 && d?.code === "timeout") {
             setErrorMsg(
               `Computation timed out after ${d.timeout_s}s. ${d.hint ?? ""}`
             );
           } else {
-            setErrorMsg(e?.message || "Unknown error while loading variants.");
+            setErrorMsg(e instanceof Error ? e.message : "Unknown error while loading variants.");
           }
         }
       }

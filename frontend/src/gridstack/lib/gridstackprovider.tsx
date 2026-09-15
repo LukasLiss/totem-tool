@@ -6,9 +6,15 @@ import React, {
   useState,
   ReactNode,
 } from "react";
-import ReactDOM from "react-dom/client";
-import { GridStack, GridStackNode, GridStackOptions } from "gridstack";
-import { componentMap } from "../../components/componentMap";
+import ReactDOM, { type Root } from "react-dom/client";
+import { GridStack, GridStackNode, GridStackOptions, GridStackWidget } from "gridstack";
+import { componentMap, type ComponentProps } from "../../components/componentMap";
+import type { SelectedFile } from "../../contexts/SelectedFileContext";
+
+type GridWidgetElement = HTMLElement & {
+  _reactRoot?: Root;
+  gridstackNode?: GridStackNode;
+};
 
 // Minimum grid cell size (w, h) per component type. Falls back to DEFAULT_MIN_SIZE
 // for any component_name not listed here. Enforced by GridStack itself, so users
@@ -20,7 +26,6 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   VariantsComponent: { minW: 4, minH: 4 },
   ProcessAreaComponent: { minW: 4, minH: 4 },
   LogStatisticsComponent: { minW: 3, minH: 2 },
-  OCDFGComponent: { minW: 4, minH: 4 },
   OCDottedChartComponent: { minW: 4, minH: 3 },
   NewOCDFGComponent: { minW: 4, minH: 4 },
   NewOCDFGVariantsComponent: { minW: 4, minH: 4 },
@@ -32,11 +37,13 @@ const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 const getMinSize = (componentName?: string) =>
   (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
 
+type GridLayoutItem = Omit<GridStackWidget, 'id'> & { id?: number };
+
 interface GridContextValue {
   grid: GridStack | null;
   addWidget: (content?: string, componentName?: string) => void;  // Updated to include componentName
-  getLayout: () => any[];
-  loadLayout: (layout: any[]) => void;
+  getLayout: () => GridLayoutItem[];
+  loadLayout: (layout: GridLayoutItem[]) => void;
   resetGrid: () => void;
 }
 
@@ -48,7 +55,7 @@ const GridModeContext = createContext<{
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
-  selectedFile?: any;  // Made optional
+  selectedFile?: SelectedFile | null;
   dashboardId?: number;
 }
 
@@ -103,7 +110,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     console.log('GridProvider useEffect - isEditMode changed to:', isEditMode);
     // Update renderCB with current isEditMode
     GridStack.renderCB = (el: HTMLElement, w: GridStackNode) => {
-      const component_name = (w as any).component_name || el.dataset.componentName;
+      const component_name = w.component_name || el.dataset.componentName;
       const Component = componentMap[component_name];
 
       if (Component) {
@@ -111,7 +118,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const root = ReactDOM.createRoot(el);
         root.render(
           <Component
-            node={w as any}
+            node={w as ComponentProps['node']}
             isEditMode={isEditMode}
             selectedFile={selectedFile}
             dashboardId={dashboardId}  // Pass dashboardId
@@ -121,8 +128,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             }}
           />
         );
-        (el as any)._reactRoot = root;
-        (el as any).gridstackNode = w; // Store node for re-rendering
+        (el as GridWidgetElement)._reactRoot = root;
+        (el as GridWidgetElement).gridstackNode = w; // Store node for re-rendering
       } else {
         el.innerHTML = w.content || '';
       }
@@ -137,9 +144,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       items.forEach((item, index) => {
         console.log(`Re-rendering item ${index}`);
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
-        const root = (contentEl as any)._reactRoot;
-        const node = (contentEl as any).gridstackNode;
-        const component_name = (node as any)?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
+        const root = (contentEl as GridWidgetElement)._reactRoot;
+        const node = (contentEl as GridWidgetElement).gridstackNode;
+        const component_name = node?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         console.log(`Item ${index} - component_name: ${component_name}, node:`, node);
         // Self-heal widgets whose node predates the min-size feature (e.g. loaded
         // from an older saved layout) — grows them up to the minimum if needed.
@@ -152,7 +159,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           console.log(`Re-rendering component for item ${index}`);
           root.render(
             <Component
-              node={node}
+              node={node as ComponentProps['node']}
               isEditMode={isEditMode}
               selectedFile={selectedFile}
               dashboardId={dashboardId}
@@ -190,8 +197,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     if (widgetEl) {
       const node = grid.getGridItems().find(item => item === widgetEl)?.gridstackNode;
       if (node) {
-        (node as any).component_name = componentName;
-        (node as any).component_id = newId;
+        node.component_name = componentName;
+        node.component_id = newId;
       }
       widgetEl.dataset.componentName = componentName;
     }
@@ -236,11 +243,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     const nodes = gridRef.current.save(false) as GridStackNode[];
     return nodes.map((node, index) => {
       // Ensure component_id is set (generate if missing)
-      const component_id = (node as any).component_id || generateComponentId();
-      (node as any).component_id = component_id;  // Update node for consistency
+      const component_id = node.component_id || generateComponentId();
+      node.component_id = component_id;  // Update node for consistency
       // Use component_name from the node, fallback to data attribute or content-based logic
-      const component_name = (node as any).component_name || node.el?.dataset.componentName || "TextBoxComponent";
-      let props: any = {};
+      const component_name = node.component_name || node.el?.dataset.componentName || "TextBoxComponent";
+      let props: Partial<GridStackWidget> = {};
       const w =
         node.w ??
         1; // necessary because GS sets w=1 to undefined
@@ -250,92 +257,86 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: (node as any).text || "Enter text here", font_size: 14 };  
+        props = { text: node.text || "Enter text here", font_size: 14 };  
       } else if (component_name === "ImageComponent") {
         props = {
-          image: (node as any).image,
-          image_asset: (node as any).image_asset ?? null,
-          image_fit: (node as any).image_fit ?? "contain",
-          image_alignment: (node as any).image_alignment ?? "center",
+          image: node.image,
+          image_asset: node.image_asset ?? null,
+          image_fit: node.image_fit ?? "contain",
+          image_alignment: node.image_alignment ?? "center",
         };
       } else if (component_name === "VariantsComponent") {
         props = {
-          automatic_loading: (node as any).automatic_loading ?? false,
-          leading_object_type: (node as any).leading_object_type ?? '',
+          automatic_loading: node.automatic_loading ?? false,
+          leading_object_type: node.leading_object_type ?? '',
           // Persisted advanced settings — see VariantsExplorer.tsx for semantics.
-          extraction: (node as any).extraction ?? 'leading_1hop',
-          iso: (node as any).iso ?? 'wl+vf2',
-          timeout_s: (node as any).timeout_s ?? 10.0,
+          extraction: node.extraction ?? 'leading_1hop',
+          iso: node.iso ?? 'wl+vf2',
+          timeout_s: node.timeout_s ?? 10.0,
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
-          show_num_events: (node as any).show_num_events ?? true,
-          show_num_activities: (node as any).show_num_activities ?? true,
-          show_num_objects: (node as any).show_num_objects ?? true,
-          show_num_object_types: (node as any).show_num_object_types ?? true,
-          show_earliest_timestamp: (node as any).show_earliest_timestamp ?? false,
-          show_newest_timestamp: (node as any).show_newest_timestamp ?? false,
-          show_duration: (node as any).show_duration ?? false,
-        };
-      } else if (component_name === "OCDFGComponent") {
-        props = {
-          show_controls: (node as any).show_controls ?? true,
-          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
+          show_num_events: node.show_num_events ?? true,
+          show_num_activities: node.show_num_activities ?? true,
+          show_num_objects: node.show_num_objects ?? true,
+          show_num_object_types: node.show_num_object_types ?? true,
+          show_earliest_timestamp: node.show_earliest_timestamp ?? false,
+          show_newest_timestamp: node.show_newest_timestamp ?? false,
+          show_duration: node.show_duration ?? false,
         };
       } else if (component_name === "OCDottedChartComponent") {
         props = {
-          x_axis: (node as any).x_axis ?? "time",
-          y_axis: (node as any).y_axis ?? "activity",
-          color_by: (node as any).color_by ?? "activity",
-          shape_by: (node as any).shape_by ?? "none",
-          row_order: (node as any).row_order ?? "first_occurrence",
-          max_points: (node as any).max_points ?? 10000,
+          x_axis: node.x_axis ?? "time",
+          y_axis: node.y_axis ?? "activity",
+          color_by: node.color_by ?? "activity",
+          shape_by: node.shape_by ?? "none",
+          row_order: node.row_order ?? "first_occurrence",
+          max_points: node.max_points ?? 10000,
         };
       } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
         props = {
-          show_controls: (node as any).show_controls ?? true,
-          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
-          layout_direction: (node as any).layout_direction ?? 'TB',
+          show_controls: node.show_controls ?? true,
+          initial_interaction_locked: node.initial_interaction_locked ?? true,
+          layout_direction: node.layout_direction ?? 'TB',
         };
       } else if (component_name === "ProcessAreaComponent") {
         props = {
-          algorithm: (node as any).algorithm ?? "advanced",
-          w_temporal: (node as any).w_temporal ?? 1,
-          w_cardinality: (node as any).w_cardinality ?? 1,
-          w_divergence: (node as any).w_divergence ?? 1,
-          alpha: (node as any).alpha ?? 1,
-          beta: (node as any).beta ?? 1,
+          algorithm: node.algorithm ?? "advanced",
+          w_temporal: node.w_temporal ?? 1,
+          w_cardinality: node.w_cardinality ?? 1,
+          w_divergence: node.w_divergence ?? 1,
+          alpha: node.alpha ?? 1,
+          beta: node.beta ?? 1,
         };
       } else if (component_name === "OCCNComponent") {
         props = {
-          relative_occurrence_threshold: (node as any).relative_occurrence_threshold ?? 0,
-          object_types: (node as any).object_types ?? "",
-          show_controls: (node as any).show_controls ?? true,
-          initial_interaction_locked: (node as any).initial_interaction_locked ?? true,
-          layout_direction: (node as any).layout_direction ?? 'LR',
+          relative_occurrence_threshold: node.relative_occurrence_threshold ?? 0,
+          object_types: node.object_types ?? "",
+          show_controls: node.show_controls ?? true,
+          initial_interaction_locked: node.initial_interaction_locked ?? true,
+          layout_direction: node.layout_direction ?? 'LR',
         };
       } else if (component_name === "OCPNComponent") {
         props = {
-          automatic_loading: (node as any).automatic_loading ?? false,
-          timeout_s: (node as any).timeout_s ?? 30.0,
+          automatic_loading: node.automatic_loading ?? false,
+          timeout_s: node.timeout_s ?? 30.0,
         };
       } else if (component_name === "PieChartComponent") {
         props = {
-          query: (node as any).query ?? '',
-          ring_text: (node as any).ring_text ?? '',
-          chart_type: (node as any).chart_type ?? 'donut',
-          title: (node as any).title ?? '',
-          label_column: (node as any).label_column ?? '',
-          value_column: (node as any).value_column ?? '',
-          show_legend: (node as any).show_legend ?? true,
-          show_tooltip: (node as any).show_tooltip ?? true,
+          query: node.query ?? '',
+          ring_text: node.ring_text ?? '',
+          chart_type: node.chart_type ?? 'donut',
+          title: node.title ?? '',
+          label_column: node.label_column ?? '',
+          value_column: node.value_column ?? '',
+          show_legend: node.show_legend ?? true,
+          show_tooltip: node.show_tooltip ?? true,
         };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
       
       return {
-        id: component_id,  // Now always set
         component_name,
         x: node.x,
         y: node.y,
@@ -343,11 +344,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         h,
         order: index,
         ...props,
+        id: component_id,  // Now always set — spread last so this always wins
       };
     });
   };
 
-  const loadLayout = (layout: any[]) => {
+  const loadLayout = (layout: GridLayoutItem[]) => {
     console.log("loadLayout called with:", layout);
     
     if (!gridRef.current) {
@@ -407,8 +409,6 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "TOTeM Miner";
         } else if (item.component_name === "LogStatisticsComponent") {
           content = "Log Statistics";
-        } else if (item.component_name === "OCDFGComponent") {
-          content = "OCDFG";
         } else if (item.component_name === "OCDottedChartComponent") {
           content = "OC Dotted Chart";
         } else if (item.component_name === "NewOCDFGComponent") {
@@ -463,7 +463,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             show_earliest_timestamp: item.show_earliest_timestamp,
             show_newest_timestamp: item.show_newest_timestamp,
             show_duration: item.show_duration,
-            // OCDFGComponent properties
+            // NewOCDFGComponent properties
             show_controls: item.show_controls,
             initial_interaction_locked: item.initial_interaction_locked,
             // OCDottedChartComponent properties
@@ -498,59 +498,59 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           if (widgetEl) {
             const node = grid.getGridItems().find(gridItem => gridItem === widgetEl)?.gridstackNode;
             if (node) {
-              (node as any).component_name = item.component_name;
-              (node as any).component_id = component_id;  // Ensure it's set
-              (node as any).text = item.text;
-              (node as any).color = item.color; // For NumberOfEventsComponent
-              (node as any).font_size = item.font_size;
-              (node as any).image = item.image; // For ImageComponent (legacy upload)
-              (node as any).image_asset = item.image_asset; // For ImageComponent
-              (node as any).image_asset_url = item.image_asset_url; // For ImageComponent
-              (node as any).image_fit = item.image_fit; // For ImageComponent
-              (node as any).image_alignment = item.image_alignment; // For ImageComponent
-              (node as any).automatic_loading = item.automatic_loading; // For VariantsComponent
-              (node as any).leading_object_type = item.leading_object_type; // For VariantsComponent
-              (node as any).extraction = item.extraction;   // For VariantsComponent advanced settings
-              (node as any).iso = item.iso;                 // For VariantsComponent advanced settings
-              (node as any).timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
+              node.component_name = item.component_name;
+              node.component_id = component_id;  // Ensure it's set
+              node.text = item.text;
+              node.color = item.color; // For NumberOfEventsComponent
+              node.font_size = item.font_size;
+              node.image = item.image; // For ImageComponent (legacy upload)
+              node.image_asset = item.image_asset; // For ImageComponent
+              node.image_asset_url = item.image_asset_url; // For ImageComponent
+              node.image_fit = item.image_fit; // For ImageComponent
+              node.image_alignment = item.image_alignment; // For ImageComponent
+              node.automatic_loading = item.automatic_loading; // For VariantsComponent
+              node.leading_object_type = item.leading_object_type; // For VariantsComponent
+              node.extraction = item.extraction;   // For VariantsComponent advanced settings
+              node.iso = item.iso;                 // For VariantsComponent advanced settings
+              node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               // LogStatisticsComponent properties
-              (node as any).show_num_events = item.show_num_events;
-              (node as any).show_num_activities = item.show_num_activities;
-              (node as any).show_num_objects = item.show_num_objects;
-              (node as any).show_num_object_types = item.show_num_object_types;
-              (node as any).show_earliest_timestamp = item.show_earliest_timestamp;
-              (node as any).show_newest_timestamp = item.show_newest_timestamp;
-              (node as any).show_duration = item.show_duration;
-              // OCDFGComponent properties
+              node.show_num_events = item.show_num_events;
+              node.show_num_activities = item.show_num_activities;
+              node.show_num_objects = item.show_num_objects;
+              node.show_num_object_types = item.show_num_object_types;
+              node.show_earliest_timestamp = item.show_earliest_timestamp;
+              node.show_newest_timestamp = item.show_newest_timestamp;
+              node.show_duration = item.show_duration;
               // PieChartComponent properties
-              (node as any).query = item.query;
-              (node as any).ring_text = item.ring_text;
-              (node as any).chart_type = item.chart_type;
-              (node as any).title = item.title;
-              (node as any).label_column = item.label_column;
-              (node as any).value_column = item.value_column;
-              (node as any).show_legend = item.show_legend;
-              (node as any).show_tooltip = item.show_tooltip;
-              (node as any).show_controls = item.show_controls;
-              (node as any).initial_interaction_locked = item.initial_interaction_locked;
+              node.query = item.query;
+              node.ring_text = item.ring_text;
+              node.chart_type = item.chart_type;
+              node.title = item.title;
+              node.label_column = item.label_column;
+              node.value_column = item.value_column;
+              node.show_legend = item.show_legend;
+              node.show_tooltip = item.show_tooltip;
+              // NewOCDFGComponent properties
+              node.show_controls = item.show_controls;
+              node.initial_interaction_locked = item.initial_interaction_locked;
               // OCDottedChartComponent properties
-              (node as any).x_axis = item.x_axis;
-              (node as any).y_axis = item.y_axis;
-              (node as any).color_by = item.color_by;
-              (node as any).shape_by = item.shape_by;
-              (node as any).row_order = item.row_order;
-              (node as any).max_points = item.max_points;
-              (node as any).layout_direction = item.layout_direction;
+              node.x_axis = item.x_axis;
+              node.y_axis = item.y_axis;
+              node.color_by = item.color_by;
+              node.shape_by = item.shape_by;
+              node.row_order = item.row_order;
+              node.max_points = item.max_points;
+              node.layout_direction = item.layout_direction;
               // OCCNComponent properties
-              (node as any).relative_occurrence_threshold = item.relative_occurrence_threshold;
-              (node as any).object_types = item.object_types;
+              node.relative_occurrence_threshold = item.relative_occurrence_threshold;
+              node.object_types = item.object_types;
               // ProcessAreaComponent properties
-              (node as any).algorithm = item.algorithm;
-              (node as any).w_temporal = item.w_temporal;
-              (node as any).w_cardinality = item.w_cardinality;
-              (node as any).w_divergence = item.w_divergence;
-              (node as any).alpha = item.alpha;
-              (node as any).beta = item.beta;
+              node.algorithm = item.algorithm;
+              node.w_temporal = item.w_temporal;
+              node.w_cardinality = item.w_cardinality;
+              node.w_divergence = item.w_divergence;
+              node.alpha = item.alpha;
+              node.beta = item.beta;
             }
           }
           // Set data attribute for persistence

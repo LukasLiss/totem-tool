@@ -78,23 +78,6 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
-      ".sidepanel .ocdfg-component",
-      {
-        helper: "clone",
-        appendTo: "body",
-      },
-      [{
-        h: 6,
-        w: 8,
-        content: "OCDFG",
-        component_name: "OCDFGComponent",
-        show_controls: true,
-        initial_interaction_locked: true,
-        order: 0
-      }]
-    );
-
-    GridStack.setupDragIn(
       ".sidepanel .oc-dotted-chart-component",
       {
         helper: "clone",
@@ -262,11 +245,6 @@ const SidePanel: React.FC = () => {
       <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
         <img src="src/images/log-statistics-preview.png" width="100" height="70"/>
         <div>Log Statistics</div>
-      </div>
-
-      <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
-        <div>OCDFG</div>
       </div>
 
       <div className="grid-stack-item sidepanel-item oc-dotted-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">

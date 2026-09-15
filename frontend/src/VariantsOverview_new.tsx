@@ -17,7 +17,7 @@ export function VariantsOverview() {
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    const fileId = (selectedFile as any)?.id as number | undefined;
+    const fileId = selectedFile?.id;
 
     // No file selected: reset and bail
     if (!fileId) {
@@ -45,10 +45,11 @@ export function VariantsOverview() {
           setVariants(safe);
           setStatus(safe.length ? "ready" : "empty");
         }
-      } catch (e: any) {
-        if (!cancelled && e?.name !== "AbortError") {
+      } catch (e) {
+        const err = e as { name?: string; message?: string } | undefined;
+        if (!cancelled && err?.name !== "AbortError") {
           setStatus("error");
-          setErrorMsg(e?.message ? String(e.message) : "Unknown error.");
+          setErrorMsg(err?.message ? String(err.message) : "Unknown error.");
         }
       }
     })();

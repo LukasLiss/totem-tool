@@ -9,6 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { executeQuery } from '../api/fileApi';
 import { GridStackNode } from 'gridstack';
+import type { SelectedFile } from '../contexts/SelectedFileContext';
+
+// SQL query rows have arbitrary, query-defined columns — not knowable ahead
+// of execution — and the recharts data derived from them keeps the same
+// dynamic-key shape (label/value column names are user-configurable).
+type QueryRow = Record<string, unknown>;
+type ChartDataItem = Record<string, string | number>;
 
 // Define props interface for components (extend as needed)
 interface ComponentProps {
@@ -24,10 +31,10 @@ interface ComponentProps {
     label_column?: string;
     value_column?: string;
   };
-  onUpdate?: (updates: Partial<GridStackNode> & Record<string, any>) => void;
+  onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean;
   dashboardId: number;
-  selectedFile?: { id: number; [key: string]: any };
+  selectedFile?: SelectedFile;
 }
 
 const PieChartComponent: React.FC<ComponentProps> = ({
@@ -45,7 +52,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const [valueColumn, setValueColumn] = useState(node.value_column || '');
 
   // State for view mode
-  const [chartData, setChartData] = useState<any[]>([]);
+  const [chartData, setChartData] = useState<ChartDataItem[]>([]);
   const [availableColumns, setAvailableColumns] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,9 +126,9 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 
         if (result.data && Array.isArray(result.data)) {
           // Transform data for recharts
-          const transformedData = result.data.map((row: any, index: number) => ({
-            [labelColumn]: row[labelColumn],
-            [valueColumn]: parseFloat(row[valueColumn]) || 0,
+          const transformedData = result.data.map((row: QueryRow, index: number) => ({
+            [labelColumn]: row[labelColumn] as string | number,
+            [valueColumn]: parseFloat(String(row[valueColumn])) || 0,
             fill: `var(--chart-${(index % 5) + 1})`
           }));
           setChartData(transformedData);
@@ -194,7 +201,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   }, [chartData, labelColumn, valueColumn]);
 
   const totalValue = React.useMemo(() => {
-    return chartData.reduce((acc, curr) => acc + (curr[valueColumn] || 0), 0);
+    return chartData.reduce((acc, curr) => acc + (Number(curr[valueColumn]) || 0), 0);
   }, [chartData, valueColumn]);
 
   if (isEditMode) {

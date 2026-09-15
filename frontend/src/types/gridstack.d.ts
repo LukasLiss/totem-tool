@@ -32,5 +32,30 @@ declare module 'gridstack' {
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
+    // ImageComponent
+    image_asset?: number | null;
+    image_asset_url?: string | null;
+    image_fit?: string;
+    image_alignment?: string;
+    // NewOCDFG / NewOCDFGVariants components
+    w_temporal?: number;
+    w_cardinality?: number;
+    w_divergence?: number;
+    alpha?: number;
+    beta?: number;
+    algorithm?: string;
+    // SQLQueryComponent
+    query?: string;
+    ring_text?: string;
+    title?: string;
+    label_column?: string;
+    value_column?: string;
+    show_legend?: boolean;
+    show_tooltip?: boolean;
+    // PieChartComponent
+    chart_type?: string;
+    // VariantsComponent
+    object_types?: string;
+    relative_occurrence_threshold?: number;
   }
 }

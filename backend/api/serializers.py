@@ -12,7 +12,7 @@ from totem_lib import (
 from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SQLQueryComponent, PieChartComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SQLQueryComponent, PieChartComponent
 from django.db.models import Max
 
 
@@ -416,12 +416,6 @@ class LogStatisticsComponentSerializer(DashboardComponentSerializer):
         model = LogStatisticsComponent
         fields = "__all__"
 
-class OCDFGComponentSerializer(DashboardComponentSerializer):
-    class Meta:
-        model = OCDFGComponent
-        fields = "__all__"
-
-
 class OCDottedChartComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = OCDottedChartComponent
@@ -472,7 +466,6 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ProcessAreaComponent: ProcessAreaComponentSerializer,
         TotemMinerComponent: TotemMinerComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
-        OCDFGComponent: OCDFGComponentSerializer,
         FilterStackComponent: FilterStackComponentSerializer,
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
