@@ -1,4 +1,5 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
+import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
+import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -17,14 +18,13 @@ import {
 import { DashboardContext, AnalysisComponent } from "@/contexts/DashboardContext"
 
 const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarChart3 }[] = [
-  { id: 'processArea', label: 'Process Area', icon: BarChart3 },
+  { id: 'processArea', label: 'Process Area', icon: Network },
   { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
-  { id: 'occn', label: 'OCCN', icon: Workflow },
+  { id: 'occn', label: 'OCCN', icon: CausalNet },
   { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
-  { id: 'ocdfg', label: 'OC-DFG', icon: Network },
-  { id: 'variants', label: 'Variants', icon: GitBranch },
+  { id: 'ocdfg', label: 'OC-DFG', icon: BoxesArrowRight },
+  { id: 'variants', label: 'Variants', icon: TextAlignStart },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
-  // Added on main after the order in #360 was agreed, so it goes last.
   { id: 'sqlQuery', label: 'SQL Queries', icon: Database },
 ];
 
