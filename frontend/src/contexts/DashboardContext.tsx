@@ -33,9 +33,16 @@ export type ViewMode =
  */
 export type NavigationGuard = (next: ViewMode) => boolean;
 
+/**
+ * `force` skips the navigation guard. For moves the user cannot be asked
+ * about because the view they are on has ceased to exist — deleting the
+ * open dashboard, say; there is nothing left to go back and save.
+ */
+export type SetViewModeOptions = { force?: boolean };
+
 type DashboardContextType = {
   viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
+  setViewMode: (mode: ViewMode, options?: SetViewModeOptions) => void;
   /** Install the guard, or pass null to remove it. Only one can be active. */
   registerNavigationGuard?: (guard: NavigationGuard | null) => void;
 };
@@ -65,8 +72,14 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   // when a navbar item is clicked. Navigating to the current route is a
   // no-op, so this is safe to call unconditionally.
   const setViewMode = useCallback(
-    (mode: ViewMode) => {
-      if (navigationGuard.current && !navigationGuard.current(mode)) return;
+    (mode: ViewMode, options?: SetViewModeOptions) => {
+      if (
+        !options?.force &&
+        navigationGuard.current &&
+        !navigationGuard.current(mode)
+      ) {
+        return;
+      }
       setViewModeState(mode);
       navigate("/overview");
     },

@@ -1,5 +1,5 @@
 import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
-import { useContext,  useState } from 'react'
+import { useContext, useRef, useState } from 'react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -60,42 +60,86 @@ export function NavDashboard({
 
 
   const { selectedFile } = useContext(SelectedFileContext);
+
+  // Only one of these dialogs is open at a time, so one flag covers all three.
+  // It keeps the submit button disabled for as long as the request is in
+  // flight: without it, impatient clicks on "Save changes" sent a POST each and
+  // created a dashboard each.
+  //
+  // The ref is what actually holds the line. Clicks arriving in the same tick
+  // all run before React re-renders the button as disabled, and each handler
+  // would read the same stale `isSubmitting === false`; a ref is updated
+  // synchronously, so every click after the first turns back here.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitting = useRef(false);
+
+  const beginSubmit = () => {
+    if (submitting.current) return false;
+    submitting.current = true;
+    setIsSubmitting(true);
+    return true;
+  };
+
+  const endSubmit = () => {
+    submitting.current = false;
+    setIsSubmitting(false);
+  };
+
   const handleAddDashboard = async () => {
-    if (!selectedFile?.project) return;
+    const name = dashboardname.trim();
+    if (!selectedFile?.project || !name) return;
+    if (!beginSubmit()) return;
+
     try {
-      await addDashboard(dashboardname, selectedFile.project);
-      await refreshDashboards();   // ✅ ask parent to reload dashboards
-      setOpen(false);              // ✅ close dialog
-      setDashboardname("");        // ✅ reset input field
+      await addDashboard(name, selectedFile.project);
+      await refreshDashboards();
+      setOpen(false);
+      setDashboardname("");
     } catch {
-    toast.error("Dashboard could not be created");
-  }
-};
+      toast.error("Dashboard could not be created");
+    } finally {
+      endSubmit();
+    }
+  };
 
   const handleChangeName = async () => {
-  if (!dashboardToRename) return;
+    const name = dashboardname.trim();
+    if (!dashboardToRename || !name) return;
+    if (!beginSubmit()) return;
 
-  try {
-    await renameDashboard(dashboardToRename.id, dashboardname);
-    await refreshDashboards();
-    setOpenRename(false);
-    setDashboardname("");
-    setDashboardToRename(null); // reset
-  } catch {
-    toast.error("Dashboard could not be renamed");
-  }
-};
+    try {
+      await renameDashboard(dashboardToRename.id, name);
+      await refreshDashboards();
+      setOpenRename(false);
+      setDashboardname("");
+      setDashboardToRename(null);
+    } catch {
+      toast.error("Dashboard could not be renamed");
+    } finally {
+      endSubmit();
+    }
+  };
 
   const handleDeleteDashboard = async () => {
     if (!dashboardToDelete) return;
+    if (!beginSubmit()) return;
 
     try {
       await deleteDashboard(dashboardToDelete.id);
+      // Nothing can be shown for a dashboard that no longer exists: staying on
+      // it leaves an empty grid whose layout can neither be loaded nor saved.
+      // Forced, because edit mode's unsaved-changes guard would otherwise ask
+      // whether to discard a layout that has just been deleted.
+      if (viewMode.type === "dashboard" && viewMode.id === dashboardToDelete.id) {
+        setViewMode({ type: "overview" }, { force: true });
+      }
       await refreshDashboards();
       setOpenDelete(false);
-      setDashboardToDelete(null); // reset
+      setDashboardToDelete(null);
     } catch {
       toast.error("Dashboard could not be deleted");
+    } finally {
+      endSubmit();
     }
   };
 
@@ -122,51 +166,71 @@ export function NavDashboard({
               {/* Expandable list of dashboards */}
               <CollapsibleContent>
                 <SidebarMenuSub>
+                  {/* The menu is a sibling of the row, not a child of it. A
+                      menu item lives in a portal, so when the menu closes the
+                      browser resolves the click onto whatever is underneath —
+                      the row — and picking "Delete" also re-entered the
+                      dashboard, which in edit mode raised the discard prompt on
+                      top of the delete dialog. (It was also a <button> inside
+                      an <a>.) */}
                   {dashboards.map((dashboard) => (
-                    <SidebarMenuSubItem key={dashboard.id}>
-                      <SidebarMenuSubButton className="flex w-full items-center justify-between"
-                      onClick={() => {
-                        setViewMode({ type: 'dashboard', id: dashboard.id });
-                      }}>
-                        <span className="flex-1 truncate"
-                        title={dashboard.name}
-
-                        >{dashboard.name}</span>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              className="p-1 hover:bg-accent rounded"
-                              onClick={(e) => e.stopPropagation()} // stop row click
-                            >
-                              <Settings2 className="w-4 h-4" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setDashboardToRename(dashboard);     // store selected dashboard
-                                setDashboardname(dashboard.name);    // prefill input field
-                                setOpenRename(true);                 // open rename dialog
-                              }}
-                            >
-                              Rename
-                            </DropdownMenuItem>
-
-                            <DropdownMenuItem onClick={() => {
-                                setDashboardToDelete(dashboard);     // store selected dashboard
-                                setOpenDelete(true);                 // open rename dialog
-                              }}>
-                              Delete</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                    <SidebarMenuSubItem key={dashboard.id} className="flex w-full items-center">
+                      <SidebarMenuSubButton
+                        className="min-w-0 flex-1"
+                        onClick={() => {
+                          setViewMode({ type: 'dashboard', id: dashboard.id });
+                        }}
+                      >
+                        <span className="truncate" title={dashboard.name}>
+                          {dashboard.name}
+                        </span>
                       </SidebarMenuSubButton>
+
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`Actions for ${dashboard.name}`}
+                            title={`Actions for ${dashboard.name}`}
+                            className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground shrink-0 rounded p-1"
+                          >
+                            <Settings2 className="size-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setDashboardToRename(dashboard);
+                              setDashboardname(dashboard.name);
+                              setOpenRename(true);
+                            }}
+                          >
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setDashboardToDelete(dashboard);
+                              setOpenDelete(true);
+                            }}
+                          >
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </SidebarMenuSubItem>
                   ))}
 
                   {/* Add new dashboard button */}
                   <SidebarMenuSubItem>
-                    <Dialog open={open} onOpenChange={setOpen}>
+                    <Dialog
+                      open={open}
+                      onOpenChange={(next) => {
+                        if (isSubmitting) return;
+                        setOpen(next);
+                        // Never reopen carrying the last attempt's text.
+                        if (next) setDashboardname("");
+                      }}
+                    >
                       <SidebarMenuSubButton asChild className="cursor-pointer">
                         <DialogTrigger>
                           <Plus className="w-4 h-4 shrink-0" />
@@ -188,21 +252,30 @@ export function NavDashboard({
                             </DialogHeader>
                             <div className="grid gap-4 py-4">
                               <div className="grid gap-3">
-                                <Label htmlFor="name-1">Name</Label>
+                                <Label htmlFor="new-dashboard-name">Name</Label>
                                 <Input
-                                  id="name-1"
+                                  id="new-dashboard-name"
                                   name="name"
                                   value={dashboardname}
                                   onChange={(e) => setDashboardname(e.target.value)}
                                   placeholder="Dashboard Name"
+                                  maxLength={100}
+                                  autoFocus
                                 />
                               </div>
                             </div>
                             <DialogFooter>
                               <DialogClose asChild>
-                                <Button type="button" variant="outline">Cancel</Button>
+                                <Button type="button" variant="outline" disabled={isSubmitting}>
+                                  Cancel
+                                </Button>
                               </DialogClose>
-                              <Button type="submit">Save changes</Button>
+                              <Button
+                                type="submit"
+                                disabled={isSubmitting || !dashboardname.trim()}
+                              >
+                                {isSubmitting ? "Creating…" : "Save changes"}
+                              </Button>
                             </DialogFooter>
                           </form>
                         </DialogContent>
@@ -215,7 +288,12 @@ export function NavDashboard({
         </SidebarMenu>
       </SidebarGroup>
     {/* Rename dialog */}
-    <Dialog open={openRename} onOpenChange={setOpenRename}>
+    <Dialog
+      open={openRename}
+      onOpenChange={(next) => {
+        if (!isSubmitting) setOpenRename(next);
+      }}
+    >
         <DialogContent className="sm:max-w-[425px]">
           <form
             onSubmit={(e) => {
@@ -231,9 +309,9 @@ export function NavDashboard({
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-3">
-                <Label htmlFor="name-1">Name</Label>
+                <Label htmlFor="rename-dashboard-name">Name</Label>
                 <Input
-                  id="name-1"
+                  id="rename-dashboard-name"
                   name="name"
                   value={dashboardname}
                   onChange={(e) => setDashboardname(e.target.value)}
@@ -244,15 +322,27 @@ export function NavDashboard({
             </div>
             <DialogFooter>
               <DialogClose asChild>
-                <Button type="button" variant="outline">Cancel</Button>
+                <Button type="button" variant="outline" disabled={isSubmitting}>
+                  Cancel
+                </Button>
               </DialogClose>
-              <Button type="submit">Save changes</Button>
+              <Button
+                type="submit"
+                disabled={isSubmitting || !dashboardname.trim()}
+              >
+                {isSubmitting ? "Renaming…" : "Save changes"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
-      </Dialog>  
+      </Dialog>
       {/* Delete dialog */}
-      <Dialog open={openDelete} onOpenChange={setOpenDelete}>
+      <Dialog
+        open={openDelete}
+        onOpenChange={(next) => {
+          if (!isSubmitting) setOpenDelete(next);
+        }}
+      >
         <DialogContent className="sm:max-w-[425px]">
           <form
             onSubmit={(e) => {
@@ -268,7 +358,7 @@ export function NavDashboard({
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-3">
-                <Label htmlFor="name-1">Dashboard</Label>
+                <Label>Dashboard</Label>
                 <div className="p-2 rounded-md bg-muted text-sm">
                   {dashboardToDelete?.name || "No dashboard selected"}
                 </div>
@@ -276,9 +366,13 @@ export function NavDashboard({
             </div>
             <DialogFooter>
               <DialogClose asChild>
-                <Button type="button" variant="outline">Cancel</Button>
+                <Button type="button" variant="outline" disabled={isSubmitting}>
+                  Cancel
+                </Button>
               </DialogClose>
-              <Button type="submit">Delete</Button>
+              <Button type="submit" variant="destructive" disabled={isSubmitting}>
+                {isSubmitting ? "Deleting…" : "Delete"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
