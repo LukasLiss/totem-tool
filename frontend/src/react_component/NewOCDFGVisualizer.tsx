@@ -23,6 +23,7 @@ import { Slider } from '@/components/ui/slider';
 import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { toast } from 'sonner';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -243,7 +244,6 @@ function NewOCDFGVisualizer({
   initialInteractionLocked = true,
   filterEnabled = true,
 }: NewOCDFGVisualizerProps) {
-  console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -589,9 +589,9 @@ function NewOCDFGVisualizer({
         if (graph) setDfgData(graph);
         else        setDfgData({ nodes: [], links: [] });
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
-          console.error('[NewOCDFGVisualizer] Failed to load new OCDFG data', err);
+          toast.error('OC-DFG could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -924,7 +924,7 @@ function NewOCDFGVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(console.error);
+    }).catch(() => toast.error('OC-DFG layout failed'));
   }, [
     typeVisibility,
     rawNodes,

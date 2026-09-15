@@ -49,13 +49,14 @@ import {
 } from '@/editors/shared/sessionCache';
 import { useProjectAssetBridge } from '@/editors/shared/useProjectAssetBridge';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
+import TotemObjectTypeNode from '@/components/totem/TotemObjectTypeNode';
+import TotemRelationEdge from '@/components/totem/TotemRelationEdge';
+import { TOTEM_NODE_HEIGHT, totemNodeWidth } from '@/components/totem/totemTheme';
 
 import { EXAMPLE_MODEL } from './example';
 import { layoutTotemGraph } from './layout';
 import { buildModelFile, modelToFlow } from './serialize';
 import { OverviewPanel, RelationPanel, TypePanel } from './TotemPanel';
-import TotemRelationEdge from './TotemRelationEdge';
-import TotemTypeNode from './TotemTypeNode';
 import {
   freshId,
   type TotemRelationEdgeData,
@@ -63,7 +64,7 @@ import {
   type TotemTypeNodeType,
 } from './types';
 
-const nodeTypes = { totemType: TotemTypeNode };
+const nodeTypes = { totemType: TotemObjectTypeNode };
 const edgeTypes = { totemRelation: TotemRelationEdge };
 
 const SESSION_KEY = 'totem';
@@ -287,8 +288,8 @@ function TotemEditorInner() {
         })
       : { x: 0, y: 0 };
     const position = {
-      x: Math.round(center.x - 70 + (Math.random() - 0.5) * 80),
-      y: Math.round(center.y - 26 + (Math.random() - 0.5) * 80),
+      x: Math.round(center.x - totemNodeWidth(name) / 2 + (Math.random() - 0.5) * 80),
+      y: Math.round(center.y - TOTEM_NODE_HEIGHT / 2 + (Math.random() - 0.5) * 80),
     };
 
     const newNode: TotemTypeNodeType = {

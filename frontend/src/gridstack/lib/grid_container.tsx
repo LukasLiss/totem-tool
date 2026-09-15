@@ -20,16 +20,16 @@ const GridContainer: React.FC<{ children: React.ReactNode; className?: string }>
           if (grid && grid.engine) { // Check if grid engine is initialized
             grid.onResize(Math.floor(width));
           }
-        } catch (err) {
-          // defensive: if onResize not present for some reason, fallback to compact()
-          // (but onResize is the documented method).
-          // eslint-disable-next-line no-console
-          console.warn("grid.onResize failed, trying compact() as fallback", err);
-          try { 
+        } catch {
+          // Defensive: onResize is the documented method, but fall back to
+          // compact() if this GridStack build does not have it.
+          try {
             if (grid && grid.engine) {
-              grid.compact(); 
+              grid.compact();
             }
-          } catch (_) {}
+          } catch {
+            // Both paths failed; the next resize gets another go.
+          }
         }
       }
     });
@@ -42,8 +42,8 @@ const GridContainer: React.FC<{ children: React.ReactNode; className?: string }>
       if (grid && grid.engine) {
         grid.onResize(Math.floor(initialWidth));
       }
-    } catch (err) {
-      console.warn("Initial onResize failed:", err);
+    } catch {
+      // The observer above re-runs this on the next resize.
     }
 
     return () => ro.disconnect();

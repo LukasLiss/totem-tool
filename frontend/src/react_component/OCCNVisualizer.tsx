@@ -41,6 +41,7 @@ import MarkerOverlay from '@/editors/occn/MarkerOverlay';
 import type { MarkerVis } from '@/editors/occn/markers';
 import { elkLayeredPositions } from '@/editors/occn/model';
 import OccnEdgeComponent from '@/editors/occn/OccnEdge';
+import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import OccnNodeComponent from '@/editors/occn/OccnNode';
 import {
   OccnRenderContext,
@@ -49,6 +50,7 @@ import {
 } from '@/editors/occn/types';
 import OccnOverflowBadges from './OccnOverflowBadges';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { toast } from 'sonner';
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -122,6 +124,9 @@ function OCCNVisualizer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked);
+  const [tooltipState, setTooltipState] = useState<
+    { x: number; y: number; title?: string; rows: TooltipRow[] } | null
+  >(null);
   // Threshold applied to the fetch; the slider commits into this state.
   const [threshold, setThreshold] = useState(initialThreshold);
   const [layoutDirection, setLayoutDirection] = useState<OccnLayoutDirection>(initialLayoutDirection);
@@ -177,7 +182,6 @@ function OCCNVisualizer({
       })
       .catch((err) => {
         if (cancelled) return;
-        console.error('Failed to load OCCN', err);
         setNet(null);
         setError(err?.response?.data?.error ?? 'Failed to discover the OCCN for this file.');
       })
@@ -218,8 +222,9 @@ function OCCNVisualizer({
         edgeNodeGap: 60,
       },
     )
-      .catch((err) => {
-        console.error('OCCN layout failed, rendering unpositioned nodes', err);
+      .catch(() => {
+        // Fall back to unpositioned nodes rather than an empty canvas.
+        toast.error('OCCN layout failed');
         return {} as Record<string, { x: number; y: number }>;
       })
       .then((positions) => {
@@ -335,6 +340,31 @@ function OCCNVisualizer({
   );
 
   const interactionsDisabled = interactionLocked;
+
+  /**
+   * Arc hover card. These handlers must sit on the ReactFlow, not inside the
+   * edge component: with `elementsSelectable` off and no edge handlers React
+   * Flow marks each edge `inactive`, which sets pointer-events: none on the
+   * arc and no hover would ever reach it.
+   */
+  const showArcTooltip = useCallback(
+    (event: React.MouseEvent, edge: EditorOccnEdge) => {
+      const dependence = edge.data?.dependenceMeasure;
+      setTooltipState({
+        x: event.clientX,
+        y: event.clientY,
+        title: `${edge.source} \u2192 ${edge.target}`,
+        rows: [
+          { label: 'Object type', value: edge.data?.objectType || 'unknown' },
+          {
+            label: 'Dependence',
+            value: dependence != null ? dependence.toFixed(2) : 'N/A',
+          },
+        ],
+      });
+    },
+    [],
+  );
   const highlightedNodeIds = useMemo(
     () =>
       Object.entries(conformanceHighlights)
@@ -391,6 +421,14 @@ function OCCNVisualizer({
           opacity: 0 !important;
           pointer-events: none !important;
         }
+        /* React Flow marks an edge "inactive" — pointer-events: none — when
+           nothing is selectable and no click handler is set, which is exactly
+           this view while interactions are locked. Locking is about panning
+           and dragging, not about an arc refusing to say what it is, so the
+           arcs keep their pointer events and the hover card works either way. */
+        [data-occn-readonly] .react-flow__edge.inactive {
+          pointer-events: auto;
+        }
       `}</style>
       <OccnRenderContext.Provider value={renderContext}>
         <ReactFlow
@@ -415,6 +453,9 @@ function OCCNVisualizer({
           zoomOnScroll={!interactionsDisabled}
           zoomOnDoubleClick={!interactionsDisabled}
           preventScrolling={!interactionsDisabled}
+          onEdgeMouseEnter={showArcTooltip}
+          onEdgeMouseMove={showArcTooltip}
+          onEdgeMouseLeave={() => setTooltipState(null)}
         >
           {graph && (
             <MarkerOverlay
@@ -675,6 +716,7 @@ function OCCNVisualizer({
           </div>
         </>
       )}
+      {tooltipState && <HoverTooltip {...tooltipState} />}
     </div>
   );
 }

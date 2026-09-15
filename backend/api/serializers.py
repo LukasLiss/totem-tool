@@ -144,10 +144,15 @@ class OCCNReplayUnitDetailRequestSerializer(
 
 
 class EventLogSerializer(serializers.ModelSerializer):
+     # Renamed through the viewset's `rename` action, never by writing here.
+     display_name = serializers.CharField(
+         source="project.display_name", read_only=True
+     )
+
      class Meta:
         #not including user to ensure security
         model = EventLog
-        fields = ["id", "project", "file", "uploaded_at"]
+        fields = ["id", "project", "display_name", "file", "uploaded_at"]
         read_only_fields = ["project", "uploaded_at"]
 
 

@@ -61,6 +61,7 @@ from ._ocel_db import (
     _OCEL_OBJECT_TYPES_REGISTRY,
     _activities_with_counts,
     _build_ocel_db_from_path,
+    _close_ocel_db,
     _filter_shadow,
     _get_ocel_object_types,
     _object_types,
@@ -154,16 +155,110 @@ def _project_name_for_upload(file_name: str, username: str) -> str:
     return (slugify(file_name)[: max(1, limit - len(suffix))] + suffix)[:limit]
 
 
+def _remove_file(path):
+    """Delete a file, tolerating one that is already gone."""
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _project_file_paths(project):
+    """Every upload a project owns, so deleting it does not orphan them.
+
+    Cascades take care of the rows; Django never deletes the files behind
+    FileFields, so they are collected before the project goes away.
+    """
+    from ..models import ImageAsset, ImageComponent
+
+    paths = []
+    for asset in ImageAsset.objects.filter(project=project):
+        if asset.image:
+            paths.append(asset.image.path)
+    for component in ImageComponent.objects.filter(dashboard__project=project):
+        if component.image:
+            paths.append(component.image.path)
+    return paths
+
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
-    # No PUT/PATCH: the uploaded file is converted, validated and registered
-    # in `perform_create` only. Replacing it in place would skip conversion,
-    # leave the old file on disk and keep serving the stale DuckDB handle.
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    # PATCH is allowed only so the `rename` action below can be reached;
+    # `partial_update` itself stays closed. The uploaded file is converted,
+    # validated and registered in `perform_create` only, so replacing it in
+    # place would skip conversion, leave the old file on disk and keep serving
+    # the stale DuckDB handle.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def partial_update(self, request, *args, **kwargs):
+        return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
     def get_queryset(self):
         return EventLog.objects.filter(project__users=self.request.user)
+
+    @action(detail=True, methods=["PATCH"])
+    def rename(self, request, pk=None):
+        """
+        Rename the project this event log belongs to. Only accepts `name`.
+
+        The name is stored on the project's `display_name`; `name` stays the
+        slug the uploaded file produced because it doubles as a directory
+        name for dashboard image uploads.
+        """
+        event_log = self.get_object()
+        new_name = (request.data.get("name") or "").strip()
+        if not new_name:
+            return Response(
+                {"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        limit = Project._meta.get_field("display_name").max_length
+        if len(new_name) > limit:
+            return Response(
+                {"error": f"Name must be at most {limit} characters"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        project = event_log.project
+        project.display_name = new_name
+        project.save(update_fields=["display_name"])
+        return Response(self.get_serializer(event_log).data)
+
+    def perform_destroy(self, instance):
+        """
+        Delete an event log and the project around it.
+
+        The default implementation drops the row only, which leaves the
+        DuckDB file on disk, the project (with its dashboards and assets)
+        in the database, and a live read-only connection in the registry —
+        the last of which also keeps the file locked on Windows, so deleting
+        it later fails.
+        """
+        user = self.request.user
+        project = instance.project
+
+        # A project shared with other people is not ours to delete: step out
+        # of it and leave their copy alone. Mirrors `delete_user_data`.
+        if project.users.exclude(pk=user.pk).exists():
+            project.users.remove(user)
+            return
+
+        pk = int(instance.pk)
+        file_path = instance.file.path if instance.file else None
+        _close_ocel_db(pk)
+        instance.delete()
+        _remove_file(file_path)
+
+        # A project can in principle hold more than one log; only tear it
+        # down once the last one is gone.
+        if project.eventlog_set.exists():
+            return
+        orphaned = _project_file_paths(project)
+        project.delete()
+        for path in orphaned:
+            _remove_file(path)
 
     def perform_create(self, serializer):
 

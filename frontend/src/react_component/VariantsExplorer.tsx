@@ -207,7 +207,6 @@ export default function VariantsExplorer({
         });
       } catch (e: unknown) {
         if (cancelled || fileIdRef.current !== currentFileId) return;
-        console.error("Failed to load event log metadata:", e);
         setErrorMsg(describeRequestError(e, "Failed to load object types"));
         setStatus("error");
       } finally {

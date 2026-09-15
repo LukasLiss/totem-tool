@@ -24,6 +24,7 @@ import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { toast } from 'sonner';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
@@ -238,7 +239,6 @@ function NewOCDFGVariantsVisualizer({
   onToggleFilter = () => {},
   showTitle = true,
 }: NewOCDFGVariantsVisualizerProps) {
-  console.log('[NewOCDFGVariantsVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -598,9 +598,9 @@ function NewOCDFGVariantsVisualizer({
           });
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
-          console.error('[NewOCDFGVariantsVisualizer] Failed to load new OCDFG data', err);
+          toast.error('OC-DFG variants could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -926,7 +926,7 @@ function NewOCDFGVariantsVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(console.error);
+    }).catch(() => toast.error('OC-DFG layout failed'));
   }, [
     typeVisibility,
     traceLimit,

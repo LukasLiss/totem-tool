@@ -247,7 +247,6 @@ export async function layoutOCDFGLongestTrace({
   layoutKey?: string;
   ignoreTypesWithoutTraces?: boolean;
 }): LayoutResult {
-  console.log(`[LAYOUT LONGEST TRACE] layoutOCDFGLongestTrace called with ${renderNodes.length} nodes, ${renderEdges.length} edges, direction: ${direction}`);
 
   return layoutWithLongestTrace(
     renderNodes,
@@ -310,7 +309,6 @@ async function layoutWithLongestTrace(
   ignoreTypesWithoutTraces = false,
   backendTraceVariants?: TraceVariantsPerType,
 ): LayoutResult {
-  console.log('[LONGEST TRACE] Starting longest trace layout');
 
   const activeTypeSet = activeTypes
     ? new Set(
@@ -319,7 +317,6 @@ async function layoutWithLongestTrace(
     : null;
 
   if (activeTypeSet && activeTypeSet.size === 0) {
-    console.warn('[LONGEST TRACE] No active object types specified, returning empty layout.');
     return { nodes: [], edges: [] };
   }
 
@@ -346,7 +343,6 @@ async function layoutWithLongestTrace(
   const traceCounts: Record<string, number> = {};
 
   if (backendTraceVariants && Object.keys(backendTraceVariants).length > 0) {
-    console.log('[LONGEST TRACE] Using backend trace variants (actual OCEL traces)');
 
     Object.entries(backendTraceVariants).forEach(([objectType, typeData]) => {
       if (activeTypeSet && !activeTypeSet.has(objectType)) return;
@@ -358,8 +354,6 @@ async function layoutWithLongestTrace(
         if (!variant.trace || variant.trace.length === 0) return;
 
         // Debug: Log the raw backend trace
-        console.log(`[TRACE DEBUG] Backend trace for ${objectType} variant ${variantIndex}:`, variant.trace);
-        console.log(`[TRACE DEBUG] Trace has ${variant.trace.length} elements, unique: ${new Set(variant.trace).size}`);
 
         // Build the full trace including start/end nodes
         // Backend traces contain activity names; we add start/end markers
@@ -388,11 +382,6 @@ async function layoutWithLongestTrace(
 
         if (fullTrace.length === 0) return;
 
-        // Debug: Log the full trace with start/end nodes
-        console.log(`[TRACE DEBUG] Full trace for ${objectType} variant ${variantIndex}:`, fullTrace);
-        const hasSelfLoop = fullTrace.some((node, i) => i > 0 && fullTrace[i - 1] === node);
-        console.log(`[TRACE DEBUG] Contains self-loop: ${hasSelfLoop}`);
-
         // Create one TraceInfo entry per variant
         // Use a synthetic owner ID based on object type and variant index
         traces.push({
@@ -410,10 +399,8 @@ async function layoutWithLongestTrace(
       }
     });
 
-    console.log(`[LONGEST TRACE] Loaded ${Array.from(tracesByType.values()).flat().length} traces from backend for ${tracesByType.size} object types`);
   } else {
     // Fallback: compute traces via DFS on graph structure (legacy behavior)
-    console.log('[LONGEST TRACE] No backend trace variants, falling back to DFS computation');
 
     // Build a map of edges by their owners (object instances)
     const ownerEdges = new Map<string, Array<{ source: string; target: string; link: DfgLink }>>();
@@ -435,7 +422,6 @@ async function layoutWithLongestTrace(
       });
     });
 
-    console.log(`[LONGEST TRACE] Found ${ownerEdges.size} unique object instances`);
 
     const allTraces: TraceInfo[] = [];
 
@@ -466,7 +452,6 @@ async function layoutWithLongestTrace(
 
       const dfs = (current: string, path: string[], visited: Set<string>) => {
         if (path.length > pathLimit) {
-          console.warn(`[LONGEST TRACE] Path limit reached for owner ${owner}, stopping expansion.`);
           uniquePaths.add(path.join('->'));
           return;
         }
@@ -535,16 +520,8 @@ async function layoutWithLongestTrace(
     return a.owner.localeCompare(b.owner);
   });
 
-  const logCount = Math.min(selectedTraces.length, 5);
-  for (let i = 0; i < logCount; i += 1) {
-    const t = selectedTraces[i];
-    console.log(`[LONGEST TRACE] Trace #${i + 1} has ${t.trace.length} nodes for owner "${t.owner}":`, t.trace);
-    console.log(`[LONGEST TRACE] Object type of trace #${i + 1}: "${t.ownerType}"`);
-  }
-
   // If no trace was found, return empty layout
   if (selectedTraces.length === 0) {
-    console.warn('[LONGEST TRACE] No valid trace found');
     return { nodes: [], edges: [] };
   }
 
@@ -846,13 +823,6 @@ async function layoutWithLongestTrace(
     });
   });
 
-  const sharedNodes = new Set<string>(
-    Array.from(traceMembership.entries())
-      .filter(([, traces]) => traces.length > 1)
-      .map(([nodeId]) => nodeId),
-  );
-  console.log(`[LONGEST TRACE] Shared nodes between traces:`, Array.from(sharedNodes));
-
   // Layout configuration - direction-aware spacing
   const spacing = getLayoutSpacing(direction);
   const VERTICAL_SPACING = spacing.nodePrimarySpacing;
@@ -895,10 +865,6 @@ async function layoutWithLongestTrace(
     trace.filter(nodeId => !isTerminalNode(nodeId)),
   );
 
-  console.log(
-    '[LONGEST TRACE] Activity counts per trace:',
-    traceActivities.map((acts, idx) => `#${idx + 1}:${acts.length}`).join(', '),
-  );
 
   const activityPositions = new Map<string, number>();
   traceActivities.forEach((activities) => {
@@ -1425,45 +1391,15 @@ async function layoutWithLongestTrace(
   const traceEdgeSets = traceSequences.map((trace) => {
     const set = new Set<string>();
     for (let i = 0; i < trace.length - 1; i += 1) {
-      const edgeKey = `${trace[i]}->${trace[i + 1]}`;
-      set.add(edgeKey);
-      // Debug: Log self-loops being added
-      if (trace[i] === trace[i + 1]) {
-        console.log(`[TRACE DEBUG] Adding self-loop edge to traceEdgeSets: ${edgeKey}`);
-      }
+      set.add(`${trace[i]}->${trace[i + 1]}`);
     }
     return set;
   });
   const traceOwnerTypes = selectedTraces.map(t => t.ownerType);
 
-  // Debug: Check if any trace contains self-loops
-  traceSequences.forEach((trace, idx) => {
-    const hasSelfLoop = trace.some((node, i) => i > 0 && trace[i - 1] === node);
-    if (hasSelfLoop) {
-      console.log(`[TRACE DEBUG] traceSequences[${idx}] contains self-loop:`, trace);
-    }
-  });
-
-  traceEdgeSets.slice(0, 5).forEach((set, idx) => {
-    if (set.size > 0) {
-      console.log(`[LONGEST TRACE] Trace #${idx + 1} edges:`, Array.from(set));
-    }
-  });
-
   // Split edges by object type - each edge should have only one object type
   // If an edge has multiple object types, create separate edges for each type
   const splitEdgesByObjectType: Edge[] = [];
-
-  // debug: Log all self-loop edges in renderEdges
-  const selfLoopEdges = renderEdges.filter(e => e.source === e.target);
-  if (selfLoopEdges.length > 0) {
-    console.log(`[SELF-LOOP DEBUG] Found ${selfLoopEdges.length} self-loop edges in renderEdges:`, selfLoopEdges.map(e => `${e.source}->${e.target}`));
-    selfLoopEdges.forEach(e => {
-      const edgeKey = `${e.source}->${e.target}`;
-      const inTrace = traceEdgeSets.some(set => set.has(edgeKey));
-      console.log(`[SELF-LOOP DEBUG] Edge ${edgeKey}: inTrace=${inTrace}, data=`, e.data);
-    });
-  }
 
   renderEdges.forEach(edge => {
     const edgeKey = `${edge.source}->${edge.target}`;
@@ -1516,7 +1452,6 @@ async function layoutWithLongestTrace(
     });
   });
 
-  console.log(`[LONGEST TRACE] Split into ${splitEdgesByObjectType.length} edges (one per object type) from ${renderEdges.length} total`);
 
   // Detect bidirectional pairs (cycles of length 1 between two nodes)
   const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -1773,7 +1708,6 @@ async function layoutWithLongestTrace(
         offsetVector = { x: 0, y: centeredOffset };
       }
 
-      console.log(`[HIGHWAY LANES] Straight edge ${edge.id}: group=${group.length}, laneIndex=${laneIndex}, laneSpacing=${laneSpacing.toFixed(2)}, centeredOffset=${centeredOffset.toFixed(2)}, offsetVector=(${offsetVector.x.toFixed(2)}, ${offsetVector.y.toFixed(2)}), direction=${direction}`);
     } else {
       // For curved edges: use perpendicular offset (existing logic)
       const srcCenter = nodeCenters.get(edge.source);
@@ -1805,13 +1739,6 @@ async function layoutWithLongestTrace(
       y: p.y + offsetVector.y,
     })) ?? [];
 
-    if (isStraightEdge && group.length > 1) {
-      console.log(`[HIGHWAY LANES] Shifted polyline for ${edge.id}:`,
-        `base: (${basePolyline[0].x.toFixed(1)}, ${basePolyline[0].y.toFixed(1)}) -> (${basePolyline[1].x.toFixed(1)}, ${basePolyline[1].y.toFixed(1)})`,
-        `shifted: (${shiftedPolyline[0].x.toFixed(1)}, ${shiftedPolyline[0].y.toFixed(1)}) -> (${shiftedPolyline[1].x.toFixed(1)}, ${shiftedPolyline[1].y.toFixed(1)})`
-      );
-    }
-
     return {
       ...edge,
       data: {
@@ -1826,7 +1753,6 @@ async function layoutWithLongestTrace(
     };
   });
 
-  console.log(`[LONGEST TRACE] Layout complete with ${adjustedNodes.length} nodes and ${laneAdjustedEdges.length} edges`);
 
   const visibleNodes = adjustedNodes.filter(n => !n.hidden);
   const terminalFirst = (edges: Edge[]) => {

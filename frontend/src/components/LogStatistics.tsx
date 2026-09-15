@@ -72,8 +72,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       try {
         const { data } = await axios.get(`/api/files/${fileId}/statistics/`);
         setStats(data);
-      } catch (err) {
-        console.error('Failed to fetch statistics:', err);
+      } catch {
         setError('Failed to load statistics');
       } finally {
         setLoading(false);
