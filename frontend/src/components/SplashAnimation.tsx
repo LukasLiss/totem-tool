@@ -402,7 +402,6 @@ export function SplashAnimation({ onComplete }: SplashAnimationProps) {
           return;
         }
         // Don't strand the user on the splash if something unexpected blew up.
-        // eslint-disable-next-line no-console
         console.warn("[SplashAnimation] aborted by error:", err);
         cleanup();
         done();

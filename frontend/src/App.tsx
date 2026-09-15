@@ -58,8 +58,8 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           }
           if (!cancelled) setReady(true);
           return;
-        } catch (err: any) {
-          if (err?.response) {
+        } catch (err) {
+          if (axios.isAxiosError(err) && err.response) {
             console.error(
               "Guest auto-login rejected by backend. Is the Guest user seeded " +
                 "with password 'guest'? Run `node scripts/run-python.js " +

@@ -41,7 +41,7 @@ function UserFileSelect() {
                 console.log("Fetched files:", response);
                 setFiles(response);
                 console.log("files",files)
-            } catch (error: any) {
+            } catch (error) {
                 console.error(error);
             }
         };

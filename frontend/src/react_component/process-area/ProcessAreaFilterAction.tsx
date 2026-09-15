@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useFilterStack } from "@/contexts/FilterStackContext";
+import { useFilterStack } from "@/contexts/filterStackHooks";
 import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
 import type { ProcessAreaSnapshot } from "@/store/processAreaStore";
 

@@ -4005,11 +4005,11 @@ class FilteredEndpointRegressionTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.json()["all_event_types"], ["place order"])
 
-    def test_ocdfg_drilldown_respects_activity_filter(self):
-        """The process-area drill-down calls /api/ocdfg/, which had no
-        filter support at all — it returned the whole log regardless."""
+    def test_new_ocdfg_drilldown_respects_activity_filter(self):
+        """The TOTeM process-area drill-down calls /api/new-ocdfg/ with its
+        own object_types selection alongside the global filter."""
         response = self.client.get(
-            "/api/ocdfg/",
+            "/api/new-ocdfg/",
             {
                 "file_id": self.log.pk,
                 "object_types": "order,item",
@@ -4024,9 +4024,9 @@ class FilteredEndpointRegressionTests(APITestCase):
         }
         self.assertEqual(labels, {"place order"})
 
-    def test_ocdfg_drilldown_respects_time_filter(self):
+    def test_new_ocdfg_drilldown_respects_time_filter(self):
         response = self.client.get(
-            "/api/ocdfg/",
+            "/api/new-ocdfg/",
             {"file_id": self.log.pk, "object_types": "order,item", "after": 1, "before": 1},
         )
         self.assertEqual(response.status_code, 200, response.data)
@@ -4037,12 +4037,14 @@ class FilteredEndpointRegressionTests(APITestCase):
         }
         self.assertEqual(labels, {"place order"})
 
-    def test_ocdfg_filtered_and_unfiltered_do_not_share_a_cache_entry(self):
+    def test_new_ocdfg_filtered_and_unfiltered_differ(self):
+        # /api/new-ocdfg/ isn't cached (unlike /api/variants/ etc.), so this
+        # only checks that the activity filter actually reaches the graph.
         unfiltered = self.client.get(
-            "/api/ocdfg/", {"file_id": self.log.pk, "object_types": "order,item"}
+            "/api/new-ocdfg/", {"file_id": self.log.pk, "object_types": "order,item"}
         )
         filtered = self.client.get(
-            "/api/ocdfg/",
+            "/api/new-ocdfg/",
             {
                 "file_id": self.log.pk,
                 "object_types": "order,item",
@@ -4056,10 +4058,10 @@ class FilteredEndpointRegressionTests(APITestCase):
             len(filtered.json()["dfg"]["nodes"]),
         )
 
-    def test_ocdfg_global_object_type_filter_intersects_area_selection(self):
+    def test_new_ocdfg_global_object_type_filter_intersects_area_selection(self):
         # Area asks for order+item; the global filter allows only order.
         response = self.client.get(
-            "/api/ocdfg/",
+            "/api/new-ocdfg/",
             {
                 "file_id": self.log.pk,
                 "object_types": "order,item",
