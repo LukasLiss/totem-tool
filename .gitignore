@@ -8,6 +8,8 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
 !.claude/**/*.md
+!totem_lib/evaluation/results/*.md
+totem_lib/evaluation/results/*.json
 *.txt
 
 # Reinclude totem_lib tests
@@ -253,3 +255,6 @@ totem_lib/test_data/large/*
 !totem_lib/test_data/large/.gitkeep
 
 backend/cache/*
+
+# DuckDB scratch directories, created next to a .duckdb file while it is open
+*.duckdb.tmp/
