@@ -30,6 +30,12 @@ export type MarkerVis = {
   cardinality: string | null;
   /** Key badge, only when ≥2 markers of the group share this (non-zero) key. */
   keyBadge: number | null;
+  /**
+   * True when this marker sits in a large stack on one arc end (dense
+   * discovered nets): the stacked labels would overlap into unreadable mush,
+   * so the overlay hides them unless the view is zoomed far in.
+   */
+  crowded: boolean;
 };
 
 export type GroupLineVis = {
@@ -41,6 +47,8 @@ export type GroupLineVis = {
 const INPUT_BASE_T = 0.85;
 const OUTPUT_BASE_T = 0.15;
 const STACK_STEP_T = 0.11;
+/** Stacks larger than this are `crowded` — their labels would overlap. */
+const CROWDED_STACK = 3;
 /**
  * Span along the curve available for stacked markers: inputs occupy
  * t ∈ [0.55, 0.85], outputs t ∈ [0.15, 0.45]. With many groups on one arc end
@@ -155,6 +163,7 @@ export function computeMarkerLayout(args: {
             cardinality:
               min === 1 && max === 1 ? null : `(${min},${max === -1 ? '*' : max})`,
             keyBadge: key > 0 && (keyCounts.get(key) ?? 0) >= 2 ? key : null,
+            crowded: count > CROWDED_STACK,
           });
         });
         if (points.length >= 2) {

@@ -1,0 +1,153 @@
+{
+  "schema": "occn",
+  "version": 1,
+  "activities": [
+    "END_item",
+    "END_order",
+    "START_item",
+    "START_order",
+    "a"
+  ],
+  "object_types": [
+    "item",
+    "order"
+  ],
+  "dependency_graph": {
+    "edges": [
+      {
+        "source": "START_item",
+        "target": "a",
+        "object_type": "item"
+      },
+      {
+        "source": "START_order",
+        "target": "a",
+        "object_type": "order"
+      },
+      {
+        "source": "a",
+        "target": "END_item",
+        "object_type": "item"
+      },
+      {
+        "source": "a",
+        "target": "END_order",
+        "object_type": "order"
+      }
+    ]
+  },
+  "input_marker_groups": {
+    "END_item": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "a",
+            "object_type": "item",
+            "min_count": 1,
+            "max_count": null,
+            "marker_key": 1
+          }
+        ]
+      }
+    ],
+    "END_order": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "a",
+            "object_type": "order",
+            "min_count": 1,
+            "max_count": 1,
+            "marker_key": 1
+          }
+        ]
+      }
+    ],
+    "START_item": [],
+    "START_order": [],
+    "a": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "START_item",
+            "object_type": "item",
+            "min_count": 1,
+            "max_count": null,
+            "marker_key": 2
+          },
+          {
+            "related_activity": "START_order",
+            "object_type": "order",
+            "min_count": 1,
+            "max_count": 1,
+            "marker_key": 1
+          }
+        ]
+      }
+    ]
+  },
+  "output_marker_groups": {
+    "END_item": [],
+    "END_order": [],
+    "START_item": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "a",
+            "object_type": "item",
+            "min_count": 1,
+            "max_count": null,
+            "marker_key": 1
+          }
+        ]
+      }
+    ],
+    "START_order": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "a",
+            "object_type": "order",
+            "min_count": 1,
+            "max_count": 1,
+            "marker_key": 1
+          }
+        ]
+      }
+    ],
+    "a": [
+      {
+        "support_count": null,
+        "markers": [
+          {
+            "related_activity": "END_item",
+            "object_type": "item",
+            "min_count": 1,
+            "max_count": null,
+            "marker_key": 2
+          },
+          {
+            "related_activity": "END_order",
+            "object_type": "order",
+            "min_count": 1,
+            "max_count": 1,
+            "marker_key": 1
+          }
+        ]
+      }
+    ]
+  },
+  "activity_count": {
+    "END_item": 1,
+    "END_order": 1,
+    "START_item": 1,
+    "START_order": 1,
+    "a": 1
+  },
+  "relative_occurrence_threshold": 0
+}

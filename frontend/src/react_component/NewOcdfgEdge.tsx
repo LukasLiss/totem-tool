@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react';
 import { BaseEdge, useReactFlow } from '@xyflow/react';
-import type { EdgeProps, Node } from '@xyflow/react';
+import type { Edge, EdgeProps, Node } from '@xyflow/react';
 import {
   pointAlongPolylineFromEnd,
   smoothPolyline,
@@ -262,7 +262,7 @@ function resolveNodeGeometry(node: Node | undefined) {
   if (!node) return null;
   const width = node.width ?? DEFAULT_NODE_WIDTH;
   const height = node.height ?? DEFAULT_NODE_HEIGHT;
-  const position = node.positionAbsolute ?? node.position;
+  const position = (node as { positionAbsolute?: { x: number; y: number } }).positionAbsolute ?? node.position;
   const x = position?.x ?? 0;
   const y = position?.y ?? 0;
   return {
@@ -439,7 +439,7 @@ const NewOcdfgEdge = memo(function NewOcdfgEdge({
   targetY,
   target,
   style,
-}: EdgeProps<EdgeData>) {
+}: EdgeProps<Edge<EdgeData>>) {
   const objtype = data?.objtype ?? 'default';
   const colorMap = data?.colors ?? {};
   const reactFlow = useReactFlow();

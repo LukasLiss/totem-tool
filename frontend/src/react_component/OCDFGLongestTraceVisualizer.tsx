@@ -229,7 +229,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
   );
 
   useEffect(() => {
-    axios.get<DfgData>('http://127.0.0.1:8000/api/ocdfg/')
+    axios.get<DfgData>('/api/ocdfg/')
       .then(({ data }) => {
         const { nodes: dfgNodes, links: dfgLinks } = data.dfg;
         // Accept trace variants from either the dfg payload or top-level.
@@ -487,7 +487,7 @@ function OCDFGLongestTraceVisualizer({ height = 'calc(100vh - 50px)' }: OCDFGLon
         padding: { top: 50, right: 50, bottom: 50, left: 50 },
         offset: { x: LEGEND_TOTAL, y: 0 },
         duration: 200
-      }));
+      } as any));
     }).catch(console.error);
   }, [typeVisibility, typeTraceLimit, rawNodes, rawEdges, dfgData, typeColors, fitView, layoutKey, showDebugOverlays, shiftForLegend]);
 

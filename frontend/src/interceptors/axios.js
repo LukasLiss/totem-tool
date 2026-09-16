@@ -1,4 +1,11 @@
 import axios from "axios";
+import { useFilterStore, buildFilterParams } from "@/store/filterStore";
+import { API_BASE_URL, getApiUrl } from "../config/api";
+
+/**
+ * Configure default Axios base URL from environment / config
+ */
+axios.defaults.baseURL = API_BASE_URL;
 
 /**
  * Token refresh strategy
@@ -34,6 +41,30 @@ function setAuthHeaderFromStorage() {
 }
 setAuthHeaderFromStorage();
 
+/**
+ * Global cache-bypass flag
+ * ------------------------
+ * When the user turns "bypass cache" on in Settings, every request should
+ * carry ``?bypass_cache=1`` so the backend recomputes instead of serving the
+ * disk cache. Rather than threading that param through every call site, we
+ * keep the flag here and a request interceptor appends it automatically.
+ *
+ * The flag is seeded once at app startup from the user's saved setting (see
+ * `setBypassCache` callers) and updated live when the toggle is flipped.
+ */
+let bypassCacheEnabled = false;
+
+export function setBypassCache(enabled) {
+  bypassCacheEnabled = Boolean(enabled);
+}
+
+axios.interceptors.request.use((config) => {
+  if (bypassCacheEnabled) {
+    config.params = { ...(config.params || {}), bypass_cache: 1 };
+  }
+  return config;
+});
+
 // Shared in-flight refresh promise. While non-null, concurrent 401s await
 // it and then retry the original request with the new access token.
 let refreshInFlight = null;
@@ -48,7 +79,7 @@ async function performRefresh() {
     throw new Error("No refresh token available");
   }
   const response = await axios.post(
-    "http://localhost:8000/token/refresh/",
+    getApiUrl("/token/refresh/"),
     { refresh: refreshToken },
     {
       headers: { "Content-Type": "application/json" },
@@ -70,9 +101,14 @@ async function performRefresh() {
 
 async function guestReAuth() {
   const resp = await axios.post(
-    "http://localhost:8000/token/",
+    getApiUrl("/token/"),
     { username: "Guest", password: "guest" },
-    { headers: { "Content-Type": "application/json" } }
+    {
+      headers: { "Content-Type": "application/json" },
+      // A 401 here means the Guest account is missing/misconfigured; it must
+      // never re-enter the refresh → guestReAuth path or we recurse forever.
+      _skipAuthRefresh: true,
+    }
   );
   const { access, refresh: newRefresh } = resp.data;
   axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;
@@ -81,16 +117,40 @@ async function guestReAuth() {
   return access;
 }
 
+axios.interceptors.request.use((config) => {
+  if (config._skipGlobalFilter) return config;
+  const { appliedRules, isApplied } = useFilterStore.getState();
+  const url = config.url ?? "";
+  // NOTE: check "/api/ocdfg/" as well as "/api/new-ocdfg/" — they are two
+  // distinct routes, and the process-area drill-down uses the former.
+  const isDataEndpoint =
+    url.includes("/api/files/") ||
+    url.includes("/api/ocdfg/") ||
+    url.includes("/api/new-ocdfg/") ||
+    url.includes("/api/variants/") ||
+    url.includes("/api/occn/") ||
+    url.includes("/api/ocpn/");
+  if (isApplied && isDataEndpoint) {
+    const filterParams = buildFilterParams(appliedRules);
+    config.params = { ...config.params, ...filterParams };
+  }
+  return config;
+});
+
 axios.interceptors.response.use(
   (resp) => resp,
   async (error) => {
     const cfg = error.config || {};
-    // Only handle 401s, and never recurse on the refresh call itself.
+    const url = String(cfg.url ?? "");
+    // Only handle 401s, and never recurse on the token endpoints themselves
+    // (login or refresh): a 401 from /token/ means bad credentials, and
+    // retrying it via the refresh/guest path would loop indefinitely.
     if (
       !error.response ||
       error.response.status !== 401 ||
       cfg._skipAuthRefresh ||
-      cfg._retried
+      cfg._retried ||
+      /\/token\/(refresh\/)?$/.test(url)
     ) {
       return Promise.reject(error);
     }

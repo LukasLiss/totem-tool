@@ -137,17 +137,30 @@ html, body, #root {
   animation: none;
 }
 
-/* Smooth transitions for parametric edge curves */
-.react-flow__edge path {
-  transition: d 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
 
-/* Disable transitions during node dragging to prevent jitter */
-.react-flow__edge.dragging path {
-  transition: none;
-}
 
 /* Ensure mouse hover events reach nodes when interaction is locked */
 .interactions-disabled .react-flow__pane {
   pointer-events: none !important;
+}
+
+/* Prevent subpixel SVG edge flickering during pan and zoom */
+.react-flow__edges,
+.react-flow__edge-path,
+.ocdfg-edge-line,
+.ocdfg-edge-base,
+.ocdfg-arrow-head,
+.totem-primary-svg path,
+.totem-primary-svg line {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+.react-flow__edge-path,
+.ocdfg-edge-line,
+.ocdfg-edge-base,
+.totem-primary-svg path,
+.totem-primary-svg line {
+  shape-rendering: geometricPrecision;
 }

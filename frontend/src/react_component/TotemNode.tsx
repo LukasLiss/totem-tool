@@ -1,11 +1,13 @@
 import { memo, useMemo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 
 type TotemNodeData = {
   label: string;
   events?: string[];
   color?: string;
 };
+
+type TotemNodeType = Node<TotemNodeData, 'totemNode'>;
 
 const handleStyle = {
   opacity: 0,
@@ -33,7 +35,7 @@ function lighten(hex: string, factor = 0.18) {
 const TotemNode = memo(function TotemNode({
   data,
   selected,
-}: NodeProps<TotemNodeData>) {
+}: NodeProps<TotemNodeType>) {
   const label = data?.label ?? 'Unknown';
   const events = data?.events ?? [];
   const background = useMemo(() => {

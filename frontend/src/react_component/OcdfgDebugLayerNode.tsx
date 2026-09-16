@@ -1,4 +1,4 @@
-import type { NodeProps } from '@xyflow/react';
+import type { Node, NodeProps } from '@xyflow/react';
 
 type DebugLayerData = {
   color?: string;
@@ -6,7 +6,9 @@ type DebugLayerData = {
   direction?: 'TB' | 'LR';
 };
 
-export function OcdfgDebugLayerNode({ data }: NodeProps<DebugLayerData>) {
+type DebugLayerNode = Node<DebugLayerData, 'debugLayer'>;
+
+export function OcdfgDebugLayerNode({ data }: NodeProps<DebugLayerNode>) {
   const color = data?.color ?? 'rgba(255, 232, 138, 0.45)';
   const label = data?.label ?? '';
   const isVertical = (data?.direction ?? 'TB') === 'TB';

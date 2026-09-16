@@ -268,15 +268,21 @@ const elk = new ELK();
 export async function elkLayeredPositions(
   items: Array<{ id: string; kind: OccnNodeKind }>,
   links: Array<{ source: string; target: string }>,
+  opts?: {
+    direction?: 'RIGHT' | 'DOWN';
+    layerGap?: number;
+    nodeGap?: number;
+    edgeNodeGap?: number;
+  },
 ): Promise<Record<string, XY>> {
   const graph = {
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '110',
-      'elk.spacing.nodeNode': '55',
-      'elk.spacing.edgeNode': '30',
+      'elk.direction': opts?.direction ?? 'RIGHT',
+      'elk.layered.spacing.nodeNodeBetweenLayers': String(opts?.layerGap ?? 110),
+      'elk.spacing.nodeNode': String(opts?.nodeGap ?? 55),
+      'elk.spacing.edgeNode': String(opts?.edgeNodeGap ?? 30),
       'elk.layered.mergeEdges': 'false',
     },
     children: items.map((item) => ({
@@ -284,11 +290,15 @@ export async function elkLayeredPositions(
       width: item.kind === 'activity' ? ACTIVITY_WIDTH : PSEUDO_WIDTH,
       height: item.kind === 'activity' ? ACTIVITY_HEIGHT : PSEUDO_HEIGHT,
     })),
-    edges: links.map((link, index) => ({
-      id: `e${index}`,
-      sources: [link.source],
-      targets: [link.target],
-    })),
+    // Self-loops don't influence a layered layout and ELK may choke on them
+    // (discovered nets contain self-dependencies); drop them defensively.
+    edges: links
+      .filter((link) => link.source !== link.target)
+      .map((link, index) => ({
+        id: `e${index}`,
+        sources: [link.source],
+        targets: [link.target],
+      })),
   };
   const layouted = await elk.layout(graph);
   // Null prototype: keys are activity names (user data, e.g. "__proto__").

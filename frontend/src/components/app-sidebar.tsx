@@ -23,24 +23,24 @@ import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import { getUserFiles } from "../api/fileApi"
 import { NavOverview } from "./nav-overview";
 import { NavAnalysis } from "./nav-analysis";
+import { NavProject } from "./nav-project";
+import { NavConformance } from "./nav-conformance";
 import { NavEditor } from "./nav-editor";
+import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
-import { error } from "console";
 import { useLocation, useNavigate } from "react-router-dom";
+
+// In the desktop build the only account is the auto-logged-in Guest, so
+// "Log out" would just drop the user's place and log them straight back in.
+const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate();
   const location = useLocation();
-  const context = useContext(SelectedFileContext);
-  if (!context) {
-    console.error('SelectedFileContext not provided');
-    return null;
-  }
-  const { selectedFile } = context;
+  // Hooks must run unconditionally; the context has a non-null default.
+  const { selectedFile } = useContext(SelectedFileContext);
   const [files, setFiles] = useState<any[]>([]);
   const [dashboards, setDashboards] = useState<any[]>([]);
-
-  console.log("Current selectedFile:", selectedFile);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -81,7 +81,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavOverview />
+        <NavProject />
         <NavAnalysis />
+        <NavConformance />
         <NavDashboard
           dashboards={dashboards}
           refreshDashboards={async () => {
@@ -97,13 +99,21 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           }}
         />
         <NavEditor />
+        <NavPlayout />
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
-            <LogOut />
-            <span>Log out</span>
+        <SidebarMenuButton tooltip="Settings" onClick={() => navigate("/settings")}>
+            <Settings2 />
+            <span>Settings</span>
             <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
         </SidebarMenuButton>
+        {!LOCAL_MODE && (
+          <SidebarMenuButton tooltip="Log out" onClick={() => navigate("/logout")}>
+              <LogOut />
+              <span>Log out</span>
+              <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+          </SidebarMenuButton>
+        )}
       </SidebarFooter>
     </Sidebar>
   )

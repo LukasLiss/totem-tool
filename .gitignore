@@ -10,9 +10,15 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !.claude/**/*.md
 !totem_lib/evaluation/results/*.md
 totem_lib/evaluation/results/*.json
+!docs/MODEL_ASSETS.md
+!docs/OCCN_REPLAY_FITNESS.md
+!docs/RESOURCE_AWARE_VARIANTS.md
+!docs/EDGE_CASE_TAXONOMY.md
+!totem_lib/test_data/edge_cases/README.md
 *.txt
-
-# Reinclude totem_lib tests
+!*requirements*.txt
+!backend/requirements.txt
+!totem_lib/requirements.txt
 !totem_lib/tests/
 
 
@@ -76,6 +82,7 @@ backend/user_files/*
 .env/
 
 # Django specific
+backend/cache/
 backend/db.sqlite3
 backend/db.sqlite3-journal
 backend/media/
@@ -88,6 +95,8 @@ backend/static/
 # Python distribution / packaging
 .Python
 build/
+# Electron packaging assets (icons, entitlements) are tracked on purpose
+!electron/build/
 develop-eggs/
 dist/
 downloads/
@@ -216,6 +225,7 @@ temp/
 
 # Build directories
 build/
+!electron/build/
 dist/
 out/
 
@@ -258,3 +268,12 @@ backend/cache/*
 
 # DuckDB scratch directories, created next to a .duckdb file while it is open
 *.duckdb.tmp/
+
+# ====================
+# Claude Code
+# ====================
+
+Claude_design
+
+# Locally generated Django/JWT signing key (settings._local_secret_key)
+.secret_key

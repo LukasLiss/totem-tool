@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { MousePointerClick, Pencil, Plus, X } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
   ColorSwatches,
+  CommitInput,
   PanelEmptyState,
   PanelField,
   PanelSection,
@@ -58,46 +58,6 @@ type SidePanelProps = {
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
 };
-
-/** Input that keeps a local draft and commits on blur / Enter. */
-function CommitInput({
-  value,
-  onCommit,
-  placeholder,
-  disabled,
-  ariaLabel,
-}: {
-  value: string;
-  onCommit: (value: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  ariaLabel?: string;
-}) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
-  return (
-    <Input
-      className="h-8"
-      value={draft}
-      placeholder={placeholder}
-      disabled={disabled}
-      aria-label={ariaLabel}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          // Only blur — the onBlur handler performs the single commit
-          // (calling commit() here too would commit twice).
-          (event.target as HTMLInputElement).blur();
-        }
-        if (event.key === 'Escape') setDraft(value);
-      }}
-    />
-  );
-}
 
 function LabeledSwitch({
   label,
