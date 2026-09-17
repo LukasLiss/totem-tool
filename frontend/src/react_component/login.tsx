@@ -1,5 +1,5 @@
-// Import the react JS packages
 import { useState } from "react";
+import axios from "axios";
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -20,6 +20,7 @@ type LocationState = {
 export const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -28,43 +29,46 @@ export const Login = () => {
     (location.state as LocationState)?.from ?? "/upload";
 
   // Create the submit method.
-  const submit = async (e) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
+    setLoading(true);
 
     const user = {
-      username: username,
+      username: username.trim(),
       password: password,
     };
 
     try {
-    const response = await fetch(getApiUrl('/token/'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(user),
-    });
+      const response = await fetch(getApiUrl('/token/'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(user),
+      });
 
-    if (!response.ok) {
-      throw new Error('Login failed');
+      if (!response.ok) {
+        throw new Error('Login failed');
+      }
+
+      const data = await response.json();
+
+      // Initialize the access & refresh token in localStorage and axios defaults
+      localStorage.setItem('access_token', data.access);
+      if (data.refresh) {
+        localStorage.setItem('refresh_token', data.refresh);
+      }
+      axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
+
+      console.log("Login successful");
+      navigate(from, { replace: true });
+    } catch (error) {
+      console.error("Login failed:", error);
+      alert("Invalid credentials or server error.");
+    } finally {
+      setLoading(false);
     }
-
-    const data = await response.json();
-
-    // Initialize the access & refresh token in localStorage
-    localStorage.clear();
-    localStorage.setItem('access_token', data.access);
-    localStorage.setItem('refresh_token', data.refresh);
-
-
-    console.log("Login successful");
-    //window.history.back();
-    navigate(from, { replace: true });
-  } catch (error) {
-    console.error("Login failed:", error);
-    alert("Invalid credentials or server error.");
-  }
-
   };
 
   return (
@@ -81,13 +85,15 @@ export const Login = () => {
             <div className="grid gap-6">
               <div className="grid gap-6">
                 <div className="grid gap-3">
-                  <Label htmlFor="username">Email</Label>
+                  <Label htmlFor="username">Username</Label>
                   <Input
                     id="username"
-                    type="username"
+                    type="text"
                     placeholder="Enter Username"
                     required
+                    value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    disabled={loading}
                   />
                 </div>
                 <div className="grid gap-3">
@@ -105,11 +111,13 @@ export const Login = () => {
                     type="password" 
                     placeholder="Enter password"
                     required 
+                    value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    disabled={loading}
                   />
                 </div>
-                <Button type="submit" className="w-full">
-                  Login
+                <Button type="submit" className="w-full" disabled={loading}>
+                  {loading ? "Logging in..." : "Login"}
                 </Button>
               </div>
               <div className="text-center text-sm">

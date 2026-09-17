@@ -18,6 +18,7 @@ import {
   Save, Minus, Plus
 } from "lucide-react"
 import { toast } from "sonner"
+import { TOUR_IDS } from "@/tour/tourIds"
 import FilterChipStack from "@/components/FilterChipStack";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -63,6 +64,19 @@ const GridContent: React.FC = () => {
     };
     
     loadSelectedDashboard();
+
+    const handleRefreshEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ dashboard_id?: number }>).detail;
+      if (!detail?.dashboard_id || detail.dashboard_id === selectedDashboard) {
+        console.log("totem:refresh-dashboard event received, refreshing grid...");
+        loadSelectedDashboard();
+      }
+    };
+
+    window.addEventListener("totem:refresh-dashboard", handleRefreshEvent);
+    return () => {
+      window.removeEventListener("totem:refresh-dashboard", handleRefreshEvent);
+    };
   }, [selectedDashboard, resetGrid]);
 
   const handleSave = async () => {
@@ -115,6 +129,7 @@ const GridContent: React.FC = () => {
         <Button
             variant="ghost"
             size="icon"
+            data-tour-id={TOUR_IDS.DASHBOARD_ADD_CARD}
             onClick={() => {
             console.log('Edit mode button clicked, current isEditMode:', isEditMode);
             setIsEditMode(!isEditMode);}}>
@@ -123,7 +138,7 @@ const GridContent: React.FC = () => {
           </Button> }
 
       </div>
-      <div className="flex flex-row flex-grow overflow-hidden">
+      <div className="flex flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
         
         <div className="flex-grow overflow-auto">
           <GridContainer>

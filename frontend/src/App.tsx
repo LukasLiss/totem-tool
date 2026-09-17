@@ -13,6 +13,10 @@ import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
 import { Toaster } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { TourController } from "./tour/TourController";
+import { AgentBridge } from "./components/chat/AgentBridge";
+import { ChatWidget } from "./components/chat/ChatWidget";
+import { useAssistantContext } from "./components/chat/useAssistantContext";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
 
@@ -28,6 +32,53 @@ async function guestLogin() {
   axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
   localStorage.setItem("access_token", data.access);
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
+}
+
+function MainAppShell({
+  splashDone,
+  handleSplashComplete,
+}: {
+  splashDone: boolean;
+  handleSplashComplete: () => void;
+}) {
+  const assistantContext = useAssistantContext();
+
+  return (
+    <TourController>
+      <AgentBridge />
+      <div className="website-background">
+        <Toaster position="top-center" richColors />
+        {!splashDone && (
+          <SplashAnimation onComplete={handleSplashComplete} />
+        )}
+
+        <Routes>
+          <Route
+            path="/title"
+            element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Title />}
+          />
+          <Route
+            path="/login"
+            element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
+          />
+          <Route path="/logout" element={<Logout />} />
+          <Route path="/upload" element={<UploadView />} />
+          <Route path="/overview" element={<ProcessOverview />} />
+          <Route path="/userdatadelete" element={<DeleteView />} />
+          <Route path="/settings" element={<SettingsView />} />
+          <Route
+            path="/"
+            element={
+              <Navigate to={LOCAL_MODE ? "/upload" : "/title"} replace />
+            }
+          />
+        </Routes>
+
+        {/* Global Floating AI Assistant Drawer */}
+        <ChatWidget context={assistantContext} />
+      </div>
+    </TourController>
+  );
 }
 
 function AppRoutes({ selectedFile, setSelectedFile }) {
@@ -102,34 +153,10 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
   return (
     <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
       <DashboardProvider>
-        <div className="website-background">
-          <Toaster position="top-center" richColors />
-          {!splashDone && (
-            <SplashAnimation onComplete={handleSplashComplete} />
-          )}
-
-          <Routes>
-            <Route
-              path="/title"
-              element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Title />}
-            />
-            <Route
-              path="/login"
-              element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
-            />
-            <Route path="/logout" element={<Logout />} />
-            <Route path="/upload" element={<UploadView />} />
-            <Route path="/overview" element={<ProcessOverview />} />
-            <Route path="/userdatadelete" element={<DeleteView />} />
-            <Route path="/settings" element={<SettingsView />} />
-            <Route
-              path="/"
-              element={
-                <Navigate to={LOCAL_MODE ? "/upload" : "/title"} replace />
-              }
-            />
-          </Routes>
-        </div>
+        <MainAppShell
+          splashDone={splashDone}
+          handleSplashComplete={handleSplashComplete}
+        />
       </DashboardProvider>
     </SelectedFileContext.Provider>
   );
@@ -144,3 +171,4 @@ function App() {
 }
 
 export default App;
+

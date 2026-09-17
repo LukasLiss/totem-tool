@@ -75,6 +75,17 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       }
     };
     fetchDashboards();
+
+    const handleRefresh = () => {
+      fetchDashboards();
+    };
+
+    window.addEventListener("totem:refresh-dashboard", handleRefresh);
+    window.addEventListener("totem:select-dashboard", handleRefresh);
+    return () => {
+      window.removeEventListener("totem:refresh-dashboard", handleRefresh);
+      window.removeEventListener("totem:select-dashboard", handleRefresh);
+    };
   }, [selectedFile]);
 
   return (
