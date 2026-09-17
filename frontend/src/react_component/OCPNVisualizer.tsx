@@ -180,7 +180,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
         params: { timeout_s: timeoutRef.current },
         _skipGlobalFilter: !filterEnabledRef.current,
-      } as any);
+      });
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
       const flow = modelToFlow(parsed.model);
@@ -194,7 +194,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       requestAnimationFrame(() =>
         rfInstance.current?.fitView({ padding: 0.15 }),
       );
-    } catch (err: any) {
+    } catch (err) {
       if (seq !== requestSeq.current) return;
       if (axios.isAxiosError(err) && err.response?.status === 408) {
         const info = err.response.data as { timeout_s?: number } | undefined;
@@ -205,7 +205,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       } else if (axios.isAxiosError(err) && err.response?.data?.error) {
         setError(String(err.response.data.error));
       } else {
-        setError(err?.message ?? 'OCPN discovery failed.');
+        setError(err instanceof Error ? err.message : 'OCPN discovery failed.');
       }
     } finally {
       if (seq === requestSeq.current) setLoading(false);

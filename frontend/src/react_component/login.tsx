@@ -1,7 +1,5 @@
-// Import the react JS packages 
-import axios from "axios";
+// Import the react JS packages
 import { useState } from "react";
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Card,

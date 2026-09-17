@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button";
 import GridContainer from "../gridstack/lib/grid_container";
-import { useGrid } from "../gridstack/lib/gridstackprovider";
+import { useGrid } from "../gridstack/lib/gridContext";
 import { saveLayout, getLayout } from "../api/componentsApi";
 import {
   DashboardContext,
@@ -24,9 +24,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
-import { useGridMode } from '../gridstack/lib/gridstackprovider';
+import { useGridMode } from '../gridstack/lib/gridContext';
 import {
-  Settings, Save, Pencil, X
+  Save, Pencil, X
 } from "lucide-react"
 import { toast } from "sonner"
 import FilterChipStack from "@/components/FilterChipStack";
@@ -69,7 +69,7 @@ const layoutFingerprint = (layout: LayoutFingerprintItem[]): string =>
   );
 
 const GridContent: React.FC = () => {
-  const { getLayout: getGridLayout, loadLayout, grid, resetGrid } = useGrid();
+  const { getLayout: getGridLayout, loadLayout, resetGrid } = useGrid();
   const { viewMode, setViewMode, registerNavigationGuard } =
     useContext(DashboardContext);
   const { isEditMode, setIsEditMode } = useGridMode();
@@ -154,16 +154,6 @@ const GridContent: React.FC = () => {
     } catch {
       toast.error("Save failed!");
     }
-  };
-
-  const handleLoad = async () => {
-    if (!selectedDashboard) {
-      toast.error("No dashboard selected!");
-      return;
-    }
-    const response = await getLayout(selectedDashboard);
-    // Small delay to ensure any pending operations complete
-    setTimeout(() => loadLayout(response), 50);
   };
 
   /**

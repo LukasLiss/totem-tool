@@ -3,7 +3,7 @@ import axios from "axios";
 import { useFilterVersion } from "@/store/filterStore";
 
 // Helper function to format duration from seconds
-export const formatDuration = (seconds: number): string => {
+const formatDuration = (seconds: number): string => {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -16,7 +16,7 @@ export const formatDuration = (seconds: number): string => {
 };
 
 // Helper function to format unix timestamp as date string
-export const formatTimestamp = (unix: number): string => {
+const formatTimestamp = (unix: number): string => {
   const date = new Date(unix * 1000);
   return date.toLocaleDateString();
 };

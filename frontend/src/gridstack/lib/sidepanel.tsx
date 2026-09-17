@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridContext";
 import {
   BarChartTile,
   DottedChartTile,
@@ -9,7 +9,6 @@ import {
   LogStatisticsTile,
   OccnTile,
   OcdfgArcWeightTile,
-  OcdfgTile,
   OcdfgVariantsTile,
   OcpnTile,
   PieChartTile,
@@ -91,23 +90,6 @@ const SidePanel: React.FC = () => {
         show_earliest_timestamp: false,
         show_newest_timestamp: false,
         show_duration: false,
-        order: 0
-      }]
-    );
-
-    GridStack.setupDragIn(
-      ".sidepanel .ocdfg-component",
-      {
-        helper: "clone",
-        appendTo: "body",
-      },
-      [{
-        h: 6,
-        w: 8,
-        content: "OCDFG",
-        component_name: "OCDFGComponent",
-        show_controls: true,
-        initial_interaction_locked: true,
         order: 0
       }]
     );
@@ -361,11 +343,6 @@ const SidePanel: React.FC = () => {
       <div className={`${TILE_CLASS} log-statistics-component`}>
         <LogStatisticsTile />
         <div>Log Statistics</div>
-      </div>
-
-      <div className={`${TILE_CLASS} ocdfg-component`}>
-        <OcdfgTile />
-        <div>OCDFG</div>
       </div>
 
       <div className={`${TILE_CLASS} oc-dotted-chart-component`}>

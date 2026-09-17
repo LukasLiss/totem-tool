@@ -630,7 +630,7 @@ export default function DottedChart({
                 name="Events"
                 data={displayedPoints}
                 isAnimationActive={false}
-                shape={(props: any) => {
+                shape={(props: { cx?: number; cy?: number; payload?: ChartPoint }) => {
                   const point = props.payload as ChartPoint;
                   const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
                   const shape = shapeScale.get(point.shapeKey) ?? "circle";

@@ -283,11 +283,6 @@ class LogStatisticsComponent(DashboardComponent):
     show_duration = models.BooleanField(default=False)
 
 
-class OCDFGComponent(DashboardComponent):
-    show_controls = models.BooleanField(default=True)
-    initial_interaction_locked = models.BooleanField(default=True)
-
-
 class FilterStackComponent(DashboardComponent):
     filter_stack_json = models.JSONField(default=list, blank=True)
 

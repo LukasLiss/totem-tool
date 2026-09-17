@@ -67,8 +67,8 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           }
           if (!cancelled) setReady(true);
           return;
-        } catch (err: any) {
-          if (err?.response) {
+        } catch (err) {
+          if (axios.isAxiosError(err) && err.response) {
             // A response means the backend is up and said no, so retrying
             // cannot help: the Guest user is missing or has another password.
             if (!cancelled) {

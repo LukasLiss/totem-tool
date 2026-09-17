@@ -40,9 +40,7 @@ import {
   type Variant,
 } from "./variants/types";
 
-// Re-exported for the dashboard wrapper and other callers that used to
-// import these from this file.
-export { EXTRACTION_OPTIONS, ISO_OPTIONS } from "./variants/types";
+// Re-exported for other callers that used to import these from this file.
 export type {
   AdvancedSettings,
   Extraction,
