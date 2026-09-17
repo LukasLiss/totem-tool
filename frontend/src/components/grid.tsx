@@ -82,6 +82,8 @@ const GridContent: React.FC = () => {
   // whether leaving edit mode would throw work away.
   const savedLayoutRef = useRef<string | null>(null);
   const getGridLayoutRef = useRef(getGridLayout);
+  const loadLayoutRef = useRef(loadLayout);
+  const resetGridRef = useRef(resetGrid);
   // Set while a confirmed navigation is being re-issued, so the guard we are
   // still registered with lets that one through.
   const allowNavigationRef = useRef(false);
@@ -90,6 +92,8 @@ const GridContent: React.FC = () => {
 
   useEffect(() => {
     getGridLayoutRef.current = getGridLayout;
+    loadLayoutRef.current = loadLayout;
+    resetGridRef.current = resetGrid;
   });
 
   const hasUnsavedChanges = useCallback(() => {
@@ -120,7 +124,7 @@ const GridContent: React.FC = () => {
     const loadSelectedDashboard = async () => {
 
       // Completely reset the grid instance
-      resetGrid();
+      resetGridRef.current();
 
       if (!selectedDashboard) {
         return;
@@ -131,7 +135,7 @@ const GridContent: React.FC = () => {
         
         if (Array.isArray(response) && response.length > 0) {
           // Small delay to ensure grid is fully initialized after reset
-          setTimeout(() => loadLayout(response), 50);
+          setTimeout(() => loadLayoutRef.current(response), 50);
         }
       } catch {
         toast.error("Dashboard layout could not be loaded");
@@ -139,7 +143,8 @@ const GridContent: React.FC = () => {
     };
     
     loadSelectedDashboard();
-  }, [selectedDashboard, resetGrid]);
+    // Only a different dashboard should tear the grid down and rebuild it.
+  }, [selectedDashboard]);
 
   const handleSave = async () => {
     if (!selectedDashboard) {
@@ -164,16 +169,16 @@ const GridContent: React.FC = () => {
    */
   const reloadSavedLayout = useCallback(async () => {
     if (!selectedDashboard) {
-      resetGrid();
+      resetGridRef.current();
       return;
     }
     try {
       const response = await getLayout(selectedDashboard);
-      loadLayout(Array.isArray(response) ? response : []);
+      loadLayoutRef.current(Array.isArray(response) ? response : []);
     } catch {
       toast.error("Dashboard layout could not be reloaded");
     }
-  }, [selectedDashboard, resetGrid, loadLayout]);
+  }, [selectedDashboard]);
 
   const requestExitEditMode = () => {
     if (!hasUnsavedChanges()) {
