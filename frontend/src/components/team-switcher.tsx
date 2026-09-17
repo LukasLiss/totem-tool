@@ -124,10 +124,13 @@ export function Switcher() {
     try {
       await deleteProject(projectToDelete.id);
       await loadFiles();
-      // Nothing can be shown for a project that no longer exists.
+      // Nothing can be shown for a project that no longer exists. Forced,
+      // because a dashboard of that project may be open in edit mode, and its
+      // unsaved-changes guard would otherwise ask whether to discard a layout
+      // that has just been deleted along with everything around it.
       if (selectedFile?.id === projectToDelete.id) {
         setSelectedFile(null);
-        setViewMode({ type: "overview" });
+        setViewMode({ type: "overview" }, { force: true });
       }
       setProjectToDelete(null);
     } catch {

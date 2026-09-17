@@ -132,7 +132,6 @@ const GridContent: React.FC = () => {
         if (Array.isArray(response) && response.length > 0) {
           // Small delay to ensure grid is fully initialized after reset
           setTimeout(() => loadLayout(response), 50);
-        } else {
         }
       } catch {
         toast.error("Dashboard layout could not be loaded");
@@ -165,9 +164,6 @@ const GridContent: React.FC = () => {
     const response = await getLayout(selectedDashboard);
     // Small delay to ensure any pending operations complete
     setTimeout(() => loadLayout(response), 50);
-  };
-
-  const handleLog = async () => {
   };
 
   /**

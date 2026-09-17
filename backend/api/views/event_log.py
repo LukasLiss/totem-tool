@@ -197,7 +197,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
     def get_queryset(self):
-        return EventLog.objects.filter(project__users=self.request.user)
+        # `select_related`: the serializer reads `project.display_name`, which
+        # would otherwise cost one extra query per row of the project switcher.
+        return EventLog.objects.filter(
+            project__users=self.request.user
+        ).select_related("project")
 
     @action(detail=True, methods=["PATCH"])
     def rename(self, request, pk=None):
