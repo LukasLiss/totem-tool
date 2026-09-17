@@ -179,15 +179,24 @@ class GeminiProvider(BaseLLMProvider):
                 "error_type": "key_error",
             }
 
+        # Security Note: Google Gemini Generative Language REST API accepts authentication
+        # via the 'x-goog-api-key' HTTP header or '?key=' query parameter.
+        # We supply 'x-goog-api-key' in HTTP headers to safeguard user BYOK keys, and request-URL
+        # logging must remain strictly disabled so keys are never exposed in access or proxy logs.
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
         payload = self._build_payload(system_prompt, user_message, tools, history)
 
         try:
-            resp = requests.post(url, json=payload, timeout=self.timeout)
+            resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
             resp.encoding = "utf-8"
             if resp.status_code != 200:
                 # Attempt fallback model if 404 or unsupported
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
+                    logger.info("Gemini model '%s' returned 404; falling back to gemini-1.5-flash", self.model)
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
                     return fallback_provider.complete(system_prompt, user_message, tools, history)
                 logger.error("Gemini API error %d: %s", resp.status_code, resp.text)
@@ -248,14 +257,20 @@ class GeminiProvider(BaseLLMProvider):
             yield {"type": "done", "usage": {}}
             return
 
+        # Security Note: pass 'x-goog-api-key' in request headers; request URL logging is suppressed.
         url = f"{self.base_url}/models/{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
         payload = self._build_payload(system_prompt, user_message, tools, history)
 
         try:
-            resp = requests.post(url, json=payload, stream=True, timeout=self.timeout)
+            resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=self.timeout)
             resp.encoding = "utf-8"
             if resp.status_code != 200:
                 if resp.status_code == 404 and self.model != "gemini-1.5-flash":
+                    logger.info("Gemini stream model '%s' returned 404; falling back to gemini-1.5-flash", self.model)
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
                     yield from fallback_provider.stream_chat(system_prompt, user_message, tools, history)
                     return

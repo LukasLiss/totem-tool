@@ -1,5 +1,6 @@
 import React, { useState, useContext } from "react";
 import { Check, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { confirmAction } from "@/api/assistantApi";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -37,6 +38,13 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
     try {
       const res = await confirmAction(id, approved);
       if (approved) {
+        const resError = res.error || (res.result && typeof res.result === "object" && "error" in res.result ? String(res.result.error) : undefined);
+        if (res.status === "error" || resError) {
+          toast.error(resError || "Failed to execute action");
+          setDeciding((prev) => ({ ...prev, [id]: false }));
+          return;
+        }
+
         // If this was a dashboard-mutating tool and it was approved, trigger a grid refresh & auto-selection
         if (DASHBOARD_MUTATING_TOOLS.has(name)) {
           const targetId = res.result?.id ?? actionArgs?.dashboard_id;
@@ -75,10 +83,16 @@ export function PendingActions({ actions, onResolved }: PendingActionsProps) {
           );
         }
       }
-    } catch {
-      // Best-effort — server may not implement storage yet
+      onResolved(id);
+    } catch (err: unknown) {
+      let message = "Failed to process action confirmation";
+      if (err && typeof err === "object") {
+        const maybeAxios = err as { response?: { data?: { error?: string } }; message?: string };
+        message = maybeAxios.response?.data?.error || maybeAxios.message || message;
+      }
+      toast.error(message);
+      setDeciding((prev) => ({ ...prev, [id]: false }));
     }
-    onResolved(id);
   };
 
   const visibleActions = actions.filter(

@@ -11,9 +11,30 @@ from django.core.cache import cache
 
 CACHE_PREFIX = "assistant_action:"
 DEFAULT_TTL = 600  # 10 minutes
+MAX_MEMORY_ENTRIES = 500
 
-# In-memory fallback / storage for local test isolation
+# In-memory fallback / storage for local test isolation with TTL and LRU bounding
 _memory_store: Dict[str, Dict[str, Any]] = {}
+
+
+def _prune_expired(now: Optional[float] = None) -> None:
+    """Evict expired entries and cap in-memory fallback store to prevent unbounded growth."""
+    current_time = now if now is not None else time.time()
+    expired_keys = [
+        aid for aid, rec in _memory_store.items()
+        if rec.get("expires_at") is not None and rec["expires_at"] <= current_time
+    ]
+    for aid in expired_keys:
+        _memory_store.pop(aid, None)
+
+    if len(_memory_store) > MAX_MEMORY_ENTRIES:
+        excess = len(_memory_store) - MAX_MEMORY_ENTRIES
+        oldest_keys = sorted(
+            _memory_store.keys(),
+            key=lambda k: _memory_store[k].get("created_at", 0)
+        )[:excess]
+        for aid in oldest_keys:
+            _memory_store.pop(aid, None)
 
 
 def register_action(
@@ -32,6 +53,7 @@ def register_action(
         action_id (str): UUID string identifying the pending action.
     """
     aid = action_id or str(uuid.uuid4())
+    now = time.time()
     record = {
         "id": aid,
         "user_id": user_id,
@@ -39,10 +61,12 @@ def register_action(
         "arguments": arguments if isinstance(arguments, dict) else {},
         "description": description,
         "status": "pending",
-        "created_at": time.time(),
+        "created_at": now,
+        "expires_at": now + ttl,
         "context": context if isinstance(context, dict) else {},
     }
 
+    _prune_expired(now)
     _memory_store[aid] = record
     try:
         cache.set(f"{CACHE_PREFIX}{aid}", record, timeout=ttl)
@@ -53,23 +77,38 @@ def register_action(
 
 
 def get_action(action_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve an action record by ID."""
+    """Retrieve an action record by ID, verifying TTL expiration."""
     if not action_id or not isinstance(action_id, str):
         return None
+
+    now = time.time()
 
     # Check cache first
     try:
         cached = cache.get(f"{CACHE_PREFIX}{action_id}")
         if cached and isinstance(cached, dict):
-            return cached
+            if cached.get("expires_at") is not None and now > cached["expires_at"]:
+                cache.delete(f"{CACHE_PREFIX}{action_id}")
+            else:
+                return cached
     except Exception:
         pass
 
-    return _memory_store.get(action_id)
+    record = _memory_store.get(action_id)
+    if record and record.get("expires_at") is not None:
+        if now > record["expires_at"]:
+            _memory_store.pop(action_id, None)
+            return None
+
+    return record
 
 
-def update_action_status(action_id: str, status: str) -> bool:
-    """Update status of an action ('pending', 'executed', 'cancelled')."""
+def update_action_status(
+    action_id: str,
+    status: str,
+    result: Optional[Any] = None,
+) -> bool:
+    """Update status of an action ('pending', 'executed', 'cancelled') and optionally cache result."""
     if not action_id or not isinstance(action_id, str):
         return False
 
@@ -78,10 +117,20 @@ def update_action_status(action_id: str, status: str) -> bool:
         return False
 
     record["status"] = status
+    if result is not None:
+        record["result"] = result
+
     _memory_store[action_id] = record
 
+    # Calculate remaining TTL if possible
+    remaining_ttl = DEFAULT_TTL
+    if record.get("expires_at") is not None:
+        remaining = int(record["expires_at"] - time.time())
+        if remaining > 0:
+            remaining_ttl = remaining
+
     try:
-        cache.set(f"{CACHE_PREFIX}{action_id}", record, timeout=DEFAULT_TTL)
+        cache.set(f"{CACHE_PREFIX}{action_id}", record, timeout=remaining_ttl)
     except Exception:
         pass
 
@@ -108,3 +157,7 @@ def clear_actions() -> None:
     """Clear all pending actions (primarily for testing)."""
     global _memory_store
     _memory_store.clear()
+    try:
+        cache.clear()
+    except Exception:
+        pass

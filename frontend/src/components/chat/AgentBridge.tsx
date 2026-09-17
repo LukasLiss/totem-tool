@@ -187,6 +187,9 @@ export function AgentBridge({
     startTour: propDeps?.startTour || tourCtrl?.startTour,
   };
 
+  const dependenciesRef = useRef<HandlerDependencies>(dependencies);
+  dependenciesRef.current = dependencies;
+
   const updateStatus = useCallback(
     (newStatus: ConnectionStatus) => {
       setStatus(newStatus);
@@ -229,7 +232,7 @@ export function AgentBridge({
 
           // If incoming frame has an action, execute command and reply
           if (data && data.action) {
-            const result = await executeCommand(data, dependencies);
+            const result = await executeCommand(data, dependenciesRef.current);
 
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(
@@ -273,7 +276,7 @@ export function AgentBridge({
       console.error("Failed to initialize AgentBridge WebSocket:", err);
       updateStatus("disconnected");
     }
-  }, [wsUrl, token, sessionId, dependencies, updateStatus]);
+  }, [wsUrl, token, sessionId, updateStatus]);
 
   useEffect(() => {
     isUnmountedRef.current = false;

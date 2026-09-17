@@ -205,6 +205,7 @@ export interface ConfirmActionResponse {
   status: "executed" | "cancelled" | string;
   pending_action_id?: string;
   result?: any;
+  error?: string;
 }
 
 /**

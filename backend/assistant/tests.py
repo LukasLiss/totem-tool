@@ -713,9 +713,14 @@ class ConfirmActionTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_confirm_supports_action_id_alias(self):
+        action_id = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Alias Test"},
+        )
         response = self.client.post(
             self.url,
-            {"action_id": "abc-123", "approved": True},
+            {"action_id": action_id, "approved": True},
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -771,6 +776,78 @@ class ConfirmActionTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("Unauthorized", response.json()["error"])
+
+    def test_confirm_nonexistent_action_id_executes_gracefully(self):
+        response = self.client.post(
+            self.url,
+            {"pending_action_id": "non-existent-action-id", "approved": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["status"], "executed")
+        self.assertEqual(response.json()["result"], {})
+
+    @patch("assistant.views.call_tool")
+    def test_confirm_idempotency_prevents_duplicate_tool_execution(self, mock_tool):
+        mock_tool.return_value = {"id": 99, "name": "Created once"}
+        action_id = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Idempotent Dashboard"},
+        )
+        # First confirmation
+        resp1 = self.client.post(
+            self.url,
+            {"pending_action_id": action_id, "approved": True},
+            format="json",
+        )
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp1.json()["status"], "executed")
+        self.assertEqual(mock_tool.call_count, 1)
+
+        # Second confirmation replay
+        resp2 = self.client.post(
+            self.url,
+            {"pending_action_id": action_id, "approved": True},
+            format="json",
+        )
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp2.json()["status"], "already_executed")
+        self.assertEqual(resp2.json()["result"]["id"], 99)
+        # Verify tool was NOT called a second time
+        self.assertEqual(mock_tool.call_count, 1)
+
+    def test_confirm_cancelled_action_returns_400(self):
+        action_id = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Cancelled Dashboard"},
+        )
+        update_action_status(action_id, "cancelled")
+        response = self.client.post(
+            self.url,
+            {"pending_action_id": action_id, "approved": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("cancelled", response.json()["error"].lower())
+
+    def test_action_registry_memory_ttl_pruning(self):
+        import time
+        from assistant.action_registry import _memory_store, _prune_expired
+        from django.core.cache import cache
+        cache.clear()
+        aid = register_action(
+            user_id=self.user.id,
+            tool_name="create_dashboard",
+            arguments={"name": "Expiring"},
+            ttl=1,
+        )
+        self.assertIsNotNone(get_action(aid))
+        # Simulate expiry in memory store
+        _memory_store[aid]["expires_at"] = time.time() - 10
+        cache.delete(f"assistant_action:{aid}")
+        self.assertIsNone(get_action(aid))
 
 
 # ===========================================================================

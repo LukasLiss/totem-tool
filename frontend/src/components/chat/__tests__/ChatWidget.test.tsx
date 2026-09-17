@@ -571,6 +571,38 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       expect(elements.length).toBeGreaterThanOrEqual(4);
     });
 
+    it("renders safe https and mailto markdown links as anchors", () => {
+      const text = "Visit [Totem Docs](https://totem.org) or email [Support](mailto:support@totem.org).";
+      const formatted = formatInline(text);
+
+      expect(Array.isArray(formatted)).toBe(true);
+      const elements = formatted as React.ReactElement<{ href?: string; rel?: string }>[];
+      const links = elements.filter(
+        (el): el is React.ReactElement<{ href?: string; rel?: string }> =>
+          React.isValidElement(el) && el.type === "a"
+      );
+      expect(links.length).toBe(2);
+      expect(links[0].props.href).toBe("https://totem.org");
+      expect(links[0].props.rel).toBe("noopener noreferrer");
+      expect(links[1].props.href).toBe("mailto:support@totem.org");
+    });
+
+    it("disallows javascript: and data: links, rendering only safe plain text", () => {
+      const text = "Click [Malicious](javascript:alert(1)) or [Data](data:text/html;base64,PHNjcmlwdD4=).";
+      const formatted = formatInline(text);
+
+      expect(Array.isArray(formatted)).toBe(true);
+      const elements = formatted as React.ReactNode[];
+      // None of the elements should be an <a> tag pointing to javascript: or data:
+      const unsafeLinks = elements.filter(
+        (el) => React.isValidElement(el) && el.type === "a"
+      );
+      expect(unsafeLinks.length).toBe(0);
+      // Link text should be preserved as safe plain text
+      expect(elements).toContain("Malicious");
+      expect(elements).toContain("Data");
+    });
+
     it("parses markdown tables with headers, alignments, and rows", () => {
       const tableMarkdown = "| Metric | Value | Interpretation |\n| :--- | :---: | ---: |\n| Total Events | 28,278 | High density |\n| Total Objects | 8,819 | Unique entities |";
       const blocks = parseMarkdownBlocks(tableMarkdown);

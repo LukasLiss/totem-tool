@@ -201,9 +201,15 @@ export async function executeCommand(
 
         let targetSelector = "";
         if (tourId) {
-          targetSelector = `[data-tour-id="${tourId}"]`;
+          const escaped = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(String(tourId)) : String(tourId).replace(/["\\]/g, "");
+          targetSelector = `[data-tour-id="${escaped}"]`;
         } else if (selector) {
-          targetSelector = selector;
+          // Security allowlist: restrict click targets strictly to elements within the data-tour-id catalog
+          if (typeof selector === "string" && selector.includes("data-tour-id")) {
+            targetSelector = selector;
+          } else {
+            throw new Error("Target selector not allowed: click commands are restricted to data-tour-id elements for security.");
+          }
         } else {
           throw new Error("Missing selector or tour_id parameter for click action");
         }
@@ -215,6 +221,15 @@ export async function executeCommand(
         const element = document.querySelector(targetSelector) as HTMLElement | null;
         if (!element) {
           throw new Error(`Element not found matching selector/tour_id: ${tourId || selector}`);
+        }
+
+        // Verify target or ancestor is actually registered with data-tour-id
+        const hasTourAttr = typeof element.hasAttribute === "function"
+          ? element.hasAttribute("data-tour-id")
+          : typeof element.getAttribute === "function" && Boolean(element.getAttribute("data-tour-id"));
+        const hasClosest = typeof element.closest === "function" && Boolean(element.closest("[data-tour-id]"));
+        if (!hasTourAttr && !hasClosest) {
+          throw new Error("Click target must be an element registered with data-tour-id in the catalog.");
         }
 
         if (typeof element.scrollIntoView === "function") {

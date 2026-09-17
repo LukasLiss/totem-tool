@@ -25,6 +25,14 @@ class MockElement {
     return this.attributes[name] || null;
   }
 
+  hasAttribute(name: string) {
+    return name in this.attributes;
+  }
+
+  closest(selector: string) {
+    return null;
+  }
+
   addEventListener(type: string, listener: (e?: any) => void) {
     if (!this.listeners[type]) this.listeners[type] = [];
     this.listeners[type].push(listener);
@@ -300,6 +308,24 @@ describe("handlers.ts unit tests", () => {
       expect(result.status).toBe("error");
       expect(result.correlation_id).toBe("corr-click-err");
       expect(result.error).toContain("Element not found matching selector/tour_id");
+    });
+
+    it("rejects click command with arbitrary selector not in data-tour-id catalog", async () => {
+      const button = mockDocument.createElement("button");
+      button.setAttribute("id", "dangerous-delete-btn");
+      mockDocument.body.appendChild(button);
+
+      const cmd: AgentCommand = {
+        action: "click",
+        parameters: { selector: "#dangerous-delete-btn" },
+        correlation_id: "corr-click-blocked",
+      };
+
+      const result = await executeCommand(cmd);
+
+      expect(result.status).toBe("error");
+      expect(result.correlation_id).toBe("corr-click-blocked");
+      expect(result.error).toContain("Target selector not allowed");
     });
 
     it("handles create_dashboard command and dispatches totem:refresh-dashboard", async () => {

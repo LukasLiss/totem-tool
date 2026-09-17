@@ -377,17 +377,25 @@ export function formatInline(text: string): React.ReactNode {
       } else if (token.startsWith("[") && token.includes("](")) {
         const linkMatch = token.match(/^\[(.*?)\]\((.*?)\)$/);
         if (linkMatch) {
-          parts.push(
-            <a
-              key={key}
-              href={linkMatch[2]}
-              target="_blank"
-              rel="noreferrer"
-              className="text-primary underline font-medium"
-            >
-              {linkMatch[1]}
-            </a>
-          );
+          const rawHref = linkMatch[2].trim();
+          // Security: allowlist http(s) and mailto schemes to prevent javascript: or data: injection
+          const isSafeScheme = /^(https?:\/\/|mailto:)/i.test(rawHref);
+          if (isSafeScheme) {
+            parts.push(
+              <a
+                key={key}
+                href={rawHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline font-medium"
+              >
+                {linkMatch[1]}
+              </a>
+            );
+          } else {
+            // Render link text as safe plain text when scheme is untrusted
+            parts.push(linkMatch[1]);
+          }
         } else {
           parts.push(token);
         }

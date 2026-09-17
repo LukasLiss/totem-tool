@@ -272,7 +272,11 @@ class ChatView(APIView):
                     for tc in read_only_calls:
                         t_name = tc.get("name")
                         t_res = tc.get("result", {})
-                        res_str = json.dumps(t_res, default=str)[:3500]
+                        raw_json = json.dumps(t_res, default=str)
+                        if len(raw_json) > 3500:
+                            res_str = raw_json[:3500] + "\n... [truncated for prompt length]"
+                        else:
+                            res_str = raw_json
                         results_text_parts.append(f"Tool `{t_name}` returned:\n```json\n{res_str}\n```")
 
                     tool_result_msg = "\n\n".join(results_text_parts)
@@ -288,18 +292,25 @@ class ChatView(APIView):
                         f"Please synthesize and present these findings clearly with key metrics, process insights, and markdown formatting."
                     )
 
-                    for evt in stream_chat(
-                        system_prompt=synthesis_sys_prompt,
-                        user_message=followup_prompt,
-                        tools=[],
-                        history=history,
-                        provider_name=provider,
-                    ):
-                        if evt.get("type") == "text":
-                            total_text_emitted = True
-                            yield _sse_frame(evt)
-                        elif evt.get("type") in ("done", "error"):
-                            break
+                    try:
+                        for evt in stream_chat(
+                            system_prompt=synthesis_sys_prompt,
+                            user_message=followup_prompt,
+                            tools=[],
+                            history=history,
+                            provider_name=provider,
+                        ):
+                            if evt.get("type") == "text":
+                                total_text_emitted = True
+                                yield _sse_frame(evt)
+                            elif evt.get("type") in ("done", "error"):
+                                break
+                    except Exception as exc:
+                        logger.warning("Synthesis follow-up stream_chat failed: %s", exc)
+                        yield _sse_frame({
+                            "type": "text",
+                            "content": f"\n\n*(Note: Analysis data extracted successfully, but response synthesis encountered an issue: {exc})*",
+                        })
 
             # Fallback if no text tokens were emitted across the entire request
             if not total_text_emitted:
@@ -548,6 +559,34 @@ def confirm_action(request):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+        action_status = action_record.get("status")
+        if action_status == "executed":
+            return Response(
+                {
+                    "status": "already_executed",
+                    "pending_action_id": pending_action_id,
+                    "result": action_record.get("result", {}),
+                },
+                status=status.HTTP_200_OK,
+            )
+        if action_status == "cancelled":
+            return Response(
+                {
+                    "error": "This action was cancelled and cannot be executed.",
+                    "pending_action_id": pending_action_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if action_status != "pending":
+            return Response(
+                {
+                    "error": f"Action is not pending (status: {action_status}).",
+                    "pending_action_id": pending_action_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Mark as executed immediately so sequential replays or double-clicks cannot re-execute
         update_action_status(pending_action_id, "executed")
         tool_name = action_record.get("tool_name", "")
         tool_args = action_record.get("arguments", {})
@@ -558,6 +597,9 @@ def confirm_action(request):
             result = call_tool(tool_name, tool_args, user=request.user, context=exec_ctx)
         except Exception as exc:
             result = {"error": str(exc)}
+
+        # Cache execution result for future idempotent queries/replays
+        update_action_status(pending_action_id, "executed", result=result)
     else:
         result = {}
 
