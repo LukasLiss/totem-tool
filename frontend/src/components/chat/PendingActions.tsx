@@ -30,12 +30,7 @@ const DASHBOARD_MUTATING_TOOLS = new Set([
 export function PendingActions({ actions, onResolved }: PendingActionsProps) {
   const [deciding, setDeciding] = useState<Record<string, boolean>>({});
   const dashboardCtx = useContext(DashboardContext);
-  let navigate: ReturnType<typeof useNavigate> | undefined;
-  try {
-    navigate = useNavigate();
-  } catch {
-    // Router context not available
-  }
+  const navigate = useNavigate();
 
   const handleDecision = async (id: string, approved: boolean, name: string, actionArgs: Record<string, unknown>) => {
     setDeciding((prev) => ({ ...prev, [id]: true }));

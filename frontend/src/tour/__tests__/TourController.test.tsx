@@ -22,13 +22,13 @@ describe("Tour Controller & Highlighting System", () => {
   });
 
   it("handles tour completion events cleanly in browser environments", () => {
-    const listeners: Record<string, Function[]> = {};
+    const listeners: Record<string, ((...args: unknown[]) => unknown)[]> = {};
     const mockWindow = {
-      addEventListener: vi.fn((event: string, cb: Function) => {
+      addEventListener: vi.fn((event: string, cb: (...args: unknown[]) => unknown) => {
         listeners[event] = listeners[event] || [];
         listeners[event].push(cb);
       }),
-      removeEventListener: vi.fn((event: string, cb: Function) => {
+      removeEventListener: vi.fn((event: string, cb: (...args: unknown[]) => unknown) => {
         if (listeners[event]) {
           listeners[event] = listeners[event].filter((f) => f !== cb);
         }

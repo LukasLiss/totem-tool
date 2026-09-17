@@ -29,7 +29,7 @@ function escapeSelectorAttr(val: string): string {
   return val.replace(/["\\]/g, "\\$&");
 }
 
-export function findTourElement(tourId: TourId | string | null): HTMLElement | null {
+function findTourElement(tourId: TourId | string | null): HTMLElement | null {
   if (!tourId || typeof document === "undefined") return null;
   const escaped = escapeSelectorAttr(tourId);
   // 1. Direct data-tour-id lookup
@@ -53,7 +53,7 @@ export function findTourElement(tourId: TourId | string | null): HTMLElement | n
   return null;
 }
 
-export function getCalloutPosition(targetRect: TargetRect | null): React.CSSProperties {
+function getCalloutPosition(targetRect: TargetRect | null): React.CSSProperties {
   if (!targetRect || typeof window === "undefined") {
     return {
       top: "50%",

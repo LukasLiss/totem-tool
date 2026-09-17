@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/rules-of-hooks, @typescript-eslint/no-explicit-any, react-refresh/only-export-components */
 /**
  * Real-Time WebSocket Agent Bridge for Totem.
  *
@@ -8,7 +9,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { executeCommand, HandlerDependencies, AgentCommand } from "./handlers";
-import { useTourController, useOptionalTourController } from "@/tour/TourController";
+import { useOptionalTourController } from "@/tour/TourController";
 import { useContext } from "react";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";

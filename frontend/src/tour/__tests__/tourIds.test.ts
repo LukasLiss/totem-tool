@@ -24,7 +24,7 @@ describe("tourIds and contracts", () => {
     expect(TOUR_IDS.PROJECT_SWITCHER).toBe("project-switcher");
     expect(TOUR_IDS.VIEW_MODE_SELECTOR).toBe("view-mode-selector");
 
-    for (const [key, val] of Object.entries(TOUR_IDS)) {
+    for (const [, val] of Object.entries(TOUR_IDS)) {
       expect(typeof val).toBe("string");
       expect(val.length).toBeGreaterThan(0);
       expect(val).toMatch(/^[a-z0-9-]+$/);

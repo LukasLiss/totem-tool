@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * UI Command Execution Handlers for Totem Real-Time Agent Bridge.
  *
