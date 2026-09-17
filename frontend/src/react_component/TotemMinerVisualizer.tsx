@@ -22,6 +22,7 @@ import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion } from '@/store/filterStore';
 import { Button } from '@/components/ui/button';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import {
   Card,
   CardContent,
@@ -1181,12 +1182,10 @@ function TotemMinerVisualizer({
     >
       {/* Empty state */}
       {!eventLogId && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, borderRadius: 12, border: '1px solid #e2e8f0', background: 'white', padding: '20px 28px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>TOTeM Miner</span>
-            <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Select an event log to discover its TOTeM model.</p>
-          </div>
-        </div>
+        <VisualizerEmptyState
+          label="TOTeM Miner"
+          message="Select an event log to discover its TOTeM model."
+        />
       )}
 
       {/* Error */}

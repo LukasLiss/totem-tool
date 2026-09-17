@@ -3,7 +3,6 @@ import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion } from '@/store/filterStore';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -12,6 +11,7 @@ import {
   CardTitle,
   CardAction,
 } from '@/components/ui/card';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import { RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
@@ -6323,12 +6323,10 @@ function TotemVisualizer({
   const visualizerContent = (
     <div className="relative flex-1" style={{ height: computedHeight, width: '100%' }}>
       {!eventLogId && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-5 shadow-md">
-            <Badge variant="outline">Totem Visualizer</Badge>
-            <p className="text-sm text-slate-600">Select an event log to discover its Totem model.</p>
-          </div>
-        </div>
+        <VisualizerEmptyState
+          label="Totem Visualizer"
+          message="Select an event log to discover its Totem model."
+        />
       )}
 
       <div

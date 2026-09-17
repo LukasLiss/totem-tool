@@ -25,6 +25,7 @@ import {
   LocateFixedIcon,
 } from 'lucide-react';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
   occnNetToEditorGraph,
@@ -503,6 +504,13 @@ function OCCNVisualizer({
           ) : null}
         </Button>
       ) : null}
+
+      {data == null && fileId == null && (
+        <VisualizerEmptyState
+          label="Object-Centric Causal Net"
+          message="Select an event log to discover its causal net."
+        />
+      )}
 
       {(loading || error) && (
         <div

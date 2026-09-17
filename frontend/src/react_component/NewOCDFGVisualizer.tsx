@@ -22,6 +22,7 @@ import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { toast } from 'sonner';
 
@@ -1018,6 +1019,7 @@ function NewOCDFGVisualizer({
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
   const hasActivities = dfgData === null || nodes.some(n => n.data?.nodeVariant === 'center');
+  const noEventLog = data == null && !fileId;
 
   return (
     <div
@@ -1057,7 +1059,14 @@ function NewOCDFGVisualizer({
         preventScrolling={!interactionsDisabled}
       />
 
-      {!hasActivities && (
+      {noEventLog && (
+        <VisualizerEmptyState
+          label="Object-Centric DFG"
+          message="Select an event log to discover its directly-follows graph."
+        />
+      )}
+
+      {!noEventLog && !hasActivities && (
         <div style={{
           position: 'absolute',
           inset: 0,

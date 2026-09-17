@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { useFilterVersion } from "@/store/filterStore";
 import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
 
@@ -416,7 +417,11 @@ export default function VariantsExplorer({
 
       <CardContent className="pt-2">
         {!fileId ? (
-          <div className="text-sm text-muted-foreground">Select a file to view variants</div>
+          <VisualizerEmptyState
+            label="Variants Explorer"
+            message="Select an event log to view its variants."
+            overlay={false}
+          />
         ) : null}
 
         {fileId && status === "idle" ? (
