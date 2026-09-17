@@ -31,7 +31,7 @@ from .misc import (
     health_check,
     user_settings,
 )
-from .ocdfg import NewOCDFGViewSet, OCDFGViewSet
+from .ocdfg import NewOCDFGViewSet
 from .occn import OCCNViewSet, _occn_base_cache
 from .playout import playout, playout_export_ocel
 from .variants import _layout_shim, variants
@@ -41,7 +41,6 @@ __all__ = [
     "ProjectAssetViewSet",
     "ImageAssetViewSet",
     "DashboardViewSet",
-    "OCDFGViewSet",
     "NewOCDFGViewSet",
     "OCCNViewSet",
     "variants",

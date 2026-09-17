@@ -234,6 +234,7 @@ export function ArcConnectionLine({
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const edgeTypes = {
   arc: ArcEdge,
 };

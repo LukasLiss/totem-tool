@@ -155,6 +155,7 @@ export const ControlNode = memo(function ControlNode({
   );
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const nodeTypes = {
   activity: ActivityNode,
   control: ControlNode,

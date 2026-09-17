@@ -16,7 +16,7 @@ import { RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
-import type { OcdfgGraph } from './OCDFGVisualizer';
+import type { OcdfgGraph } from './NewOCDFGVisualizer';
 import { MetricTooltip } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
@@ -56,105 +56,14 @@ type ProcessLayer = {
   areas: ProcessAreaDefinition[];
 };
 
-/**
- * Which engine decides the object-type hierarchy.
- *
- * - `mlpa`      — temporal relations only (Liss & van der Aalst, BPM 2025).
- * - `advanced`  — the three resource indicators of Schlegelmilch's thesis
- *                 section 4.1, tunable through {@link ProcessAreaParams}.
- *
- * Both endpoints return the same payload, so switching changes the URL and
- * nothing else in the render path.
- */
-export type ProcessAreaAlgorithm = 'mlpa' | 'advanced';
-
-/**
- * Parameters of the advanced algorithm.
- *
- * The weights decide how much each indicator contributes. `alpha` and `beta`
- * balance the two halves of the ILP objective, and follow the **thesis**
- * convention: `alpha` weights the resource force (separation), `beta` the
- * attractive force (cohesion). The reference implementation names them the
- * other way round; getting this backwards makes both sliders feel inverted.
- */
-export type ProcessAreaParams = {
-  wTemporal: number;
-  wCardinality: number;
-  wDivergence: number;
-  alpha: number;
-  beta: number;
-};
-
-export const DEFAULT_PROCESS_AREA_ALGORITHM: ProcessAreaAlgorithm = 'advanced';
-
-export const DEFAULT_PROCESS_AREA_PARAMS: ProcessAreaParams = {
-  wTemporal: 1,
-  wCardinality: 1,
-  wDivergence: 1,
-  alpha: 1,
-  beta: 1,
-};
-
-export const PROCESS_AREA_ALGORITHM_LABELS: Record<ProcessAreaAlgorithm, string> = {
-  mlpa: 'MLPA (temporal)',
-  advanced: 'Advanced (resource indicators)',
-};
-
-/**
- * Slider bounds. The lower bounds come from the thesis, the upper ones from how
- * the result actually responds — the maths bounds none of these above.
- *
- * **Weights** may be zero: Def. 4.1.11 takes `w_i ∈ ℝ≥0`, and a zero weight
- * simply drops that indicator. They are normalised by their sum, so only their
- * ratios matter and `0..2` around a default of `1` reaches every relative
- * weighting.
- *
- * **α and β may not.** Def. 4.1.12 takes them from `ℝ⁺`, strictly positive, and
- * the degenerate cases show why: at `α = 0` nothing separates the object types
- * and the whole log collapses onto one layer; at `β = 0` nothing holds peers
- * together. Neither is a hierarchy. The sliders therefore start at `0.1`.
- *
- * Their upper bound is `10`: only the ratio α/β matters — scaling both leaves
- * the ILP's argmin unchanged — so `0.1..10` spans ratios from 1:100 to 100:1.
- * Sweeping α against β = 1, container-logistics settles by 1.5,
- * order-management by 6 and p2p by 4. Only p2p moves again past 25, and by then
- * the resource force has drowned out cohesion entirely.
- */
-export const PROCESS_AREA_PARAM_RANGES: Record<
-  keyof ProcessAreaParams,
-  { min: number; max: number; step: number }
-> = {
-  wTemporal: { min: 0, max: 2, step: 0.05 },
-  wCardinality: { min: 0, max: 2, step: 0.05 },
-  wDivergence: { min: 0, max: 2, step: 0.05 },
-  alpha: { min: 0.1, max: 10, step: 0.1 },
-  beta: { min: 0.1, max: 10, step: 0.1 },
-};
-
-/** Pull a value into its slider's range. */
-function clampProcessAreaParam(key: keyof ProcessAreaParams, value: number): number {
-  const { min, max } = PROCESS_AREA_PARAM_RANGES[key];
-  if (!Number.isFinite(value)) return DEFAULT_PROCESS_AREA_PARAMS[key];
-  return Math.min(max, Math.max(min, value));
-}
-
-/**
- * Clamp a whole parameter set. Persisted dashboards may hold an α or β of `0`
- * from before the lower bound existed; those must land on `0.1` rather than
- * leaving the slider stuck below its own minimum.
- */
-export function clampProcessAreaParams(
-  params: Partial<ProcessAreaParams> | undefined,
-): ProcessAreaParams {
-  const merged = { ...DEFAULT_PROCESS_AREA_PARAMS, ...params };
-  return (Object.keys(DEFAULT_PROCESS_AREA_PARAMS) as Array<keyof ProcessAreaParams>).reduce(
-    (result, key) => {
-      result[key] = clampProcessAreaParam(key, merged[key]);
-      return result;
-    },
-    {} as ProcessAreaParams,
-  );
-}
+import {
+  DEFAULT_PROCESS_AREA_ALGORITHM,
+  DEFAULT_PROCESS_AREA_PARAMS,
+  clampProcessAreaParam,
+  clampProcessAreaParams,
+  type ProcessAreaAlgorithm,
+  type ProcessAreaParams,
+} from './processAreaParams';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
 const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
@@ -267,11 +176,6 @@ const RELATION_PRIORITY: Record<RelationType, number> = {
   D: 1,
   I: 2,
   A: 3,
-};
-
-type AttachmentInfo = {
-  edge: EdgeDescriptor;
-  side: NodeSide;
 };
 
 type AttachmentTracker = {
@@ -387,16 +291,8 @@ const PROCESS_AREA_BORDER = 'rgba(37, 99, 235, 0.35)';
 const PROCESS_AREA_INSET_SHADOW = 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)';
 const DETAIL_EDGE_STROKE = 'rgba(37, 99, 235, 0.35)';
 const BASE_DETAIL_COLLISION_PADDING = 12;
-const DETAIL_ANCHOR_SPRING = 0.12;
-const DETAIL_REPULSION = 0.65; // stronger separation between detail nodes
-const DETAIL_OBSTACLE_PUSH = 0.9; // push harder off anchors/process areas
-const DETAIL_DAMPING = 0.78; // slightly less damping so they can move apart faster
-const DETAIL_ITERATIONS = 85; // more relaxation passes
 const BASE_DETAIL_MIN_DISTANCE = 36; // larger minimum clearance
-const LEVEL_LEGEND_GAP = 24;
-const LEGEND_RIGHT_PADDING = 32;
 const LEGEND_HIDE_INSET = 12; // pixels the intruder must cross into the legend before hiding
-const CAMERA_PADDING = 24;
 
 function buildProcessAreaMetrics(scale: number): ProcessAreaMetrics {
   const clamped = Math.min(MAX_PROCESS_AREA_SCALE, Math.max(MIN_PROCESS_AREA_SCALE, scale));
@@ -894,33 +790,6 @@ function getAttachmentPoint(node: NodePosition, attachment: AttachmentSlot): Poi
 }
 
 /**
- * Assigns a slot based on edge index and total edges on that side.
- * Uses center when there's only one edge, otherwise distributes across available slots.
- */
-function assignSlot(
-  side: NodeSide,
-  edgeIndex: number,
-  totalEdges: number,
-): HorizontalSlot | VerticalSlot {
-  // Single edge (or untracked edge) on any side uses center
-  // totalEdges can be 0 for non-'P' edges that aren't tracked in sourceAttachments
-  if (totalEdges <= 1) {
-    return 'center';
-  }
-
-  // Multiple edges: use non-center slots only to spread them apart
-  if (side === 'top' || side === 'bottom') {
-    // 2 non-center horizontal slots (left/right)
-    const slots: HorizontalSlot[] = ['left', 'right'];
-    return slots[edgeIndex % 2];
-  } else {
-    // 2 non-center vertical slots (top/bottom)
-    const slots: VerticalSlot[] = ['top', 'bottom'];
-    return slots[edgeIndex % 2];
-  }
-}
-
-/**
  * Port constraints map: edgeId-source or edgeId-target → forced port
  * Used to enforce single-edge center and straight-edge same-port rules
  */
@@ -947,7 +816,7 @@ function computePortConstraints(
       if (!route) continue;
 
       // Determine if this edge is source or target at this node-side
-      const [nodeId, side] = key.split('-');
+      const [nodeId] = key.split('-');
       const isSource = edge.from === nodeId;
       const isTarget = edge.to === nodeId;
 
@@ -2017,74 +1886,6 @@ function predictAttachmentSide(
 }
 
 /**
- * Builds a tracker of which edges attach to which node sides
- */
-function buildAttachmentTracker(
-  edges: EdgeDescriptor[],
-  positions: Record<string, NodePosition>,
-): AttachmentTracker {
-  const targetAttachments = new Map<string, EdgeDescriptor[]>();
-  const sourceAttachments = new Map<string, EdgeDescriptor[]>();
-  const allAttachments = new Map<string, EdgeDescriptor[]>();
-
-  for (const edge of edges) {
-    const source = positions[edge.from];
-    const target = positions[edge.to];
-    if (!source || !target) continue;
-
-    const sourceCenter = { x: source.centerX, y: source.centerY };
-    const targetCenter = { x: target.centerX, y: target.centerY };
-
-    // Predict attachment sides
-    const sourceSide = predictAttachmentSide(sourceCenter, targetCenter, true);
-    const targetSide = predictAttachmentSide(sourceCenter, targetCenter, false);
-    const sourceKey = `${edge.from}-${sourceSide}`;
-    const targetKey = `${edge.to}-${targetSide}`;
-
-    // Track target attachments (all edges)
-    if (!targetAttachments.has(targetKey)) {
-      targetAttachments.set(targetKey, []);
-    }
-    targetAttachments.get(targetKey)!.push(edge);
-
-    // Track source attachments (P edges only)
-    if (edge.relation === 'P') {
-      if (!sourceAttachments.has(sourceKey)) {
-        sourceAttachments.set(sourceKey, []);
-      }
-      sourceAttachments.get(sourceKey)!.push(edge);
-    }
-
-    // Track ALL attachments (both source and target, all edge types)
-    if (!allAttachments.has(sourceKey)) {
-      allAttachments.set(sourceKey, []);
-    }
-    allAttachments.get(sourceKey)!.push(edge);
-
-    if (!allAttachments.has(targetKey)) {
-      allAttachments.set(targetKey, []);
-    }
-    allAttachments.get(targetKey)!.push(edge);
-  }
-
-  // Sort each attachment list by priority (P first, then D, I, A)
-  const sortByPriority = (a: EdgeDescriptor, b: EdgeDescriptor) =>
-    RELATION_PRIORITY[a.relation] - RELATION_PRIORITY[b.relation];
-
-  for (const list of targetAttachments.values()) {
-    list.sort(sortByPriority);
-  }
-  for (const list of sourceAttachments.values()) {
-    list.sort(sortByPriority);
-  }
-  for (const list of allAttachments.values()) {
-    list.sort(sortByPriority);
-  }
-
-  return { targetAttachments, sourceAttachments, allAttachments };
-}
-
-/**
  * Builds attachment tracker using ACTUAL route sides (not predicted).
  * This ensures edges are grouped by their real attachment points.
  */
@@ -2148,31 +1949,6 @@ function buildAttachmentTrackerFromRoutes(
   return { targetAttachments, sourceAttachments, allAttachments };
 }
 
-/**
- * Calculates the offset for an edge's attachment point
- */
-function getAttachmentOffset(
-  edge: EdgeDescriptor,
-  attachmentList: EdgeDescriptor[] | undefined,
-  nodeSize: number,
-  edgeScale: number,
-): number {
-  if (!attachmentList || attachmentList.length <= 1) {
-    return 0;
-  }
-
-  const index = attachmentList.findIndex((e) => e.id === edge.id);
-  if (index === -1) return 0;
-
-  const count = attachmentList.length;
-  const maxSpread = Math.min(nodeSize * 0.5, 40 * edgeScale);
-  const spacing = Math.min(maxSpread / Math.max(count - 1, 1), 16 * edgeScale);
-  const totalSpan = spacing * (count - 1);
-  const startOffset = -totalSpan / 2;
-
-  return startOffset + index * spacing;
-}
-
 function calculateNodeCollisionPoint(
   tail: Point2D,
   head: Point2D,
@@ -2207,52 +1983,6 @@ function calculateNodeCollisionPoint(
     x: head.x + t * deltaX,
     y: head.y + t * deltaY,
   };
-}
-
-/**
- * Calculates the inward-facing normal perpendicular to the box edge
- * at the collision point. This ensures arrow heads and parallel bars
- * are always perpendicular/parallel to the node boundary.
- */
-function calculatePerpendicularBoxNormal(
-  tail: Point2D,
-  head: Point2D,
-  headWidth: number,
-  headHeight: number,
-): Point2D {
-  const deltaX = tail.x - head.x;
-  const deltaY = tail.y - head.y;
-
-  const halfWidth = Math.max(headWidth / 2, COLLISION_EPSILON);
-  const halfHeight = Math.max(headHeight / 2, COLLISION_EPSILON);
-
-  // Pure vertical approach - hitting top or bottom edge
-  if (Math.abs(deltaX) < COLLISION_EPSILON) {
-    return { x: 0, y: deltaY > 0 ? -1 : 1 };
-  }
-
-  // Pure horizontal approach - hitting left or right edge
-  if (Math.abs(deltaY) < COLLISION_EPSILON) {
-    return { x: deltaX > 0 ? -1 : 1, y: 0 };
-  }
-
-  // Calculate which edge is hit first
-  const tHorizontal = Math.abs(halfHeight / deltaY);
-  const tVertical = Math.abs(halfWidth / deltaX);
-
-  if (tVertical < tHorizontal) {
-    // Hitting left or right edge - normal is horizontal
-    return { x: deltaX > 0 ? -1 : 1, y: 0 };
-  } else if (tHorizontal < tVertical) {
-    // Hitting top or bottom edge - normal is vertical
-    return { x: 0, y: deltaY > 0 ? -1 : 1 };
-  } else {
-    // Hitting corner exactly - use diagonal normal (normalized)
-    const cornerNormalX = deltaX > 0 ? -1 : 1;
-    const cornerNormalY = deltaY > 0 ? -1 : 1;
-    const cornerMag = Math.SQRT2;
-    return { x: cornerNormalX / cornerMag, y: cornerNormalY / cornerMag };
-  }
 }
 
 function shouldRenderStraightSegment(dx: number, dy: number, lengthOverride?: number): boolean {
@@ -2329,7 +2059,7 @@ function recalculateEdgeDecorations(
 
   const startPoint = waypoints[0];
   const endPoint = waypoints[waypoints.length - 1];
-  let updatedWaypoints = waypoints.slice();
+  const updatedWaypoints = waypoints.slice();
   let pathNeedsUpdate = false;
   let renderStart: Point2D = startPoint;
   let renderEnd: Point2D = endPoint;
@@ -3050,8 +2780,8 @@ function computeEdgeSegments(
       }
     }
 
-    let startX = startPoint.x;
-    let startY = startPoint.y;
+    const startX = startPoint.x;
+    const startY = startPoint.y;
     const collisionX = collisionPoint.x;
     const collisionY = collisionPoint.y;
 
@@ -3885,67 +3615,6 @@ function computeEdgeSegments(
   });
 
   return segments;
-}
-
-function buildCurvedPath({
-  startX,
-  startY,
-  endX,
-  endY,
-  dx,
-  dy,
-  unitX,
-  unitY,
-}: {
-  startX: number;
-  startY: number;
-  endX: number;
-  endY: number;
-  dx: number;
-  dy: number;
-  unitX: number;
-  unitY: number;
-}): string {
-  const length = Math.hypot(dx, dy);
-  if (!Number.isFinite(length) || length < 1) {
-    return `M ${startX} ${startY} L ${endX} ${endY}`;
-  }
-
-  if (shouldRenderStraightSegment(dx, dy, length)) {
-    return `M ${startX} ${startY} L ${endX} ${endY}`;
-  }
-
-  const absDx = Math.abs(dx);
-  const absDy = Math.abs(dy);
-  const midpointX = (startX + endX) / 2;
-  const midpointY = (startY + endY) / 2;
-
-  let bendDirection: number;
-  // Prefer bending along the dominant axis to keep the arc predictable.
-  if (absDx >= absDy) {
-    bendDirection = dy >= 0 ? 1 : -1;
-  } else {
-    bendDirection = dx <= 0 ? 1 : -1;
-  }
-  if (!Number.isFinite(bendDirection) || bendDirection === 0) {
-    bendDirection = 1;
-  }
-
-  const baseCurve = length * 0.5;
-  // Clamp curvature so short edges still get a gentle circular-looking arc.
-  const maxCurve = Math.max(36, length * 0.65);
-  const curveStrength = Math.min(
-    Math.max(baseCurve, 18),
-    maxCurve,
-    length * 1.2,
-  );
-  const perpX = -unitY * bendDirection;
-  const perpY = unitX * bendDirection;
-
-  const controlX = midpointX + perpX * curveStrength;
-  const controlY = midpointY + perpY * curveStrength;
-
-  return `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`;
 }
 
 function describeSimplePathGeometry({
@@ -4826,7 +4495,6 @@ function computeDetailLayout(
   processAreas: Rect[],
   previousLayout: DetailLayoutState,
   metrics: ProcessAreaMetrics,
-  iterationScale = 1,
 ): DetailLayoutState {
   if (detailNodes.length === 0) return {};
 
@@ -4885,7 +4553,6 @@ function computeDetailLayout(
 
     for (const dir of directions) {
       let d = dir.startD;
-      let found = false;
       while (d < 5000) { // max search distance
         const cx = anchor.centerX + dir.dx * d;
         const cy = anchor.centerY + dir.dy * d;
@@ -4905,7 +4572,6 @@ function computeDetailLayout(
             bestDist = d + penalty;
             bestPos = { x: cx, y: cy };
           }
-          found = true;
           break; // Stop searching this direction once we find the first valid spot
         }
         d += 40; // Step size
@@ -5073,7 +4739,7 @@ function TotemVisualizer({
     setAppliedParams(seededParams);
   }, [seededParams]);
   const [internalReloadSignal, setInternalReloadSignal] = useState(0);
-  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: { frequency?: number; avg_lead_time?: number }, label?: string } | null>(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
@@ -5087,19 +4753,6 @@ function TotemVisualizer({
     width: 0,
     height: 0,
   });
-  const resetScrollToCenter = useCallback(() => {
-    // No-op: replaced by fitToView with transform-based viewport
-  }, []);
-  const centerCamera = useCallback(
-    (
-      _hBounds: { left: number; right: number; width: number },
-      _vBounds: { top: number; bottom: number; height: number },
-    ) => {
-      // No-op: replaced by fitToView with transform-based viewport
-    },
-    [],
-  );
-
   const assignNodeRef = useCallback((type: string, element: HTMLElement | null) => {
     if (element) {
       nodeRefs.current[type] = element;
@@ -5135,17 +4788,16 @@ function TotemVisualizer({
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
-  const [layoutBounds, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(0);
+  const [, setLayoutBounds] = useState<{ left: number; right: number; width: number } | null>(null);
+  const [, setViewportWidth] = useState(0);
+  const [, setViewportHeight] = useState(0);
   const [autoZoomTrigger, setAutoZoomTrigger] = useState(0);
-  const layoutBoundsRef = useRef<typeof layoutBounds>(null);
+  const layoutBoundsRef = useRef<{ left: number; right: number; width: number } | null>(null);
   const viewportWidthRef = useRef(0);
   const viewportHeightRef = useRef(0);
   const lastAppliedAutoZoomRef = useRef(0);
-  const [verticalBounds, setVerticalBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
-  const verticalBoundsRef = useRef<typeof verticalBounds>(null);
-  const lastCenteredTriggerRef = useRef(0);
+  const [, setVerticalBounds] = useState<{ top: number; bottom: number; height: number } | null>(null);
+  const verticalBoundsRef = useRef<{ top: number; bottom: number; height: number } | null>(null);
   const [pendingCenter, setPendingCenter] = useState(0);
   const autoZoomEnabled = true; // kept for API compat – fit-to-view is now handled natively
   // ── Viewport transform state (pan + viewport-level zoom) ──────────────────
@@ -5751,13 +5403,6 @@ function TotemVisualizer({
     () => edgeSegments.filter((segment) => segment.crossesNode),
     [edgeSegments],
   );
-  const legendColumnOffset = useMemo(() => {
-    const offsets = Object.values(legendOffsets);
-    if (offsets.length === 0) return 0;
-    const needsHide = offsets.some((value) => (value ?? 0) > 0.5);
-    if (needsHide) return 0;
-    return Math.max(0, ...offsets.filter((value) => Number.isFinite(value)));
-  }, [legendOffsets]);
   const legendHidden = useMemo(
     () => Object.values(legendOffsets).some((value) => (value ?? 0) > 0.5),
     [legendOffsets],
@@ -5847,14 +5492,14 @@ function TotemVisualizer({
 
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
-        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; error?: string } & Partial<OcdfgGraph>>(
+          `${backendBaseUrl}/api/new-ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
           { _skipGlobalFilter: !filterEnabled },
         );
-        if (payload?.filter_error || payload?.error) {
-          throw new Error(payload.filter_error || payload.error);
+        if (payload?.error) {
+          throw new Error(payload.error);
         }
-        const graph = payload?.dfg ?? { nodes: (payload as any)?.nodes, links: (payload as any)?.links };
+        const graph = payload?.dfg ?? { nodes: payload?.nodes, links: payload?.links };
         if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) {
           throw new Error('Invalid OCDFG payload');
         }
@@ -5872,6 +5517,7 @@ function TotemVisualizer({
             ? {
                 ...graph,
                 nodes: graph.nodes.map((node) => {
+                  const richNode = node as typeof node & { object_type?: string | null; role?: string | null };
                   const registerNode = registerNodes.find((n) => n.id === node.id);
                   const mergedTypes = Array.from(
                     new Set([...(node.types ?? []), ...((registerNode?.types as string[]) ?? [])]),
@@ -5879,35 +5525,17 @@ function TotemVisualizer({
                   return {
                     ...node,
                     types: mergedTypes,
-                    object_type: node.object_type ?? registerNode?.object_type ?? null,
-                    role: node.role ?? registerNode?.role ?? null,
+                    object_type: richNode.object_type ?? registerNode?.object_type ?? null,
+                    role: richNode.role ?? registerNode?.role ?? null,
                   };
                 }),
-                // Normalise links: map owners[0] → key so NewOCDFGVisualizer can identify object type
-                links: graph.links.map((link: any) => ({
-                  ...link,
-                  key: link.key ?? link.objtype ?? (Array.isArray(link.owners) ? link.owners[0] : undefined),
-                })),
-                // Include trace variants from backend
-                trace_variants: payload?.trace_variants,
               }
-            : {
-                ...graph,
-                // Normalise links: map owners[0] → key so NewOCDFGVisualizer can identify object type
-                links: graph.links.map((link: any) => ({
-                  ...link,
-                  key: link.key ?? link.objtype ?? (Array.isArray(link.owners) ? link.owners[0] : undefined),
-                })),
-                trace_variants: payload?.trace_variants,
-              };
+            : graph;
 
         setDetailCache((prev) => ({
           ...prev,
           [areaId]: enrichedGraph,
         }));
-        if (payload?.filter_error) {
-          setDetailError((prev) => ({ ...prev, [areaId]: payload.filter_error }));
-        }
       } catch (err) {
         console.error('[TotemVisualizer] Failed to load detail OCDFG', err);
         setDetailError((prev) => ({
@@ -5916,7 +5544,8 @@ function TotemVisualizer({
         }));
       } finally {
         setDetailLoading((prev) => {
-          const { [areaId]: _removed, ...rest } = prev;
+          const rest = { ...prev };
+          delete rest[areaId];
           return rest;
         });
       }
@@ -5930,7 +5559,8 @@ function TotemVisualizer({
       setExpandedAreas((prev) => {
         const alreadyOpen = prev[area.id];
         if (alreadyOpen) {
-          const { [area.id]: _removed, ...rest } = prev;
+          const rest = { ...prev };
+          delete rest[area.id];
           return rest;
         }
         // Kick off detail fetch on first open
@@ -6105,7 +5735,6 @@ function TotemVisualizer({
           Object.values(areaRects),
           isZooming ? {} : detailLayout,
           processAreaMetrics,
-          isZooming ? 2.5 : 1,
         );
 
         if (isZooming || !layoutsApproximatelyEqual(detailLayout, computedLayout)) {
@@ -6752,7 +6381,6 @@ function TotemVisualizer({
                           const baseDetailHeight = detailSize?.height ?? BASE_OBJECT_NODE_MIN_HEIGHT;
                           const ocdfgWidth = baseDetailWidth * detailScale;
                           const ocdfgHeight = baseDetailHeight * detailScale;
-                          const cachedDetail = detailCache[area.id];
                           const loadingDetail = Boolean(detailLoading[area.id]);
                           const errorDetail = detailError[area.id];
                           const detailData = filteredDetailCache[area.id] ?? null;

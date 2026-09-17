@@ -14,8 +14,8 @@ import {
   type TimeRangeParams,
   type ObjectTypesParams,
   type ActivityParams,
-  useFilterStack,
 } from "@/contexts/FilterStackContext";
+import { useFilterStack } from "@/contexts/filterStackHooks";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
 import { useFilterStore, type FilterStats } from "@/store/filterStore";

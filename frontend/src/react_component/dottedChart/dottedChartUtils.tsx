@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Cross, Diamond, Square, Triangle } from "lucide-react";
+import { Cross, Diamond, Triangle } from "lucide-react";
 
 export type AxisOption =
   | { type: "time" }
@@ -210,15 +210,6 @@ export function renderPointShape(
     return <Cross x={cx - 4} y={cy - 4} width={8} height={8} fill="none" {...common} />;
   }
   return <circle cx={cx} cy={cy} r={3.5} {...common} fill="transparent" strokeWidth={1.75} />;
-}
-
-function numericValue(value: number | string | null): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : Number.NaN;
-  }
-  return Number.NaN;
 }
 
 function valueKey(value: number | string | null): string {

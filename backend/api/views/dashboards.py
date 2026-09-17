@@ -20,7 +20,6 @@ from ..models import (
     VariantsComponent,
     ProcessAreaComponent,
     LogStatisticsComponent,
-    OCDFGComponent,
     OCDottedChartComponent,
     NewOCDFGComponent,
     OCCNComponent,
@@ -139,7 +138,6 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "ProcessAreaComponent": ProcessAreaComponent,
         "TotemMinerComponent": TotemMinerComponent,
         "LogStatisticsComponent": LogStatisticsComponent,
-        "OCDFGComponent": OCDFGComponent,
         "OCDottedChartComponent": OCDottedChartComponent,
         "NewOCDFGComponent": NewOCDFGComponent,
         "NewOCDFGVariantsComponent": NewOCDFGComponent,
@@ -328,19 +326,6 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_earliest_timestamp=item.get("show_earliest_timestamp", False),
                     show_newest_timestamp=item.get("show_newest_timestamp", False),
                     show_duration=item.get("show_duration", False),
-                )
-            elif component_name == "OCDFGComponent":
-                OCDFGComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
-                    show_controls=item.get("show_controls", True),
-                    initial_interaction_locked=item.get(
-                        "initial_interaction_locked", True
-                    ),
                 )
             elif component_name == "OCDottedChartComponent":
                 OCDottedChartComponent.objects.create(

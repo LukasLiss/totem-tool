@@ -17,7 +17,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
+import { SelectedFileContext, type SelectedFile } from "../contexts/SelectedFileContext.tsx";
 import { getUserFiles } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
 import { DashboardContext } from "@/contexts/DashboardContext.tsx";
@@ -28,7 +28,7 @@ export function Switcher() {
   const { selectedFile, setSelectedFile } = useContext(SelectedFileContext);
   console.log('beginning')
   console.log(selectedFile)
-  const [files, setFiles] = useState<any[]>([]);
+  const [files, setFiles] = useState<SelectedFile[]>([]);
   const navigate = useNavigate();
   const { setViewMode } = useContext(DashboardContext)
 
@@ -42,7 +42,7 @@ const displayName = selectedFile?.file
           const response = await getUserFiles();
           setFiles(response);
           console.log('Loading files successfull')
-        } catch (error: any) {
+        } catch (error) {
           console.error(error);
         }
       };
