@@ -21,7 +21,7 @@ from api.models import (
     NewOCDFGComponent,
     NumberofEventsComponent,
     OCCNComponent,
-    OCDFGComponent,
+    OCPNComponent,
     OCDottedChartComponent,
     ProcessAreaComponent,
     Project,
@@ -309,15 +309,15 @@ class DashboardServiceCrudTests(TestCase):
         self.assertEqual(c6["resourcetype"], "LogStatisticsComponent")
         self.assertTrue(c6["show_duration"])
 
-        # 7. OCDFGComponent
+        # 7. OCPNComponent
         c7 = DashboardService.add_component(
             user=self.user_a,
             dashboard_id=dash_id,
-            component_type="OCDFGComponent",
-            config={"show_controls": False, "initial_interaction_locked": False},
+            component_type="OCPNComponent",
+            config={"automatic_loading": True},
         )
-        self.assertEqual(c7["resourcetype"], "OCDFGComponent")
-        self.assertFalse(c7["show_controls"])
+        self.assertEqual(c7["resourcetype"], "OCPNComponent")
+        self.assertTrue(c7["automatic_loading"])
 
         # 8. OCDottedChartComponent
         c8 = DashboardService.add_component(

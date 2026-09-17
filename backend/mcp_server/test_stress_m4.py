@@ -36,7 +36,7 @@ from api.models import (
     NewOCDFGComponent,
     NumberofEventsComponent,
     OCCNComponent,
-    OCDFGComponent,
+    OCPNComponent,
     OCDottedChartComponent,
     ProcessAreaComponent,
     Project,
@@ -337,7 +337,7 @@ class DashboardServiceAdversarialTests(TestCase):
             "VariantsComponent",
             "ProcessAreaComponent",
             "LogStatisticsComponent",
-            "OCDFGComponent",
+            "OCPNComponent",
             "OCDottedChartComponent",
             "NewOCDFGComponent",
             "OCCNComponent",
@@ -478,7 +478,7 @@ class CascadingDeletionTests(TestCase):
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="VariantsComponent")
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="ProcessAreaComponent")
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="LogStatisticsComponent")
-        DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="OCDFGComponent")
+        DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="OCPNComponent", config={"automatic_loading": True})
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="OCDottedChartComponent")
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="NewOCDFGComponent")
         DashboardService.add_component(user=self.user, dashboard_id=dash_id, component_type="OCCNComponent")
@@ -491,7 +491,7 @@ class CascadingDeletionTests(TestCase):
         self.assertEqual(VariantsComponent.objects.filter(dashboard_id=dash_id).count(), 1)
         self.assertEqual(ProcessAreaComponent.objects.filter(dashboard_id=dash_id).count(), 1)
         self.assertEqual(LogStatisticsComponent.objects.filter(dashboard_id=dash_id).count(), 1)
-        self.assertEqual(OCDFGComponent.objects.filter(dashboard_id=dash_id).count(), 1)
+        self.assertEqual(OCPNComponent.objects.filter(dashboard_id=dash_id).count(), 1)
         self.assertEqual(OCDottedChartComponent.objects.filter(dashboard_id=dash_id).count(), 1)
         self.assertEqual(NewOCDFGComponent.objects.filter(dashboard_id=dash_id).count(), 1)
         self.assertEqual(OCCNComponent.objects.filter(dashboard_id=dash_id).count(), 1)
@@ -510,7 +510,7 @@ class CascadingDeletionTests(TestCase):
         self.assertEqual(VariantsComponent.objects.filter(dashboard_id=dash_id).count(), 0)
         self.assertEqual(ProcessAreaComponent.objects.filter(dashboard_id=dash_id).count(), 0)
         self.assertEqual(LogStatisticsComponent.objects.filter(dashboard_id=dash_id).count(), 0)
-        self.assertEqual(OCDFGComponent.objects.filter(dashboard_id=dash_id).count(), 0)
+        self.assertEqual(OCPNComponent.objects.filter(dashboard_id=dash_id).count(), 0)
         self.assertEqual(OCDottedChartComponent.objects.filter(dashboard_id=dash_id).count(), 0)
         self.assertEqual(NewOCDFGComponent.objects.filter(dashboard_id=dash_id).count(), 0)
         self.assertEqual(OCCNComponent.objects.filter(dashboard_id=dash_id).count(), 0)

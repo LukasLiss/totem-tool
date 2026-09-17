@@ -205,16 +205,18 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
 
 
 // NumberOfEventsComponent: Displays total event count for the selected log
-export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
+export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
   const [processedResult, setProcessedResult] = useState<number | null>(null);
   const filterVersion = useFilterVersion();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const nodeFileId = (node as unknown as { file_id?: number })?.file_id;
+
   useEffect(() => {
     let isMounted = true;
     const handleProcessFile = async () => {
-      const fileId = selectedFile?.id || (selectedFile as any)?.file?.id || (node as any)?.file_id;
+      const fileId = selectedFile?.id || (selectedFile as unknown as { file?: { id?: number } })?.file?.id || nodeFileId;
       if (!fileId) {
         setProcessedResult(null);
         return;
@@ -252,7 +254,7 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
     return () => {
       isMounted = false;
     };
-  }, [selectedFile, (node as any)?.file_id, filterVersion]);
+  }, [selectedFile, nodeFileId, filterVersion]);
 
   const display = processedResult !== null
     ? processedResult.toLocaleString()

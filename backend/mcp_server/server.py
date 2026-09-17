@@ -307,7 +307,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                 },
                 "component_name": {
                     "type": "string",
-                    "description": "Component type name (e.g. LogStatisticsComponent, OCDFGComponent, VariantsComponent, OCDottedChartComponent, OCCNComponent, TextBoxComponent)."
+                    "description": "Component type name (e.g. LogStatisticsComponent, NewOCDFGComponent, VariantsComponent, OCDottedChartComponent, OCCNComponent, TextBoxComponent, OCPNComponent)."
                 },
                 "x": {"type": "integer", "default": 0},
                 "y": {"type": "integer", "default": 0},

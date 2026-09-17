@@ -65,8 +65,8 @@ const GridContent: React.FC = () => {
     
     loadSelectedDashboard();
 
-    const handleRefreshEvent = (e: any) => {
-      const detail = e.detail;
+    const handleRefreshEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ dashboard_id?: number }>).detail;
       if (!detail?.dashboard_id || detail.dashboard_id === selectedDashboard) {
         console.log("totem:refresh-dashboard event received, refreshing grid...");
         loadSelectedDashboard();

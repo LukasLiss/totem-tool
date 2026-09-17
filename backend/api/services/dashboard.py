@@ -19,6 +19,7 @@ from api.models import (
     OCCNComponent,
     OCDFGComponent,
     OCDottedChartComponent,
+    OCPNComponent,
     ProcessAreaComponent,
     Project,
     TextBoxComponent,
@@ -48,8 +49,8 @@ class DashboardService:
         "logstatisticscomponent": (LogStatisticsComponent, "LogStatisticsComponent"),
         "logstatistics": (LogStatisticsComponent, "LogStatisticsComponent"),
         "log_statistics": (LogStatisticsComponent, "LogStatisticsComponent"),
-        "ocdfgcomponent": (OCDFGComponent, "OCDFGComponent"),
-        "ocdfg": (OCDFGComponent, "OCDFGComponent"),
+        "ocdfgcomponent": (NewOCDFGComponent, "NewOCDFGComponent"),
+        "ocdfg": (NewOCDFGComponent, "NewOCDFGComponent"),
         "newocdfgcomponent": (NewOCDFGComponent, "NewOCDFGComponent"),
         "newocdfg": (NewOCDFGComponent, "NewOCDFGComponent"),
         "new_ocdfg": (NewOCDFGComponent, "NewOCDFGComponent"),
@@ -61,6 +62,9 @@ class DashboardService:
         "dotted_chart": (OCDottedChartComponent, "OCDottedChartComponent"),
         "occncomponent": (OCCNComponent, "OCCNComponent"),
         "occn": (OCCNComponent, "OCCNComponent"),
+        "ocpncomponent": (OCPNComponent, "OCPNComponent"),
+        "ocpn": (OCPNComponent, "OCPNComponent"),
+        "oc_pn": (OCPNComponent, "OCPNComponent"),
     }
 
     @staticmethod
@@ -89,14 +93,14 @@ class DashboardService:
             VariantsComponent,
             ProcessAreaComponent,
             LogStatisticsComponent,
-            OCDFGComponent,
+            OCPNComponent,
             OCDottedChartComponent,
             NewOCDFGComponent,
             OCCNComponent,
         ):
             if (
                 model_cls.__name__.lower() == name.lower()
-                or (name in ("NewOCDFGComponent", "NewOCDFGVariantsComponent") and model_cls == NewOCDFGComponent)
+                or (name in ("NewOCDFGComponent", "NewOCDFGVariantsComponent", "OCDFGComponent") and model_cls == NewOCDFGComponent)
             ):
                 try:
                     return model_cls.objects.get(id=base_comp.id)
@@ -382,8 +386,8 @@ class DashboardService:
                 show_newest_timestamp=bool(cfg.get("show_newest_timestamp", False)),
                 show_duration=bool(cfg.get("show_duration", False)),
             )
-        elif model_cls == OCDFGComponent:
-            comp = OCDFGComponent.objects.create(
+        elif model_cls == OCPNComponent:
+            comp = OCPNComponent.objects.create(
                 dashboard=dashboard,
                 x=x,
                 y=y,
@@ -391,8 +395,7 @@ class DashboardService:
                 h=h,
                 component_name=canonical_name,
                 order=order,
-                show_controls=bool(cfg.get("show_controls", True)),
-                initial_interaction_locked=bool(cfg.get("initial_interaction_locked", True)),
+                automatic_loading=bool(cfg.get("automatic_loading", False)),
             )
         elif model_cls == OCDottedChartComponent:
             raw_file_id = cfg.get("file_id")
@@ -534,11 +537,9 @@ class DashboardService:
                 ):
                     if f in config:
                         setattr(comp, f, bool(config[f]))
-            elif isinstance(comp, OCDFGComponent):
-                if "show_controls" in config:
-                    comp.show_controls = bool(config["show_controls"])
-                if "initial_interaction_locked" in config:
-                    comp.initial_interaction_locked = bool(config["initial_interaction_locked"])
+            elif isinstance(comp, OCPNComponent):
+                if "automatic_loading" in config:
+                    comp.automatic_loading = bool(config["automatic_loading"])
             elif isinstance(comp, OCDottedChartComponent):
                 if "file_id" in config:
                     comp.file_id = int(config["file_id"]) if config["file_id"] is not None else None
