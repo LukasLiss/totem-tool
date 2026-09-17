@@ -6,6 +6,7 @@ const ASSISTANT_URL = getApiUrl("/api/assistant");
 export interface AssistantContext {
   selected_file_id?: number;
   active_file_id?: number;
+  project_id?: number;
   current_view?: string;
   view_mode?: string;
   pathname?: string;
