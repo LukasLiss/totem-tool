@@ -336,11 +336,11 @@ class AnthropicProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "claude-sonnet-5",
+        model: Optional[str] = None,
         timeout: int = 30,
     ):
         self.api_key = api_key if api_key is not None else getattr(settings, "ANTHROPIC_API_KEY", "")
-        self.model = model
+        self.model = model or getattr(settings, "ANTHROPIC_MODEL", "claude-sonnet-5") or "claude-sonnet-5"
         self.timeout = timeout
         self.base_url = "https://api.anthropic.com/v1/messages"
 

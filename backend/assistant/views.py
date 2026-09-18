@@ -299,6 +299,7 @@ class ChatView(APIView):
                             tools=[],
                             history=history,
                             provider_name=provider,
+                            api_key=api_key,
                         ):
                             if evt.get("type") == "text":
                                 total_text_emitted = True
@@ -473,6 +474,7 @@ class ChatView(APIView):
                 tools=[],
                 history=history,
                 provider_name=provider,
+                api_key=api_key,
             )
             text = followup.get("text", text)
 
