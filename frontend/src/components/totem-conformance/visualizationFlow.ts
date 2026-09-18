@@ -1,5 +1,7 @@
 import type { Edge, Node } from "@xyflow/react";
 
+import type { TotemObjectTypeNodeData } from "@/components/totem/TotemObjectTypeNode";
+import type { TotemRelationEdgeData } from "@/components/totem/TotemRelationEdge";
 import { assignTypeColors } from "@/editors/shared/colors";
 
 import {
@@ -10,27 +12,19 @@ import type {
   ConformanceDimension,
   TotemConformanceLookup,
 } from "./conformanceLookup";
-import {
-  computeTotemNodePositions,
-  TOTEM_NODE_HEIGHT,
-  TOTEM_NODE_WIDTH,
-} from "./visualizationLayout";
+import { computeTotemNodePositions } from "./visualizationLayout";
 import type {
   TotemCardinalityAnnotation,
   TotemTemporalRelation,
   TotemVisualizationModel,
 } from "./visualizationModel";
 
-export type TotemConformanceNodeData = {
-  name: string;
-  color: string;
-};
+export type TotemConformanceNodeData = TotemObjectTypeNodeData;
 
-export type TotemConformanceEdgeData = {
+export type TotemConformanceEdgeData = TotemRelationEdgeData & {
   temporal: TotemTemporalRelation | null;
   sourceToTarget: TotemCardinalityAnnotation;
   targetToSource: TotemCardinalityAnnotation;
-  strokeColor?: string;
 };
 
 export type TotemConformanceNodeType = Node<
@@ -69,8 +63,6 @@ export function createTotemFlowElements(
       id: node.id,
       type: "totemConformanceNode",
       position: positions.get(node.id) ?? { x: 0, y: 0 },
-      width: TOTEM_NODE_WIDTH,
-      height: TOTEM_NODE_HEIGHT,
       selected: node.id === options.selectedObjectTypeId,
       data: {
         name: node.label,

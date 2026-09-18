@@ -40,6 +40,7 @@ import {
   type XY,
 } from '@/editors/shared/model-types';
 import { loadEditorSession, saveEditorSession } from '@/editors/shared/sessionCache';
+import { useProjectAssetBridge } from '@/editors/shared/useProjectAssetBridge';
 import { useUndoRedo } from '@/editors/shared/useUndoRedo';
 
 import { ArcConnectionLine, edgeTypes } from './ArcEdge';
@@ -912,6 +913,29 @@ function OcpnEditorInner() {
     }
   }, [nodes, edges, record, fitView]);
 
+  // Discovery writes the same exchange format the editor reads
+  // (`{"format": "ocpn", ...}`, see totem_lib/ocpn/ocpn_db.discover_ocpn_db),
+  // so a stored asset needs no conversion in either direction.
+  const bridge = useProjectAssetBridge({
+    assetType: 'OCPN',
+    modelName,
+    serializeAsset: () => serializeRef.current() as unknown as Record<string, unknown>,
+    onOpen: (content, assetName) => {
+      const parsed = parseOcpnModelFile(content);
+      if (parsed.ok === false) {
+        toast.error(parsed.error);
+        return;
+      }
+      // Keep the current model reachable via undo, as importing a file does.
+      record();
+      // Discovery names the model after the event log, so show the name the
+      // asset is stored under — that is what "Save to project" updates.
+      applyModel({ ...parsed.model, name: assetName }, { fit: true });
+      for (const warning of parsed.warnings ?? []) toast.info(warning);
+      toast.success(`Loaded "${assetName}".`);
+    },
+  });
+
   // -------------------------------------------------------------------------
 
   return (
@@ -923,6 +947,8 @@ function OcpnEditorInner() {
       onNew={handleNew}
       onImport={handleImport}
       onExport={handleExport}
+      onSaveToProject={bridge.available ? bridge.onSaveToProject : undefined}
+      onOpenFromProject={bridge.available ? bridge.onOpenFromProject : undefined}
       onAutoLayout={handleAutoLayout}
       onLoadExample={handleLoadExample}
       undo={{ onClick: handleUndo, disabled: !history.canUndo }}
@@ -1020,6 +1046,7 @@ function OcpnEditorInner() {
           </div>
         )}
       </div>
+      {bridge.dialogs}
     </EditorShell>
   );
 }

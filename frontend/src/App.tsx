@@ -11,7 +11,7 @@ import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
 import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
@@ -40,6 +40,15 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
     setSplashDone(true);
   };
 
+  const [guestLoginError, setGuestLoginError] = useState<string | null>(null);
+
+  // Reported once the Toaster is on screen — it only renders after `ready`.
+  useEffect(() => {
+    if (ready && guestLoginError) {
+      toast.error(guestLoginError, { duration: 10000 });
+    }
+  }, [ready, guestLoginError]);
+
   useEffect(() => {
     if (!LOCAL_MODE) return;
     let cancelled = false;
@@ -60,12 +69,15 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           return;
         } catch (err) {
           if (axios.isAxiosError(err) && err.response) {
-            console.error(
-              "Guest auto-login rejected by backend. Is the Guest user seeded " +
-                "with password 'guest'? Run `node scripts/run-python.js " +
-                "backend/manage.py migrate` and try again."
-            );
-            if (!cancelled) setReady(true);
+            // A response means the backend is up and said no, so retrying
+            // cannot help: the Guest user is missing or has another password.
+            if (!cancelled) {
+              setGuestLoginError(
+                "Automatic sign-in was rejected. Seed the Guest user with " +
+                  "`npm run db:migrate` and reload."
+              );
+              setReady(true);
+            }
             return;
           }
           await new Promise((r) => setTimeout(r, 500));

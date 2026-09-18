@@ -57,9 +57,27 @@ function ChartContainer({
   const uniqueId = React.useId()
   const chartId = `chart-${id ?? uniqueId.replace(/:/g, "")}`
 
+  // Recharts measures its parent and warns when that comes back 0x0, which is
+  // what every chart does for the first frame inside a dashboard cell the grid
+  // has not sized yet. Hold the chart back until the box is real.
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [hasSize, setHasSize] = React.useState(false)
+
+  React.useEffect(() => {
+    const element = containerRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      setHasSize(width > 0 && height > 0)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <ChartContext.Provider value={{ config }}>
       <div
+        ref={containerRef}
         data-slot="chart"
         data-chart={chartId}
         className={cn(
@@ -69,11 +87,13 @@ function ChartContainer({
         {...props}
       >
         <ChartStyle id={chartId} config={config} />
-        <RechartsPrimitive.ResponsiveContainer
-          initialDimension={initialDimension}
-        >
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
+        {hasSize && (
+          <RechartsPrimitive.ResponsiveContainer
+            initialDimension={initialDimension}
+          >
+            {children}
+          </RechartsPrimitive.ResponsiveContainer>
+        )}
       </div>
     </ChartContext.Provider>
   )

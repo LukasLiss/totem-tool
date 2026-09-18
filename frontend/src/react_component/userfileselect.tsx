@@ -38,11 +38,9 @@ function UserFileSelect() {
         const fetchFiles = async () => {
             try {
                 const response = await getUserFiles();
-                console.log("Fetched files:", response);
                 setFiles(response);
-                console.log("files",files)
-            } catch (error) {
-                console.error(error);
+            } catch {
+                toast.error("Projects could not be loaded");
             }
         };
 
