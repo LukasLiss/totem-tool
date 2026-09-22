@@ -31,6 +31,8 @@ from ..models import (
     ScatterPlotComponent,
     TotemMinerComponent,
     FilterStackComponent,
+    OCHandoverComponent,
+    ResourceProfilingComponent,
 )
 from ..serializers import (
     DashboardComponentPolymorphicSerializer,
@@ -97,6 +99,51 @@ def _string_list_field(item, key: str) -> list:
     return [v for v in value if isinstance(v, str) and v]
 
 
+def _choice_field(item, key: str, choices, default: str) -> str:
+    """A string field restricted to ``choices``; anything else is the default."""
+    value = item.get(key)
+    return value if isinstance(value, str) and value in choices else default
+
+
+def _bounded_float(item, key: str, default: float, lo: float, hi: float) -> float:
+    try:
+        value = float(item.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN
+        return default
+    return min(max(value, lo), hi)
+
+
+def _optional_non_negative_int(item, key: str):
+    """``None`` when absent/empty/invalid, else the value clamped to >= 0."""
+    value = item.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+# Choice sets of the organizational mining widgets; mirror totem_lib.ochandover.
+_HANDOVER_METHODS = ("oc", "flattened")
+_HANDOVER_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
+_HANDOVER_SCOPES = ("global", "per_bo_type")
+_HANDOVER_VIEW_MODES = ("graph", "table", "log")
+_PROFILE_FEATURE_GROUPS = (
+    "activity_fractions",
+    "cooccurrence_fractions",
+    "object_collaboration_fractions",
+    "object_portfolio_fractions",
+    "time_fractions",
+    "weekday_fractions",
+)
+_PROFILE_CLUSTER_METHODS = ("kmeans", "agglomerative", "hdbscan")
+_PROFILE_DISTANCE_METRICS = ("euclidean", "hellinger")
+_PROFILE_VIEW_MODES = ("graph", "table")
+
+
 class DashboardViewSet(viewsets.ModelViewSet):
     serializer_class = DashboardSerializer
     permission_classes = [IsAuthenticated]
@@ -149,6 +196,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "ScatterPlotComponent": ScatterPlotComponent,
         "OCCNComponent": OCCNComponent,
         "FilterStackComponent": FilterStackComponent,
+        "OCHandoverComponent": OCHandoverComponent,
+        "ResourceProfilingComponent": ResourceProfilingComponent,
     }
 
     _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
@@ -478,6 +527,58 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     series_column=item.get('series_column') or '',
                     x_label=item.get('x_label') or '',
                     y_label=item.get('y_label') or '',
+                )
+            elif component_name == 'OCHandoverComponent':
+                OCHandoverComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=bool(item.get('show_controls', True)),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
+                    method=_choice_field(item, 'method', _HANDOVER_METHODS, 'oc'),
+                    resource_types=_string_list_field(item, 'resource_types'),
+                    businessobject_types=_string_list_field(item, 'businessobject_types'),
+                    case_type=item.get('case_type') or '',
+                    flat_resource_type=item.get('flat_resource_type') or '',
+                    max_gap=_optional_non_negative_int(item, 'max_gap'),
+                    normalization=_choice_field(item, 'normalization', _HANDOVER_NORMALIZATIONS, 'by_arcs_in_eog'),
+                    normalization_scope=_choice_field(item, 'normalization_scope', _HANDOVER_SCOPES, 'global'),
+                    parallel_filter_enabled=bool(item.get('parallel_filter_enabled', False)),
+                    parallel_threshold=_bounded_float(item, 'parallel_threshold', 0.5, 0.0, 1.0),
+                    min_parallel_observations=_bounded_int(item, 'min_parallel_observations', 1, 1, 1_000_000),
+                    cluster_by_ot=bool(item.get('cluster_by_ot', False)),
+                    view_mode=_choice_field(item, 'view_mode', _HANDOVER_VIEW_MODES, 'graph'),
+                )
+            elif component_name == 'ResourceProfilingComponent':
+                feature_groups = [
+                    g for g in _string_list_field(item, 'feature_groups') if g in _PROFILE_FEATURE_GROUPS
+                ]
+                tooltip_groups = [
+                    g for g in _string_list_field(item, 'tooltip_feature_groups')
+                    if g in _PROFILE_FEATURE_GROUPS and g not in feature_groups
+                ]
+                ResourceProfilingComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=bool(item.get('show_controls', True)),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
+                    resource_types=_string_list_field(item, 'resource_types'),
+                    business_object_types=_string_list_field(item, 'business_object_types'),
+                    feature_groups=feature_groups,
+                    tooltip_feature_groups=tooltip_groups,
+                    compute_clusters=bool(item.get('compute_clusters', True)),
+                    cluster_method=_choice_field(item, 'cluster_method', _PROFILE_CLUSTER_METHODS, 'hdbscan'),
+                    n_clusters=_bounded_int(item, 'n_clusters', 3, 1, 1000),
+                    min_cluster_size=_bounded_int(item, 'min_cluster_size', 2, 2, 100000),
+                    distance_metric=_choice_field(item, 'distance_metric', _PROFILE_DISTANCE_METRICS, 'euclidean'),
+                    view_mode=_choice_field(item, 'view_mode', _PROFILE_VIEW_MODES, 'graph'),
                 )
 
         return Response({"status": "saved"})

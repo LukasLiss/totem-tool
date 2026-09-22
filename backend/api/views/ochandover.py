@@ -1,151 +1,103 @@
 """Organizational mining endpoints: handover of work and resource profiling.
 
-Carried over from the former monolithic ``api/views.py`` (branch
-``oc-handover-demo``) when merging ``main``, which split the views into this
-package.
+All three endpoints run on the process-local ``OcelDuckDB`` of the event log
+(``_with_ocel_db``) and honour the global filter through ``_filter_shadow``,
+like every other analysis endpoint. The algorithms themselves live in
+``totem_lib.ochandover``; this module only parses parameters, resolves the
+log, and serialises the result.
 """
 
-import os
+import hashlib
+import json
+import traceback
 
-from django.core.cache import cache
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from totem_lib.ochandover import OCHANDOVER, ProfileMatrix
+
+from ..cache_utils import get_cached_result, set_cached_result
 from ..models import EventLog
+from ._filters import _parse_filter_params, _should_use_cache
+from ._ocel_db import _filter_shadow, _object_types, _with_ocel_db
 
-def _build_ocel_from_path(path: str):
-    from totem_lib.ocel.ocel import ObjectCentricEventLog
-    from totem_lib.ocel.importer import (
-        load_events_from_sqlite, load_objects_from_sqlite,
-        load_events_from_json,   load_objects_from_json,
-        load_events_from_xml,    load_objects_from_xml,
-    )
-    ext = os.path.splitext(path)[1].lower()
-    if ext in (".sqlite", ".db"):
-        log = ObjectCentricEventLog(events=load_events_from_sqlite(path), objects=load_objects_from_sqlite(path))
-    elif ext == ".json":
-        log = ObjectCentricEventLog(events=load_events_from_json(path), objects=load_objects_from_json(path))
-    elif ext == ".xml":
-        log = ObjectCentricEventLog(events=load_events_from_xml(path), objects=load_objects_from_xml(path))
-    elif ext == ".duckdb":
-        from totem_lib.ocel.importer_duckdb import (
-            load_events_from_duckdb, load_objects_from_duckdb,
-            load_object_attributes_from_duckdb,
-        )
-        log = ObjectCentricEventLog(
-            events=load_events_from_duckdb(path),
-            objects=load_objects_from_duckdb(path),
-            object_attributes=load_object_attributes_from_duckdb(path),
-        )
-    else:
-        raise ValueError(f"Unsupported file type: {ext}. Supported formats: .sqlite, .db, .json, .xml, .duckdb")
-    return log
+VALID_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
+VALID_NORMALIZATION_SCOPES = ("global", "per_bo_type")
+VALID_METHODS = ("oc", "flattened")
+VALID_FEATURE_GROUPS = (
+    "activity_fractions",
+    "cooccurrence_fractions",
+    "object_collaboration_fractions",
+    "object_portfolio_fractions",
+    "time_fractions",
+    "weekday_fractions",
+)
+VALID_CLUSTER_METHODS = ("kmeans", "agglomerative", "hdbscan")
+VALID_DISTANCE_METRICS = ("euclidean", "hellinger")
+
+_TRUE_VALUES = ("true", "1", "yes")
 
 
-@api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
-def ochandover(request):
-    from totem_lib.ochandover.ochandover import OCHANDOVER
+class _BadRequest(Exception):
+    """Raised while parsing parameters; the message becomes the 400 body."""
 
-    # Support GET (query params) for normal mode and POST (JSON body) for cluster mode
-    p = request.data if request.method == "POST" else request.query_params
 
-    file_id = p.get("file_id")
-    if not file_id:
-        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+def _csv_list(raw) -> list:
+    """A comma-separated query value (or a JSON list in a POST body) as a list."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    return [t.strip() for t in str(raw).split(",") if t.strip()]
 
-    method = p.get("method", "oc")
 
-    cluster_map: dict | None = None
-    if request.method == "POST":
-        raw = request.data.get("cluster_map")
-        if isinstance(raw, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
-            cluster_map = raw
+def _bool_param(params, key: str, default: bool = False) -> bool:
+    raw = params.get(key)
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).lower() in _TRUE_VALUES
 
-    cluster_by_ot = p.get("cluster_by_ot", "false").lower() in ("true", "1", "yes")
-    include_flows = p.get("include_flows", "false").lower() in ("true", "1", "yes")
-    include_bindings = p.get("include_bindings", "false").lower() in ("true", "1", "yes")
 
+def _int_param(params, key: str, default=None, minimum=None):
+    raw = params.get(key)
+    if raw in (None, ""):
+        return default
     try:
-        EventLog.objects.get(pk=file_id, project__users=request.user)
-    except EventLog.DoesNotExist:
-        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise _BadRequest(f"Invalid {key} value")
+    if minimum is not None and value < minimum:
+        raise _BadRequest(f"{key} must be at least {minimum}")
+    return value
 
-    cache_key = f"ocel_object_{file_id}"
-    ocel = cache.get(cache_key)
 
-    if not ocel:
-        try:
-            uf = EventLog.objects.get(pk=file_id)
-            path = uf.file.path
-            if not os.path.exists(path):
-                return Response({"error": f"Path does not exist: {path}"}, status=status.HTTP_400_BAD_REQUEST)
-            ocel = _build_ocel_from_path(path)
-            cache.set(cache_key, ocel, timeout=3600)
-        except EventLog.DoesNotExist:
-            return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+def _resolve_event_log(request, file_id):
+    """The caller's event log, or ``None`` when it does not exist / is not theirs.
 
+    ``ValueError`` covers a non-numeric ``file_id``, which would otherwise
+    escape as a 500.
+    """
     try:
-        if method == "flattened":
-            case_type = p.get("case_type", "")
-            resource_type = p.get("resource_type", "")
-            if not case_type or not resource_type:
-                return Response(
-                    {"error": "Missing case_type or resource_type"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            max_gap_raw = p.get("max_gap")
-            max_gap = int(max_gap_raw) if max_gap_raw is not None else None
-            graph = OCHANDOVER.from_ocel_flattened(ocel, case_type=case_type, resource_type=resource_type, max_gap=max_gap)
-        else:
-            resource_types_raw = p.get("resource_types", "")
-            businessobject_types_raw = p.get("businessobject_types", "")
-            if not resource_types_raw or not businessobject_types_raw:
-                return Response(
-                    {"error": "Missing resource_types or businessobject_types"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()]
-            businessobject_types = [t.strip() for t in businessobject_types_raw.split(",") if t.strip()]
-            max_gap_raw = p.get("max_gap")
-            max_gap = int(max_gap_raw) if max_gap_raw is not None else None
-            normalization_raw = p.get("normalization", "by_arcs_in_eog")
-            valid_normalizations = {"by_source", "by_target", "by_arcs_in_eog", "by_total_weight"}
-            if normalization_raw not in valid_normalizations:
-                return Response({"error": f"Invalid normalization: {normalization_raw}"}, status=status.HTTP_400_BAD_REQUEST)
-            normalization_scope_raw = p.get("normalization_scope", "global")
-            if normalization_scope_raw not in {"global", "per_bo_type"}:
-                return Response({"error": f"Invalid normalization_scope: {normalization_scope_raw}"}, status=status.HTTP_400_BAD_REQUEST)
-            parallel_threshold = None
-            parallel_threshold_raw = p.get("parallel_threshold")
-            if parallel_threshold_raw is not None:
-                try:
-                    parallel_threshold = float(parallel_threshold_raw)
-                    if not (0.0 <= parallel_threshold <= 1.0):
-                        return Response({"error": "parallel_threshold must be between 0 and 1"}, status=status.HTTP_400_BAD_REQUEST)
-                except ValueError:
-                    return Response({"error": "Invalid parallel_threshold value"}, status=status.HTTP_400_BAD_REQUEST)
-            min_parallel_observations = 1
-            min_parallel_observations_raw = p.get("min_parallel_observations")
-            if min_parallel_observations_raw is not None:
-                try:
-                    min_parallel_observations = int(min_parallel_observations_raw)
-                    if min_parallel_observations < 1:
-                        return Response({"error": "min_parallel_observations must be at least 1"}, status=status.HTTP_400_BAD_REQUEST)
-                except ValueError:
-                    return Response({"error": "Invalid min_parallel_observations value"}, status=status.HTTP_400_BAD_REQUEST)
-            graph = OCHANDOVER.from_ocel(ocel, resource_types=resource_types, businessobject_types=businessobject_types, max_gap=max_gap, normalization=normalization_raw, normalization_scope=normalization_scope_raw, parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations, cluster_map=cluster_map, cluster_by_ot=cluster_by_ot, include_flows=include_flows, include_bindings=include_bindings)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": f"Handover computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return EventLog.objects.get(pk=file_id, project__users=request.user)
+    except (EventLog.DoesNotExist, ValueError, TypeError):
+        return None
 
+
+def _filter_cache_params(fp: dict) -> dict:
+    return {f"f_{k}": str(v) for k, v in sorted(fp.items())}
+
+
+def _serialize_handover(graph: OCHANDOVER, include_flows: bool, include_bindings: bool) -> dict:
     nodes = [
-        {"id": node_id, "object_type": data.get("object_type", "unknown"), "event_count": data.get("event_count", 0)}
+        {
+            "id": node_id,
+            "object_type": data.get("object_type", "unknown"),
+            "event_count": data.get("event_count", 0),
+        }
         for node_id, data in graph.nodes(data=True)
     ]
     edges = [
@@ -161,198 +113,318 @@ def ochandover(request):
         }
         for u, v, data in graph.edges(data=True)
     ]
-
-    response_data: dict = {"nodes": nodes, "edges": edges}
+    result: dict = {"nodes": nodes, "edges": edges}
     if include_flows:
         animation_flows = graph.graph.get("animation_flows")
         if animation_flows:
-            response_data["flows"] = animation_flows["flows"]
-            response_data["timeline"] = animation_flows["timeline"]
+            result["flows"] = animation_flows["flows"]
+            result["timeline"] = animation_flows["timeline"]
         else:
-            response_data["flows"] = []
-            response_data["timeline"] = None
-
+            result["flows"] = []
+            result["timeline"] = None
     if include_bindings:
-        response_data["bindings"] = graph.graph.get("bindings", [])
-        from collections import defaultdict
-        raw_bindings = graph.graph.get("bindings", [])
-        for direction in ["output", "input"]:
-            print(f"\n=== {direction.upper()} BINDINGS ===")
-            by_resource = defaultdict(list)
-            for b in raw_bindings:
-                if b["type"] == direction:
-                    by_resource[b["resource"]].append(b)
-            for resource in sorted(by_resource):
-                print(f"  {resource}:")
-                for b in by_resource[resource]:
-                    bo_type = b["arcs"][0]["bo_type"]
-                    arcs = {(a["other_resource"], a["mark"], "filled" if not a["is_gapped"] else "hollow") for a in b["arcs"]}
-                    line = b["line_type"] or "solo"
-                    print(f"    [{bo_type}]  {arcs}  [{line}]  ×{b['count']}")
-
-        suppressed = [b for b in raw_bindings
-                      if any(a["other_resource"] == b["resource"] for a in b["arcs"])
-                      and any(a["other_resource"] != b["resource"] for a in b["arcs"])]
-        if suppressed:
-            print("\n=== SUPPRESSED (self-loop + regular arcs, connection not visualized) ===")
-            for b in suppressed:
-                bo_type = b["arcs"][0]["bo_type"]
-                arcs = {(a["other_resource"], a["mark"], "filled" if not a["is_gapped"] else "hollow") for a in b["arcs"]}
-                print(f"  [{b['type']}] {b['resource']}:  [{bo_type}]  {arcs}  [{b['line_type'] or 'solo'}]  ×{b['count']}")
-
-    return Response(response_data, status=status.HTTP_200_OK)
+        result["bindings"] = graph.graph.get("bindings", [])
+    return result
 
 
-@api_view(["GET"])
+def _parse_handover_params(p, cluster_map) -> dict:
+    """Validate the handover query into the keyword arguments of the lib call.
+
+    Returns ``{"method": ..., "kwargs": {...}}``; raises ``_BadRequest``.
+    """
+    method = p.get("method", "oc")
+    if method not in VALID_METHODS:
+        raise _BadRequest(f"Invalid method: {method}. Allowed: {list(VALID_METHODS)}")
+
+    max_gap = _int_param(p, "max_gap", default=None, minimum=0)
+
+    if method == "flattened":
+        case_type = p.get("case_type", "")
+        resource_type = p.get("resource_type", "")
+        if not case_type or not resource_type:
+            raise _BadRequest("Missing case_type or resource_type")
+        return {
+            "method": method,
+            "kwargs": {"case_type": case_type, "resource_type": resource_type, "max_gap": max_gap},
+        }
+
+    resource_types = _csv_list(p.get("resource_types"))
+    businessobject_types = _csv_list(p.get("businessobject_types"))
+    if not resource_types or not businessobject_types:
+        raise _BadRequest("Missing resource_types or businessobject_types")
+
+    normalization = p.get("normalization", "by_arcs_in_eog")
+    if normalization not in VALID_NORMALIZATIONS:
+        raise _BadRequest(f"Invalid normalization: {normalization}")
+    normalization_scope = p.get("normalization_scope", "global")
+    if normalization_scope not in VALID_NORMALIZATION_SCOPES:
+        raise _BadRequest(f"Invalid normalization_scope: {normalization_scope}")
+
+    parallel_threshold = None
+    raw_threshold = p.get("parallel_threshold")
+    if raw_threshold not in (None, ""):
+        try:
+            parallel_threshold = float(raw_threshold)
+        except (TypeError, ValueError):
+            raise _BadRequest("Invalid parallel_threshold value")
+        if not (0.0 <= parallel_threshold <= 1.0):
+            raise _BadRequest("parallel_threshold must be between 0 and 1")
+
+    min_parallel_observations = _int_param(p, "min_parallel_observations", default=1, minimum=1)
+
+    return {
+        "method": method,
+        "kwargs": {
+            "resource_types": resource_types,
+            "businessobject_types": businessobject_types,
+            "max_gap": max_gap,
+            "normalization": normalization,
+            "normalization_scope": normalization_scope,
+            "parallel_threshold": parallel_threshold,
+            "min_parallel_observations": min_parallel_observations,
+            "cluster_map": cluster_map,
+            "cluster_by_ot": _bool_param(p, "cluster_by_ot"),
+            "include_flows": _bool_param(p, "include_flows"),
+            "include_bindings": _bool_param(p, "include_bindings"),
+        },
+    }
+
+
+@api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
-def event_log_table(request):
-    file_id = request.query_params.get("file_id")
+def ochandover(request):
+    """Object-centric handover-of-work graph for an event log.
+
+    ``GET`` takes its parameters from the query string; ``POST`` additionally
+    accepts a JSON ``cluster_map`` (``{resource id: cluster name}``) in the
+    body, which collapses resources into organizational units before the
+    handovers are counted. Global filter parameters are always read from the
+    query string, where the frontend interceptor puts them.
+    """
+    p = request.data if request.method == "POST" else request.query_params
+
+    file_id = p.get("file_id")
     if not file_id:
-        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    cluster_map = None
+    if request.method == "POST":
+        raw = request.data.get("cluster_map")
+        if isinstance(raw, dict) and all(
+            isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+        ):
+            cluster_map = raw
 
     try:
-        EventLog.objects.get(pk=file_id, project__users=request.user)
-    except EventLog.DoesNotExist:
+        parsed = _parse_handover_params(p, cluster_map)
+    except _BadRequest as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    user_file = _resolve_event_log(request, file_id)
+    if user_file is None:
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
-    cache_key = f"ocel_object_{file_id}"
-    ocel = cache.get(cache_key)
-    if not ocel:
-        try:
-            uf = EventLog.objects.get(pk=file_id)
-            ocel = _build_ocel_from_path(uf.file.path)
-            cache.set(cache_key, ocel, timeout=3600)
-        except Exception as e:
-            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    method, kwargs = parsed["method"], parsed["kwargs"]
+    fp = _parse_filter_params(request)
+
+    # Results are deterministic in (log version, parameters, filter); the
+    # cluster map can be large, so it enters the key as a digest.
+    cache_params = {
+        "method": method,
+        **{k: v for k, v in kwargs.items() if k != "cluster_map"},
+        **_filter_cache_params(fp),
+    }
+    if cluster_map:
+        cache_params["cluster_map"] = hashlib.sha256(
+            json.dumps(cluster_map, sort_keys=True).encode()
+        ).hexdigest()
+
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file, "handover", cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        # Build object_id → object_type lookup
-        obj_type_map = {}
-        for obj_type in ocel.object_types:
-            for obj_id in ocel.get_object_ids_by_type(obj_type):
-                obj_type_map[obj_id] = obj_type
-
-        events_df = (
-            ocel.events
-            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
-            .sort("_timestampUnix")
+        with _with_ocel_db(user_file) as db:
+            with _filter_shadow(db, fp):
+                if method == "flattened":
+                    graph = OCHANDOVER.from_ocel_db_flattened(db, **kwargs)
+                else:
+                    graph = OCHANDOVER.from_ocel_db(db, **kwargs)
+    except Exception as exc:
+        traceback.print_exc()
+        return Response(
+            {"error": f"Handover computation failed: {exc}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-        events = []
-        for row in events_df.to_dicts():
-            objects_by_type: dict[str, list[str]] = {t: [] for t in ocel.object_types}
-            for obj_id in (row["_objects"] or []):
-                t = obj_type_map.get(obj_id)
-                if t:
-                    objects_by_type[t].append(obj_id)
-            ts = row["_timestampUnix"]
-            # Normalise to milliseconds for the frontend
-            if isinstance(ts, (int, float)):
-                ts_ms = int(ts) if ts > 1e12 else int(ts * 1000)
-            else:
-                ts_ms = str(ts)
-            events.append({
-                "event_id": row["_eventId"],
-                "activity": row["_activity"],
-                "timestamp": ts_ms,
-                "objects": objects_by_type,
-            })
-
-        return Response({"object_types": ocel.object_types, "events": events}, status=status.HTTP_200_OK)
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return Response({"error": f"Failed to build event log: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    result = _serialize_handover(
+        graph,
+        include_flows=kwargs.get("include_flows", False),
+        include_bindings=kwargs.get("include_bindings", False),
+    )
+    set_cached_result(user_file, "handover", result, cache_params)
+    return Response(result, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def profile_matrix(request):
-    from totem_lib.ochandover.orgamining import ProfileMatrix
-
-    file_id = request.query_params.get("file_id")
+    """Resource profiles (feature vectors, clusters, MDS layout) for an event log."""
+    q = request.query_params
+    file_id = q.get("file_id")
     if not file_id:
         return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        EventLog.objects.get(pk=file_id, project__users=request.user)
-    except EventLog.DoesNotExist:
+    user_file = _resolve_event_log(request, file_id)
+    if user_file is None:
         return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
 
-    cache_key = f"ocel_object_{file_id}"
-    ocel = cache.get(cache_key)
-    if not ocel:
-        try:
-            uf = EventLog.objects.get(pk=file_id)
-            ocel = _build_ocel_from_path(uf.file.path)
-            cache.set(cache_key, ocel, timeout=3600)
-        except Exception as e:
-            return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    resource_types = _csv_list(q.get("resource_types")) or None
+    business_object_types = _csv_list(q.get("business_object_types")) or None
 
-    resource_types_raw = request.query_params.get("resource_types", "")
-    resource_types = [t.strip() for t in resource_types_raw.split(",") if t.strip()] or None
+    feature_groups = [g for g in _csv_list(q.get("feature_groups", "activity_fractions")) if g in VALID_FEATURE_GROUPS]
+    if not feature_groups:
+        feature_groups = ["activity_fractions"]
+    tooltip_only = [
+        g for g in _csv_list(q.get("tooltip_feature_groups"))
+        if g in VALID_FEATURE_GROUPS and g not in feature_groups
+    ]
 
-    business_object_types_raw = request.query_params.get("business_object_types", "")
-    business_object_types = [t.strip() for t in business_object_types_raw.split(",") if t.strip()] or None
-
-    VALID_FEATURE_GROUPS = {"activity_fractions", "cooccurrence_fractions", "object_collaboration_fractions", "object_portfolio_fractions", "time_fractions", "weekday_fractions"}
-    feature_groups_raw = request.query_params.get("feature_groups", "activity_fractions")
-    feature_groups = [g.strip() for g in feature_groups_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS] or ["activity_fractions"]
-
-    tooltip_only_raw = request.query_params.get("tooltip_feature_groups", "")
-    tooltip_only = [g.strip() for g in tooltip_only_raw.split(",") if g.strip() in VALID_FEATURE_GROUPS and g.strip() not in feature_groups]
-
-    width = height = None
     try:
-        w_raw = request.query_params.get("width")
-        h_raw = request.query_params.get("height")
-        if w_raw and h_raw:
-            width, height = int(w_raw), int(h_raw)
-    except ValueError:
+        width = _int_param(q, "width", default=None, minimum=1)
+        height = _int_param(q, "height", default=None, minimum=1)
+    except _BadRequest:
         return Response({"error": "Invalid width or height"}, status=status.HTTP_400_BAD_REQUEST)
+    if (width is None) != (height is None):
+        width = height = None
 
     try:
-        n_clusters = max(1, int(request.query_params.get("n_clusters", 3)))
-    except ValueError:
-        n_clusters = 3
+        n_clusters = _int_param(q, "n_clusters", default=3, minimum=1)
+        min_cluster_size = _int_param(q, "min_cluster_size", default=2, minimum=2)
+    except _BadRequest:
+        n_clusters, min_cluster_size = 3, 2
 
-    cluster_method = request.query_params.get("cluster_method", "hdbscan")
-    if cluster_method not in ("kmeans", "agglomerative", "hdbscan"):
+    cluster_method = q.get("cluster_method", "hdbscan")
+    if cluster_method not in VALID_CLUSTER_METHODS:
         cluster_method = "hdbscan"
-
-    try:
-        min_cluster_size = max(2, int(request.query_params.get("min_cluster_size", 2)))
-    except ValueError:
-        min_cluster_size = 2
-
-    compute_clusters = request.query_params.get("compute_clusters", "true").lower() != "false"
-
-    distance_metric = request.query_params.get("distance_metric", "euclidean")
-    if distance_metric not in ("euclidean", "hellinger"):
+    distance_metric = q.get("distance_metric", "euclidean")
+    if distance_metric not in VALID_DISTANCE_METRICS:
         distance_metric = "euclidean"
+    compute_clusters = _bool_param(q, "compute_clusters", default=True)
+
+    fp = _parse_filter_params(request)
+    cache_params = {
+        "resource_types": resource_types,
+        "business_object_types": business_object_types,
+        "feature_groups": feature_groups,
+        "tooltip_only": tooltip_only,
+        "width": width,
+        "height": height,
+        "n_clusters": n_clusters,
+        "min_cluster_size": min_cluster_size,
+        "cluster_method": cluster_method,
+        "distance_metric": distance_metric,
+        "compute_clusters": compute_clusters,
+        **_filter_cache_params(fp),
+    }
+    if _should_use_cache(request):
+        cached = get_cached_result(user_file, "profile_matrix", cache_params)
+        if cached is not None:
+            return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        pm = ProfileMatrix.from_ocel(
-            ocel,
-            resource_types=resource_types,
-            feature_groups=feature_groups + tooltip_only,
-            business_object_types=business_object_types,
-            tooltip_only_groups=tooltip_only,
-        )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": f"Computation failed: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    group_weights = {g: 0.0 for g in tooltip_only} if tooltip_only else None
-
-    return Response(
-        pm.to_dict(
-            width=width, height=height,
-            n_clusters=n_clusters, cluster_method=cluster_method,
+        with _with_ocel_db(user_file) as db:
+            with _filter_shadow(db, fp):
+                pm = ProfileMatrix.from_ocel_db(
+                    db,
+                    resource_types=resource_types,
+                    feature_groups=feature_groups + tooltip_only,
+                    business_object_types=business_object_types,
+                    tooltip_only_groups=tooltip_only,
+                )
+        group_weights = {g: 0.0 for g in tooltip_only} if tooltip_only else None
+        result = pm.to_dict(
+            width=width,
+            height=height,
+            n_clusters=n_clusters,
+            cluster_method=cluster_method,
             compute_clusters=compute_clusters,
             min_cluster_size=min_cluster_size,
             distance_metric=distance_metric,
             group_weights=group_weights,
-        ),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return Response({"error": f"Computation failed: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    set_cached_result(user_file, "profile_matrix", result, cache_params)
+    return Response(result, status=status.HTTP_200_OK)
+
+
+_EVENT_LOG_TABLE_SQL = """
+    SELECT e.event_id,
+           e.activity,
+           e.timestamp_unix,
+           list(o.obj_type ORDER BY eo.obj_id) FILTER (WHERE o.obj_id IS NOT NULL) AS obj_types,
+           list(eo.obj_id  ORDER BY eo.obj_id) FILTER (WHERE o.obj_id IS NOT NULL) AS obj_ids
+    FROM events e
+    LEFT JOIN event_object eo ON eo.event_id = e.event_id
+    LEFT JOIN objects o       ON o.obj_id    = eo.obj_id
+    GROUP BY e.event_id, e.activity, e.timestamp_unix
+    ORDER BY e.timestamp_unix, e.event_id
+"""
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def event_log_table(request):
+    """The (filtered) event log as a flat table: one row per event with its
+    objects grouped by object type. Timestamps are Unix milliseconds.
+
+    ``?limit=N`` truncates to the first N events by time; ``total_events``
+    always reports the full count so a client can show what was cut.
+    """
+    q = request.query_params
+    file_id = q.get("file_id")
+    if not file_id:
+        return Response({"error": "Missing ?file_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+    user_file = _resolve_event_log(request, file_id)
+    if user_file is None:
+        return Response({"error": "File not found or access denied"}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        limit = _int_param(q, "limit", default=None, minimum=1)
+    except _BadRequest as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    fp = _parse_filter_params(request)
+    try:
+        with _with_ocel_db(user_file) as db:
+            with _filter_shadow(db, fp):
+                object_types = _object_types(db)
+                sql = _EVENT_LOG_TABLE_SQL + (f" LIMIT {int(limit)}" if limit else "")
+                rows = db.conn.execute(sql).fetchall()
+                total_events = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    except Exception as exc:
+        traceback.print_exc()
+        return Response({"error": f"Failed to build event log: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    events = []
+    for event_id, activity, ts, obj_types, obj_ids in rows:
+        objects_by_type: dict = {t: [] for t in object_types}
+        for obj_type, obj_id in zip(obj_types or [], obj_ids or []):
+            objects_by_type.setdefault(obj_type, []).append(obj_id)
+        events.append({
+            "event_id": event_id,
+            "activity": activity,
+            # DuckDB stores Unix seconds; the table renders milliseconds.
+            "timestamp": int(ts) if ts is not None and ts > 1e12 else int((ts or 0) * 1000),
+            "objects": objects_by_type,
+        })
+
+    return Response(
+        {"object_types": object_types, "events": events, "total_events": total_events},
         status=status.HTTP_200_OK,
     )

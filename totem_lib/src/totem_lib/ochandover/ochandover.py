@@ -9,7 +9,6 @@ keeps every uploaded log in (``from_ocel_db``).
 from __future__ import annotations
 
 import logging
-import math
 from typing import TYPE_CHECKING, List, Literal
 
 import polars as pl
@@ -167,10 +166,15 @@ class OCHANDOVER(nx.MultiDiGraph):
                     resource_type_by_id[cluster_id] = "cluster"
 
 
-        businessobject_type_df = pl.DataFrame({
-            "businessobject_id": list(businessobject_type_by_id.keys()),
-            "businessobject_type": list(businessobject_type_by_id.values()),
-        })
+        # Explicit schema: with no business objects (e.g. the global filter
+        # removed every type) an untyped empty frame cannot be joined on.
+        businessobject_type_df = pl.DataFrame(
+            {
+                "businessobject_id": list(businessobject_type_by_id.keys()),
+                "businessobject_type": list(businessobject_type_by_id.values()),
+            },
+            schema={"businessobject_id": pl.Utf8, "businessobject_type": pl.Utf8},
+        )
 
 
         # Get the business object(s) and type to each event
