@@ -1,5 +1,4 @@
 import React, { useCallback, useContext, useState } from "react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -18,6 +17,7 @@ import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import OCPNVisualizer from "@/react_component/OCPNVisualizer";
 import TotemMiner from "@/react_component/TotemMiner";
+import { SqlQueryAnalysis } from "@/components/SqlQueryAnalysis";
 import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
 import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
   const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
 
   if (viewMode.type !== "analysis") return null;
@@ -182,6 +182,16 @@ export function AnalysisView() {
           </div>
         );
 
+      case 'sqlQuery':
+        return (
+          <div className="w-full max-w-7xl">
+            <SqlQueryAnalysis
+              fileId={selectedFile?.id}
+              projectId={selectedFile?.project}
+              height={760}
+            />
+          </div>
+        );
       case 'orgaMining':
         return <OrgaMiningView fileId={selectedFile?.id} />;
 
@@ -192,7 +202,11 @@ export function AnalysisView() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <div className="flex-1 flex justify-center p-4 pt-4">
+      {/* Keyed by component: the cases share a tree shape, so without this
+          React reuses the ReactFlowProvider across a switch and the incoming
+          view briefly renders the outgoing view's nodes — which is where the
+          "Edge type occnArc not found" warnings came from. */}
+      <div key={viewMode.component} className="flex-1 flex justify-center p-4 pt-4">
         {renderComponent()}
       </div>
     </div>

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 
 import {
   AssetType,
+  MODEL_ASSET_TYPES,
   ProjectAsset,
   deleteAsset,
   extractAssetApiError,
@@ -59,17 +60,19 @@ import { ModelAssetDropzone } from "@/components/model-assets/ModelAssetDropzone
 type AssetFilter = "ALL" | AssetType;
 
 // TOTEM/OCCN/OCDFG files carry a "schema" key; OCPN files use "format".
-const EXPECTED_SCHEMA_BY_TYPE: Record<AssetType, { key: "schema" | "format"; value: string }> = {
+const EXPECTED_SCHEMA_BY_TYPE: Partial<Record<AssetType, { key: "schema" | "format"; value: string }>> = {
   TOTEM: { key: "schema", value: "totem" },
   OCCN: { key: "schema", value: "occn" },
   OCPN: { key: "format", value: "ocpn" },
   OCDFG: { key: "schema", value: "ocdfg" },
 };
 
-// Only these types have an asset-store-connected editor today.
+// Every model type has an editor that can load an asset from the store.
 const EDITOR_COMPONENT_BY_TYPE: Partial<Record<AssetType, EditorComponent>> = {
   TOTEM: "totem",
   OCCN: "occn",
+  OCPN: "ocpn",
+  OCDFG: "ocdfg",
 };
 
 // Only these types can run conformance checking.
@@ -121,7 +124,12 @@ export function ModelAssetsView() {
       const data = await listAssets({
         projectId,
       });
-      setAssets(Array.isArray(data) ? data : []);
+      // Stored SQL queries have their own page (QueryAssetsView).
+      setAssets(
+        Array.isArray(data)
+          ? data.filter((asset) => MODEL_ASSET_TYPES.includes(asset.asset_type))
+          : []
+      );
     } catch (error) {
       setAssets([]);
       setErrorMessage(extractAssetApiError(error).message);
@@ -759,6 +767,8 @@ function formatAssetType(assetType: AssetType) {
       return "OCPN";
     case "OCDFG":
       return "OC-DFG";
+    case "QUERY":
+      return "SQL Query";
   }
 }
 
@@ -775,6 +785,9 @@ async function validateModelAssetFile(file: File, assetType: AssetType) {
   }
 
   const expected = EXPECTED_SCHEMA_BY_TYPE[assetType];
+  if (!expected) {
+    throw new Error(`${formatAssetType(assetType)} assets cannot be uploaded here.`);
+  }
   const actual = (parsed as Record<string, unknown>)[expected.key];
   if (typeof actual !== "string") {
     throw new Error(`Model asset JSON must declare a "${expected.key}".`);

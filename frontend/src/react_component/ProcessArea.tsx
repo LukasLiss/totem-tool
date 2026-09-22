@@ -26,12 +26,14 @@ import {
 } from '@/components/ui/select';
 import { RefreshCcw, SlidersHorizontal } from 'lucide-react';
 import TotemVisualizer, {
+  type TotemVisualizerControls,
+} from './TotemVisualizer';
+import {
   PROCESS_AREA_ALGORITHM_LABELS,
   PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
-  type TotemVisualizerControls,
-} from './TotemVisualizer';
+} from './processAreaParams';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
 
@@ -82,7 +84,7 @@ export default function ProcessArea({
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
-  const [filterEnabled, setFilterEnabled] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);

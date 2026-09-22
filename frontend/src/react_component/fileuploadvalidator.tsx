@@ -8,8 +8,6 @@ import { Button } from "@/components/ui/button";
 import { SelectedFileContext } from "../contexts/SelectedFileContext";
 import {
   Card,
-  CardAction,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -59,7 +57,6 @@ export function FileUploadValidator() {
     }
 
     const type = await fileTypeFromBlob(file);
-    console.log("Detected type:", type);
 
     const isJson =
       type?.ext === "json" || file.name.toLowerCase().endsWith(".json");
@@ -104,7 +101,6 @@ export function FileUploadValidator() {
       navigate("/overview");
       setTimeout(() => setValidationStatus('idle'), 3000);
     } catch (err: unknown) {
-      console.error("Upload failed:", err);
       setIsConverting(false);
       setValidationStatus('error');
       setTimeout(() => setValidationStatus('idle'), 3000);

@@ -38,5 +38,7 @@ RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
-# Run migrations, seed default Guest user if not present, and launch Gunicorn
-CMD sh -c "python manage.py migrate --noinput && python manage.py loaddata initial_user.json && gunicorn totem_backend.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --timeout 300"
+# Run migrations and launch Gunicorn. No default account is created: create
+# one with `python manage.py createsuperuser`, or set SEED_GUEST_USER=1 for a
+# throwaway demo instance that should expose the well-known Guest/guest login.
+CMD sh -c "python manage.py migrate --noinput && gunicorn totem_backend.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --timeout 300"

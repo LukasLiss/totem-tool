@@ -14,6 +14,8 @@ function result(
     file_id: 1,
     asset_id: 2,
     replay_unit_strategy: "connected_components",
+    leading_object_type: null,
+    max_states: 1_000,
     fitness: 1,
     coverage: 1,
     total_units: 2,

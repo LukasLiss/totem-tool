@@ -10,10 +10,9 @@ import { ClusterProvider } from "./contexts/ClusterContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
-import { VariantsOverview } from "./VariantsOverview";
 import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
@@ -21,10 +20,12 @@ import { getUserSettings } from "./api/settingsApi";
 const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
 
 async function guestLogin() {
-  const { data } = await axios.post("/token/", {
-    username: "Guest",
-    password: "guest",
-  });
+  const { data } = await axios.post(
+    "/token/",
+    { username: "Guest", password: "guest" },
+    // Never let a 401 from the login itself trigger the refresh interceptor.
+    { _skipAuthRefresh: true }
+  );
   axios.defaults.headers.common["Authorization"] = `Bearer ${data.access}`;
   localStorage.setItem("access_token", data.access);
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
@@ -39,6 +40,15 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
   const handleSplashComplete = () => {
     setSplashDone(true);
   };
+
+  const [guestLoginError, setGuestLoginError] = useState<string | null>(null);
+
+  // Reported once the Toaster is on screen — it only renders after `ready`.
+  useEffect(() => {
+    if (ready && guestLoginError) {
+      toast.error(guestLoginError, { duration: 10000 });
+    }
+  }, [ready, guestLoginError]);
 
   useEffect(() => {
     if (!LOCAL_MODE) return;
@@ -58,14 +68,17 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
           }
           if (!cancelled) setReady(true);
           return;
-        } catch (err: any) {
-          if (err?.response) {
-            console.error(
-              "Guest auto-login rejected by backend. Is the Guest user seeded " +
-                "with password 'guest'? Run `node scripts/run-python.js " +
-                "backend/manage.py migrate` and try again."
-            );
-            if (!cancelled) setReady(true);
+        } catch (err) {
+          if (axios.isAxiosError(err) && err.response) {
+            // A response means the backend is up and said no, so retrying
+            // cannot help: the Guest user is missing or has another password.
+            if (!cancelled) {
+              setGuestLoginError(
+                "Automatic sign-in was rejected. Seed the Guest user with " +
+                  "`npm run db:migrate` and reload."
+              );
+              setReady(true);
+            }
             return;
           }
           await new Promise((r) => setTimeout(r, 500));
@@ -121,7 +134,6 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
             <Route path="/overview" element={<ProcessOverview />} />
-            <Route path="/variantsview" element={<VariantsOverview />} />
             <Route path="/userdatadelete" element={<DeleteView />} />
             <Route path="/settings" element={<SettingsView />} />
             <Route

@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserFiles } from "../api/fileApi";
@@ -37,11 +38,9 @@ function UserFileSelect() {
         const fetchFiles = async () => {
             try {
                 const response = await getUserFiles();
-                console.log("Fetched files:", response);
                 setFiles(response);
-                console.log("files",files)
-            } catch (error: any) {
-                console.error(error);
+            } catch {
+                toast.error("Projects could not be loaded");
             }
         };
 
@@ -49,11 +48,16 @@ function UserFileSelect() {
         }, [selectedFile]);
 
     const handleSubmit = () => {
+        if (!selectedFile) {
+            toast.warning("Please select an event log first.");
+            return;
+        }
         const file = files.find((f) => f.id === Number(selectedFile.id));
         if (file) {
-        setSelectedFile(file);
-        console.log("Saved to context:", file);
-        navigate("/overview");
+            setSelectedFile(file);
+            navigate("/overview");
+        } else {
+            toast.error("The selected event log is no longer available.");
         }
     };
 

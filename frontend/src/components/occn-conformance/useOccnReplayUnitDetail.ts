@@ -4,11 +4,20 @@ import { extractAssetApiError } from "@/api/assetsApi";
 import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
+  STORED_COLUMN_REPLAY_STRATEGY,
   getOCCNReplayUnitDetail,
+  type OCCNReplayOptions,
+  type OCCNReplayUnitDetailRequestOptions,
   type OCCNReplayUnitDetailResponse,
   type OCCNReplayUnitResult,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
+
+/** Extra replay-unit options; must match the ones of the conformance run. */
+export interface OccnReplayUnitDetailOptions extends OCCNReplayOptions {
+  /** Needed when `restrictToModelObjectTypes` is set. */
+  assetId?: number | null;
+}
 
 interface ReplayUnitDetailState {
   contextKey: string | null;
@@ -59,7 +68,8 @@ export function useOccnReplayUnitDetail(
   unit: OCCNReplayUnitResult | null | undefined,
   replayUnitStrategy: OCCNReplayUnitStrategy =
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-  leadingObjectType: string | null = null
+  leadingObjectType: string | null = null,
+  options: OccnReplayUnitDetailOptions = {}
 ): OccnReplayUnitDetailState {
   const [state, setState] = useState<ReplayUnitDetailState>(EMPTY_STATE);
   const requestGeneration = useRef(0);
@@ -71,12 +81,33 @@ export function useOccnReplayUnitDetail(
   const initialOffset = replayUnitDetailInitialOffset(
     unit?.failure_event_index ?? null
   );
+  const executionColumn =
+    replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY
+      ? options.executionColumn ?? null
+      : null;
+  const restrictToModelObjectTypes = Boolean(options.restrictToModelObjectTypes);
+  const assetId = restrictToModelObjectTypes ? options.assetId ?? null : null;
   const contextKey = useMemo(
     () =>
       validEventLogId !== null && unitId
-        ? `${validEventLogId}:${unitId}:${replayUnitStrategy}:${leadingObjectType ?? ""}`
+        ? [
+            validEventLogId,
+            unitId,
+            replayUnitStrategy,
+            leadingObjectType ?? "",
+            executionColumn ?? "",
+            restrictToModelObjectTypes ? assetId ?? "model" : "",
+          ].join(":")
         : null,
-    [leadingObjectType, replayUnitStrategy, unitId, validEventLogId]
+    [
+      assetId,
+      executionColumn,
+      leadingObjectType,
+      replayUnitStrategy,
+      restrictToModelObjectTypes,
+      unitId,
+      validEventLogId,
+    ]
   );
 
   const loadPage = useCallback(
@@ -98,16 +129,20 @@ export function useOccnReplayUnitDetail(
       });
 
       try {
-        const options = {
+        const requestOptions: OCCNReplayUnitDetailRequestOptions = {
           replayUnitStrategy,
           offset: requestedOffset,
           limit: DEFAULT_OCCN_REPLAY_UNIT_DETAIL_LIMIT,
           ...(leadingObjectType === null ? {} : { leadingObjectType }),
+          ...(executionColumn === null ? {} : { executionColumn }),
+          ...(restrictToModelObjectTypes
+            ? { restrictToModelObjectTypes, assetId }
+            : {}),
         };
         const detail = await getOCCNReplayUnitDetail(
           validEventLogId,
           unitId,
-          options
+          requestOptions
         );
         if (generation !== requestGeneration.current) return null;
 
@@ -132,9 +167,12 @@ export function useOccnReplayUnitDetail(
         return null;
       }
     }, [
+      assetId,
       contextKey,
+      executionColumn,
       leadingObjectType,
       replayUnitStrategy,
+      restrictToModelObjectTypes,
       unitId,
       validEventLogId,
     ]

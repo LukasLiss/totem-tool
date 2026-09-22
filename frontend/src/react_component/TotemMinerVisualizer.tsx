@@ -19,8 +19,10 @@ import {
   useState,
 } from 'react';
 import axios from 'axios';
+import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion } from '@/store/filterStore';
 import { Button } from '@/components/ui/button';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import {
   Card,
   CardContent,
@@ -115,11 +117,7 @@ type TotemMinerVisualizerProps = {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DEFAULT_BACKEND = (
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
-  'http://localhost:8000'
-).replace(/\/$/, '');
+const DEFAULT_BACKEND = API_BASE_URL;
 
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',
@@ -132,7 +130,6 @@ const RELATION_COLOR: Record<string, string> = {
 const NODE_H = 36;
 const NODE_PADDING_X = 16;
 const NODE_R = 6;
-const OVAL_RX = 20;
 const OVAL_RY = 10;
 const SQUARE_SIZE = 7;
 const FONT_SIZE_NODE = 12;
@@ -277,7 +274,6 @@ function computeHierarchicalLayout(
   edges: GraphEdge[],
   width: number,
   height: number,
-  nodeWidths: Map<string, number>,
 ): Map<string, { x: number; y: number }> {
   if (nodeIds.length === 0) return new Map();
   if (nodeIds.length === 1) {
@@ -430,28 +426,6 @@ function bezierPoint(
     y: u * u * y1 + 2 * u * t * cpy + t * t * y2,
   };
 }
-function bezierMid(
-  x1: number, y1: number,
-  x2: number, y2: number,
-  curvature = 0,
-): { x: number; y: number } {
-  return bezierPoint(x1, y1, x2, y2, curvature, 0.5);
-}
-
-/** Direction vector along quadratic bezier at t=0 (tangent at start). */
-function bezierStartTangent(
-  x1: number, y1: number,
-  x2: number, y2: number,
-  curvature = 0,
-): { dx: number; dy: number } {
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const edx = x2 - x1, edy = y2 - y1;
-  const len = Math.sqrt(edx * edx + edy * edy) || 1;
-  const cpx = mx - (edy / len) * curvature;
-  const cpy = my + (edx / len) * curvature;
-  return { dx: cpx - x1, dy: cpy - y1 };
-}
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function TotemMinerVisualizer({
@@ -463,7 +437,7 @@ function TotemMinerVisualizer({
   embedded = false,
   onControlsReady,
   tau = 0.8,
-  filterEnabled = false,
+  filterEnabled = true,
 }: TotemMinerVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
@@ -515,7 +489,7 @@ function TotemMinerVisualizer({
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { _skipGlobalFilter: !filterEnabled } as any,
+        { _skipGlobalFilter: !filterEnabled },
       );
       setRawData(data);
     } catch (err) {
@@ -558,7 +532,7 @@ function TotemMinerVisualizer({
     const typeRelations = rawData.type_relations || [];
     const relationsData = rawData.relations_stats || [];
 
-    const relMap = new Map<string, any>();
+    const relMap = new Map<string, TotemRelationStat>();
     relationsData.forEach((rel) => {
       relMap.set(`${rel.from}→${rel.to}`, rel);
     });
@@ -640,7 +614,7 @@ function TotemMinerVisualizer({
   // ── Hierarchical layout & Relayout controls ──────────────────────────────────
   const handleRelayout = useCallback(() => {
     if (nodeIds.length === 0 || !stableSvgSize) return;
-    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
+    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
     setLayoutPositions(newLayout);
     setManualNodePositions(new Map());
   }, [nodeIds, edges, stableSvgSize, widthMap]);
@@ -654,7 +628,7 @@ function TotemMinerVisualizer({
   // Run layout on initial load or if layoutPositions is empty
   useEffect(() => {
     if (nodeIds.length > 0 && layoutPositions.size === 0 && stableSvgSize) {
-      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height, widthMap);
+      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
       setLayoutPositions(initialLayout);
     }
   }, [nodeIds, edges, stableSvgSize, widthMap, layoutPositions.size]);
@@ -925,7 +899,7 @@ function TotemMinerVisualizer({
       const arrow = arrowPath(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, 9);
 
       // Stagger bubbles vertically based on horizontal angle to reduce overlap
-      let bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
+      const bubbleT = 0.5 + (edgeDx / edgeLen) * 0.15;
       let midPt = bezierPoint(srcPt.x, srcPt.y, tgtPt.x, tgtPt.y, curvature, bubbleT);
 
       // Angle parallel to the edge vector (same logic as TotemRelationEdge)
@@ -934,7 +908,7 @@ function TotemMinerVisualizer({
       const bubbleAngle = flipped ? rawAngle + (rawAngle > 0 ? -180 : 180) : rawAngle;
 
       // Keep pill text placement matching the physical node placement when flipped
-      let rawBubbleLabel = edge.bubbleLabel || '0|0';
+      const rawBubbleLabel = edge.bubbleLabel || '0|0';
       let bubbleLabel = rawBubbleLabel;
       if (rawBubbleLabel.includes('|')) {
         const parts = rawBubbleLabel.split('|');
@@ -1023,7 +997,7 @@ function TotemMinerVisualizer({
       }
 
       return { edge, path, color, isParallel, isInitiating, srcPt, tgtPt, arrow, midPt, srcLText, tgtLText, perpX, perpY, parallelSource, parallelTarget, bubbleWidth: bubbleW, bubbleLabel, bubbleAngle };
-    }).filter(Boolean) as any[];
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item));
 
     return (
       <>
@@ -1184,12 +1158,10 @@ function TotemMinerVisualizer({
     >
       {/* Empty state */}
       {!eventLogId && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, borderRadius: 12, border: '1px solid #e2e8f0', background: 'white', padding: '20px 28px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>TOTeM Miner</span>
-            <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>Select an event log to discover its TOTeM model.</p>
-          </div>
-        </div>
+        <VisualizerEmptyState
+          label="TOTeM Miner"
+          message="Select an event log to discover its TOTeM model."
+        />
       )}
 
       {/* Error */}

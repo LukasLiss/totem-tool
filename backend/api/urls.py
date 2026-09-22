@@ -2,8 +2,9 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table
 from . import views_ocel_editor
+from . import views_process_executions
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -14,9 +15,12 @@ router.register(r'dashboard', DashboardViewSet, basename="dashboard")
 urlpatterns = [
     path('health-check/', health_check, name='health-check'),
     path('greeting/', greeting, name='greeting'),
-    path('ocdfg/', OCDFGViewSet, name='ocdfg'),
     path('new-ocdfg/', NewOCDFGViewSet, name='new-ocdfg'),
     path('occn/', OCCNViewSet, name='occn'),
+    # Process executions stored as event columns (see views_process_executions.py).
+    # Registered before the router so the explicit paths win over `files/<pk>/`.
+    path("files/<int:pk>/event_columns/", views_process_executions.event_columns, name="event-columns"),
+    path("files/<int:pk>/process_executions/", views_process_executions.process_executions, name="process-executions"),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("handover/", ochandover, name="handover"),

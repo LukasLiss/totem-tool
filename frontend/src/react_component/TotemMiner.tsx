@@ -1,10 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   Card,
-  CardAction,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -29,7 +26,7 @@ export default function TotemMiner({
   embedded = false,
   backendBaseUrl = API_BASE_URL,
   height = 600,
-  filterEnabled = false,
+  filterEnabled = true,
   onToggleFilter,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
@@ -109,6 +106,7 @@ export default function TotemMiner({
 
           <SaveModelAssetButton
             fileId={fileId ?? undefined}
+            filterEnabled={filterEnabled}
             modelType="TOTEM"
             params={{ tau }}
             disabled={!fileId}

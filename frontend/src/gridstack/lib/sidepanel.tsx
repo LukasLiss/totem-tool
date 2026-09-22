@@ -1,16 +1,30 @@
 import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridContext";
 import {
-  Trash, CirclePlus, Image, TextInitial, Hash
-} from "lucide-react"
-
+  BarChartTile,
+  DottedChartTile,
+  ImageTile,
+  KpiTile,
+  LogStatisticsTile,
+  OccnTile,
+  OcdfgArcWeightTile,
+  OcdfgVariantsTile,
+  OcpnTile,
+  PieChartTile,
+  ProcessAreaTile,
+  ScatterPlotTile,
+  SqlEditorTile,
+  TextBoxTile,
+  TotemMinerTile,
+  TrashTile,
+  VariantsTile,
+} from "@/components/tiles/tile-previews";
 
 const SidePanel: React.FC = () => {
   const { grid } = useGrid();
 
   useEffect(() => {
-    console.log("Setting up drag-in for grid:", grid);
     if (!grid) return;
 
     GridStack.setupDragIn(
@@ -37,7 +51,7 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', order: 0 }]
+      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], order: 0 }]
     );
 
     GridStack.setupDragIn(
@@ -76,23 +90,6 @@ const SidePanel: React.FC = () => {
         show_earliest_timestamp: false,
         show_newest_timestamp: false,
         show_duration: false,
-        order: 0
-      }]
-    );
-
-    GridStack.setupDragIn(
-      ".sidepanel .ocdfg-component",
-      {
-        helper: "clone",
-        appendTo: "body",
-      },
-      [{
-        h: 6,
-        w: 8,
-        content: "OCDFG",
-        component_name: "OCDFGComponent",
-        show_controls: true,
-        initial_interaction_locked: true,
         order: 0
       }]
     );
@@ -190,16 +187,87 @@ const SidePanel: React.FC = () => {
     );
 
     GridStack.setupDragIn(
-      ".sidepanel .sqlquery-component",
+      ".sidepanel .sql-query-component",
       {
         helper: "clone",
         appendTo: "body",
       },
       [{
-        h: 6,
+        h: 8,
+        w: 10,
+        content: "SQL Editor",
+        component_name: "SqlQueryComponent",
+        name: "",
+        query: "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+        query_asset: null,
+        row_limit: 25,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .kpi-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 2,
+        w: 3,
+        content: "KPI (by SQL)",
+        component_name: "KpiComponent",
+        title: "",
+        query: "SELECT count(*) AS value FROM events",
+        query_asset: null,
+        value_column: "",
+        prefix: "",
+        suffix: "",
+        decimals: 0,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .bar-chart-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 5,
         w: 6,
-        content: "SQL Query",
-        component_name: "SQLQueryComponent",
+        content: "Bar Chart (by SQL)",
+        component_name: "BarChartComponent",
+        title: "",
+        query: "SELECT activity AS label, count(*) AS value FROM events GROUP BY activity ORDER BY value DESC",
+        query_asset: null,
+        label_column: "",
+        value_column: "",
+        horizontal: false,
+        show_values: false,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .scatter-plot-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 5,
+        w: 6,
+        content: "Scatter Plot (by SQL)",
+        component_name: "ScatterPlotComponent",
+        title: "",
+        query: "SELECT count(*) AS x, count(DISTINCT activity) AS y, obj_id AS series\nFROM event_object JOIN events USING (event_id)\nGROUP BY obj_id LIMIT 500",
+        query_asset: null,
+        x_column: "",
+        y_column: "",
+        series_column: "",
+        x_label: "",
+        y_label: "",
         order: 0
       }]
     );
@@ -216,6 +284,7 @@ const SidePanel: React.FC = () => {
         content: "Pie Chart",
         component_name: "PieChartComponent",
         query: '',
+        query_asset: null,
         ring_text: '',
         chart_type: 'donut',
         title: '',
@@ -227,134 +296,104 @@ const SidePanel: React.FC = () => {
       }]
     );
 
-    console.log("Drag-in setup complete");
   }, [grid]);
 
+  // The panel's own markup: every tile is the same box, differing only in its
+  // GridStack class, its thumbnail and its label.
+  const TILE_CLASS =
+    "grid-stack-item sidepanel-item flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50";
+
   return (
-    <div className="sidepanel col-md-2 d-none d-md-block p-2 max-h-screen overflow-y-auto">
-      <div id="trash" className="sidepanel-item flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/trash-icon.svg" width="50" height="50"/>
+    // Two rows: the drop target stays put, the component list scrolls under
+    // it. Deleting means dragging a widget onto the target, which is
+    // impossible while it can scroll out of sight.
+    <div className="sidepanel col-md-2 d-none d-md-block p-2 max-h-screen flex flex-col">
+      <div id="trash" className="sidepanel-item shrink-0 flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
+        <TrashTile />
         <div>Drop here to remove!</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item text-box flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/textbox-icon.svg" width="100" height="50"/>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+
+      <div className={`${TILE_CLASS} text-box`}>
+        <TextBoxTile />
         <div>Text Box</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item image-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/image-icon.svg" width="100" height="50"/>
+      <div className={`${TILE_CLASS} image-component`}>
+        <ImageTile />
         <div>Image Component</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/variants-preview.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} variants-component`}>
+        <VariantsTile />
         <div>Variants Explorer</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item process-area-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/process-area-preview.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} process-area-component`}>
+        <ProcessAreaTile />
         <div>Process Area</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item totem-miner-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/process-area-preview.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} totem-miner-component`}>
+        <TotemMinerTile />
         <div>TOTeM Miner</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item log-statistics-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/log-statistics-preview.png" width="100" height="70"/>
+      <div className={`${TILE_CLASS} log-statistics-component`}>
+        <LogStatisticsTile />
         <div>Log Statistics</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
-        <div>OCDFG</div>
-      </div>
-
-      <div className="grid-stack-item sidepanel-item oc-dotted-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <svg
-          width="100"
-          height="50"
-          viewBox="0 0 100 50"
-          role="img"
-          aria-label="OC Dotted Chart preview"
-          className="rounded-md bg-white"
-        >
-          <line x1="14" y1="8" x2="14" y2="40" stroke="#475569" strokeWidth="2" />
-          <line x1="14" y1="40" x2="90" y2="40" stroke="#475569" strokeWidth="2" />
-          <circle cx="25" cy="33" r="3" fill="#2563eb" />
-          <circle cx="39" cy="29" r="3" fill="#16a34a" />
-          <circle cx="52" cy="24" r="3" fill="#dc2626" />
-          <circle cx="67" cy="18" r="3" fill="#ca8a04" />
-          <circle cx="80" cy="13" r="3" fill="#9333ea" />
-          <circle cx="31" cy="21" r="2.5" fill="#0891b2" />
-          <circle cx="58" cy="34" r="2.5" fill="#db2777" />
-          <circle cx="75" cy="28" r="2.5" fill="#65a30d" />
-        </svg>
+      <div className={`${TILE_CLASS} oc-dotted-chart-component`}>
+        <DottedChartTile />
         <div>OC Dotted Chart</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item new-ocdfg-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} new-ocdfg-component`}>
+        <OcdfgArcWeightTile />
         <div>Object-Centric DFG (Arc Weight)</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item new-ocdfg-variants-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/ocdfg-preview.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} new-ocdfg-variants-component`}>
+        <OcdfgVariantsTile />
         <div>Object-Centric DFG (Variants)</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item occn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <svg
-          width="100"
-          height="50"
-          viewBox="0 0 100 50"
-          role="img"
-          aria-label="OCCN preview"
-          className="rounded-md bg-white"
-        >
-          <line x1="26" y1="25" x2="42" y2="25" stroke="#475569" strokeWidth="2" />
-          <line x1="58" y1="25" x2="74" y2="25" stroke="#475569" strokeWidth="2" />
-          <rect x="8" y="17" width="18" height="16" rx="3" fill="#2563eb" />
-          <rect x="42" y="17" width="18" height="16" rx="3" fill="#16a34a" />
-          <rect x="74" y="17" width="18" height="16" rx="3" fill="#ca8a04" />
-          <circle cx="38" cy="12" r="3" fill="#dc2626" />
-          <circle cx="64" cy="12" r="3" fill="#9333ea" />
-          <circle cx="38" cy="38" r="3" fill="#0891b2" />
-          <circle cx="64" cy="38" r="3" fill="#db2777" />
-        </svg>
+      <div className={`${TILE_CLASS} occn-component`}>
+        <OccnTile />
         <div>Object-Centric Causal Net (OCCN)</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item ocpn-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <svg
-          width="100"
-          height="50"
-          viewBox="0 0 100 50"
-          role="img"
-          aria-label="OC Petri Net preview"
-          className="rounded-md bg-white"
-        >
-          <circle cx="14" cy="18" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
-          <circle cx="14" cy="38" r="7" fill="none" stroke="#10b981" strokeWidth="2" />
-          <rect x="40" y="18" width="20" height="16" rx="3" fill="none" stroke="#475569" strokeWidth="2" />
-          <circle cx="86" cy="26" r="7" fill="none" stroke="#2563eb" strokeWidth="2" />
-          <line x1="21" y1="18" x2="40" y2="24" stroke="#2563eb" strokeWidth="2" />
-          <line x1="21" y1="38" x2="40" y2="30" stroke="#10b981" strokeWidth="2" />
-          <line x1="60" y1="26" x2="79" y2="26" stroke="#475569" strokeWidth="2" />
-        </svg>
+      <div className={`${TILE_CLASS} ocpn-component`}>
+        <OcpnTile />
         <div>OC Petri Net</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item sqlquery-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/sql_query_icon.png" width="100" height="50"/>
-        <div>SQL Query</div>
+      <div className={`${TILE_CLASS} sql-query-component`}>
+        <SqlEditorTile />
+        <div>SQL Editor</div>
       </div>
 
-      <div className="grid-stack-item sidepanel-item pie-chart-component flex flex-col justify-center items-center border p-2 m-2 gap-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50">
-        <img src="src/images/pie_chart_icon.png" width="100" height="50"/>
+      <div className={`${TILE_CLASS} pie-chart-component`}>
+        <PieChartTile />
         <div>Pie Chart</div>
+      </div>
+
+      <div className={`${TILE_CLASS} kpi-component`}>
+        <KpiTile />
+        <div>KPI (by SQL)</div>
+      </div>
+
+      <div className={`${TILE_CLASS} bar-chart-component`}>
+        <BarChartTile />
+        <div>Bar Chart (by SQL)</div>
+      </div>
+
+      <div className={`${TILE_CLASS} scatter-plot-component`}>
+        <ScatterPlotTile />
+        <div>Scatter Plot (by SQL)</div>
+      </div>
       </div>
     </div>
   );

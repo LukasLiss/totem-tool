@@ -1,6 +1,9 @@
 import axios, { AxiosError } from "axios";
 
-export type AssetType = "TOTEM" | "OCCN" | "OCPN" | "OCDFG";
+export type AssetType = "TOTEM" | "OCCN" | "OCPN" | "OCDFG" | "QUERY";
+
+/** Model asset types (everything the Model Assets view manages). */
+export const MODEL_ASSET_TYPES: AssetType[] = ["TOTEM", "OCCN", "OCPN", "OCDFG"];
 
 export type ProjectAssetMetadata = Record<string, unknown>;
 
@@ -128,6 +131,12 @@ export interface SaveDiscoveredModelParams {
   modelType: AssetType;
   /** Discovery settings of the requesting component (tau, threshold, …). */
   params?: Record<string, unknown>;
+  /**
+   * Whether the requesting component has the global filter enabled. When
+   * true (the default) the axios interceptor appends the active global
+   * filter to the request, so the stored model matches the filtered view.
+   */
+  applyGlobalFilter?: boolean;
 }
 
 /**
@@ -139,6 +148,7 @@ export async function saveDiscoveredModel({
   name,
   modelType,
   params,
+  applyGlobalFilter = true,
 }: SaveDiscoveredModelParams) {
   const { data } = await axios.post<ProjectAsset>(
     `/api/files/${fileId}/save_discovered_model/`,
@@ -146,7 +156,8 @@ export async function saveDiscoveredModel({
       name,
       model_type: modelType,
       params: params ?? {},
-    }
+    },
+    { _skipGlobalFilter: !applyGlobalFilter }
   );
   return data;
 }
@@ -210,4 +221,83 @@ function getFirstErrorMessage(value: unknown): string | undefined {
     return Object.values(value).map(getFirstErrorMessage).find(Boolean);
   }
   return undefined;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Stored SQL queries (asset_type "QUERY")                             */
+/* ------------------------------------------------------------------ */
+
+export const SQL_QUERY_ASSET_SCHEMA = "sql-query";
+export const SQL_QUERY_ASSET_VERSION = 1;
+
+export interface SqlQueryAssetContent extends Record<string, unknown> {
+  schema: typeof SQL_QUERY_ASSET_SCHEMA;
+  version: typeof SQL_QUERY_ASSET_VERSION;
+  query: string;
+  description?: string;
+}
+
+export function buildQueryAssetContent(
+  query: string,
+  description = ""
+): SqlQueryAssetContent {
+  return {
+    schema: SQL_QUERY_ASSET_SCHEMA,
+    version: SQL_QUERY_ASSET_VERSION,
+    query,
+    description,
+  };
+}
+
+/** The SQL text stored in a QUERY asset ("" for anything malformed). */
+export function queryAssetSql(asset: Pick<ProjectAsset, "content_json"> | null | undefined) {
+  const query = asset?.content_json?.query;
+  return typeof query === "string" ? query : "";
+}
+
+export function queryAssetDescription(asset: Pick<ProjectAsset, "content_json"> | null | undefined) {
+  const description = asset?.content_json?.description;
+  return typeof description === "string" ? description : "";
+}
+
+export async function listQueryAssets(projectId: number) {
+  return listAssets({ projectId, assetType: "QUERY" });
+}
+
+export async function createQueryAsset(params: {
+  projectId: number;
+  name: string;
+  query: string;
+  description?: string;
+}) {
+  return createAsset({
+    projectId: params.projectId,
+    name: params.name,
+    assetType: "QUERY",
+    contentJson: buildQueryAssetContent(params.query, params.description),
+  });
+}
+
+export async function updateQueryAsset(params: {
+  assetId: number;
+  name?: string;
+  query?: string;
+  description?: string;
+  /** current content, needed when only part of it changes */
+  current?: SqlQueryAssetContent | Record<string, unknown>;
+}) {
+  const contentJson =
+    params.query !== undefined || params.description !== undefined
+      ? buildQueryAssetContent(
+          params.query ?? queryAssetSql({ content_json: params.current ?? {} }),
+          params.description ??
+            queryAssetDescription({ content_json: params.current ?? {} })
+        )
+      : undefined;
+  return updateAsset({
+    assetId: params.assetId,
+    name: params.name,
+    contentJson,
+  });
 }

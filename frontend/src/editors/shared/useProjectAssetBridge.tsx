@@ -46,7 +46,11 @@ type UseProjectAssetBridgeArgs = {
   modelName: string;
   /** Build the canonical asset JSON for the current model. */
   serializeAsset: () => Record<string, unknown>;
-  /** Load a stored asset's content into the editor. */
+  /**
+   * Load a stored asset's content into the editor. The editor announces the
+   * result itself — it is the only one that knows whether the content parsed —
+   * so the bridge stays quiet on success.
+   */
   onOpen: (content: Record<string, unknown>, name: string) => void;
 };
 
@@ -59,7 +63,16 @@ type UseProjectAssetBridge = {
   dialogs: React.ReactNode;
 };
 
-const assetLabel = (assetType: AssetType) => (assetType === 'TOTEM' ? 'TOTeM' : 'OCCN');
+const ASSET_LABELS: Record<AssetType, string> = {
+  TOTEM: 'TOTeM',
+  OCCN: 'OCCN',
+  OCPN: 'OC Petri Net',
+  OCDFG: 'OC-DFG',
+  // Stored SQL queries share the asset store but have no model editor.
+  QUERY: 'SQL query',
+};
+
+const assetLabel = (assetType: AssetType) => ASSET_LABELS[assetType] ?? assetType;
 
 export function useProjectAssetBridge({
   assetType,
@@ -106,7 +119,6 @@ export function useProjectAssetBridge({
       try {
         const asset = await getAsset(targetId);
         loadIntoEditor(asset);
-        toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(extractAssetApiError(error).message);
       }
@@ -195,7 +207,6 @@ export function useProjectAssetBridge({
       setOpenOpen(false);
       try {
         loadIntoEditor(asset);
-        toast.success(`Loaded "${asset.name}".`);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Could not open the asset.');
       }
@@ -237,11 +248,16 @@ export function useProjectAssetBridge({
                 }
               }}
             />
-            <DialogFooter className="gap-2 sm:justify-between">
+            {/* The update button carries the asset's name, which can be long
+                enough to push the row past the dialog. DialogContent is a grid,
+                so the footer needs min-w-0 before it will shrink below its
+                content, and buttons are shrink-0 by default — hence the chain
+                of min-w-0 down to the span that finally truncates the name. */}
+            <DialogFooter className="min-w-0 gap-2 sm:justify-between">
               <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>
                 Cancel
               </Button>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 gap-2">
                 {openedAsset && (
                   <Button
                     variant="outline"
@@ -252,14 +268,21 @@ export function useProjectAssetBridge({
                   </Button>
                 )}
                 <Button
+                  className="min-w-0 shrink"
+                  title={openedAsset ? `Update "${openedAsset.name}"` : undefined}
                   onClick={() => void (openedAsset ? updateExisting() : saveAsNew())}
                   disabled={saving}
                 >
-                  {saving
-                    ? 'Saving…'
-                    : openedAsset
-                      ? `Update "${openedAsset.name}"`
-                      : 'Save'}
+                  {saving ? (
+                    'Saving…'
+                  ) : openedAsset ? (
+                    <>
+                      Update
+                      <span className="min-w-0 truncate">"{openedAsset.name}"</span>
+                    </>
+                  ) : (
+                    'Save'
+                  )}
                 </Button>
               </div>
             </DialogFooter>

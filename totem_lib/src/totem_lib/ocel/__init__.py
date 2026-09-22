@@ -13,3 +13,12 @@ from .importer_db import import_ocel_db
 from .editor import OcelEditor, OcelEditorError
 from .filter_stack import FilterRule, FilterStack, apply_filter_stack
 from .validation import OCELValidationException, validate_ocel
+from .event_columns import (
+    EventColumnError,
+    FIXED_EVENT_COLUMNS,
+    event_column_summary,
+    list_event_columns,
+    validate_event_column_name,
+    write_event_column,
+    write_event_columns_to_file,
+)

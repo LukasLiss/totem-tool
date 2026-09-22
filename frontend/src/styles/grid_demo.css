@@ -107,7 +107,7 @@ h1 {
 .gridstack-sidebar > .grid-stack-item,
 .grid-stack-item-content {
   text-align: center;
-  background-color: #3d3f45;
+  background-color: var(--card);
   border: 1px solid #ccc;
   border-radius: 12px;
   display: flex;
@@ -133,7 +133,7 @@ h1 {
 }
 
 .ui-draggable-disabled.ui-resizable-disabled > .grid-stack-item-content {
-  background-color: #777;
+  background-color: var(--card);
 }
 
 .grid-stack-item-removing {

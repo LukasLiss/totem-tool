@@ -35,7 +35,7 @@ export function useDottedChartData({
   viewport,
   sampleSeed = 0,
   debounceMs = 300,
-  filterEnabled = false,
+  filterEnabled = true,
   effectiveFilterVersion = 0,
 }: UseDottedChartDataArgs) {
   const [data, setData] = useState<DottedChartResponse | null>(null);
@@ -93,7 +93,6 @@ export function useDottedChartData({
         setData(response.data);
       } catch (err) {
         if (axios.isCancel(err) || controller.signal.aborted) return;
-        console.error("Failed to fetch OC dotted chart data:", err);
         setError("Failed to load dotted chart");
       } finally {
         if (!controller.signal.aborted) {

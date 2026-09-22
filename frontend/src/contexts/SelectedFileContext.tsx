@@ -1,8 +1,17 @@
 import { createContext } from "react";
 
+export interface SelectedFile {
+  id: number;
+  name?: string;
+  filename?: string;
+  file?: string;
+  project?: number;
+  [key: string]: unknown;
+}
+
 type SelectedFileContextType = {
-  selectedFile: any; // Replace `any` with your actual file type
-  setSelectedFile: (file: any) => void;
+  selectedFile: SelectedFile | null;
+  setSelectedFile: (file: SelectedFile | null) => void;
 };
 
 export const SelectedFileContext = createContext<SelectedFileContextType>({

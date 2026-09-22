@@ -12,28 +12,43 @@ export async function getUserFiles() {
   return data;
 }
 
-export async function processFile(fileId: string | number) {
-  const { data } = await axios.get(`/api/files/${fileId}/NoE/`, { _skipGlobalFilter: true });
+/** Rename the project an event log belongs to (its switcher label). */
+export async function renameProject(fileId: string | number, name: string) {
+  const { data } = await axios.patch(
+    `/api/files/${fileId}/rename/`,
+    { name },
+    { _skipGlobalFilter: true }
+  );
   return data;
 }
 
-// Execute a SQL query on OCEL data
-export async function executeQuery(token: string, fileId: string, query: string) {
-  const response = await fetch(`http://localhost:8000/api/files/${fileId}/execute_query/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query }),
-  });
-  if (response.status === 401) {
-    throw new Error("UNAUTHORIZED");
-  }
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Query execution failed: ${response.status} ${response.statusText}`);
-  }
+/** Delete a project: its event log, dashboards, assets and uploaded files. */
+export async function deleteProject(fileId: string | number) {
+  await axios.delete(`/api/files/${fileId}/`, { _skipGlobalFilter: true });
+}
 
-  return await response.json();
+export async function processFile(fileId: string | number) {
+  // Honors the active global filter (the interceptor appends its params),
+  // so the shown event count matches the rest of the tool.
+  const { data } = await axios.get(`/api/files/${fileId}/NoE/`);
+  return data;
+}
+
+// Execute a SQL query on OCEL data.
+// Goes through the shared axios instance so it honours API_BASE_URL (hosted
+// builds), the token-refresh interceptor and the global-filter params, instead
+// of a raw fetch against a hardcoded http://localhost:8000.
+export async function executeQuery(fileId: string | number, query: string) {
+  try {
+    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, { query });
+    return data as { data: Record<string, unknown>[]; columns: string[] };
+  } catch (err) {
+    let message: string | undefined;
+    if (axios.isAxiosError<{ error?: string }>(err)) {
+      message =
+        err.response?.data?.error ||
+        (err.response ? `Query execution failed: ${err.response.status} ${err.response.statusText}` : err.message);
+    }
+    throw new Error(message || "Query execution failed");
+  }
 }

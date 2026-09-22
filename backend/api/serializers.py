@@ -6,13 +6,20 @@ from rest_polymorphic.serializers import PolymorphicSerializer
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     LEADING_OBJECT_REPLAY_STRATEGY,
+    REPLAY_UNIT_STRATEGIES,
+    STORED_COLUMN_REPLAY_STRATEGY,
     validate_occn_dict,
     validate_totem_dict,
 )
-from .asset_formats import validate_ocdfg_asset_dict, validate_ocpn_asset_dict
+from totem_lib.ocel.event_columns import EventColumnError, validate_event_column_name
+from .asset_formats import (
+    validate_ocdfg_asset_dict,
+    validate_ocpn_asset_dict,
+    validate_sql_query_asset_dict,
+)
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SQLQueryComponent, PieChartComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent
 from django.db.models import Max
 
 
@@ -21,11 +28,21 @@ class TotemConformanceRequestSerializer(serializers.Serializer):
 
 
 class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
+    """Replay-unit options shared by the conformance and detail endpoints.
+
+    * ``leading_object_type`` -- required by, and only valid for, the
+      leading-object strategy.
+    * ``execution_column`` -- name of an events column holding precomputed
+      process execution ids; required by, and only valid for, the
+      stored-column strategy.
+    * ``restrict_to_model_object_types`` -- project every event onto the
+      object types of the OCCN before building replay units, so objects the
+      model deliberately leaves out (e.g. a shared worker resource) do not
+      make every unit non-fitting. Valid for every strategy.
+    """
+
     replay_unit_strategy = serializers.ChoiceField(
-        choices=(
-            CONNECTED_COMPONENTS_REPLAY_STRATEGY,
-            LEADING_OBJECT_REPLAY_STRATEGY,
-        ),
+        choices=REPLAY_UNIT_STRATEGIES,
         default=CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     )
     leading_object_type = serializers.CharField(
@@ -33,10 +50,26 @@ class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
         required=False,
         trim_whitespace=True,
     )
+    execution_column = serializers.CharField(
+        allow_blank=False,
+        allow_null=True,
+        required=False,
+        trim_whitespace=True,
+    )
+    restrict_to_model_object_types = serializers.BooleanField(default=False)
+
+    def validate_execution_column(self, value):
+        if value is None:
+            return None
+        try:
+            return validate_event_column_name(value)
+        except EventColumnError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def validate(self, attrs):
         strategy = attrs["replay_unit_strategy"]
         leading_object_type = attrs.get("leading_object_type")
+        execution_column = attrs.get("execution_column")
         if strategy == LEADING_OBJECT_REPLAY_STRATEGY:
             if leading_object_type is None:
                 raise serializers.ValidationError(
@@ -52,6 +85,25 @@ class OCCNReplayStrategyRequestSerializer(serializers.Serializer):
                 {
                     "leading_object_type": (
                         "This field is only supported for the leading-object "
+                        "replay strategy."
+                    )
+                }
+            )
+        if strategy == STORED_COLUMN_REPLAY_STRATEGY:
+            if execution_column is None:
+                raise serializers.ValidationError(
+                    {
+                        "execution_column": (
+                            "This field is required for the stored-column "
+                            "replay strategy."
+                        )
+                    }
+                )
+        elif execution_column is not None:
+            raise serializers.ValidationError(
+                {
+                    "execution_column": (
+                        "This field is only supported for the stored-column "
                         "replay strategy."
                     )
                 }
@@ -74,13 +126,33 @@ class OCCNReplayUnitDetailRequestSerializer(
     unit_id = serializers.CharField(allow_blank=False, trim_whitespace=True)
     offset = serializers.IntegerField(min_value=0, default=0)
     limit = serializers.IntegerField(min_value=1, max_value=250, default=50)
+    # Only needed to reproduce a projection onto the model's object types.
+    asset_id = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("restrict_to_model_object_types") and "asset_id" not in attrs:
+            raise serializers.ValidationError(
+                {
+                    "asset_id": (
+                        "This field is required when restricting replay units "
+                        "to the model's object types."
+                    )
+                }
+            )
+        return attrs
 
 
 class EventLogSerializer(serializers.ModelSerializer):
+     # Renamed through the viewset's `rename` action, never by writing here.
+     display_name = serializers.CharField(
+         source="project.display_name", read_only=True
+     )
+
      class Meta:
         #not including user to ensure security
         model = EventLog
-        fields = ["id", "project", "file", "uploaded_at"]
+        fields = ["id", "project", "display_name", "file", "uploaded_at"]
         read_only_fields = ["project", "uploaded_at"]
 
 
@@ -220,6 +292,7 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
             ProjectAsset.AssetType.OCCN: validate_occn_dict,
             ProjectAsset.AssetType.OCPN: validate_ocpn_asset_dict,
             ProjectAsset.AssetType.OCDFG: validate_ocdfg_asset_dict,
+            ProjectAsset.AssetType.QUERY: validate_sql_query_asset_dict,
         }
         validator = schema_validators.get(asset_type)
         if validator is None:
@@ -346,6 +419,18 @@ class DashboardSerializer(serializers.ModelSerializer):
         model = Dashboard
         fields = ['id', 'project', 'name', 'order_in_project', 'created_at']
 
+    def validate_project(self, value):
+        # Only projects the requesting user is a member of. Without this a
+        # dashboard could be created in — or re-parented into — any project
+        # by guessing its (sequential) id.
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authenticated request context is required.")
+        if not value.users.filter(pk=user.pk).exists():
+            raise serializers.ValidationError("You do not have access to this project.")
+        return value
+
     def create(self, validated_data):
         project = validated_data['project']
 
@@ -416,12 +501,6 @@ class LogStatisticsComponentSerializer(DashboardComponentSerializer):
         model = LogStatisticsComponent
         fields = "__all__"
 
-class OCDFGComponentSerializer(DashboardComponentSerializer):
-    class Meta:
-        model = OCDFGComponent
-        fields = "__all__"
-
-
 class OCDottedChartComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = OCDottedChartComponent
@@ -446,12 +525,6 @@ class OCCNComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 #Fill in new Component Serializers here and then edit the mapping below
 
-class SQLQueryComponentSerializer(DashboardComponentSerializer):
-    class Meta:
-        model = SQLQueryComponent
-        fields = "__all__"
-
-
 class PieChartComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = PieChartComponent
@@ -462,6 +535,32 @@ class FilterStackComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = FilterStackComponent
         fields = "__all__"
+
+
+class SqlQueryComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = SqlQueryComponent
+        fields = "__all__"
+
+
+class KpiComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = KpiComponent
+        fields = "__all__"
+
+
+class BarChartComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = BarChartComponent
+        fields = "__all__"
+
+
+class ScatterPlotComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = ScatterPlotComponent
+        fields = "__all__"
+
+
 class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
     model_serializer_mapping = {
         DashboardComponent: DashboardComponentSerializer,
@@ -472,12 +571,14 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ProcessAreaComponent: ProcessAreaComponentSerializer,
         TotemMinerComponent: TotemMinerComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
-        OCDFGComponent: OCDFGComponentSerializer,
         FilterStackComponent: FilterStackComponentSerializer,
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCPNComponent: OCPNComponentSerializer,
-        SQLQueryComponent: SQLQueryComponentSerializer,
         PieChartComponent: PieChartComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
+        SqlQueryComponent: SqlQueryComponentSerializer,
+        KpiComponent: KpiComponentSerializer,
+        BarChartComponent: BarChartComponentSerializer,
+        ScatterPlotComponent: ScatterPlotComponentSerializer,
     }

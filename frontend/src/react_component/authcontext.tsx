@@ -16,7 +16,7 @@ async function guestReAuth() {
   const resp = await axios.post(
     "/token/",
     { username: "Guest", password: "guest" },
-    { headers: { "Content-Type": "application/json" } }
+    { headers: { "Content-Type": "application/json" }, _skipAuthRefresh: true }
   );
   const { access, refresh } = resp.data;
   axios.defaults.headers.common["Authorization"] = `Bearer ${access}`;
@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- hook colocated with its provider
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used inside AuthProvider");

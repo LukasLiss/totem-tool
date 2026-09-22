@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
+import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { cn } from "@/lib/utils";
 import { Map as MapIcon } from "lucide-react";
 import { useFilterVersion } from "@/store/filterStore";
@@ -82,7 +83,7 @@ export default function DottedChart({
   showMinimap = true,
   className,
   onEventClick,
-  filterEnabled = false,
+  filterEnabled = true,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({
@@ -501,7 +502,15 @@ export default function DottedChart({
   );
 
   if (!fileId) {
-    return <DottedChartState className={className} message="Select an event log to view the dotted chart" />;
+    return (
+      <div className={cn("h-[320px]", className)}>
+        <VisualizerEmptyState
+          label="OC Dotted Chart"
+          message="Select an event log to view its dotted chart."
+          overlay={false}
+        />
+      </div>
+    );
   }
 
   if (loading && !data) {
@@ -621,7 +630,7 @@ export default function DottedChart({
                 name="Events"
                 data={displayedPoints}
                 isAnimationActive={false}
-                shape={(props: any) => {
+                shape={(props: { cx?: number; cy?: number; payload?: ChartPoint }) => {
                   const point = props.payload as ChartPoint;
                   const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
                   const shape = shapeScale.get(point.shapeKey) ?? "circle";

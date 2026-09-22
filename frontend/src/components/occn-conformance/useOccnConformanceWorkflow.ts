@@ -5,9 +5,13 @@ import {
   CONNECTED_COMPONENTS_REPLAY_STRATEGY,
   DEFAULT_OCCN_MAX_STATES,
   LEADING_OBJECT_REPLAY_STRATEGY,
+  STORED_COLUMN_REPLAY_STRATEGY,
+  getEventLogEventColumns,
   getEventLogObjectTypes,
   runOCCNConformance,
+  type EventColumnInfo,
   type OCCNConformanceResponse,
+  type OCCNReplayOptions,
   type OCCNReplayUnitStrategy,
 } from "@/api/occnConformanceApi";
 
@@ -27,6 +31,18 @@ export interface OccnConformanceWorkflowState {
   objectTypesLoading: boolean;
   objectTypesError: string | null;
   retryObjectTypes: () => void;
+  /** Stored-column strategy: the events column holding execution ids. */
+  executionColumn: string | null;
+  setExecutionColumn: (column: string | null) => void;
+  availableEventColumns: EventColumnInfo[];
+  eventColumnsLoading: boolean;
+  eventColumnsError: string | null;
+  retryEventColumns: () => void;
+  /** Project events onto the model's object types before replay. */
+  restrictToModelObjectTypes: boolean;
+  setRestrictToModelObjectTypes: (enabled: boolean) => void;
+  /** The option object handed to the API for every request of this run. */
+  replayOptions: OCCNReplayOptions;
   maxStates: number;
   setMaxStates: (maxStates: number) => void;
   canRun: boolean;
@@ -36,6 +52,71 @@ export interface OccnConformanceWorkflowState {
   run: () => Promise<OCCNConformanceResponse | null>;
   runLeadingObjectType: (objectType: string) => void;
 }
+
+/**
+ * Generic "load a list for the current log while a condition holds" state
+ * machine, used for the leading object types and the stored event columns.
+ */
+function useEventLogList<T>(
+  eventLogId: number | null | undefined,
+  enabled: boolean,
+  load: (eventLogId: number) => Promise<T[]>
+) {
+  const [items, setItems] = useState<T[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  const requestGeneration = useRef(0);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    setItems([]);
+    setError(null);
+
+    if (!enabled || !eventLogId) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    void load(eventLogId)
+      .then((loaded) => {
+        if (generation !== requestGeneration.current) return;
+        setItems(loaded);
+      })
+      .catch((requestError) => {
+        if (generation !== requestGeneration.current) return;
+        setError(extractAssetApiError(requestError).message);
+      })
+      .finally(() => {
+        if (generation === requestGeneration.current) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      requestGeneration.current += 1;
+    };
+    // `load` is a module-level function for every caller.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventLogId, enabled, retryGeneration]);
+
+  const retry = useCallback(() => {
+    setRetryGeneration((generation) => generation + 1);
+  }, []);
+
+  return { items, loading, error, retry };
+}
+
+const loadSortedObjectTypes = (eventLogId: number) =>
+  getEventLogObjectTypes(eventLogId).then((objectTypes) =>
+    [...objectTypes].sort((left, right) => left.localeCompare(right))
+  );
+
+const loadEventColumns = (eventLogId: number) =>
+  getEventLogEventColumns(eventLogId).then((columns) =>
+    [...columns].sort((left, right) => left.name.localeCompare(right.name))
+  );
 
 export function useOccnConformanceWorkflow(
   eventLogId: number | null | undefined,
@@ -48,13 +129,9 @@ export function useOccnConformanceWorkflow(
   const [leadingObjectType, setLeadingObjectType] = useState<string | null>(
     null
   );
-  const [availableObjectTypes, setAvailableObjectTypes] = useState<string[]>(
-    []
-  );
-  const [objectTypesLoading, setObjectTypesLoading] = useState(false);
-  const [objectTypesError, setObjectTypesError] = useState<string | null>(null);
-  const [objectTypesRetryGeneration, setObjectTypesRetryGeneration] =
-    useState(0);
+  const [executionColumn, setExecutionColumn] = useState<string | null>(null);
+  const [restrictToModelObjectTypes, setRestrictToModelObjectTypes] =
+    useState(false);
   const [maxStates, setMaxStates] = useState(DEFAULT_OCCN_MAX_STATES);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<OCCNConformanceResponse | null>(null);
@@ -63,8 +140,18 @@ export function useOccnConformanceWorkflow(
     string | null
   >(null);
   const requestGeneration = useRef(0);
-  const objectTypesRequestGeneration = useRef(0);
   const runningRequest = useRef(false);
+
+  const objectTypes = useEventLogList(
+    eventLogId,
+    replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY,
+    loadSortedObjectTypes
+  );
+  const eventColumns = useEventLogList(
+    eventLogId,
+    replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY,
+    loadEventColumns
+  );
 
   const setReplayUnitStrategy = useCallback(
     (strategy: OCCNReplayUnitStrategy) => {
@@ -73,6 +160,9 @@ export function useOccnConformanceWorkflow(
       if (strategy !== LEADING_OBJECT_REPLAY_STRATEGY) {
         setLeadingObjectType(null);
       }
+      if (strategy !== STORED_COLUMN_REPLAY_STRATEGY) {
+        setExecutionColumn(null);
+      }
     },
     []
   );
@@ -80,47 +170,31 @@ export function useOccnConformanceWorkflow(
   useEffect(() => {
     setPendingLeadingObjectType(null);
     setLeadingObjectType(null);
+    setExecutionColumn(null);
   }, [eventLogId]);
 
+  // A log with exactly one candidate column is the common case right after
+  // storing executions; pick it so the user does not have to.
   useEffect(() => {
-    const generation = ++objectTypesRequestGeneration.current;
-    setAvailableObjectTypes([]);
-    setObjectTypesError(null);
-
     if (
-      replayUnitStrategy !== LEADING_OBJECT_REPLAY_STRATEGY ||
-      !eventLogId
+      replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY &&
+      executionColumn === null &&
+      eventColumns.items.length === 1
     ) {
-      setObjectTypesLoading(false);
-      return;
+      setExecutionColumn(eventColumns.items[0].name);
     }
+  }, [eventColumns.items, executionColumn, replayUnitStrategy]);
 
-    setObjectTypesLoading(true);
-    void getEventLogObjectTypes(eventLogId)
-      .then((objectTypes) => {
-        if (generation !== objectTypesRequestGeneration.current) return;
-        setAvailableObjectTypes(
-          [...objectTypes].sort((left, right) => left.localeCompare(right))
-        );
-      })
-      .catch((requestError) => {
-        if (generation !== objectTypesRequestGeneration.current) return;
-        setObjectTypesError(extractAssetApiError(requestError).message);
-      })
-      .finally(() => {
-        if (generation === objectTypesRequestGeneration.current) {
-          setObjectTypesLoading(false);
-        }
-      });
-
-    return () => {
-      objectTypesRequestGeneration.current += 1;
-    };
-  }, [eventLogId, objectTypesRetryGeneration, replayUnitStrategy]);
-
-  const retryObjectTypes = useCallback(() => {
-    setObjectTypesRetryGeneration((generation) => generation + 1);
-  }, []);
+  const replayOptions = useMemo<OCCNReplayOptions>(
+    () => ({
+      executionColumn:
+        replayUnitStrategy === STORED_COLUMN_REPLAY_STRATEGY
+          ? executionColumn
+          : null,
+      restrictToModelObjectTypes,
+    }),
+    [executionColumn, replayUnitStrategy, restrictToModelObjectTypes]
+  );
 
   const canRun = useMemo(() => {
     const selectionIsReady = canRunOccnConformance({
@@ -131,12 +205,17 @@ export function useOccnConformanceWorkflow(
       assetsLoading: assetSelection.loading,
       running,
     });
-    const strategyIsReady =
+    const leadingIsReady =
       replayUnitStrategy !== LEADING_OBJECT_REPLAY_STRATEGY ||
       (leadingObjectType !== null &&
-        !objectTypesLoading &&
-        objectTypesError === null);
-    return selectionIsReady && strategyIsReady;
+        !objectTypes.loading &&
+        objectTypes.error === null);
+    const storedIsReady =
+      replayUnitStrategy !== STORED_COLUMN_REPLAY_STRATEGY ||
+      (executionColumn !== null &&
+        !eventColumns.loading &&
+        eventColumns.error === null);
+    return selectionIsReady && leadingIsReady && storedIsReady;
   }, [
     eventLogId,
     projectId,
@@ -146,8 +225,11 @@ export function useOccnConformanceWorkflow(
     running,
     replayUnitStrategy,
     leadingObjectType,
-    objectTypesLoading,
-    objectTypesError,
+    objectTypes.loading,
+    objectTypes.error,
+    executionColumn,
+    eventColumns.loading,
+    eventColumns.error,
   ]);
 
   useEffect(() => {
@@ -162,6 +244,8 @@ export function useOccnConformanceWorkflow(
     assetSelection.selectedAssetId,
     replayUnitStrategy,
     leadingObjectType,
+    executionColumn,
+    restrictToModelObjectTypes,
     maxStates,
   ]);
 
@@ -184,22 +268,16 @@ export function useOccnConformanceWorkflow(
     setError(null);
 
     try {
-      const nextResult =
+      const nextResult = await runOCCNConformance(
+        eventLogId,
+        assetId,
+        replayUnitStrategy,
         replayUnitStrategy === LEADING_OBJECT_REPLAY_STRATEGY
-          ? await runOCCNConformance(
-              eventLogId,
-              assetId,
-              replayUnitStrategy,
-              leadingObjectType,
-              maxStates
-            )
-          : await runOCCNConformance(
-              eventLogId,
-              assetId,
-              replayUnitStrategy,
-              null,
-              maxStates
-            );
+          ? leadingObjectType
+          : null,
+        maxStates,
+        replayOptions
+      );
       if (requestGeneration.current !== generation) return null;
       setResult(nextResult);
       return nextResult;
@@ -219,11 +297,13 @@ export function useOccnConformanceWorkflow(
     eventLogId,
     leadingObjectType,
     maxStates,
+    replayOptions,
     replayUnitStrategy,
   ]);
 
   const runLeadingObjectType = useCallback((objectType: string) => {
     setReplayUnitStrategyState(LEADING_OBJECT_REPLAY_STRATEGY);
+    setExecutionColumn(null);
     setLeadingObjectType(objectType);
     setPendingLeadingObjectType(objectType);
   }, []);
@@ -255,10 +335,19 @@ export function useOccnConformanceWorkflow(
     setReplayUnitStrategy,
     leadingObjectType,
     setLeadingObjectType,
-    availableObjectTypes,
-    objectTypesLoading,
-    objectTypesError,
-    retryObjectTypes,
+    availableObjectTypes: objectTypes.items,
+    objectTypesLoading: objectTypes.loading,
+    objectTypesError: objectTypes.error,
+    retryObjectTypes: objectTypes.retry,
+    executionColumn,
+    setExecutionColumn,
+    availableEventColumns: eventColumns.items,
+    eventColumnsLoading: eventColumns.loading,
+    eventColumnsError: eventColumns.error,
+    retryEventColumns: eventColumns.retry,
+    restrictToModelObjectTypes,
+    setRestrictToModelObjectTypes,
+    replayOptions,
     maxStates,
     setMaxStates,
     canRun,
