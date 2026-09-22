@@ -1,11 +1,25 @@
+"""Resource profiling (organizational mining) on object-centric event logs.
+
+Profiles are computed from an
+:class:`~totem_lib.ochandover._source.EventObjectSource`, so the same code
+serves the polars ``ObjectCentricEventLog`` (``ProfileMatrix.from_ocel``) and
+the relational :class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB` the backend
+works on (``ProfileMatrix.from_ocel_db``).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Literal
+from typing import TYPE_CHECKING, List, Literal
 
 import polars as pl
 import numpy as np
-from totem_lib import ObjectCentricEventLog as OCEL
+
+from ._source import EventObjectSource
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ..ocel.ocel import ObjectCentricEventLog as OCEL
+    from ..ocel.ocel_duckdb import OcelDuckDB
 
 FEATURE_GROUPS = Literal[
     "activity_fractions",
@@ -145,17 +159,45 @@ class ProfileMatrix:
 
     # ── construction ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _needed_object_types(
+        all_object_types: list[str],
+        resource_types: List[str] | None,
+        feature_groups: List[str],
+        business_object_types: List[str] | None,
+    ) -> tuple[list[str], list[str] | None, list[str]]:
+        """Resolve which object types a profile needs to read from the log.
+
+        Returns ``(resource_types, business_object_types, types_to_load)``.
+        Business objects are only read when a feature group depends on them;
+        ``None`` for ``business_object_types`` keeps the "all non-resource
+        types" default.
+        """
+        resource_types = list(resource_types) if resource_types is not None else list(all_object_types)
+        need_bizobj = any(g in feature_groups for g in (
+            "object_collaboration_fractions",
+            "object_portfolio_fractions",
+        ))
+        if not need_bizobj:
+            return resource_types, business_object_types, resource_types
+        if business_object_types is None:
+            biz = [t for t in all_object_types if t not in set(resource_types)]
+        else:
+            biz = list(business_object_types)
+        to_load = resource_types + [t for t in biz if t not in set(resource_types)]
+        return resource_types, business_object_types, to_load
+
     @classmethod
     def from_ocel(
         cls,
-        ocel: OCEL,
+        ocel: "OCEL",
         resource_types: List[str] | None = None,
         feature_groups: List[str] | None = None,
         business_object_types: List[str] | None = None,
         tooltip_only_groups: List[str] | None = None,
     ) -> "ProfileMatrix":
         """
-        Build a ProfileMatrix from an OCEL.
+        Build a ProfileMatrix from a polars ``ObjectCentricEventLog``.
 
         Parameters
         ----------
@@ -165,33 +207,70 @@ class ProfileMatrix:
         feature_groups : list[str] | None
             Which feature groups to compute. Defaults to ["activity_fractions"].
             Supported values: "activity_fractions", "cooccurrence_fractions",
-            "object_collaboration_fractions", "time_fractions".
+            "object_collaboration_fractions", "object_portfolio_fractions",
+            "time_fractions", "weekday_fractions".
         business_object_types : list[str] | None
             Object types considered as business objects for the
-            ``object_collaboration_fractions`` feature group.  Defaults to all
-            non-resource object types when ``None``.
+            ``object_collaboration_fractions`` / ``object_portfolio_fractions``
+            feature groups.  Defaults to all non-resource object types when
+            ``None``.
         """
-        if feature_groups is None:
-            feature_groups = ["activity_fractions"]
+        feature_groups = list(feature_groups) if feature_groups is not None else ["activity_fractions"]
+        resource_types, business_object_types, to_load = cls._needed_object_types(
+            sorted(ocel.object_types), resource_types, feature_groups, business_object_types,
+        )
+        source = EventObjectSource.from_ocel(ocel, to_load)
+        return cls._from_source(
+            source, resource_types, feature_groups, business_object_types, tooltip_only_groups,
+        )
 
-        if resource_types is None:
-            resource_types = ocel.object_types
+    @classmethod
+    def from_ocel_db(
+        cls,
+        db: "OcelDuckDB",
+        resource_types: List[str] | None = None,
+        feature_groups: List[str] | None = None,
+        business_object_types: List[str] | None = None,
+        tooltip_only_groups: List[str] | None = None,
+    ) -> "ProfileMatrix":
+        """
+        Build a ProfileMatrix from an :class:`OcelDuckDB`.
 
-        resource_ids: set[str] = set()
-        resource_object_types: dict[str, str] = {}
-        for obj_type in resource_types:
-            for obj_id in ocel.get_object_ids_by_type(obj_type):
-                resource_ids.add(obj_id)
-                resource_object_types[obj_id] = obj_type
+        Same parameters and semantics as :meth:`from_ocel`; only the
+        (event, object) rows of the resource types — and of the business
+        object types when a feature group needs them — are read from the
+        database. The caller is responsible for holding ``db.lock`` when the
+        connection is shared between threads.
+        """
+        feature_groups = list(feature_groups) if feature_groups is not None else ["activity_fractions"]
+        all_types = [
+            r[0] for r in db.conn.execute(
+                "SELECT DISTINCT obj_type FROM objects ORDER BY obj_type"
+            ).fetchall()
+        ]
+        resource_types, business_object_types, to_load = cls._needed_object_types(
+            all_types, resource_types, feature_groups, business_object_types,
+        )
+        source = EventObjectSource.from_ocel_db(db, to_load)
+        return cls._from_source(
+            source, resource_types, feature_groups, business_object_types, tooltip_only_groups,
+        )
+
+    @classmethod
+    def _from_source(
+        cls,
+        source: EventObjectSource,
+        resource_types: List[str],
+        feature_groups: List[str],
+        business_object_types: List[str] | None = None,
+        tooltip_only_groups: List[str] | None = None,
+    ) -> "ProfileMatrix":
+        """Core of the profile computation, independent of the log representation."""
+        resource_object_types: dict[str, str] = source.type_map_for(resource_types)
+        resource_ids: set[str] = set(resource_object_types.keys())
 
         # ── Base join: one row per (event, resource) ───────────────────────────
-        event_resource = (
-            ocel.events
-            .select(["_eventId", "_activity", "_timestampUnix", "_objects"])
-            .explode("_objects")
-            .rename({"_objects": "_objId"})
-            .filter(pl.col("_objId").is_in(resource_ids))
-        )
+        event_resource = source.restricted_to(resource_types)
 
         # Per-resource total event count — shared denominator for all fractions
         totals = (
@@ -285,29 +364,19 @@ class ProfileMatrix:
         bizobj_type_map: dict[str, str] = {}  # bizobj_id → object type name
 
         if need_bizobj:
-            event_all_obj = (
-                ocel.events
-                .select(["_eventId", "_objects"])
-                .explode("_objects")
-                .rename({"_objects": "_objId"})
+            # Business objects are the loaded non-resource types: either the
+            # explicit ``business_object_types`` or every other type in the log.
+            biz_types = (
+                [t for t in business_object_types if t not in set(resource_types)]
+                if business_object_types is not None
+                else [t for t in source.object_types if t not in set(resource_types)]
             )
-            event_bizobj = event_all_obj.filter(
-                ~pl.col("_objId").is_in(resource_ids)
+            bizobj_type_map = source.type_map_for(biz_types)
+            event_bizobj = (
+                source.restricted_to(biz_types)
+                .select(["_eventId", "_objId"])
+                .filter(~pl.col("_objId").is_in(list(resource_ids)))
             )
-            if business_object_types is not None:
-                allowed_biz_ids: set[str] = set()
-                for biz_type in business_object_types:
-                    for obj_id in ocel.get_object_ids_by_type(biz_type):
-                        allowed_biz_ids.add(obj_id)
-                        bizobj_type_map[obj_id] = biz_type
-                event_bizobj = event_bizobj.filter(
-                    pl.col("_objId").is_in(allowed_biz_ids)
-                )
-            else:
-                for obj_type in ocel.object_types:
-                    if obj_type not in set(resource_types or []):
-                        for obj_id in ocel.get_object_ids_by_type(obj_type):
-                            bizobj_type_map[obj_id] = obj_type
 
             resource_bizobj = (
                 event_resource.select(["_eventId", "_objId"])
