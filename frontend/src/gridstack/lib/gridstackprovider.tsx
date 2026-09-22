@@ -117,8 +117,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
-      // Re-render all components with updated isEditMode
-      const items = document.querySelectorAll('.grid-stack-item');
+      // Re-render all components with updated isEditMode. Only the grid's own
+      // items: the edit-mode palette tiles carry the same class and, once
+      // GridStack.setupDragIn has run, a gridstackNode too — passing one of
+      // them to grid.update() ends in "Infinite collide check".
+      const items = grid.getGridItems();
       items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as GridWidgetElement)._reactRoot;
