@@ -72,6 +72,8 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 const NODE_R = 8;
+/** Container width changes below this (px) keep the current MDS layout; see the measure effect. */
+const RESIZE_RECOMPUTE_THRESHOLD = 48;
 
 // Cluster colour palette — intentionally different hues from ACTIVITY_COLORS
 const CLUSTER_COLORS = [
@@ -132,31 +134,49 @@ export default function OrgaMiningExplorer({
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
 
-  // Measure the graph container; reset results if the width changes after data loaded.
-  // Skip zero-width measurements (element hidden, e.g. in an inactive tab) so we
-  // don't fall back to the 700 px default and then compute with the wrong width.
+  // Measure the graph container. The MDS layout is computed server-side for
+  // this size, so a real width change after a computation (dashboard resize,
+  // sidebar toggle) recomputes it for the new size; the current result stays
+  // on screen until the new one arrives. Small changes are ignored: rendering
+  // the result can add a vertical scrollbar to the host, which narrows the
+  // box by ~15 px — recomputing for that would drop the result, remove the
+  // scrollbar, widen the box again, and never settle.
+  // Skip zero-width measurements (element hidden, e.g. in an inactive tab) so
+  // we don't fall back to the 700 px default and then compute with the wrong
+  // width.
+  // `computeTick` re-runs the computation with the current size; `sizeSettled`
+  // holds an automatic start until the container has stopped changing size
+  // (a dashboard widget animates to its final width right after mounting).
+  const [computeTick, setComputeTick] = useState(0);
+  const [sizeSettled, setSizeSettled] = useState(false);
+  const graphSizeRef = useRef(graphSize);
+  useEffect(() => { graphSizeRef.current = graphSize; }, [graphSize]);
   useEffect(() => {
     const el = graphContainerRef.current;
     if (!el) return;
+    let recompute: ReturnType<typeof setTimeout> | undefined;
+    let settle: ReturnType<typeof setTimeout> | undefined;
     const measure = () => {
-      const raw = Math.round(el.getBoundingClientRect().width);
-      if (raw === 0) return;                       // not visible yet — wait for next event
-      const w = raw;
-      setGraphSize(prev => {
-        if (prev.width === w) return prev;
-        if (statusRef.current !== "idle") {        // reset even during "loading"
-          setData(null);
-          setStatus("idle");
-          hasStartedLoadingRef.current = false;
-          setHasStartedLoading(false);
-        }
-        return { width: w, height: Math.min(1000, Math.max(400, Math.round(w * 0.62))) };
-      });
+      const w = Math.round(el.getBoundingClientRect().width);
+      if (w === 0) return;                         // not visible yet — wait for next event
+      clearTimeout(settle);
+      settle = setTimeout(() => setSizeSettled(true), 250);
+      const prev = graphSizeRef.current;
+      if (prev.width === w) return;
+      const computed = statusRef.current !== "idle";
+      if (computed && Math.abs(prev.width - w) < RESIZE_RECOMPUTE_THRESHOLD) return;
+      const next = { width: w, height: Math.min(1000, Math.max(400, Math.round(w * 0.62))) };
+      graphSizeRef.current = next;
+      setGraphSize(next);
+      if (computed && hasStartedLoadingRef.current) {
+        clearTimeout(recompute);
+        recompute = setTimeout(() => setComputeTick(t => t + 1), 200);
+      }
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); clearTimeout(recompute); clearTimeout(settle); };
   }, []);
 
   // Load object types when fileId changes
@@ -256,7 +276,7 @@ export default function OrgaMiningExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [fileId, hasStartedLoading]);
+  }, [fileId, hasStartedLoading, computeTick]);
 
   // Lock height after graph loads
   useEffect(() => {
@@ -312,12 +332,12 @@ export default function OrgaMiningExplorer({
   // resource type is preselected.
   const autoStartedForRef = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute) return;
+    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute || !sizeSettled) return;
     if (autoStartedForRef.current === fileId) return;
     autoStartedForRef.current = fileId;
     hasStartedLoadingRef.current = true;
     setHasStartedLoading(true);
-  }, [autoStart, fileId, objectTypes, canCompute]);
+  }, [autoStart, fileId, objectTypes, canCompute, sizeSettled]);
 
   // A changed global filter (or toggling it for this explorer) invalidates the
   // result; an auto-starting host recomputes, everyone else gets the button back.
