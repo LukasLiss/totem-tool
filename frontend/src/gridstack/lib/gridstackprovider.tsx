@@ -35,6 +35,8 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   KpiComponent: { minW: 2, minH: 2 },
   BarChartComponent: { minW: 3, minH: 3 },
   ScatterPlotComponent: { minW: 3, minH: 3 },
+  OCHandoverComponent: { minW: 6, minH: 6 },
+  ResourceProfilingComponent: { minW: 6, minH: 6 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -102,7 +104,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             dashboardId={dashboardId}  // Pass dashboardId
             onUpdate={(updates) => {
               Object.assign(w, updates);
-              gridRef.current?.update(el, updates);
+              // `el` is the widget's content element. grid.update() writes the
+              // node's position styles onto whatever element it is given, so
+              // it must get the grid item itself — otherwise the content is
+              // offset by the item's own column/row inside the item and the
+              // widget appears to jump away from its stored position.
+              const itemEl = (el.closest('.grid-stack-item') as HTMLElement | null) ?? el;
+              gridRef.current?.update(itemEl, updates);
             }}
           />
         );
@@ -115,8 +123,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
-      // Re-render all components with updated isEditMode
-      const items = document.querySelectorAll('.grid-stack-item');
+      // Re-render all components with updated isEditMode. Only the grid's own
+      // items: the edit-mode palette tiles carry the same class and, once
+      // GridStack.setupDragIn has run, a gridstackNode too — passing one of
+      // them to grid.update() ends in "Infinite collide check".
+      const items = grid.getGridItems();
       items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as GridWidgetElement)._reactRoot;
@@ -341,6 +352,39 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_legend: node.show_legend ?? true,
           show_tooltip: node.show_tooltip ?? true,
         };
+      } else if (component_name === "OCHandoverComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          method: node.method ?? 'oc',
+          resource_types: node.resource_types ?? [],
+          businessobject_types: node.businessobject_types ?? [],
+          case_type: node.case_type ?? '',
+          flat_resource_type: node.flat_resource_type ?? '',
+          max_gap: node.max_gap ?? null,
+          normalization: node.normalization ?? 'by_arcs_in_eog',
+          normalization_scope: node.normalization_scope ?? 'global',
+          parallel_filter_enabled: node.parallel_filter_enabled ?? false,
+          parallel_threshold: node.parallel_threshold ?? 0.5,
+          min_parallel_observations: node.min_parallel_observations ?? 1,
+          cluster_by_ot: node.cluster_by_ot ?? false,
+          view_mode: node.view_mode ?? 'graph',
+        };
+      } else if (component_name === "ResourceProfilingComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          resource_types: node.resource_types ?? [],
+          business_object_types: node.business_object_types ?? [],
+          feature_groups: node.feature_groups ?? ['activity_fractions'],
+          tooltip_feature_groups: node.tooltip_feature_groups ?? [],
+          compute_clusters: node.compute_clusters ?? true,
+          cluster_method: node.cluster_method ?? 'hdbscan',
+          n_clusters: node.n_clusters ?? 3,
+          min_cluster_size: node.min_cluster_size ?? 2,
+          distance_metric: node.distance_metric ?? 'euclidean',
+          view_mode: node.view_mode ?? 'graph',
+        };
       } else {
         props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
       }
@@ -423,6 +467,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Bar Chart (by SQL)";
         } else if (item.component_name === "ScatterPlotComponent") {
           content = "Scatter Plot (by SQL)";
+        } else if (item.component_name === "OCHandoverComponent") {
+          content = "Handover of Work";
+        } else if (item.component_name === "ResourceProfilingComponent") {
+          content = "Resource Profiling";
         } else {
           content = "Unknown";
         }
@@ -513,6 +561,27 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             series_column: item.series_column,
             x_label: item.x_label,
             y_label: item.y_label,
+            // OCHandoverComponent / ResourceProfilingComponent
+            method: item.method,
+            resource_types: item.resource_types,
+            businessobject_types: item.businessobject_types,
+            case_type: item.case_type,
+            flat_resource_type: item.flat_resource_type,
+            max_gap: item.max_gap,
+            normalization: item.normalization,
+            normalization_scope: item.normalization_scope,
+            parallel_filter_enabled: item.parallel_filter_enabled,
+            parallel_threshold: item.parallel_threshold,
+            min_parallel_observations: item.min_parallel_observations,
+            cluster_by_ot: item.cluster_by_ot,
+            view_mode: item.view_mode,
+            feature_groups: item.feature_groups,
+            tooltip_feature_groups: item.tooltip_feature_groups,
+            compute_clusters: item.compute_clusters,
+            cluster_method: item.cluster_method,
+            n_clusters: item.n_clusters,
+            min_cluster_size: item.min_cluster_size,
+            distance_metric: item.distance_metric,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -589,6 +658,27 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.series_column = item.series_column;
               node.x_label = item.x_label;
               node.y_label = item.y_label;
+              // OCHandoverComponent / ResourceProfilingComponent
+              node.method = item.method;
+              node.resource_types = item.resource_types;
+              node.businessobject_types = item.businessobject_types;
+              node.case_type = item.case_type;
+              node.flat_resource_type = item.flat_resource_type;
+              node.max_gap = item.max_gap;
+              node.normalization = item.normalization;
+              node.normalization_scope = item.normalization_scope;
+              node.parallel_filter_enabled = item.parallel_filter_enabled;
+              node.parallel_threshold = item.parallel_threshold;
+              node.min_parallel_observations = item.min_parallel_observations;
+              node.cluster_by_ot = item.cluster_by_ot;
+              node.view_mode = item.view_mode;
+              node.feature_groups = item.feature_groups;
+              node.tooltip_feature_groups = item.tooltip_feature_groups;
+              node.compute_clusters = item.compute_clusters;
+              node.cluster_method = item.cluster_method;
+              node.n_clusters = item.n_clusters;
+              node.min_cluster_size = item.min_cluster_size;
+              node.distance_metric = item.distance_metric;
             }
           }
           // Set data attribute for persistence

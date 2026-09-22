@@ -33,6 +33,7 @@ from .misc import (
 )
 from .ocdfg import NewOCDFGViewSet
 from .occn import OCCNViewSet, _occn_base_cache
+from .ochandover import event_log_table, ochandover, profile_matrix
 from .playout import playout, playout_export_ocel
 from .variants import _layout_shim, variants
 
@@ -44,6 +45,9 @@ __all__ = [
     "NewOCDFGViewSet",
     "OCCNViewSet",
     "variants",
+    "ochandover",
+    "profile_matrix",
+    "event_log_table",
     "playout",
     "playout_export_ocel",
     "greeting",

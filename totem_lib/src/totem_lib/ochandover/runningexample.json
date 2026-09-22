@@ -1,0 +1,432 @@
+{
+  "objectTypes": [
+    {
+      "name": "employee",
+      "attributes": []
+    },
+    {
+      "name": "machine",
+      "attributes": []
+    },
+    {
+      "name": "item",
+      "attributes": []
+    },
+    {
+      "name": "package",
+      "attributes": []
+    }
+  ],
+  "eventTypes": [
+    {
+      "name": "receive task",
+      "attributes": []
+    },
+    {
+      "name": "approve task",
+      "attributes": []
+    },
+    {
+      "name": "gather item",
+      "attributes": []
+    },
+    {
+      "name": "packaging",
+      "attributes": []
+    },
+    {
+      "name": "sending",
+      "attributes": []
+    }
+  ],
+  "objects": [
+    {
+      "id": "Mike",
+      "type": "employee",
+      "attributes": []
+    },
+    {
+      "id": "Sue",
+      "type": "employee",
+      "attributes": []
+    },
+    {
+      "id": "Pete",
+      "type": "employee",
+      "attributes": []
+    },
+    {
+      "id": "Ellen",
+      "type": "employee",
+      "attributes": []
+    },
+    {
+      "id": "m1",
+      "type": "machine",
+      "attributes": []
+    },
+    {
+      "id": "m2",
+      "type": "machine",
+      "attributes": []
+    },
+    {
+      "id": "m3",
+      "type": "machine",
+      "attributes": []
+    },
+    {
+      "id": "i1",
+      "type": "item",
+      "attributes": []
+    },
+    {
+      "id": "i2",
+      "type": "item",
+      "attributes": []
+    },
+    {
+      "id": "i3",
+      "type": "item",
+      "attributes": []
+    },
+    {
+      "id": "i4",
+      "type": "item",
+      "attributes": []
+    },
+    {
+      "id": "p1",
+      "type": "package",
+      "attributes": []
+    },
+    {
+      "id": "p2",
+      "type": "package",
+      "attributes": []
+    },
+    {
+      "id": "p3",
+      "type": "package",
+      "attributes": []
+    }
+  ],
+  "events": [
+    {
+      "id": "e1",
+      "type": "receive task",
+      "time": "2024-01-01T12:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Mike",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e2",
+      "type": "approve task",
+      "time": "2024-01-01T12:30:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Sue",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "gather item",
+      "time": "2024-01-01T12:34:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Pete",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m1",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "gather item",
+      "time": "2024-01-01T12:42:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Mike",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m2",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "packaging",
+      "time": "2024-01-01T13:01:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Pete",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i1",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "i2",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "p1",
+          "qualifier": "package"
+        }
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "sending",
+      "time": "2024-01-01T14:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Ellen",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m3",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "p1",
+          "qualifier": "package"
+        }
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "receive task",
+      "time": "2024-01-01T14:08:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Pete",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e8",
+      "type": "receive task",
+      "time": "2024-01-01T14:09:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Mike",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "approve task",
+      "time": "2024-01-01T15:00:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Sue",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "gather item",
+      "time": "2024-01-01T15:14:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Mike",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m1",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "approve task",
+      "time": "2024-01-01T15:16:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Sue",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "gather item",
+      "time": "2024-01-01T15:54:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Pete",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m2",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        }
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "packaging",
+      "time": "2024-01-01T16:05:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Pete",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "p2",
+          "qualifier": "package"
+        }
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "packaging",
+      "time": "2024-01-01T16:07:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Mike",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "p3",
+          "qualifier": "package"
+        }
+      ]
+    },
+    {
+      "id": "e15",
+      "type": "sending",
+      "time": "2024-01-01T16:23:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Ellen",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m3",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i4",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "p2",
+          "qualifier": "package"
+        }
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "sending",
+      "time": "2024-01-01T16:29:00Z",
+      "attributes": [],
+      "relationships": [
+        {
+          "objectId": "Ellen",
+          "qualifier": "employee"
+        },
+        {
+          "objectId": "m3",
+          "qualifier": "machine"
+        },
+        {
+          "objectId": "i3",
+          "qualifier": "item"
+        },
+        {
+          "objectId": "p3",
+          "qualifier": "package"
+        }
+      ]
+    }
+  ]
+}

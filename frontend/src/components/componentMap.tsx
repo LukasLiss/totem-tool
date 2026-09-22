@@ -144,6 +144,27 @@ export interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // OCHandoverComponent / ResourceProfilingComponent properties
+    method?: 'oc' | 'flattened';
+    resource_types?: string[];
+    businessobject_types?: string[];
+    case_type?: string;
+    flat_resource_type?: string;
+    max_gap?: number | null;
+    normalization?: 'by_source' | 'by_target' | 'by_arcs_in_eog' | 'by_total_weight';
+    normalization_scope?: 'global' | 'per_bo_type';
+    parallel_filter_enabled?: boolean;
+    parallel_threshold?: number;
+    min_parallel_observations?: number;
+    cluster_by_ot?: boolean;
+    view_mode?: 'graph' | 'table' | 'log';
+    feature_groups?: string[];
+    tooltip_feature_groups?: string[];
+    compute_clusters?: boolean;
+    cluster_method?: 'kmeans' | 'agglomerative' | 'hdbscan';
+    n_clusters?: number;
+    min_cluster_size?: number;
+    distance_metric?: 'euclidean' | 'hellinger';
     // SqlQueryComponent properties
     name?: string;
     query?: string;
