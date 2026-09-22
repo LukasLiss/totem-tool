@@ -104,7 +104,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             dashboardId={dashboardId}  // Pass dashboardId
             onUpdate={(updates) => {
               Object.assign(w, updates);
-              gridRef.current?.update(el, updates);
+              // `el` is the widget's content element. grid.update() writes the
+              // node's position styles onto whatever element it is given, so
+              // it must get the grid item itself — otherwise the content is
+              // offset by the item's own column/row inside the item and the
+              // widget appears to jump away from its stored position.
+              const itemEl = (el.closest('.grid-stack-item') as HTMLElement | null) ?? el;
+              gridRef.current?.update(itemEl, updates);
             }}
           />
         );

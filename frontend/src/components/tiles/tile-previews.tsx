@@ -281,9 +281,10 @@ export const HandoverTile = () => (
   <TilePreview label="Handover of Work">
     <path d="M22 18 Q50 4 78 18" fill="none" stroke={BLUE} strokeWidth="2" strokeLinecap="round" />
     <path d="M78 32 Q50 46 22 32" fill="none" stroke={GREEN} strokeWidth="2" strokeLinecap="round" />
-    <path d="M28 27 L50 40" fill="none" stroke={AMBER} strokeWidth="2" strokeLinecap="round" />
+    <line x1="16" y1="25" x2="52" y2="42" stroke={AMBER} strokeWidth="2" strokeLinecap="round" />
     <polygon points="76,14 82,18 76,22" fill={BLUE} />
     <polygon points="24,28 18,32 24,36" fill={GREEN} />
+    <polygon points="40,33 47,40 38,40" fill={AMBER} />
     <circle cx="16" cy="25" r="7" fill={MUTED} stroke={SLATE} strokeWidth="2" />
     <circle cx="84" cy="25" r="7" fill={MUTED} stroke={SLATE} strokeWidth="2" />
     <circle cx="52" cy="42" r="5" fill={MUTED} stroke={SLATE} strokeWidth="2" />
