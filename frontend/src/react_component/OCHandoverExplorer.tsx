@@ -1,5 +1,16 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useContext } from "react";
-import { ClusterContext, type ClusterInfo } from "@/contexts/ClusterContext";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
+import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
+import { useFilterVersion } from "@/store/filterStore";
+import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import {
+  DEFAULT_HANDOVER_SETTINGS,
+  NORMALIZATION_LABELS,
+  type HandoverMethod,
+  type HandoverNormalization,
+  type HandoverSettings,
+  type HandoverViewMode,
+} from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, X } from "lucide-react";
 import {
@@ -68,10 +79,18 @@ type OCHandoverExplorerProps = {
   onDataLoad?: (data: HandoverData) => void;
   embedded?: boolean;
   fileName?: string;
+  /** Preselected settings; dashboard widgets persist these. Read once on mount. */
+  initialSettings?: Partial<HandoverSettings>;
+  /** Hide the settings panel (dashboard view mode); compute + result views stay. */
+  showControls?: boolean;
+  /** Start the computation as soon as the object types are known. */
+  autoStart?: boolean;
+  /** Send the global filter with every request (default true). */
+  filterEnabled?: boolean;
 };
 
-type ViewMode = "table" | "graph" | "log";
-type Method = "oc" | "flattened";
+type ViewMode = HandoverViewMode;
+type Method = HandoverMethod;
 
 type EventLogData = {
   object_types: string[];
@@ -82,16 +101,35 @@ type EventLogData = {
     objects: Record<string, string[]>;
   }[];
 };
-type Normalization = "by_source" | "by_target" | "by_arcs_in_eog" | "by_total_weight";
+type Normalization = HandoverNormalization;
 type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
 type SortDir = "asc" | "desc";
 
-const NORMALIZATION_LABELS: Record<Normalization, string> = {
-  by_source:       "By Source",
-  by_target:       "By Target",
-  by_arcs_in_eog:  "By Arcs in EOG",
-  by_total_weight: "By Total Weight",
-};
+/* ── API helpers ─────────────────────────────────────────────── */
+type HandoverParams = Record<string, string>;
+
+/** GET without clusters, POST (JSON body) when a cluster map is applied. The
+ *  axios interceptors add the auth header and, unless skipped, the global
+ *  filter parameters. */
+async function requestHandover<T>(
+  params: HandoverParams,
+  clusterMap: Record<string, string> | null,
+  filterEnabled: boolean,
+): Promise<T> {
+  const config = { _skipGlobalFilter: !filterEnabled };
+  const { data } = clusterMap
+    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap }, config)
+    : await axios.get<T>("/api/handover/", { params, ...config });
+  return data;
+}
+
+function apiErrorMessage(e: unknown, fallback: string): string {
+  if (axios.isAxiosError(e)) {
+    const body = e.response?.data as { error?: string } | undefined;
+    return body?.error || e.message || fallback;
+  }
+  return e instanceof Error && e.message ? e.message : fallback;
+}
 
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
@@ -131,28 +169,35 @@ export default function OCHandoverExplorer({
   onDataLoad,
   embedded = false,
   fileName,
+  initialSettings,
+  showControls = true,
+  autoStart = false,
+  filterEnabled = true,
 }: OCHandoverExplorerProps) {
+  // Settings are read once; a host that changes them re-mounts the explorer.
+  const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
-  const [method, setMethod] = useState<Method>("oc");
-  const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set());
-  const [boTypes, setBoTypes] = useState<Set<string>>(new Set());
-  const [caseType, setCaseType] = useState<string>("");
-  const [flatResourceType, setFlatResourceType] = useState<string>("");
+  // The method is preselected by the host (analysis view: object-centric).
+  const [method] = useState<Method>(initial.method);
+  const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
+  const [boTypes, setBoTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
+  const [caseType, setCaseType] = useState<string>(initial.caseType);
+  const [flatResourceType, setFlatResourceType] = useState<string>(initial.flatResourceType);
   const [data, setData] = useState<HandoverData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const hasStartedLoadingRef = useRef(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("graph");
-  const [maxGap, setMaxGap] = useState<number | null>(null);
-  const [normalization, setNormalization] = useState<Normalization>("by_arcs_in_eog");
-  const [normalizationScope, setNormalizationScope] = useState<"global" | "per_bo_type">("global");
+  const [viewMode, setViewMode] = useState<ViewMode>(initial.viewMode);
+  const [maxGap, setMaxGap] = useState<number | null>(initial.maxGap);
+  const [normalization, setNormalization] = useState<Normalization>(initial.normalization);
+  const [normalizationScope, setNormalizationScope] = useState<"global" | "per_bo_type">(initial.normalizationScope);
   const [sortCol, setSortCol] = useState<SortCol>("weight");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [parallelFilterEnabled, setParallelFilterEnabled] = useState(false);
-  const [parallelThreshold, setParallelThreshold] = useState(0.5);
-  const [minParallelObs, setMinParallelObs] = useState(1);
-  const [minParallelObsStr, setMinParallelObsStr] = useState("1");
+  const [parallelFilterEnabled, setParallelFilterEnabled] = useState(initial.parallelFilterEnabled);
+  const [parallelThreshold, setParallelThreshold] = useState(initial.parallelThreshold);
+  const [minParallelObs, setMinParallelObs] = useState(initial.minParallelObservations);
+  const [minParallelObsStr, setMinParallelObsStr] = useState(String(initial.minParallelObservations));
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const [visibleGraphNodes, setVisibleGraphNodes] = useState<HandoverNode[]>([]);
@@ -161,9 +206,15 @@ export default function OCHandoverExplorer({
   const nodeSearchRef = useRef<HTMLDivElement>(null);
   const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const graphViewBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
-  const { clusterInfo } = useContext(ClusterContext);
+  const { clusterInfo } = useCluster();
   const [useClusters, setUseClusters] = useState(false);
-  const [clusterByOt, setClusterByOt] = useState(false);
+  const [clusterByOt, setClusterByOt] = useState(initial.clusterByOt);
+  // Effects that reset state when a setting changes must not fire for the
+  // preselected values on mount; this ref is flipped by the last effect below.
+  const isFirstRender = useRef(true);
+  const filterEnabledRef = useRef(filterEnabled);
+  useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const filterVersion = useFilterVersion();
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [logError, setLogError] = useState("");
@@ -206,7 +257,6 @@ export default function OCHandoverExplorer({
   // recomputation when the handover explorer is not using clusters.
   // useClusters intentionally NOT in deps: toggling it should not auto-recompute.
   const [clusterTrigger, setClusterTrigger] = useState(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (useClustersRef.current) setClusterTrigger(t => t + 1); }, [clusterInfo]);
 
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -218,59 +268,45 @@ export default function OCHandoverExplorer({
 
   // Phase 1: load object types when fileId changes
   useEffect(() => {
-    if (!fileId) {
-      setObjectTypes([]);
-      setResourceTypes(new Set());
-      setBoTypes(new Set());
-      setData(null);
-      setStatus("idle");
-      hasStartedLoadingRef.current = false;
-      setHasStartedLoading(false);
-      return;
-    }
-
     setObjectTypes([]);
-    setResourceTypes(new Set());
-    setBoTypes(new Set());
-    setCaseType("");
-    setFlatResourceType("");
+    setResourceTypes(new Set(initial.resourceTypes));
+    setBoTypes(new Set(initial.businessObjectTypes));
+    setCaseType(initial.caseType);
+    setFlatResourceType(initial.flatResourceType);
     setData(null);
     setStatus("idle");
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
+    if (!fileId) return;
 
     const currentFileId = fileId;
     let cancelled = false;
 
     (async () => {
       if (fileIdRef.current !== currentFileId) return;
-      const token = localStorage.getItem("access_token");
-      if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
       try {
-        const res = await fetch(`/api/files/${currentFileId}/object_types/`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        });
+        const types = await fetchObjectTypes(currentFileId);
         if (fileIdRef.current !== currentFileId || cancelled) return;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const raw = await res.json();
-        if (fileIdRef.current !== currentFileId || cancelled) return;
-        const types: string[] = Array.isArray(raw)
-          ? raw.map((t: any) => (typeof t === "string" ? t : t.name))
-          : [];
         setObjectTypes(types);
-      } catch (e: any) {
+        // Preselected types that no longer exist in this log are dropped.
+        const known = new Set(types);
+        setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
+        setBoTypes(prev => new Set([...prev].filter(t => known.has(t))));
+        setCaseType(prev => (known.has(prev) ? prev : ""));
+        setFlatResourceType(prev => (known.has(prev) ? prev : ""));
+      } catch (e: unknown) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
-        setErrorMsg(e?.message || "Failed to load object types");
+        setErrorMsg(apiErrorMessage(e, "Failed to load object types"));
       }
     })();
 
     return () => { cancelled = true; };
-  }, [fileId]);
+  }, [fileId, initial]);
 
-  // Reset results when the method changes
+  // Reset results when the method changes (not for the preselected method on mount)
   useEffect(() => {
+    if (isFirstRender.current) return;
     setData(null);
     setStatus("idle");
     hasStartedLoadingRef.current = false;
@@ -289,7 +325,7 @@ export default function OCHandoverExplorer({
   }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs, clusterByOt]);
 
   // Reset selected node and locked height when data changes
-  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode("graph"); graphPositionsRef.current = {}; graphViewBoxRef.current = null; }, [data]);
+  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode(initial.viewMode); graphPositionsRef.current = {}; graphViewBoxRef.current = null; }, [data, initial.viewMode]);
 
   // Reset log data when fileId changes
   useEffect(() => {
@@ -309,16 +345,8 @@ export default function OCHandoverExplorer({
     let cancelled = false;
     setMlpaStatus("loading");
     (async () => {
-      const token = localStorage.getItem("access_token");
-      if (!token) { if (!cancelled) setMlpaStatus("error"); return; }
       try {
-        const res = await fetch(`/api/files/${fileId}/discover_mlpa/`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (cancelled) return;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+        const { data: json } = await axios.get(`/api/files/${fileId}/discover_mlpa/`, { _skipGlobalFilter: true });
         if (cancelled) return;
         setMlpaLayers(json.layers ?? null);
         setMlpaStatus("ready");
@@ -335,23 +363,18 @@ export default function OCHandoverExplorer({
     let cancelled = false;
     setLogStatus("loading");
     (async () => {
-      const token = localStorage.getItem("access_token");
-      if (!token) { setLogStatus("error"); setLogError("Not authenticated"); return; }
       try {
-        const res = await fetch(`/api/event-log/?file_id=${fileId}`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}` },
+        const { data: result } = await axios.get<EventLogData>("/api/event-log/", {
+          params: { file_id: fileId },
+          _skipGlobalFilter: !filterEnabledRef.current,
         });
-        if (cancelled) return;
-        if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
-        const result: EventLogData = await res.json();
         if (cancelled) return;
         setLogData(result);
         setLogStatus("ready");
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (cancelled) return;
         setLogStatus("error");
-        setLogError(e?.message || "Failed to load event log");
+        setLogError(apiErrorMessage(e, "Failed to load event log"));
       }
     })();
     return () => { cancelled = true; };
@@ -416,36 +439,17 @@ export default function OCHandoverExplorer({
       setStatus("loading");
       setErrorMsg("");
 
-      const token = localStorage.getItem("access_token");
-      if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
-
       try {
         const activeClusterMap = useClustersRef.current && clusterInfoRef.current ? clusterInfoRef.current.clusterMap : null;
-        const res = activeClusterMap
-          ? await fetch("/api/handover/", {
-              method: "POST",
-              credentials: "include",
-              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
-            })
-          : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
-              credentials: "include",
-              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            });
-        if (fileIdRef.current !== currentFileId || cancelled) return;
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
-        const result: HandoverData = await res.json();
+        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current);
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
         setStatus(result.edges.length > 0 ? "ready" : "empty");
         onDataLoad?.(result);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
-        setErrorMsg(e?.message || "Handover computation failed");
+        setErrorMsg(apiErrorMessage(e, "Handover computation failed"));
       }
     })();
 
@@ -462,6 +466,42 @@ export default function OCHandoverExplorer({
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
+  const canCompute = method === "oc"
+    ? resourceTypes.size > 0 && boTypes.size > 0
+    : caseType !== "" && flatResourceType !== "";
+
+  // Auto start: once per file, as soon as the object types are known and the
+  // preselected settings allow a computation.
+  const autoStartedForRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute) return;
+    if (autoStartedForRef.current === fileId) return;
+    autoStartedForRef.current = fileId;
+    hasStartedLoadingRef.current = true;
+    setHasStartedLoading(true);
+  }, [autoStart, fileId, objectTypes, canCompute]);
+
+  // A changed global filter (or toggling it for this explorer) invalidates the
+  // result; an auto-starting host recomputes, everyone else gets the button back.
+  useEffect(() => {
+    if (isFirstRender.current) return;
+    setData(null);
+    setStatus("idle");
+    setErrorMsg("");
+    setLogData(null);
+    setLogStatus("idle");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    if (autoStart && canCompute) {
+      setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
+    }
+  // Only the filter is a trigger here; the other values are read when it fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterVersion, filterEnabled]);
+
+  // Must stay the last effect: everything above checks isFirstRender.
+  useEffect(() => { isFirstRender.current = false; }, []);
+
   // Clear flows + bindings when handover data is recomputed
   useEffect(() => {
     setFlowsData(null);
@@ -474,9 +514,6 @@ export default function OCHandoverExplorer({
     if (!fileId || flowsStatus === "loading") return;
     setFlowsStatus("loading");
     setFlowsData(null);
-
-    const token = localStorage.getItem("access_token");
-    if (!token) { setFlowsStatus("error"); return; }
 
     const params: Record<string, string> = {
       file_id: String(fileId),
@@ -502,23 +539,9 @@ export default function OCHandoverExplorer({
 
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
-      const res = activeClusterMap
-        ? await fetch("/api/handover/", {
-            method: "POST",
-            credentials: "include",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
-          })
-        : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
-            credentials: "include",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const result = await res.json();
+      const result = await requestHandover<{ flows?: FlowEvent[]; timeline?: FlowsData["timeline"] }>(
+        params, activeClusterMap, filterEnabledRef.current,
+      );
       if (result.flows && result.timeline) {
         setFlowsData({ flows: result.flows, timeline: result.timeline });
         setFlowsStatus("ready");
@@ -534,8 +557,6 @@ export default function OCHandoverExplorer({
     if (!fileId || bindingsStatus === "loading") return;
     setBindingsStatus("loading");
     setBindingsData(null);
-    const token = localStorage.getItem("access_token");
-    if (!token) { setBindingsStatus("error"); return; }
     const params: Record<string, string> = {
       file_id: String(fileId),
       method,
@@ -559,22 +580,7 @@ export default function OCHandoverExplorer({
     }
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
-      const res = activeClusterMap
-        ? await fetch("/api/handover/", {
-            method: "POST",
-            credentials: "include",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ ...params, cluster_map: activeClusterMap }),
-          })
-        : await fetch(`/api/handover/?${new URLSearchParams(params)}`, {
-            credentials: "include",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const result = await res.json();
+      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current);
       if (Array.isArray(result.bindings)) {
         setBindingsData(result.bindings);
         setBindingsStatus("ready");
@@ -602,13 +608,13 @@ export default function OCHandoverExplorer({
   }, [useClusters, clusterInfo]);
 
   const toggleResourceType = (t: string) => {
-    setResourceTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
+    setResourceTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
     setBoTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
     setSelectedMlpaLevel(null);
   };
 
   const toggleBoType = (t: string) => {
-    setBoTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
+    setBoTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
     setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
     setSelectedMlpaLevel(null);
   };
@@ -662,7 +668,7 @@ export default function OCHandoverExplorer({
           <p className="text-sm text-muted-foreground">Select a file to start.</p>
         )}
 
-        {fileId && objectTypes.length > 0 && (
+        {fileId && showControls && objectTypes.length > 0 && (
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
               <Tooltip delayDuration={600}>
@@ -843,7 +849,7 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
+        {fileId && showControls && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
           <div className="border rounded-md p-3 self-center">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -889,21 +895,21 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && method === "oc" && (
+        {fileId && showControls && objectTypes.length > 0 && method === "oc" && (
           <div className="flex gap-4 flex-wrap justify-center">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && method === "flattened" && (
+        {fileId && showControls && objectTypes.length > 0 && method === "flattened" && (
           <div className="flex gap-4 flex-wrap justify-center">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && (
+        {fileId && showControls && objectTypes.length > 0 && (
           <div className="border rounded-md p-3 min-w-[180px] self-center">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters</p>
             <div className={`flex items-center gap-2 ${!clusterInfo ? "opacity-40 pointer-events-none" : ""}`}>
@@ -942,14 +948,21 @@ export default function OCHandoverExplorer({
         )}
 
         {fileId && objectTypes.length > 0 && (() => {
-          const canCompute = method === "oc"
-            ? resourceTypes.size > 0 && boTypes.size > 0
-            : caseType !== "" && flatResourceType !== "";
+          // With the settings hidden, only a "compute" button (or the running
+          // computation) is shown; without a usable preselection, say why.
+          if (!showControls && (status === "ready" || status === "empty")) return null;
           return (
             <div className="flex flex-col gap-3 items-center py-4">
-              <div className="text-sm text-muted-foreground text-center">
-                Click below when ready to start the computation.
-              </div>
+              {showControls && (
+                <div className="text-sm text-muted-foreground text-center">
+                  Click below when ready to start the computation.
+                </div>
+              )}
+              {!showControls && !canCompute && (
+                <div className="text-sm text-muted-foreground text-center">
+                  No object types preselected — configure this widget in the dashboard's edit mode.
+                </div>
+              )}
               <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
                 {status === "loading" ? "Computing…" : "Compute Handover"}
               </Button>
@@ -3116,7 +3129,7 @@ function HandoverGraph({
                     return (
                       <div
                         key={ot}
-                        onClick={() => setSelectedTypeFilters(prev => { const next = new Set(prev); active ? next.delete(ot) : next.add(ot); return next; })}
+                        onClick={() => setSelectedTypeFilters(prev => { const next = new Set(prev); if (active) next.delete(ot); else next.add(ot); return next; })}
                         style={{
                           display: "inline-flex", alignItems: "center", gap: 3,
                           padding: active ? "2px 4px 2px 8px" : "2px 8px",
@@ -3169,7 +3182,7 @@ function HandoverGraph({
                         checked={checked}
                         onChange={() => setCheckedNodes(prev => {
                           const next = new Set(prev);
-                          checked ? next.delete(n.id) : next.add(n.id);
+                          if (checked) next.delete(n.id); else next.add(n.id);
                           return next;
                         })}
                         style={{ width: 13, height: 13, accentColor: color, flexShrink: 0 }}
@@ -3501,7 +3514,6 @@ function NodeDetailView({
   useEffect(() => {
     if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
     setScrollTop(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNode]);
 
   const outEdges = data.edges.filter(e => e.source === selectedNode && e.target !== selectedNode);

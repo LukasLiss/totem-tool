@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useRef, useState, useContext } from "react";
-import TooltipBox, { pieSlicePath } from "@/react_component/ResourceTooltip";
-import { ClusterContext, type TypeNMap } from "@/contexts/ClusterContext";
+import { useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
+import TooltipBox from "@/react_component/ResourceTooltip";
+import { pieSlicePath } from "@/react_component/orgamining/geometry";
+import { useCluster, type TypeNMap } from "@/contexts/ClusterContext";
+import { useFilterVersion } from "@/store/filterStore";
+import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import {
+  DEFAULT_PROFILING_SETTINGS,
+  type ProfilingClusterMethod,
+  type ProfilingDistanceMetric,
+  type ProfilingViewMode,
+  type ResourceProfilingSettings,
+} from "@/react_component/orgamining/settings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -40,9 +51,25 @@ type ProfileMatrixData = {
 type OrgaMiningExplorerProps = {
   fileId?: number;
   embedded?: boolean;
+  /** Preselected settings; dashboard widgets persist these. Read once on mount. */
+  initialSettings?: Partial<ResourceProfilingSettings>;
+  /** Hide the settings panel (dashboard view mode); compute + result views stay. */
+  showControls?: boolean;
+  /** Start the computation as soon as the object types are known. */
+  autoStart?: boolean;
+  /** Send the global filter with every request (default true). */
+  filterEnabled?: boolean;
 };
 
-type ViewMode = "table" | "graph";
+type ViewMode = ProfilingViewMode;
+
+function apiErrorMessage(e: unknown, fallback: string): string {
+  if (axios.isAxiosError(e)) {
+    const body = e.response?.data as { error?: string } | undefined;
+    return body?.error || e.message || fallback;
+  }
+  return e instanceof Error && e.message ? e.message : fallback;
+}
 
 const NODE_R = 8;
 
@@ -64,27 +91,37 @@ const ACTIVITY_COLORS = [
 export default function OrgaMiningExplorer({
   fileId,
   embedded = false,
+  initialSettings,
+  showControls = true,
+  autoStart = false,
+  filterEnabled = true,
 }: OrgaMiningExplorerProps) {
+  // Settings are read once; a host that changes them re-mounts the explorer.
+  const [initial] = useState<ResourceProfilingSettings>(() => ({ ...DEFAULT_PROFILING_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
-  const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set());
+  const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
   const [data, setData] = useState<ProfileMatrixData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   const hasStartedLoadingRef = useRef(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("graph");
-  const [featureGroups, setFeatureGroups] = useState<Set<string>>(new Set(["activity_fractions"]));
-  const [tooltipFeatureGroups, setTooltipFeatureGroups] = useState<Set<string>>(new Set());
-  const [businessObjectTypes, setBusinessObjectTypes] = useState<Set<string>>(new Set());
-  const [clustersEnabled, setClustersEnabled] = useState(true);
-  const [nClusters, setNClusters] = useState(3);
-  const [nClustersStr, setNClustersStr] = useState("3");
-  const [clusterMethod, setClusterMethod] = useState<"kmeans" | "agglomerative" | "hdbscan">("hdbscan");
-  const [distanceMetric, setDistanceMetric] = useState<"euclidean" | "hellinger">("euclidean");
-  const [minClusterSize, setMinClusterSize] = useState(2);
-  const [minClusterSizeStr, setMinClusterSizeStr] = useState("2");
+  const [viewMode, setViewMode] = useState<ViewMode>(initial.viewMode);
+  const [featureGroups, setFeatureGroups] = useState<Set<string>>(new Set<string>(initial.featureGroups));
+  const [tooltipFeatureGroups, setTooltipFeatureGroups] = useState<Set<string>>(new Set<string>(initial.tooltipFeatureGroups));
+  const [businessObjectTypes, setBusinessObjectTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
+  const [clustersEnabled, setClustersEnabled] = useState(initial.computeClusters);
+  const [nClusters, setNClusters] = useState(initial.nClusters);
+  const [nClustersStr, setNClustersStr] = useState(String(initial.nClusters));
+  const [clusterMethod, setClusterMethod] = useState<ProfilingClusterMethod>(initial.clusterMethod);
+  const [distanceMetric, setDistanceMetric] = useState<ProfilingDistanceMetric>(initial.distanceMetric);
+  const [minClusterSize, setMinClusterSize] = useState(initial.minClusterSize);
+  const [minClusterSizeStr, setMinClusterSizeStr] = useState(String(initial.minClusterSize));
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
-  const { setClusterInfo } = useContext(ClusterContext);
+  const { setClusterInfo } = useCluster();
+  const isFirstRender = useRef(true);
+  const filterEnabledRef = useRef(filterEnabled);
+  useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const filterVersion = useFilterVersion();
   const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -124,55 +161,43 @@ export default function OrgaMiningExplorer({
 
   // Load object types when fileId changes
   useEffect(() => {
-    if (!fileId) {
-      setObjectTypes([]);
-      setResourceTypes(new Set());
-      setData(null);
-      setStatus("idle");
-      hasStartedLoadingRef.current = false;
-      setHasStartedLoading(false);
-      return;
-    }
-
     setObjectTypes([]);
-    setResourceTypes(new Set());
+    setResourceTypes(new Set(initial.resourceTypes));
+    setBusinessObjectTypes(new Set(initial.businessObjectTypes));
     setData(null);
     setStatus("idle");
     hasStartedLoadingRef.current = false;
     setHasStartedLoading(false);
+    if (!fileId) return;
 
     const currentFileId = fileId;
     let cancelled = false;
 
     (async () => {
       if (fileIdRef.current !== currentFileId) return;
-      const token = localStorage.getItem("access_token");
-      if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
       try {
-        const res = await fetch(`/api/files/${currentFileId}/object_types/`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        });
-        if (fileIdRef.current !== currentFileId || cancelled) return;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const raw = await res.json();
-        const types: string[] = Array.isArray(raw)
-          ? raw.map((t: any) => (typeof t === "string" ? t : t.name))
-          : [];
+        const types = await fetchObjectTypes(currentFileId);
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setObjectTypes(types);
+        const known = new Set(types);
+        // Preselected types that no longer exist in this log are dropped.
+        setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
         // Default: all types are potential business objects; the selector will
-        // show only the non-resource subset, all pre-selected.
-        setBusinessObjectTypes(new Set(types));
-      } catch (e: any) {
+        // show only the non-resource subset, all pre-selected. A preselection
+        // narrows that down.
+        setBusinessObjectTypes(prev => {
+          const kept = [...prev].filter(t => known.has(t));
+          return new Set(kept.length > 0 ? kept : types);
+        });
+      } catch (e: unknown) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
-        setErrorMsg(e?.message || "Failed to load object types");
+        setErrorMsg(apiErrorMessage(e, "Failed to load object types"));
       }
     })();
 
     return () => { cancelled = true; };
-  }, [fileId]);
+  }, [fileId, initial]);
 
   // Compute matrix when triggered
   useEffect(() => {
@@ -215,27 +240,18 @@ export default function OrgaMiningExplorer({
       setStatus("loading");
       setErrorMsg("");
 
-      const token = localStorage.getItem("access_token");
-      if (!token) { setStatus("error"); setErrorMsg("Not authenticated"); return; }
-
       try {
-        const res = await fetch(`/api/profile-matrix/?${new URLSearchParams(params)}`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        const { data: result } = await axios.get<ProfileMatrixData>("/api/profile-matrix/", {
+          params,
+          _skipGlobalFilter: !filterEnabledRef.current,
         });
-        if (fileIdRef.current !== currentFileId || cancelled) return;
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
-        const result: ProfileMatrixData = await res.json();
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
         setStatus("ready");
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
-        setErrorMsg(e?.message || "Computation failed");
+        setErrorMsg(apiErrorMessage(e, "Computation failed"));
       }
     })();
 
@@ -253,7 +269,7 @@ export default function OrgaMiningExplorer({
     return () => clearTimeout(id);
   }, [status, lockedHeight]);
 
-  useEffect(() => { setLockedHeight(null); setViewMode("graph"); }, [data]);
+  useEffect(() => { setLockedHeight(null); setViewMode(initial.viewMode); }, [data, initial.viewMode]);
 
   // Sync cluster assignments into ClusterContext whenever a new result arrives.
   // Clears the context when data is reset or clustering was disabled.
@@ -290,8 +306,40 @@ export default function OrgaMiningExplorer({
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
+  const canCompute = resourceTypes.size > 0;
+
+  // Auto start: once per file, as soon as the object types are known and a
+  // resource type is preselected.
+  const autoStartedForRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute) return;
+    if (autoStartedForRef.current === fileId) return;
+    autoStartedForRef.current = fileId;
+    hasStartedLoadingRef.current = true;
+    setHasStartedLoading(true);
+  }, [autoStart, fileId, objectTypes, canCompute]);
+
+  // A changed global filter (or toggling it for this explorer) invalidates the
+  // result; an auto-starting host recomputes, everyone else gets the button back.
+  useEffect(() => {
+    if (isFirstRender.current) return;
+    setData(null);
+    setStatus("idle");
+    setErrorMsg("");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    if (autoStart && canCompute) {
+      setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
+    }
+  // Only the filter is a trigger here; the other values are read when it fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterVersion, filterEnabled]);
+
+  // Must stay the last effect: everything above checks isFirstRender.
+  useEffect(() => { isFirstRender.current = false; }, []);
+
   const toggleResourceType = (t: string) =>
-    setResourceTypes(prev => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); return n; });
+    setResourceTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
@@ -312,7 +360,7 @@ export default function OrgaMiningExplorer({
 
         {fileId && <div ref={graphContainerRef} className="w-full" />}
 
-        {fileId && objectTypes.length > 0 && (
+        {fileId && showControls && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap items-start">
             <TypeSelector
               title="Resource types"
@@ -340,7 +388,7 @@ export default function OrgaMiningExplorer({
                       onCheckedChange={() =>
                         setFeatureGroups(prev => {
                           const n = new Set(prev);
-                          n.has(key) ? n.delete(key) : n.add(key);
+                          if (n.has(key)) n.delete(key); else n.add(key);
                           return n;
                         })
                       }
@@ -382,7 +430,7 @@ export default function OrgaMiningExplorer({
                             checked={tooltipFeatureGroups.has(key)}
                             onChange={() => setTooltipFeatureGroups(prev => {
                               const n = new Set(prev);
-                              n.has(key) ? n.delete(key) : n.add(key);
+                              if (n.has(key)) n.delete(key); else n.add(key);
                               return n;
                             })}
                             className="accent-primary"
@@ -407,7 +455,7 @@ export default function OrgaMiningExplorer({
                   selected={businessObjectTypes}
                   onToggle={t => setBusinessObjectTypes(prev => {
                     const n = new Set(prev);
-                    n.has(t) ? n.delete(t) : n.add(t);
+                    if (n.has(t)) n.delete(t); else n.add(t);
                     return n;
                   })}
                   colorMap={typeColorMap}
@@ -513,14 +561,21 @@ export default function OrgaMiningExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && (
+        {fileId && objectTypes.length > 0 && (showControls || status !== "ready") && (
           <div className="flex flex-col gap-3 items-center py-4">
-            <div className="text-sm text-muted-foreground text-center">
-              Click below when ready to start the computation.
-            </div>
+            {showControls && (
+              <div className="text-sm text-muted-foreground text-center">
+                Click below when ready to start the computation.
+              </div>
+            )}
+            {!showControls && !canCompute && (
+              <div className="text-sm text-muted-foreground text-center">
+                No resource types preselected — configure this widget in the dashboard's edit mode.
+              </div>
+            )}
             <Button
               onClick={handleCompute}
-              disabled={status === "loading" || resourceTypes.size === 0}
+              disabled={status === "loading" || !canCompute}
               className="min-w-[200px]"
             >
               {status === "loading" ? "Computing…" : "Compute Profile Matrix"}

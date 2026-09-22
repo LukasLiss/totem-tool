@@ -72,6 +72,28 @@ declare module 'gridstack' {
     value_column?: string;
     // FilterStackComponent
     filter_stack_json?: unknown;
+    // OCHandoverComponent (show_controls / automatic_loading are shared above)
+    method?: 'oc' | 'flattened';
+    resource_types?: string[];
+    businessobject_types?: string[];
+    case_type?: string;
+    flat_resource_type?: string;
+    max_gap?: number | null;
+    normalization?: 'by_source' | 'by_target' | 'by_arcs_in_eog' | 'by_total_weight';
+    normalization_scope?: 'global' | 'per_bo_type';
+    parallel_filter_enabled?: boolean;
+    parallel_threshold?: number;
+    min_parallel_observations?: number;
+    cluster_by_ot?: boolean;
+    view_mode?: 'graph' | 'table' | 'log';
+    // ResourceProfilingComponent (business_object_types / resource_types shared)
+    feature_groups?: string[];
+    tooltip_feature_groups?: string[];
+    compute_clusters?: boolean;
+    cluster_method?: 'kmeans' | 'agglomerative' | 'hdbscan';
+    n_clusters?: number;
+    min_cluster_size?: number;
+    distance_metric?: 'euclidean' | 'hellinger';
     // ProcessAreaComponent
     algorithm?: 'mlpa' | 'advanced';
     w_temporal?: number;

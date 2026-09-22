@@ -1,13 +1,6 @@
 import { useState } from "react";
 import type { TypeNMap } from "@/contexts/ClusterContext";
-
-/* ── Shared helper (duplicated from OrgaMiningExplorer to keep this self-contained) */
-export function pieSlicePath(r: number, startAngle: number, endAngle: number): string {
-  const x1 = r * Math.cos(startAngle), y1 = r * Math.sin(startAngle);
-  const x2 = r * Math.cos(endAngle),   y2 = r * Math.sin(endAngle);
-  const large = endAngle - startAngle > Math.PI ? 1 : 0;
-  return `M 0 0 L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
-}
+import { pieSlicePath } from "@/react_component/orgamining/geometry";
 
 /* ── TooltipBox ─────────────────────────────────────────────── */
 export default function TooltipBox({
@@ -71,7 +64,7 @@ export default function TooltipBox({
   const [showResources, setShowResources] = useState(false);
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const toggleType = (key: string) =>
-    setExpandedTypes(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setExpandedTypes(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const PIE_R = 32;
 
   const lookupKey = tooltip.isCluster
@@ -92,7 +85,6 @@ export default function TooltipBox({
     angle += sweep;
   });
 
-  const selfSet = new Set(tooltip.resources);
   function typeGroupedRows(resourceList: string[], offset: number, typeNMap: TypeNMap) {
     const precomputedN = typeNMap[lookupKey] ?? {};
 

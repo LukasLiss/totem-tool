@@ -193,7 +193,14 @@ export function AnalysisView() {
           </div>
         );
       case 'orgaMining':
-        return <OrgaMiningView fileId={selectedFile?.id} />;
+        return (
+          <OrgaMiningView
+            fileId={selectedFile?.id}
+            fileName={selectedFile?.file?.split("/").pop()}
+            filterEnabled={filterEnabled}
+            onToggleFilter={toggleFilter}
+          />
+        );
 
       default:
         return null;
@@ -220,7 +227,22 @@ const SLIDES = [
   { key: "handover", label: "Object-Centric Handover of Work" },
 ] as const;
 
-function OrgaMiningView({ fileId }: { fileId?: number }) {
+/**
+ * Organizational mining: resource profiling and handover of work, one at a
+ * time. Both stay mounted so the clusters found by the profiling carry over
+ * to the handover explorer without recomputing.
+ */
+function OrgaMiningView({
+  fileId,
+  fileName,
+  filterEnabled,
+  onToggleFilter,
+}: {
+  fileId?: number;
+  fileName?: string;
+  filterEnabled: boolean;
+  onToggleFilter: () => void;
+}) {
   const [activeIdx, setActiveIdx] = useState(0);
 
   return (
@@ -229,23 +251,32 @@ function OrgaMiningView({ fileId }: { fileId?: number }) {
         <Button
           variant="outline"
           size="icon"
+          aria-label="Previous organizational mining view"
           onClick={() => setActiveIdx(i => (i + SLIDES.length - 1) % SLIDES.length)}
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
-        <span className="text-sm font-medium text-muted-foreground">
-          {SLIDES[activeIdx].label}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-muted-foreground">
+            {SLIDES[activeIdx].label}
+          </span>
+          <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
+        </div>
         <Button
           variant="outline"
           size="icon"
+          aria-label="Next organizational mining view"
           onClick={() => setActiveIdx(i => (i + 1) % SLIDES.length)}
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
-      <div className={activeIdx !== 0 ? "hidden" : undefined}><OrgaMiningExplorer fileId={fileId} /></div>
-      <div className={activeIdx !== 1 ? "hidden" : undefined}><OCHandoverExplorer fileId={fileId} /></div>
+      <div className={activeIdx !== 0 ? "hidden" : undefined}>
+        <OrgaMiningExplorer fileId={fileId} filterEnabled={filterEnabled} />
+      </div>
+      <div className={activeIdx !== 1 ? "hidden" : undefined}>
+        <OCHandoverExplorer fileId={fileId} fileName={fileName} filterEnabled={filterEnabled} />
+      </div>
     </div>
   );
 }

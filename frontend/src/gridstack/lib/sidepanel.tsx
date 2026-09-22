@@ -4,6 +4,7 @@ import { useGrid } from "./gridContext";
 import {
   BarChartTile,
   DottedChartTile,
+  HandoverTile,
   ImageTile,
   KpiTile,
   LogStatisticsTile,
@@ -13,6 +14,7 @@ import {
   OcpnTile,
   PieChartTile,
   ProcessAreaTile,
+  ResourceProfilingTile,
   ScatterPlotTile,
   SqlEditorTile,
   TextBoxTile,
@@ -296,6 +298,63 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .oc-handover-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 8,
+        w: 10,
+        content: "Handover of Work",
+        component_name: "OCHandoverComponent",
+        show_controls: true,
+        automatic_loading: false,
+        method: "oc",
+        resource_types: [],
+        businessobject_types: [],
+        case_type: "",
+        flat_resource_type: "",
+        max_gap: null,
+        normalization: "by_arcs_in_eog",
+        normalization_scope: "global",
+        parallel_filter_enabled: false,
+        parallel_threshold: 0.5,
+        min_parallel_observations: 1,
+        cluster_by_ot: false,
+        view_mode: "graph",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .resource-profiling-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 8,
+        w: 10,
+        content: "Resource Profiling",
+        component_name: "ResourceProfilingComponent",
+        show_controls: true,
+        automatic_loading: false,
+        resource_types: [],
+        business_object_types: [],
+        feature_groups: ["activity_fractions"],
+        tooltip_feature_groups: [],
+        compute_clusters: true,
+        cluster_method: "hdbscan",
+        n_clusters: 3,
+        min_cluster_size: 2,
+        distance_metric: "euclidean",
+        view_mode: "graph",
+        order: 0
+      }]
+    );
+
   }, [grid]);
 
   // The panel's own markup: every tile is the same box, differing only in its
@@ -393,6 +452,16 @@ const SidePanel: React.FC = () => {
       <div className={`${TILE_CLASS} scatter-plot-component`}>
         <ScatterPlotTile />
         <div>Scatter Plot (by SQL)</div>
+      </div>
+
+      <div className={`${TILE_CLASS} oc-handover-component`}>
+        <HandoverTile />
+        <div>Handover of Work</div>
+      </div>
+
+      <div className={`${TILE_CLASS} resource-profiling-component`}>
+        <ResourceProfilingTile />
+        <div>Resource Profiling</div>
       </div>
       </div>
     </div>
