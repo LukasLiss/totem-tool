@@ -2,6 +2,33 @@
 
 The TOTeM Tool is an object-centric Process Analysis Tool that enables easy to use process import, discovery, conformance checking, and filtering capabilities.
 
+![The TOTeM Tool showing the Process Area Visualizer for the container logistics event log](docs/user-guide/images/totem-tool-overview.png)
+
+## ✨ Features
+
+Each linked page gives a short introduction to the feature with a screenshot.
+
+* OCEL 2.0 File import (SQLite, XML, JSON)
+* Analysis
+   * [Process Area Discovery](docs/user-guide/process-area-discovery.md)
+   * [TOTeM Discovery](docs/user-guide/totem-discovery.md)
+   * [Object-Centric Causal Net (OCCN) Discovery](docs/user-guide/occn-discovery.md)
+   * [Object-Centric Petri Net Discovery](docs/user-guide/oc-petri-net-discovery.md)
+   * [Object-Centric Directly Follows Graph Discovery](docs/user-guide/oc-dfg-discovery.md)
+   * [Object-Centric Variant Discovery](docs/user-guide/variant-discovery.md)
+   * [Object-Centric Dotted Chart Analysis](docs/user-guide/dotted-chart.md)
+   * Organizational Mining
+      * [Object-Centric Handover of Work Analysis](docs/user-guide/handover-of-work.md)
+      * [Object-Centric Resource Profiling](docs/user-guide/resource-profiling.md)
+   * [SQL Queries](docs/user-guide/sql-queries.md)
+* Conformance Checking
+   * [TOTeM Conformance](docs/user-guide/totem-conformance.md)
+   * [OCCN Conformance](docs/user-guide/occn-conformance.md)
+* [Dashboard Creation for customized overviews](docs/user-guide/dashboards.md)
+* [Project Asset Store](docs/user-guide/project-asset-store.md)
+* [Editors](docs/user-guide/editors.md)
+* [Playout](docs/user-guide/playout.md)
+
 ## 🚀 Quick Start
 
 To run the application locally or contribute, please see our **[Developer Guide](DEVELOPMENT.md)**.
