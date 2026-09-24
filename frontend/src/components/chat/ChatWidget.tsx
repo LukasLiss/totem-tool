@@ -752,6 +752,17 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     setIsResizing(true);
   };
 
+  // Re-open chat drawer when a guided tour finishes or is skipped
+  useEffect(() => {
+    const handleTourComplete = () => {
+      setIsOpen(true);
+    };
+    window.addEventListener("agent:tourComplete", handleTourComplete);
+    return () => {
+      window.removeEventListener("agent:tourComplete", handleTourComplete);
+    };
+  }, []);
+
   useEffect(() => {
     if (!isResizing) return;
 
@@ -1279,6 +1290,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
               messages.map((msg) => (
                 <div
                   key={msg.id}
+                  data-role={msg.role}
                   className={`flex gap-3 text-sm min-w-0 w-full ${
                     msg.role === "user" ? "flex-row-reverse" : "flex-row"
                   }`}

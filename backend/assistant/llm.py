@@ -199,6 +199,9 @@ class GeminiProvider(BaseLLMProvider):
                     logger.info("Gemini model '%s' returned 404; falling back to gemini-1.5-flash", self.model)
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
                     return fallback_provider.complete(system_prompt, user_message, tools, history)
+                if resp.status_code == 429:
+                    logger.warning("Gemini API error 429 quota exhausted; falling back to MockProvider.")
+                    return MockProvider().complete(system_prompt, user_message, tools, history)
                 logger.error("Gemini API error %d: %s", resp.status_code, resp.text)
                 return {
                     "text": f"Error communicating with Gemini API ({resp.status_code}): {resp.text}",
@@ -273,6 +276,10 @@ class GeminiProvider(BaseLLMProvider):
                     logger.info("Gemini stream model '%s' returned 404; falling back to gemini-1.5-flash", self.model)
                     fallback_provider = GeminiProvider(api_key=self.api_key, model="gemini-1.5-flash")
                     yield from fallback_provider.stream_chat(system_prompt, user_message, tools, history)
+                    return
+                if resp.status_code == 429:
+                    logger.warning("Gemini stream 429 quota exhausted; falling back to MockProvider.")
+                    yield from MockProvider().stream_chat(system_prompt, user_message, tools, history)
                     return
                 err_msg = f"Gemini stream error ({resp.status_code}): {resp.text}"
                 yield {"type": "error", "message": err_msg}
@@ -772,48 +779,190 @@ class MockProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         msg_lower = user_message.lower()
         tool_calls = []
+        is_teach = "TEACH MODE ACTIVE" in (system_prompt or "")
 
-        # Intent detection
-        if "stat" in msg_lower or "event" in msg_lower or "how many" in msg_lower:
-            tool_calls.append({
-                "id": "mock-tc-stat",
-                "name": "get_statistics",
-                "arguments": {},
-            })
-            text = "I will check the event log statistics for you."
-        elif "variant" in msg_lower:
-            tool_calls.append({
-                "id": "mock-tc-var",
-                "name": "find_variants",
-                "arguments": {"extraction": "leading_1hop"},
-            })
-            text = "Extracting trace variants from the active log."
-        elif "create" in msg_lower and "dashboard" in msg_lower:
-            tool_calls.append({
-                "id": "mock-tc-dash",
-                "name": "create_dashboard",
-                "arguments": {"name": "Process Overview Dashboard"},
-            })
-            text = "I can create a new dashboard for you."
-        elif "navigate" in msg_lower:
-            tool_calls.append({
-                "id": "mock-tc-nav",
-                "name": "navigate",
-                "arguments": {"route": "/dashboard"},
-            })
-            text = "Navigating to dashboard."
-        elif "highlight" in msg_lower or "tour" in msg_lower:
-            tool_calls.append({
-                "id": "mock-tc-high",
-                "name": "highlight_element",
-                "arguments": {
-                    "tour_id": "nav-overview",
-                    "label": "Click here to view overall process metrics.",
-                },
-            })
-            text = "Highlighting the navigation overview item."
+        if is_teach:
+            # 1. Procedural walkthrough: Create Dashboard (6-step tour sequence)
+            if ("create" in msg_lower and "dashboard" in msg_lower) or ("guide" in msg_lower and "dashboard" in msg_lower):
+                tool_calls.append({
+                    "id": "mock-tc-high-dash",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "steps": [
+                            {"tour_id": "nav-dashboard", "label": "Click Dashboards in the sidebar to open the dashboard dropdown menu"},
+                            {"tour_id": "dashboard-add-btn", "label": "Click Add Dashboard in the dropdown to open the creation dialog"},
+                            {"tour_id": "dashboard-name-input", "label": "Enter a name for your new dashboard in the dialog"},
+                            {"tour_id": "dashboard-save-btn", "label": "Click Save changes to create the dashboard and open it"},
+                            {"tour_id": "dashboard-add-card", "label": "Click the edit button in the top right to open the component catalog"},
+                            {"tour_id": "dashboard-grid", "label": "Drag and drop process mining components from the side panel onto the grid to add components as you wish"},
+                        ]
+                    },
+                })
+                text = "I will guide you through creating a new dashboard step by step. Follow each highlighted step on your screen."
+
+            # 2. Select / switch project or event log
+            elif "select" in msg_lower or "switch" in msg_lower or ("log" in msg_lower and "where" in msg_lower):
+                tool_calls.append({
+                    "id": "mock-tc-high-proj",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "steps": [
+                            {"tour_id": "project-switcher", "label": "Switch or select active event log database in the top left"},
+                            {"tour_id": "nav-overview", "label": "View process metrics for selected log in Overview"},
+                        ]
+                    },
+                })
+                text = "Here is where you can select or switch your active project and event log in the top left."
+
+            # 3. Conformance Checking
+            elif "conformance" in msg_lower:
+                if any(w in msg_lower for w in ["what is", "explain", "how does", "why"]):
+                    text = (
+                        "### Conformance Checking in TOTeM\n\n"
+                        "Conformance checking compares an observed object-centric event log against a normative process model.\n\n"
+                        "- **Model Alignments**: Maps recorded events to transitions in the model.\n"
+                        "- **Deviations**: Identifies unexpected, skipped, or out-of-order executions.\n"
+                        "- **Fitness Metric**: Quantifies the mathematical fraction of observed behavior permitted by the model."
+                    )
+                else:
+                    tool_calls.append({
+                        "id": "mock-tc-high-conf",
+                        "name": "highlight_element",
+                        "arguments": {
+                            "steps": [
+                                {"tour_id": "nav-conformance", "label": "Click Conformance in the sidebar"},
+                                {"tour_id": "nav-analysis", "label": "Review model alignments and deviations in Analysis"},
+                            ]
+                        },
+                    })
+                    text = "Here is where to run and inspect conformance checking in the interface."
+
+            # 4. Upload event logs
+            elif "upload" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-high-upload",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "steps": [
+                            {"tour_id": "upload-button", "label": "Click Upload in the sidebar to add new event log files"},
+                            {"tour_id": "nav-overview", "label": "Inspect imported events in Overview"},
+                        ]
+                    },
+                })
+                text = "Click the Upload button in the sidebar to import new OCEL 2.0 or standard event logs."
+
+            # 5. Discover process model
+            elif "discover" in msg_lower or "process model" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-high-disc",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "steps": [
+                            {"tour_id": "nav-analysis", "label": "Navigate to Analysis in the sidebar"},
+                            {"tour_id": "nav-overview", "label": "Inspect global process graph and models"},
+                        ]
+                    },
+                })
+                text = "Here is how to discover and visualize process models from your event log."
+
+            # 6. Conceptual: OCPM
+            elif "ocpm" in msg_lower or "object-centric" in msg_lower:
+                text = (
+                    "### Object-Centric Process Mining (OCPM)\n\n"
+                    "Traditional process mining flattens data to a single case identifier, which introduces convergence and divergence distortions. "
+                    "**OCPM** models multiple interacting object types (like Orders, Items, Deliveries, and Invoices) simultaneously in their natural state, "
+                    "enabling realistic end-to-end multi-entity analysis."
+                )
+
+            # 7. Conceptual: Variants
+            elif "variant" in msg_lower:
+                text = (
+                    "### Process Variants\n\n"
+                    "A process variant represents a distinct sequence of activities executed from case start to completion. "
+                    "Analyzing trace frequency distributions reveals the most common standard operating paths versus rare deviations and anomalies."
+                )
+
+            # 8. Generic / tour request
+            elif "tour" in msg_lower or "highlight" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-high-generic",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "tour_id": "nav-overview",
+                        "label": "Click here to inspect overall process metrics.",
+                    },
+                })
+                text = "Highlighting the Overview section for you."
+
+            else:
+                text = f"As your Teach Mode guide, I am ready to help you navigate and master TOTeM. You asked: '{user_message}'."
+
         else:
-            text = f"Echo: {user_message}"
+            # ACT MODE ACTIVE
+            if "create" in msg_lower and "dashboard" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-dash",
+                    "name": "create_dashboard",
+                    "arguments": {
+                        "name": "Process Overview Dashboard",
+                        "layout": [
+                            {"component_name": "LogStatisticsComponent", "x": 0, "y": 0, "w": 12, "h": 2},
+                            {"component_name": "VariantsComponent", "x": 0, "y": 2, "w": 6, "h": 6},
+                            {"component_name": "OCDottedChartComponent", "x": 6, "y": 2, "w": 6, "h": 6},
+                            {"component_name": "NewOCDFGComponent", "x": 0, "y": 8, "w": 6, "h": 6},
+                            {"component_name": "OCCNComponent", "x": 6, "y": 8, "w": 6, "h": 6},
+                        ],
+                    },
+                })
+                text = "Creating a new process overview dashboard with 5 essential process mining components."
+
+            elif "variant" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-var",
+                    "name": "find_variants",
+                    "arguments": {"extraction": "leading_1hop", "top_k": 5},
+                })
+                text = "Extracting top process variants from the active event log."
+
+            elif "dotted chart" in msg_lower or "throughput" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-view",
+                    "name": "set_view_mode",
+                    "arguments": {"mode": "analysis", "component": "dottedChart"},
+                })
+                tool_calls.append({
+                    "id": "mock-tc-chart",
+                    "name": "get_oc_dotted_chart",
+                    "arguments": {},
+                })
+                text = "Opening the OC Dotted Chart analysis view to inspect time-series event throughput."
+
+            elif "occn" in msg_lower or "causal" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-occn",
+                    "name": "discover_occn",
+                    "arguments": {},
+                })
+                text = "Discovering the Object-Centric Causal Net (OCCN) for this log."
+
+            elif "stat" in msg_lower or "metric" in msg_lower or "event" in msg_lower or "how many" in msg_lower or "bottleneck" in msg_lower or "duration" in msg_lower or "object type" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-stat",
+                    "name": "get_statistics",
+                    "arguments": {},
+                })
+                text = "Querying live metrics, activity frequencies, and case statistics for the active log."
+
+            elif "navigate" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-nav",
+                    "name": "navigate",
+                    "arguments": {"route": "/dashboard"},
+                })
+                text = "Navigating to dashboard."
+
+            else:
+                text = f"Executing Act Mode command: '{user_message}'. The process mining copilot is active."
 
         return {
             "text": text,
@@ -917,6 +1066,13 @@ def validate_provider_key(provider: str, api_key: str) -> Dict[str, Any]:
             clean_provider = "openai"
         else:
             clean_provider = "gemini"
+
+    if clean_provider == "mock":
+        return {
+            "valid": True,
+            "provider": "mock",
+            "message": "Offline Mock provider verified.",
+        }
 
     try:
         if clean_provider == "gemini":

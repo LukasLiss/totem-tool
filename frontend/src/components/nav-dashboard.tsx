@@ -1,6 +1,7 @@
 import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
-import { useContext, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { TOUR_IDS } from "@/tour/tourIds"
+import { useOptionalTourController } from "@/tour/TourController"
 import {
   Collapsible,
   CollapsibleContent,
@@ -57,6 +58,33 @@ export function NavDashboard({
   const [ openDelete, setOpenDelete ] = useState(false);
   const [dashboardToRename, setDashboardToRename] = useState<null | { id: number; name: string }>(null);
   const [dashboardToDelete, setDashboardToDelete] = useState<null | { id: number; name: string }>(null);
+
+  const tour = useOptionalTourController();
+  const currentTourId = tour?.state.active ? tour.state.currentTourId : null;
+  const [isCollapsibleOpen, setIsCollapsibleOpen] = useState(false);
+
+  useEffect(() => {
+    if (
+      currentTourId === TOUR_IDS.DASHBOARD_ADD_BTN ||
+      currentTourId === TOUR_IDS.DASHBOARD_NAME_INPUT ||
+      currentTourId === TOUR_IDS.DASHBOARD_SAVE_BTN
+    ) {
+      setIsCollapsibleOpen(true);
+    }
+    if (
+      currentTourId === TOUR_IDS.DASHBOARD_NAME_INPUT ||
+      currentTourId === TOUR_IDS.DASHBOARD_SAVE_BTN
+    ) {
+      setOpen(true);
+    }
+    if (
+      (currentTourId === TOUR_IDS.DASHBOARD_ADD_CARD || currentTourId === TOUR_IDS.DASHBOARD_GRID) &&
+      viewMode.type !== 'dashboard' &&
+      dashboards.length > 0
+    ) {
+      setViewMode({ type: 'dashboard', id: dashboards[0].id });
+    }
+  }, [currentTourId, viewMode, dashboards, setViewMode]);
 
 
 
@@ -154,7 +182,12 @@ export function NavDashboard({
     <div>
       <SidebarGroup>
         <SidebarMenu>
-          <Collapsible asChild className="group/collapsible">
+          <Collapsible
+            open={isCollapsibleOpen}
+            onOpenChange={setIsCollapsibleOpen}
+            asChild
+            className="group/collapsible"
+          >
             <SidebarMenuItem>
               {/* Main permanent button */}
               <CollapsibleTrigger asChild>
@@ -230,6 +263,7 @@ export function NavDashboard({
                   <SidebarMenuSubItem>
                     <Dialog
                       open={open}
+                      modal={!tour?.state.active}
                       onOpenChange={(next) => {
                         if (isSubmitting) return;
                         setOpen(next);

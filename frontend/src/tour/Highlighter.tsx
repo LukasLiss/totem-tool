@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { TourId } from "./tourIds";
 
 export interface HighlighterProps {
@@ -47,6 +48,12 @@ function findTourElement(tourId: TourId | string | null): HTMLElement | null {
   // 3. Alias: 'project-switcher' -> 'file-selector'
   if (tourId === "project-switcher" || tourId === "project_switcher") {
     el = document.querySelector<HTMLElement>(`[data-tour-id="file-selector"]`);
+    if (el) return el;
+  }
+
+  // 4. Alias: 'upload-button' fallback -> project-switcher when not on /upload page
+  if (tourId === "upload-button" || tourId === "upload_button") {
+    el = document.querySelector<HTMLElement>(`[data-tour-id="project-switcher"]`);
     if (el) return el;
   }
 
@@ -198,18 +205,18 @@ export function Highlighter({
     };
   }, [showNav, tourId, onNext, isLastStep]);
 
-  if (!showNav || !tourId) return null;
+  if (!showNav || !tourId || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
       data-testid="tour-highlighter"
-      className="fixed inset-0 z-50 pointer-events-none transition-all duration-200"
+      className="fixed inset-0 z-[100] pointer-events-none transition-all duration-200"
     >
       {/* Target element spotlight frame - non-blocking glowing highlight ring */}
       {targetRect && (
         <div
           data-testid="tour-spotlight"
-          className="absolute z-20 rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background shadow-[0_0_25px_rgba(59,130,246,0.5)] transition-all duration-300 animate-pulse pointer-events-none"
+          className="absolute z-[100] rounded-md ring-4 ring-primary ring-offset-2 ring-offset-background shadow-[0_0_25px_rgba(59,130,246,0.5)] transition-all duration-300 animate-pulse pointer-events-none"
           style={{
             top: `${Math.max(0, targetRect.top - 4)}px`,
             left: `${Math.max(0, targetRect.left - 4)}px`,
@@ -221,7 +228,7 @@ export function Highlighter({
 
       {/* Tour Callout Card */}
       <div
-        className="fixed z-50 pointer-events-auto flex items-center justify-center p-2 transition-all duration-300"
+        className="fixed z-[100] pointer-events-auto flex items-center justify-center p-2 transition-all duration-300"
         style={getCalloutPosition(targetRect)}
       >
         <div className="bg-popover text-popover-foreground p-4 rounded-lg shadow-2xl border max-w-sm w-88 bg-background/95 backdrop-blur-md">
@@ -274,7 +281,8 @@ export function Highlighter({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

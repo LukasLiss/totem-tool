@@ -137,7 +137,7 @@ def build_system_prompt(
             "           2. `dashboard-add-btn`: 'Click Add Dashboard in the dropdown to open the creation dialog'",
             "           3. `dashboard-name-input`: 'Enter a name for your new dashboard in the dialog'",
             "           4. `dashboard-save-btn`: 'Click Save changes to create the dashboard and open it'",
-            "           5. `dashboard-add-card`: 'Click the plus (+) button in the top right to open the component catalog'",
+            "           5. `dashboard-add-card`: 'Click the edit button in the top right to open the component catalog'",
             "           6. `dashboard-grid`: 'Drag and drop process mining components from the side panel onto the grid to add components as you wish'",
             "       * Conformance checking UI ('Where to run conformance?', 'Where do I run conformance checking?'):",
             "           `nav-conformance` ('Click Conformance in the sidebar') -> `nav-analysis` ('Review model alignments and deviations')",
