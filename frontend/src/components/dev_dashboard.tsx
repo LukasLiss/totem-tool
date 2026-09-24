@@ -46,6 +46,7 @@ export function DevDashboard() {
                 fileId={selectedFile?.id}
                 filterEnabled={occnFilterEnabled}
                 localFilterParams={occnLocalFilter}
+                showTitle={false}
               />
             </ReactFlowProvider>
           </CardContent>

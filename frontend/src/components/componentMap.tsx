@@ -1652,6 +1652,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
             fileId={selectedFile?.id}
             localFilterParams={localFilterParams}
             showControls={showControls}
+            showTitle={false}
             initialInteractionLocked={initialInteractionLocked}
             initialLayoutDirection={layoutDirection}
             initialThreshold={threshold}
