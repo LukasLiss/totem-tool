@@ -177,7 +177,7 @@ function OCCNVisualizer({
       Object.keys(effectiveLocalParams).length > 0 ? effectiveLocalParams : undefined,
       filterEnabled,
     );
-    if (filterConfig._noResults) { setNet(null); return; }
+    if (filterConfig._noResults) { setNet(null); setLoading(false); return; }
     axios
       .get<OccnNet>(
         `/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${

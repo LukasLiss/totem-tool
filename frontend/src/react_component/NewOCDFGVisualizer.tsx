@@ -854,7 +854,7 @@ function NewOCDFGVisualizer({
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0) return;
+    if (rawNodes.length === 0) { setBaseNodes([]); setBaseEdges([]); return; }
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
