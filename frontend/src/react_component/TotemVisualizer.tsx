@@ -16,7 +16,7 @@ import { RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
-import type { OcdfgGraph } from './NewOCDFGVisualizer';
+import type { OcdfgGraph, TraceVariantsMap } from './NewOCDFGVisualizer';
 import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
@@ -5521,7 +5521,7 @@ function TotemVisualizer({
           : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
       const { data: payload } = await axios.get<TotemApiResponse>(url, {
         _skipGlobalFilter: filterConfig._skipGlobalFilter,
-      } as any);
+      });
       if (!isCurrent()) return;
       setRawTotem(payload);
       // Share the result so other components (the Variants Explorer's
@@ -5578,9 +5578,9 @@ function TotemVisualizer({
         if (detailFilterConfig.params) {
           Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
         }
-        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: TraceVariantsMap } & Partial<OcdfgGraph>>(
           `${backendBaseUrl}/api/new-ocdfg/?${detailParams.toString()}`,
-          { _skipGlobalFilter: detailFilterConfig._skipGlobalFilter } as any,
+          { _skipGlobalFilter: detailFilterConfig._skipGlobalFilter },
         );
         if (payload?.error) {
           throw new Error(payload.error);

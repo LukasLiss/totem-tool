@@ -495,7 +495,7 @@ function TotemMinerVisualizer({
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter } as any,
+        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter },
       );
       setRawData(data);
     } catch (err) {

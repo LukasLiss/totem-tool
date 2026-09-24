@@ -104,7 +104,7 @@ export async function storeProcessExecutions(
   localFilterParams?: Record<string, string>,
 ): Promise<StoredExecutionsResponse> {
   const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
-  if (filterConfig._noResults) return { executions: [], variants: [], object_types: [] } as any;
+  if (filterConfig._noResults) return { executions: [], variants: [], object_types: [] } as unknown as StoredExecutionsResponse;
   const body = { ...buildStoreBody(execution, grouping, store), ...(filterConfig.params ?? {}) };
   const { data } = await axios.post<StoredExecutionsResponse>(
     `/api/files/${fileId}/process_executions/`,
@@ -132,7 +132,7 @@ export async function fetchProcessAreas(
   localFilterParams?: Record<string, string>,
 ): Promise<Omit<ProcessAreasSnapshot, "computedAt">> {
   const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
-  if (filterConfig._noResults) return { areas: [], objectTypeToActivities: {} };
+  if (filterConfig._noResults) return { fileId, algorithm: "advanced", filtered: filterEnabled, areas: [], objectTypeToActivities: {} };
   const { data } = await axios.get<ProcessAreaPayload>(
     `/api/files/${fileId}/discover_process_areas/`,
     filterConfig,
