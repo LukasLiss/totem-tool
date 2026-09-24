@@ -165,6 +165,7 @@ export const TransitionNode = memo(function TransitionNode({
   );
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const nodeTypes = {
   place: PlaceNode,
   transition: TransitionNode,

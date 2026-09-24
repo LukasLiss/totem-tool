@@ -1,5 +1,4 @@
 import React, { useCallback, useContext, useState } from "react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -197,7 +196,11 @@ export function AnalysisView() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <div className="flex-1 flex justify-center p-4 pt-4">
+      {/* Keyed by component: the cases share a tree shape, so without this
+          React reuses the ReactFlowProvider across a switch and the incoming
+          view briefly renders the outgoing view's nodes — which is where the
+          "Edge type occnArc not found" warnings came from. */}
+      <div key={viewMode.component} className="flex-1 flex justify-center p-4 pt-4">
         {renderComponent()}
       </div>
     </div>

@@ -139,6 +139,7 @@ export function ColorSwatches({
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-panel toolkit
 export function nextFieldId(prefix: string) {
   fieldIdCounter += 1;
   return `${prefix}-${fieldIdCounter}`;

@@ -12,6 +12,7 @@ import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { ColumnInput, QuerySection } from "@/components/sql-widgets/shared";
 import { linkedQueryOf, useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
 import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
+import { SelectedFile } from '@/contexts/SelectedFileContext';
 
 
 // Define props interface for components (extend as needed)
@@ -30,10 +31,10 @@ interface ComponentProps {
     label_column?: string;
     value_column?: string;
   };
-  onUpdate?: (updates: Partial<GridStackNode> & Record<string, any>) => void;
+  onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean;
   dashboardId: number;
-  selectedFile?: { id: number; project?: number; [key: string]: any };
+  selectedFile?: SelectedFile;
 }
 
 const PieChartComponent: React.FC<ComponentProps> = ({

@@ -402,8 +402,6 @@ export function SplashAnimation({ onComplete }: SplashAnimationProps) {
           return;
         }
         // Don't strand the user on the splash if something unexpected blew up.
-        // eslint-disable-next-line no-console
-        console.warn("[SplashAnimation] aborted by error:", err);
         cleanup();
         done();
       }
@@ -418,11 +416,13 @@ export function SplashAnimation({ onComplete }: SplashAnimationProps) {
     };
   }, []);
 
-  // Fade the "press Esc to skip" hint in after the reveal settles.
+  // Fade the skip hint in after the reveal settles — early enough to be read
+  // before the wait starts to feel long, late enough not to compete with the
+  // letters appearing.
   useEffect(() => {
     const id = window.setTimeout(() => {
       const el = hintRef.current;
-      if (el) el.style.opacity = "0.65";
+      if (el) el.style.opacity = "0.7";
     }, 1800);
     return () => window.clearTimeout(id);
   }, []);
@@ -486,18 +486,20 @@ export function SplashAnimation({ onComplete }: SplashAnimationProps) {
         ref={hintRef}
         style={{
           position: "absolute",
-          bottom: 20,
-          left: 20,
+          bottom: 32,
+          left: "50%",
+          transform: "translateX(-50%)",
           fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 11,
+          fontSize: 16,
           color: "var(--muted-foreground)",
-          letterSpacing: "0.02em",
+          letterSpacing: "0.04em",
+          whiteSpace: "nowrap",
           opacity: 0,
           transition: "opacity 600ms ease",
           pointerEvents: "none",
         }}
       >
-        press Esc to skip
+        click anywhere or press Esc to skip
       </div>
     </div>
   );

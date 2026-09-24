@@ -10,6 +10,7 @@ import {
   type OccnNodeData,
 } from './types';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function internalNodeBox(node: {
   internals: { positionAbsolute: { x: number; y: number } };
   measured?: { width?: number; height?: number };
@@ -60,20 +61,8 @@ const OccnEdgeComponent = memo(function OccnEdgeComponent({
   const perpY = tangent.x * (ARROW_WIDTH / 2);
   const arrowPoints = `${tip.x},${tip.y} ${backX + perpX},${backY + perpY} ${backX - perpX},${backY - perpY}`;
 
-  // The discovery visualizer sets dependenceMeasure; the editor leaves it
-  // undefined, so editor arcs get no tooltip (behavior unchanged).
-  const tooltip =
-    data?.dependenceMeasure === undefined
-      ? null
-      : `${data?.objectType ?? ''}${
-          data?.dependenceMeasure != null
-            ? ` — dependence: ${data.dependenceMeasure.toFixed(2)}`
-            : ''
-        }`;
-
   return (
     <g>
-      {tooltip && <title>{tooltip}</title>}
       {selected && !unvisited && (
         <path
           d={path}

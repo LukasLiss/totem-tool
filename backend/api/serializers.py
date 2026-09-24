@@ -19,7 +19,7 @@ from .asset_formats import (
 )
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDFGComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent
 from django.db.models import Max
 
 
@@ -144,10 +144,15 @@ class OCCNReplayUnitDetailRequestSerializer(
 
 
 class EventLogSerializer(serializers.ModelSerializer):
+     # Renamed through the viewset's `rename` action, never by writing here.
+     display_name = serializers.CharField(
+         source="project.display_name", read_only=True
+     )
+
      class Meta:
         #not including user to ensure security
         model = EventLog
-        fields = ["id", "project", "file", "uploaded_at"]
+        fields = ["id", "project", "display_name", "file", "uploaded_at"]
         read_only_fields = ["project", "uploaded_at"]
 
 
@@ -496,12 +501,6 @@ class LogStatisticsComponentSerializer(DashboardComponentSerializer):
         model = LogStatisticsComponent
         fields = "__all__"
 
-class OCDFGComponentSerializer(DashboardComponentSerializer):
-    class Meta:
-        model = OCDFGComponent
-        fields = "__all__"
-
-
 class OCDottedChartComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = OCDottedChartComponent
@@ -572,7 +571,6 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ProcessAreaComponent: ProcessAreaComponentSerializer,
         TotemMinerComponent: TotemMinerComponentSerializer,
         LogStatisticsComponent: LogStatisticsComponentSerializer,
-        OCDFGComponent: OCDFGComponentSerializer,
         FilterStackComponent: FilterStackComponentSerializer,
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,

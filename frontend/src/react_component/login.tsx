@@ -1,7 +1,5 @@
-// Import the react JS packages 
-import axios from "axios";
+// Import the react JS packages
 import { useState } from "react";
-import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -59,11 +57,9 @@ export const Login = () => {
     localStorage.setItem('refresh_token', data.refresh);
 
 
-    console.log("Login successful");
     //window.history.back();
     navigate(from, { replace: true });
-  } catch (error) {
-    console.error("Login failed:", error);
+  } catch {
     alert("Invalid credentials or server error.");
   }
 

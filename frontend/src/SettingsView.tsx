@@ -36,8 +36,7 @@ export function SettingsView() {
     try {
       const data = await getCacheStats();
       setStats(data);
-    } catch (err) {
-      console.error("Failed to fetch cache stats:", err);
+    } catch {
       toast.error("Failed to load cache statistics");
     } finally {
       setLoading(false);
@@ -51,9 +50,7 @@ export function SettingsView() {
   useEffect(() => {
     getUserSettings()
       .then((s) => setBypassCacheState(s.bypass_cache))
-      .catch((err) => {
-        console.error("Failed to load user settings:", err);
-      });
+      .catch(() => toast.error("Settings could not be loaded"));
   }, []);
 
   const handleToggleBypass = async (checked: boolean) => {
@@ -65,8 +62,7 @@ export function SettingsView() {
     setSavingBypass(true);
     try {
       await updateUserSettings({ bypass_cache: checked });
-    } catch (err) {
-      console.error("Failed to update cache-bypass setting:", err);
+    } catch {
       toast.error("Failed to save setting");
       // Roll back on failure.
       setBypassCacheState(previous);
@@ -82,8 +78,7 @@ export function SettingsView() {
       await clearCache();
       toast.success("Cache cleared successfully");
       await fetchStats();
-    } catch (err) {
-      console.error("Failed to clear cache:", err);
+    } catch {
       toast.error("Failed to clear cache");
     } finally {
       setClearing(false);
