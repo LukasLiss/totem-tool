@@ -63,6 +63,12 @@ dependencies = [
 test = [
     "pytest",
 ]
+docs = [
+    "sphinx>=8.1,<10",
+    "furo>=2024.8.6",
+    "myst-nb>=1.1,<2",
+    "sphinx-copybutton>=0.5,<1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

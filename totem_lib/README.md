@@ -158,6 +158,24 @@ To run all tests, execute:
 pytest ./tests/
 ```
 
+### 4. Build the Documentation
+
+The documentation lives in `docs/` and is built with Sphinx. The API pages are
+generated from the docstrings. Write new docstrings in
+[Google style](https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings)
+([rendered example](https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html)).
+
+```bash
+pip install -e ".[docs]"
+sphinx-build -W --keep-going docs docs/_build/html
+```
+
+Then open `docs/_build/html/index.html`. As in CI, any warning fails the build,
+and the notebooks in `docs/examples/` are run, so a broken example fails it too.
+
+When you add a name to `__all__` in `src/totem_lib/__init__.py`, also list it on
+one of the pages in `docs/api/`. `tests/test_docs_api.py` fails until you do.
+
 ## Acknowledgements
 
 The TOTeM module is based on the original implementation by [Lukas Liss](https://github.com/LukasLiss/multi-level-resource-detection/).
