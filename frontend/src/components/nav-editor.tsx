@@ -1,4 +1,5 @@
-import { ChevronRight, PenLine, Share2, Workflow, CircleDot, GitBranch, Table2 } from "lucide-react"
+import { ChevronRight, PenLine, Workflow, CircleDot, Table2 } from "lucide-react"
+import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -17,11 +18,13 @@ import {
 } from "@/components/ui/sidebar"
 import { DashboardContext, EditorComponent } from "@/contexts/DashboardContext"
 
-const editorItems: { id: EditorComponent; label: string; icon: typeof Share2 }[] = [
-  { id: 'totem', label: 'TOTeM Model', icon: Share2 },
-  { id: 'occn', label: 'OC Causal Net', icon: Workflow },
+// Each editor edits the model type its Analysis entry shows, so the two
+// sections share a glyph per model.
+const editorItems: { id: EditorComponent; label: string; icon: typeof Workflow }[] = [
+  { id: 'totem', label: 'TOTeM Model', icon: Workflow },
+  { id: 'occn', label: 'OC Causal Net', icon: CausalNet },
   { id: 'ocpn', label: 'OC Petri Net', icon: CircleDot },
-  { id: 'ocdfg', label: 'OC-DFG', icon: GitBranch },
+  { id: 'ocdfg', label: 'OC-DFG', icon: BoxesArrowRight },
   { id: 'ocel', label: 'OCEL Editor', icon: Table2 },
 ];
 

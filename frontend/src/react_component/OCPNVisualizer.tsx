@@ -27,6 +27,7 @@ import { Download, Loader2, Play, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import {
   parseOcpnModelFile,
@@ -200,7 +201,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       requestAnimationFrame(() =>
         rfInstance.current?.fitView({ padding: 0.15 }),
       );
-    } catch (err: any) {
+    } catch (err) {
       if (seq !== requestSeq.current) return;
       if (axios.isAxiosError(err) && err.response?.status === 408) {
         const info = err.response.data as { timeout_s?: number } | undefined;
@@ -211,7 +212,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       } else if (axios.isAxiosError(err) && err.response?.data?.error) {
         setError(String(err.response.data.error));
       } else {
-        setError(err?.message ?? 'OCPN discovery failed.');
+        setError(err instanceof Error ? err.message : 'OCPN discovery failed.');
       }
     } finally {
       if (seq === requestSeq.current) setLoading(false);
@@ -253,9 +254,11 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   const renderBody = () => {
     if (!fileId) {
       return (
-        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-          Select an event log to discover an Object-Centric Petri Net.
-        </div>
+        <VisualizerEmptyState
+          label="Object-Centric Petri Net"
+          message="Select an event log to discover its Petri net."
+          overlay={false}
+        />
       );
     }
     if (loading) {

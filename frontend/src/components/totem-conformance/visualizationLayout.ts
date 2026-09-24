@@ -1,13 +1,18 @@
+import {
+  TOTEM_NODE_HEIGHT,
+  totemNodeWidth,
+} from "@/components/totem/totemTheme";
+
 import type {
   TotemVisualizationModel,
   TotemVisualizationPosition,
 } from "./visualizationModel";
 
-export const TOTEM_NODE_WIDTH = 152;
-export const TOTEM_NODE_HEIGHT = 56;
-
-const HORIZONTAL_GAP = 112;
-const VERTICAL_GAP = 128;
+// A relation needs room along its line for a log cardinality near each end
+// and the event cardinality oval in the middle, so the gaps are driven by the
+// annotations rather than by the boxes.
+const HORIZONTAL_GAP = 180;
+const VERTICAL_GAP = 180;
 
 /**
  * Lay out TOTeM object types by containment depth. In D(a,b), a is placed
@@ -66,17 +71,22 @@ export function computeTotemNodePositions(
     else rows.set(depth, [node.id]);
   }
 
+  // Object type boxes size themselves to their name, so a row is laid out by
+  // walking along it rather than by multiplying a fixed column width.
+  const labels = new Map(model.nodes.map((node) => [node.id, node.label]));
   const positions = new Map<string, TotemVisualizationPosition>();
   for (const [depth, nodeIds] of Array.from(rows.entries()).sort(
     ([left], [right]) => left - right
   )) {
     nodeIds.sort((left, right) => left.localeCompare(right));
-    nodeIds.forEach((nodeId, index) => {
+    let x = 0;
+    for (const nodeId of nodeIds) {
       positions.set(nodeId, {
-        x: index * (TOTEM_NODE_WIDTH + HORIZONTAL_GAP),
+        x,
         y: depth * (TOTEM_NODE_HEIGHT + VERTICAL_GAP),
       });
-    });
+      x += totemNodeWidth(labels.get(nodeId) ?? nodeId) + HORIZONTAL_GAP;
+    }
   }
 
   for (const node of model.nodes) {

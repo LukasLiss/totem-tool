@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 /** Sort state shared by the three editor tables. */
 export type Sort = { by: string; dir: "asc" | "desc" };
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function toggleSort(sort: Sort, column: string): Sort {
   if (sort.by !== column) return { by: column, dir: "asc" };
   return { by: column, dir: sort.dir === "asc" ? "desc" : "asc" };
@@ -38,6 +39,7 @@ export function SortableHeader({
 }
 
 /** Debounce a rapidly changing value (search inputs). */
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function useDebounced<T>(value: T, delayMs = 300): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -118,6 +120,7 @@ export function EmptyRow({ colSpan, children }: { colSpan: number; children: Rea
 }
 
 /** Unix seconds → value for <input type="datetime-local"> in local time. */
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function unixToLocalInput(unixSeconds: number): string {
   const date = new Date(unixSeconds * 1000);
   const offset = date.getTimezoneOffset() * 60000;
@@ -125,10 +128,12 @@ export function unixToLocalInput(unixSeconds: number): string {
 }
 
 /** <input type="datetime-local"> value → unix seconds (local time). */
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function localInputToUnix(value: string): number {
   return Math.floor(new Date(value).getTime() / 1000);
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function formatTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString(undefined, {
     year: "2-digit",
@@ -141,10 +146,12 @@ export function formatTimestamp(unixSeconds: number): string {
 
 export type AttributeRow = { key: string; value: string };
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function attributesToRows(attributes: Record<string, string>): AttributeRow[] {
   return Object.entries(attributes).map(([key, value]) => ({ key, value }));
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shared editor-table toolkit
 export function rowsToAttributes(rows: AttributeRow[]): Record<string, string> {
   const result: Record<string, string> = {};
   for (const row of rows) {

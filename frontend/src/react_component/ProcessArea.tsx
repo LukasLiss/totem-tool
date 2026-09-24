@@ -27,12 +27,14 @@ import {
 } from '@/components/ui/select';
 import { RefreshCcw, SlidersHorizontal } from 'lucide-react';
 import TotemVisualizer, {
+  type TotemVisualizerControls,
+} from './TotemVisualizer';
+import {
   PROCESS_AREA_ALGORITHM_LABELS,
   PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
-  type TotemVisualizerControls,
-} from './TotemVisualizer';
+} from './processAreaParams';
 
 export type { TotemVisualizerControls } from './TotemVisualizer';
 

@@ -102,7 +102,6 @@ export function useDottedChartData({
         setData(response.data);
       } catch (err) {
         if (axios.isCancel(err) || controller.signal.aborted) return;
-        console.error("Failed to fetch OC dotted chart data:", err);
         setError("Failed to load dotted chart");
       } finally {
         if (!controller.signal.aborted) {

@@ -1,17 +1,15 @@
-import React, { useState, useEffect, useContext, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { GridStackNode } from 'gridstack';
-import { SelectedFileContext } from '@/contexts/SelectedFileContext';
+import type { SelectedFile } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
 import { Input } from '@/components/ui/input';
 import { API_BASE_URL } from '@/config/api';
@@ -23,12 +21,13 @@ import {
   uploadImageAsset,
   type ImageAsset as ImageAssetInfo,
 } from '@/api/imageAssetsApi';
-import VariantsExplorer, {
+import VariantsExplorer from '@/react_component/VariantsExplorer';
+import {
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
-} from '@/react_component/VariantsExplorer';
+} from '@/react_component/variants/types';
 import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
 import ProcessArea from '@/react_component/ProcessArea';
@@ -39,9 +38,8 @@ import {
   PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
-} from '@/react_component/TotemVisualizer';
+} from '@/react_component/processAreaParams';
 import { ReactFlowProvider } from "@xyflow/react";
-import OCDFGVisualizer from '@/react_component/OCDFGVisualizer';
 import DottedChart from '@/react_component/DottedChart';
 import {
   DottedChartControls,
@@ -56,11 +54,11 @@ import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
+import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
-import PieChartComponent from './PieChartComponent';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -104,7 +102,7 @@ function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFil
 
 
 // Define props interface for components (extend as needed)
-interface ComponentProps {
+export interface ComponentProps {
   node: GridStackNode & {
     component_id: number;
     component_name?: string;
@@ -133,7 +131,7 @@ interface ComponentProps {
     show_earliest_timestamp?: boolean;
     show_newest_timestamp?: boolean;
     show_duration?: boolean;
-    // OCDFGComponent properties
+    // NewOCDFGComponent properties
     show_controls?: boolean;
     initial_interaction_locked?: boolean;
     // OCDottedChartComponent properties
@@ -167,22 +165,19 @@ interface ComponentProps {
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
   dashboardId: number;  // Added for API calls
-  selectedFile?: { id: number; [key: string]: any }; // Selected event log file
+  selectedFile?: SelectedFile; // Selected event log file
 }
 
 
 // TextBoxComponent: Editable text with ShadCN UI
-const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
-  //console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
+export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
   const [text, setText] = React.useState(node.text || 'Enter text here');
   // Sync local state with node.text when it changes (e.g., from loading or updates)
   React.useEffect(() => {
-    //console.log('TextBoxComponent useEffect - updating text to:', node.text);
     setText(node.text || 'Enter text here');
   }, [node.text]);
 
   const handleTextChange = (value: string) => {
-    //console.log('TextBoxComponent handleTextChange - new value:', value);
     setText(value);
     onUpdate?.({ text: value });
   };
@@ -219,11 +214,16 @@ const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode
 
 
 // NumberOfEventsComponent: Static display with a button (customize as needed)
-const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, isEditMode = false }) => {
+export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
   const [processedResult, setProcessedResult] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
+
+  // Refetch when the global filter changes so the count follows the filter.
   const filterVersion = useFilterVersion();
+
+  const [, setIsLoading] = useState(false);
+  const [, setError] = useState(null);
+
+
 
   useEffect(() => {
     const handleProcessFile = async () => {
@@ -289,7 +289,7 @@ const IMAGE_ALIGNMENT_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'bottom right', label: 'Bottom right' },
 ];
 
-const ImageComponent: React.FC<ComponentProps> = ({
+export const ImageComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -321,7 +321,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
       .then((data) => {
         if (!cancelled) setAssets(data);
       })
-      .catch((err) => console.error('Failed to load image assets:', err))
+      .catch(() => toast.error('Image assets could not be loaded'))
       .finally(() => {
         if (!cancelled) setLoadingAssets(false);
       });
@@ -336,17 +336,17 @@ const ImageComponent: React.FC<ComponentProps> = ({
     onUpdate?.({
       image_asset: asset?.id ?? null,
       image_asset_url: asset?.url ?? null,
-    } as any);
+    });
   };
 
   const handleFitChange = (value: string) => {
     setFit(value);
-    onUpdate?.({ image_fit: value } as any);
+    onUpdate?.({ image_fit: value });
   };
 
   const handleAlignmentChange = (value: string) => {
     setAlignment(value);
-    onUpdate?.({ image_alignment: value } as any);
+    onUpdate?.({ image_alignment: value });
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -361,7 +361,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
       let created: ImageAssetInfo;
       try {
         created = await uploadImageAsset({ projectId, name: baseName, file });
-      } catch (error) {
+      } catch {
         // Most likely a duplicate name — retry once with a unique suffix.
         created = await uploadImageAsset({
           projectId,
@@ -372,7 +372,6 @@ const ImageComponent: React.FC<ComponentProps> = ({
       setAssets((current) => [...current, created]);
       selectAsset(created);
     } catch (error) {
-      console.error('Image upload failed:', error);
       setUploadError(extractImageAssetApiError(error).message);
     } finally {
       setUploading(false);
@@ -532,7 +531,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
                   src={src}
                   alt="Preview"
                   className="h-full w-full"
-                  style={{ objectFit: fit as any, objectPosition: alignment }}
+                  style={{ objectFit: fit as React.CSSProperties['objectFit'], objectPosition: alignment }}
                 />
               </div>
             </div>
@@ -550,7 +549,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
           src={src}
           alt={selectedAsset?.name ?? 'Dashboard image'}
           className="h-full w-full"
-          style={{ objectFit: fit as any, objectPosition: alignment }}
+          style={{ objectFit: fit as React.CSSProperties['objectFit'], objectPosition: alignment }}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
@@ -563,7 +562,7 @@ const ImageComponent: React.FC<ComponentProps> = ({
 
 
 // VariantsComponent: Wrapper for VariantsExplorer with configurable settings
-const VariantsComponent: React.FC<ComponentProps> = ({
+export const VariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -623,8 +622,8 @@ const VariantsComponent: React.FC<ComponentProps> = ({
         ]);
         setAvailableTypes(types);
         setAvailableActivities(activities);
-      } catch (err) {
-        console.error('Failed to fetch object types:', err);
+      } catch {
+        toast.error('Object types could not be loaded');
       } finally {
         setLoadingTypes(false);
       }
@@ -635,41 +634,41 @@ const VariantsComponent: React.FC<ComponentProps> = ({
   // Handlers for form changes
   const handleAutomaticLoadingChange = (checked: boolean) => {
     setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked } as any);
+    onUpdate?.({ automatic_loading: checked });
   };
 
   const handleLeadingTypeChange = (value: string) => {
     setLeadingType(value);
-    onUpdate?.({ leading_object_type: value } as any);
+    onUpdate?.({ leading_object_type: value });
   };
 
   const handleExtractionChange = (value: string) => {
     const v = value as Extraction;
     setExtraction(v);
-    onUpdate?.({ extraction: v } as any);
+    onUpdate?.({ extraction: v });
   };
 
   const handleIsoChange = (value: string) => {
     const v = value as IsoStrategy;
     setIso(v);
-    onUpdate?.({ iso: v } as any);
+    onUpdate?.({ iso: v });
   };
 
   const handleTimeoutChange = (raw: string) => {
     const n = Number(raw);
     const safe = Number.isFinite(n) && n > 0 ? n : 10;
     setTimeoutS(safe);
-    onUpdate?.({ timeout_s: safe } as any);
+    onUpdate?.({ timeout_s: safe });
   };
 
   const handleBusinessObjectTypesChange = (value: string[]) => {
     setBusinessObjectTypes(value);
-    onUpdate?.({ business_object_types: value } as any);
+    onUpdate?.({ business_object_types: value });
   };
 
   const handleBusinessActivitiesChange = (value: string[]) => {
     setBusinessActivities(value);
-    onUpdate?.({ business_activities: value } as any);
+    onUpdate?.({ business_activities: value });
   };
 
   if (isEditMode) {
@@ -886,7 +885,7 @@ const VariantsComponent: React.FC<ComponentProps> = ({
               leading_object_type: s.leading_type,
               business_object_types: s.business_object_types,
               business_activities: s.business_activities,
-            } as any);
+            });
           }}
         />
       </CardContent>
@@ -913,7 +912,7 @@ const PROCESS_AREA_PARAM_FIELDS: Array<{
   { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
 ];
 
-const ProcessAreaComponent: React.FC<ComponentProps> = ({
+export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -962,7 +961,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
         w_divergence: settings.params.wDivergence,
         alpha: settings.params.alpha,
         beta: settings.params.beta,
-      } as any);
+      });
     },
     [onUpdate],
   );
@@ -1051,9 +1050,7 @@ const ProcessAreaComponent: React.FC<ComponentProps> = ({
 
 
 // TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
-const TotemMinerComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
+export const TotemMinerComponent: React.FC<ComponentProps> = ({
   isEditMode = false,
   selectedFile
 }) => {
@@ -1090,7 +1087,7 @@ const TotemMinerComponent: React.FC<ComponentProps> = ({
 
 
 // LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
-const LogStatisticsComponent: React.FC<ComponentProps> = ({
+export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1119,31 +1116,31 @@ const LogStatisticsComponent: React.FC<ComponentProps> = ({
   // Handlers for toggle changes
   const handleShowNumEventsChange = (checked: boolean) => {
     setShowNumEvents(checked);
-    onUpdate?.({ show_num_events: checked } as any);
+    onUpdate?.({ show_num_events: checked });
   };
   const handleShowNumActivitiesChange = (checked: boolean) => {
     setShowNumActivities(checked);
-    onUpdate?.({ show_num_activities: checked } as any);
+    onUpdate?.({ show_num_activities: checked });
   };
   const handleShowNumObjectsChange = (checked: boolean) => {
     setShowNumObjects(checked);
-    onUpdate?.({ show_num_objects: checked } as any);
+    onUpdate?.({ show_num_objects: checked });
   };
   const handleShowNumObjectTypesChange = (checked: boolean) => {
     setShowNumObjectTypes(checked);
-    onUpdate?.({ show_num_object_types: checked } as any);
+    onUpdate?.({ show_num_object_types: checked });
   };
   const handleShowEarliestTimestampChange = (checked: boolean) => {
     setShowEarliestTimestamp(checked);
-    onUpdate?.({ show_earliest_timestamp: checked } as any);
+    onUpdate?.({ show_earliest_timestamp: checked });
   };
   const handleShowNewestTimestampChange = (checked: boolean) => {
     setShowNewestTimestamp(checked);
-    onUpdate?.({ show_newest_timestamp: checked } as any);
+    onUpdate?.({ show_newest_timestamp: checked });
   };
   const handleShowDurationChange = (checked: boolean) => {
     setShowDuration(checked);
-    onUpdate?.({ show_duration: checked } as any);
+    onUpdate?.({ show_duration: checked });
   };
 
   if (isEditMode) {
@@ -1294,7 +1291,7 @@ const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
 };
 
 // OCDottedChartComponent: Dashboard wrapper for Object-Centric Dotted Chart
-const OCDottedChartComponent: React.FC<ComponentProps> = ({
+export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1313,7 +1310,7 @@ const OCDottedChartComponent: React.FC<ComponentProps> = ({
       shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
       row_order: nextConfig.rowOrder,
       max_points: nextConfig.maxPoints,
-    } as any);
+    });
   };
 
   if (isEditMode) {
@@ -1391,7 +1388,7 @@ function isBuiltinDottedChartAxis(
 
 
 // NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
-const NewOCDFGComponent: React.FC<ComponentProps> = ({
+export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1411,17 +1408,17 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1495,7 +1492,7 @@ const NewOCDFGComponent: React.FC<ComponentProps> = ({
 };
 
 
-const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
+export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1514,17 +1511,17 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1596,7 +1593,7 @@ const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 
 
 // OCCNComponent: Dashboard wrapper for the Object-Centric Causal Net (ELK layout)
-const OCCNComponent: React.FC<ComponentProps> = ({
+export const OCCNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1627,27 +1624,27 @@ const OCCNComponent: React.FC<ComponentProps> = ({
   const handleThresholdChange = (value: number[]) => {
     const next = value[0] ?? 0;
     setThreshold(next);
-    onUpdate?.({ relative_occurrence_threshold: next } as any);
+    onUpdate?.({ relative_occurrence_threshold: next });
   };
 
   const handleObjectTypesChange = (value: string) => {
     setObjectTypes(value);
-    onUpdate?.({ object_types: value } as any);
+    onUpdate?.({ object_types: value });
   };
 
   const handleShowControlsChange = (checked: boolean) => {
     setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
+    onUpdate?.({ show_controls: checked });
   };
 
   const handleInitialInteractionLockedChange = (checked: boolean) => {
     setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
+    onUpdate?.({ initial_interaction_locked: checked });
   };
 
   const handleLayoutDirectionChange = (value: string) => {
     setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value } as any);
+    onUpdate?.({ layout_direction: value as "TB" | "LR" });
   };
 
   if (isEditMode) {
@@ -1752,7 +1749,7 @@ const OCCNComponent: React.FC<ComponentProps> = ({
 // OCPNComponent: Dashboard wrapper for the OC Petri Net discovery view.
 // Settings: automatic loading (start discovery when the dashboard opens)
 // and the discovery timeout in seconds.
-const OCPNComponent: React.FC<ComponentProps> = ({
+export const OCPNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1771,14 +1768,14 @@ const OCPNComponent: React.FC<ComponentProps> = ({
 
   const handleAutomaticLoadingChange = (checked: boolean) => {
     setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked } as any);
+    onUpdate?.({ automatic_loading: checked });
   };
 
   const handleTimeoutChange = (raw: string) => {
     const n = Number(raw);
     const safe = Number.isFinite(n) && n > 0 ? n : 30;
     setTimeoutS(safe);
-    onUpdate?.({ timeout_s: safe } as any);
+    onUpdate?.({ timeout_s: safe });
   };
 
   if (isEditMode) {
@@ -1859,7 +1856,7 @@ const OCPNComponent: React.FC<ComponentProps> = ({
 // behavior lives there; this just maps the GridStack node/onUpdate contract
 // onto SqlQueryEditor's plain value/onChange props.
 
-const SqlQueryComponent: React.FC<ComponentProps> = ({
+export const SqlQueryComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
@@ -1886,16 +1883,16 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
   }, [node.query_asset, node.query_asset_name]);
 
   const handleChange = (patch: Partial<SqlQueryConfig>) => {
-    const update: Record<string, unknown> = {};
+    const update: Partial<GridStackNode> = {};
     if (patch.name !== undefined) update.name = patch.name;
     if (patch.query !== undefined) update.query = patch.query;
     if (patch.rowLimit !== undefined) update.row_limit = patch.rowLimit;
-    onUpdate?.(update as any);
+    onUpdate?.(update);
   };
 
   const handleLinkChange = (link: LinkedQuery | null) => {
     setLinkedQuery(link);
-    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null } as any);
+    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
   };
 
   return (
@@ -1912,24 +1909,5 @@ const SqlQueryComponent: React.FC<ComponentProps> = ({
 };
 
 
-// Component map for easy lookup
-export const componentMap: Record<string, React.FC<ComponentProps>> = {
-  TextBoxComponent,
-  NumberOfEventsComponent,
-  ImageComponent,
-  VariantsComponent,
-  ProcessAreaComponent,
-  TotemMinerComponent,
-  LogStatisticsComponent,
-  OCDFGComponent,
-  OCDottedChartComponent,
-  NewOCDFGComponent,
-  NewOCDFGVariantsComponent,
-  OCPNComponent,
-  PieChartComponent,
-  OCCNComponent,
-  SqlQueryComponent,
-  KpiComponent: KpiComponent as unknown as React.FC<ComponentProps>,
-  BarChartComponent: BarChartComponent as unknown as React.FC<ComponentProps>,
-  ScatterPlotComponent: ScatterPlotComponent as unknown as React.FC<ComponentProps>,
-};
+// Dashboard widget registry (component_name -> renderer) lives in
+// componentMapRegistry.ts — see the comment there for why it's split out.

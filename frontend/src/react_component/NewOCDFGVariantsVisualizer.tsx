@@ -8,8 +8,13 @@ import {
   applyEdgeChanges,
   type Node,
   type Edge,
+  type NodeChange,
+  type EdgeChange,
+  type NodeTypes,
+  type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
 import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
 import { mapTypesToColors } from '../utils/objectColors';
@@ -24,12 +29,13 @@ import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { toast } from 'sonner';
 
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
-type LayoutDirection = 'TB' | 'LR';
 
 const VARIANT_PRESETS = {
   full: {
@@ -126,7 +132,9 @@ function measureGraphSize(
 ) {
   const visible = renderNodes
     .map((node) => {
-      const positionSource = (node as any).positionAbsolute ?? node.position;
+      const positionSource =
+        (node as unknown as { positionAbsolute?: { x: number; y: number } }).positionAbsolute ??
+        node.position;
       const x = coerceNumeric(positionSource?.x);
       const y = coerceNumeric(positionSource?.y);
       return {
@@ -155,8 +163,8 @@ function measureGraphSize(
       minWidth?: unknown;
       minHeight?: unknown;
     } | undefined;
-    const measuredWidth = coerceNumeric((node as any).measured?.width);
-    const measuredHeight = coerceNumeric((node as any).measured?.height);
+    const measuredWidth = coerceNumeric(node.measured?.width);
+    const measuredHeight = coerceNumeric(node.measured?.height);
     const rawWidth =
       measuredWidth ??
       coerceNumeric(node.width) ??
@@ -207,16 +215,16 @@ function measureGraphSize(
 
 
 
-function extractElkPolyline(elkEdge: any): Array<{ x: number; y: number }> | undefined {
+function extractElkPolyline(elkEdge: Edge & { sections?: ElkEdgeSection[] }): Array<{ x: number; y: number }> | undefined {
   if (!elkEdge.sections || elkEdge.sections.length === 0) return undefined;
   const section = elkEdge.sections[0];
   const points: Array<{ x: number; y: number }> = [];
-  
+
   if (section.startPoint) {
     points.push({ x: section.startPoint.x, y: section.startPoint.y });
   }
   if (section.bendPoints) {
-    section.bendPoints.forEach((p: any) => {
+    section.bendPoints.forEach((p) => {
       points.push({ x: p.x, y: p.y });
     });
   }
@@ -243,7 +251,6 @@ function NewOCDFGVariantsVisualizer({
   localFilterParams,
   onLocalFilterChange,
 }: NewOCDFGVariantsVisualizerProps) {
-  console.log('[NewOCDFGVariantsVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
@@ -336,16 +343,18 @@ function NewOCDFGVariantsVisualizer({
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked ?? true);
   const [autoInteractionLocked, setAutoInteractionLocked] = useState(true);
 
-  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: any, label?: string } | null>(null);
+  type TooltipMetrics = { frequency?: number; avg_lead_time?: number };
+  const [tooltipState, setTooltipState] = useState<{ x: number, y: number, metrics: TooltipMetrics, label?: string } | null>(null);
 
   const handleNodeMouseEnter = useCallback((event: React.MouseEvent, node: Node) => {
-    const metrics = (node.data as any)?.metrics;
+    const data = node.data as { metrics?: TooltipMetrics; label?: string } | undefined;
+    const metrics = data?.metrics;
     if (metrics) {
       setTooltipState({
         x: event.clientX,
         y: event.clientY,
         metrics,
-        label: (node.data as any)?.label
+        label: data?.label
       });
     }
   }, []);
@@ -359,7 +368,7 @@ function NewOCDFGVariantsVisualizer({
   }, []);
 
   const handleEdgeMouseEnter = useCallback((event: React.MouseEvent, edge: Edge) => {
-    const metrics = (edge.data as any)?.metrics;
+    const metrics = (edge.data as { metrics?: TooltipMetrics } | undefined)?.metrics;
     if (metrics) {
       setTooltipState({
         x: event.clientX,
@@ -386,20 +395,20 @@ function NewOCDFGVariantsVisualizer({
     return { padding: 0.15, offset: { x: leftOffset, y: 0 } };
   }, [resolvedVariant, hideChrome, LEGEND_TOTAL]);
 
-  const fitViewWithOffset = useCallback(() => fitView(fitViewOptions as any), [fitView, fitViewOptions]);
-  const edgeTypes = useMemo(() => ({ ocdfg: NewOcdfgEdge as any }), []);
+  const fitViewWithOffset = useCallback(() => fitView(fitViewOptions), [fitView, fitViewOptions]);
+  const edgeTypes = useMemo(() => ({ ocdfg: NewOcdfgEdge }) as unknown as EdgeTypes, []);
   const nodeTypes = useMemo(
     () => ({
-      ocdfgStart: OcdfgTerminalNode as any,
-      ocdfgEnd: OcdfgTerminalNode as any,
-      ocdfgDefault: OcdfgDefaultNode as any,
-      debugLayer: OcdfgDebugLayerNode as any,
-    }),
+      ocdfgStart: OcdfgTerminalNode,
+      ocdfgEnd: OcdfgTerminalNode,
+      ocdfgDefault: OcdfgDefaultNode,
+      debugLayer: OcdfgDebugLayerNode,
+    }) as unknown as NodeTypes,
     [],
   );
 
-  const onNodesChange = useCallback((c: any) => setNodes((nds) => applyNodeChanges(c, nds)), []);
-  const onEdgesChange = useCallback((c: any) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
+  const onNodesChange = useCallback((c: NodeChange[]) => setNodes((nds) => applyNodeChanges(c, nds)), []);
+  const onEdgesChange = useCallback((c: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(c, eds)), []);
 
   const shallowBoolRecordEqual = (a: Record<string, boolean>, b: Record<string, boolean>) => {
     const keysA = Object.keys(a);
@@ -549,7 +558,7 @@ function NewOCDFGVariantsVisualizer({
     if (containerSize.width <= 0 || containerSize.height <= 0) return;
     if (nodes.length === 0) return;
     const frame = window.requestAnimationFrame(() => {
-      fitView(fitViewOptions as any);
+      fitView(fitViewOptions);
     });
     return () => cancelAnimationFrame(frame);
   }, [
@@ -610,9 +619,9 @@ function NewOCDFGVariantsVisualizer({
           });
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
-          console.error('[NewOCDFGVariantsVisualizer] Failed to load new OCDFG data', err);
+          toast.error('OC-DFG variants could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -938,7 +947,7 @@ function NewOCDFGVariantsVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(console.error);
+    }).catch(() => toast.error('OC-DFG layout failed'));
   }, [
     typeVisibility,
     traceLimit,
@@ -1033,6 +1042,8 @@ function NewOCDFGVariantsVisualizer({
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
 
+  const noEventLog = data == null && !fileId;
+
   return (
     <div
       ref={containerRef}
@@ -1069,6 +1080,13 @@ function NewOCDFGVariantsVisualizer({
         zoomOnDoubleClick={!interactionsDisabled}
         preventScrolling={!interactionsDisabled}
       />
+
+      {noEventLog && (
+        <VisualizerEmptyState
+          label="Object-Centric DFG"
+          message="Select an event log to discover its directly-follows graph."
+        />
+      )}
 
       {!hideChrome && (
         <div

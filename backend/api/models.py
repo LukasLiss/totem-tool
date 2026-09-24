@@ -36,11 +36,18 @@ class UserSettings(models.Model):
 
 class Project(models.Model):
     users = models.ManyToManyField(User)
+    # Slug derived from the uploaded file name. Also used as a directory name
+    # (see project_directory_path), so it stays filesystem-safe and is never
+    # set from user input.
     name = models.CharField(max_length=30)
+    # What the user sees and can rename. Blank means "fall back to the event
+    # log's file name", which is what every project showed before renaming
+    # existed.
+    display_name = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.name}"
+        return f"{self.display_name or self.name}"
 
 
 class EventLog(models.Model):
@@ -274,11 +281,6 @@ class LogStatisticsComponent(DashboardComponent):
     show_earliest_timestamp = models.BooleanField(default=False)
     show_newest_timestamp = models.BooleanField(default=False)
     show_duration = models.BooleanField(default=False)
-
-
-class OCDFGComponent(DashboardComponent):
-    show_controls = models.BooleanField(default=True)
-    initial_interaction_locked = models.BooleanField(default=True)
 
 
 class FilterStackComponent(DashboardComponent):

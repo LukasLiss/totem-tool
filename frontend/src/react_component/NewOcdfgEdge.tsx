@@ -428,7 +428,6 @@ function buildSelfLoopPolyline(
 }
 
 const NewOcdfgEdge = memo(function NewOcdfgEdge({
-  id,
   data,
   selected,
   animated,
@@ -458,7 +457,7 @@ const NewOcdfgEdge = memo(function NewOcdfgEdge({
       return buildSelfLoopPolyline(targetGeometry, laneIdx, laneCount);
     }
 
-    let basePoints = (data?.polyline && data.polyline.length >= 2)
+    const basePoints = (data?.polyline && data.polyline.length >= 2)
       ? data.polyline
       : buildFallbackPolyline(sourceX, sourceY, targetX, targetY);
 

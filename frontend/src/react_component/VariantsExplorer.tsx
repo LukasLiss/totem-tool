@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { useFilterVersion } from "@/store/filterStore";
 import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
 
@@ -39,9 +40,7 @@ import {
   type Variant,
 } from "./variants/types";
 
-// Re-exported for the dashboard wrapper and other callers that used to
-// import these from this file.
-export { EXTRACTION_OPTIONS, ISO_OPTIONS } from "./variants/types";
+// Re-exported for other callers that used to import these from this file.
 export type {
   AdvancedSettings,
   Extraction,
@@ -210,7 +209,6 @@ export default function VariantsExplorer({
         });
       } catch (e: unknown) {
         if (cancelled || fileIdRef.current !== currentFileId) return;
-        console.error("Failed to load event log metadata:", e);
         setErrorMsg(describeRequestError(e, "Failed to load object types"));
         setStatus("error");
       } finally {
@@ -420,7 +418,11 @@ export default function VariantsExplorer({
 
       <CardContent className="pt-2">
         {!fileId ? (
-          <div className="text-sm text-muted-foreground">Select a file to view variants</div>
+          <VisualizerEmptyState
+            label="Variants Explorer"
+            message="Select an event log to view its variants."
+            overlay={false}
+          />
         ) : null}
 
         {fileId && status === "idle" ? (

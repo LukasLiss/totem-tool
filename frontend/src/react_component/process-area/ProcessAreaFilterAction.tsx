@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useFilterStack } from "@/contexts/FilterStackContext";
+import { useFilterStack } from "@/contexts/filterStackHooks";
 import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
 import type { ProcessAreaSnapshot } from "@/store/processAreaStore";
 
@@ -73,8 +73,7 @@ export function ProcessAreaFilterAction({
       await applyGlobalFilterRules(numericFileId, rules);
       toast.success(`Global filter set to process area: ${describeObjectTypes(objectTypes)}`);
       setOpen(false);
-    } catch (error) {
-      console.error("[ProcessAreaFilterAction] failed to apply filter", error);
+    } catch {
       toast.error("Could not apply the process-area filter.");
     } finally {
       setApplying(false);

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { GridStackNode } from "gridstack";
-import { useGrid } from "./gridstackprovider";
+import { useGrid } from "./gridContext";
 
 interface DashboardGridProps {
   initialChildren?: GridStackNode[];
@@ -15,8 +15,8 @@ const DashboardGrid: React.FC<DashboardGridProps> = ({ initialChildren = [] }) =
     if (grid && initialChildren && initialChildren.length > 0) {
       try {
         grid.load(initialChildren);
-      } catch (error) {
-        console.warn("Error loading initial children:", error);
+      } catch {
+        // A layout GridStack refuses leaves the grid empty rather than broken.
       }
     }
   }, [grid, initialChildren]);

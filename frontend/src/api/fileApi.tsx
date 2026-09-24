@@ -12,6 +12,21 @@ export async function getUserFiles() {
   return data;
 }
 
+/** Rename the project an event log belongs to (its switcher label). */
+export async function renameProject(fileId: string | number, name: string) {
+  const { data } = await axios.patch(
+    `/api/files/${fileId}/rename/`,
+    { name },
+    { _skipGlobalFilter: true }
+  );
+  return data;
+}
+
+/** Delete a project: its event log, dashboards, assets and uploaded files. */
+export async function deleteProject(fileId: string | number) {
+  await axios.delete(`/api/files/${fileId}/`, { _skipGlobalFilter: true });
+}
+
 export async function processFile(fileId: string | number) {
   // Honors the active global filter (the interceptor appends its params),
   // so the shown event count matches the rest of the tool.
@@ -27,11 +42,13 @@ export async function executeQuery(fileId: string | number, query: string) {
   try {
     const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, { query });
     return data as { data: Record<string, unknown>[]; columns: string[] };
-  } catch (err: any) {
-    const message =
-      err?.response?.data?.error ||
-      (err?.response ? `Query execution failed: ${err.response.status} ${err.response.statusText}` : err?.message) ||
-      "Query execution failed";
-    throw new Error(message);
+  } catch (err) {
+    let message: string | undefined;
+    if (axios.isAxiosError<{ error?: string }>(err)) {
+      message =
+        err.response?.data?.error ||
+        (err.response ? `Query execution failed: ${err.response.status} ${err.response.statusText}` : err.message);
+    }
+    throw new Error(message || "Query execution failed");
   }
 }

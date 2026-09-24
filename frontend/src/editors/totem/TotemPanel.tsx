@@ -75,8 +75,8 @@ export function NotationLegend() {
             <path
               d="M 8 2 L 8 14 M 13 2 L 13 14 M 39 2 L 39 14 M 44 2 L 44 14"
               stroke="#0F172A"
-              strokeWidth="1.6"
-              strokeLinecap="round"
+              strokeWidth="2.6"
+              strokeLinecap="butt"
             />
           </LegendLine>
         }
@@ -96,13 +96,21 @@ export function NotationLegend() {
       <LegendRow
         glyph={
           <LegendLine>
-            <rect x="10" y="1.5" width="32" height="13" rx="6.5" fill="#0F172A" />
-            <text x="26" y="11" fontSize="8" fill="white" textAnchor="middle">
-              0..* – 1
+            <ellipse
+              cx="26"
+              cy="8"
+              rx="17"
+              ry="7"
+              fill="white"
+              stroke="#0F172A"
+              strokeWidth="1.2"
+            />
+            <text x="26" y="11" fontSize="8" fill="#0F172A" textAnchor="middle">
+              0..*|1
             </text>
           </LegendLine>
         }
-        text="pill = event cardinalities (both directions)"
+        text="oval = event cardinalities (both directions)"
       />
     </PanelSection>
   );

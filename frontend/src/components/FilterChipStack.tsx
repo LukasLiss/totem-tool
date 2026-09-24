@@ -14,12 +14,13 @@ import {
   type TimeRangeParams,
   type ObjectTypesParams,
   type ActivityParams,
-  useFilterStack,
 } from "@/contexts/FilterStackContext";
+import { useFilterStack } from "@/contexts/filterStackHooks";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
 import { useFilterStore, type FilterStats } from "@/store/filterStore";
 import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
+import { toast } from "sonner";
 
 
 const PIPE_BG = "var(--secondary)";
@@ -415,10 +416,10 @@ export default function FilterChipStack() {
     if (!fileId) { setObjectTypes([]); setActivities([]); return; }
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
-      .catch((err) => { console.error("FilterChipStack: failed to load object_types", err); setObjectTypes([]); });
+      .catch(() => { toast.error("Object types could not be loaded"); setObjectTypes([]); });
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/activities/`, { _skipGlobalFilter: true })
       .then(({ data }) => setActivities(Array.isArray(data) ? data : []))
-      .catch((err) => { console.error("FilterChipStack: failed to load activities", err); setActivities([]); });
+      .catch(() => { toast.error("Activities could not be loaded"); setActivities([]); });
 
     axios.get<{ num_objects: number; num_events: number }>(
       `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
@@ -485,8 +486,8 @@ export default function FilterChipStack() {
     setApplying(true);
     try {
       await applyGlobalFilterRules(fileId, filters);
-    } catch (err) {
-      console.error("FilterChipStack: failed to apply filters", err);
+    } catch {
+      toast.error("Filter could not be applied");
     } finally {
       setApplying(false);
     }

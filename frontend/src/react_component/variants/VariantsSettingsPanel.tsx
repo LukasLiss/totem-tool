@@ -119,7 +119,9 @@ export function VariantsSettingsPanel({
         {isLeadingExtraction(execution.extraction) ? (
           <Field label="Leading object type" htmlFor="variants-leading-type">
             <Select
-              value={execution.leadingType || undefined}
+              // Empty string keeps the Select controlled from the first
+              // render; undefined would make it switch later and React warns.
+              value={execution.leadingType ?? ""}
               onValueChange={(value) => onExecutionChange({ ...execution, leadingType: value })}
               disabled={disabled || optionsLoading || availableTypes.length === 0}
             >
