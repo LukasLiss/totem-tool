@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -28,6 +28,7 @@ import { Slider } from '@/components/ui/slider';
 import { MetricTooltip } from './MetricTooltip';
 import { PlusIcon, MinusIcon, ScanIcon, LockIcon, UnlockIcon, ZapIcon, Sun } from 'lucide-react';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { toast } from 'sonner';
@@ -105,6 +106,8 @@ interface NewOCDFGVariantsVisualizerProps {
   filterEnabled?: boolean;
   onToggleFilter?: () => void;
   showTitle?: boolean;
+  localFilterParams?: Record<string, string>;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -245,12 +248,16 @@ function NewOCDFGVariantsVisualizer({
   filterEnabled = true,
   onToggleFilter = () => {},
   showTitle = true,
+  localFilterParams,
+  onLocalFilterChange,
 }: NewOCDFGVariantsVisualizerProps) {
 
   const generatedInstanceId = useId();
   const reactFlowId = instanceId ?? generatedInstanceId;
 
   const filterVersion = useFilterVersion();
+  const [internalLocalParams, setInternalLocalParams] = useState<Record<string, string>>({});
+  const effectiveLocalParams = localFilterParams ?? internalLocalParams;
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -579,7 +586,12 @@ function NewOCDFGVariantsVisualizer({
     let cancelled = false;
     const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
+    const filterConfig = getEffectiveFilterConfig(
+      Object.keys(effectiveLocalParams).length > 0 ? effectiveLocalParams : undefined,
+      filterEnabled,
+    );
+    if (filterConfig._noResults) { setDfgData({ nodes: [], links: [] }); return; }
+    axios.get<DfgData>(url, filterConfig)
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -615,8 +627,8 @@ function NewOCDFGVariantsVisualizer({
       });
 
     return () => { cancelled = true; };
-   
-  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, fileId, filterEnabled, effectiveFilterVersion, effectiveLocalParams]);
 
   // Slider change: pure client-side — just update traceLimit state.
   // The layout effect has traceLimit in its dependency array so it will
@@ -841,7 +853,7 @@ function NewOCDFGVariantsVisualizer({
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0 || rawEdges.length === 0) return;
+    if (rawNodes.length === 0 || rawEdges.length === 0) { setBaseNodes([]); setBaseEdges([]); return; }
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
@@ -1103,10 +1115,11 @@ function NewOCDFGVariantsVisualizer({
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--foreground)' }}>
                   Object-Centric DFG (Variants)
                 </div>
                 <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
+                <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange ?? setInternalLocalParams} stopPropagation />
               </div>
             </div>
           )}

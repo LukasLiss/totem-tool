@@ -69,6 +69,7 @@ type VariantsExplorerProps = {
   onAdvancedChange?: (s: AdvancedSettings) => void;
   /** When provided, overrides internal filter state (controlled mode). */
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 };
 
 type Status = "idle" | "loading" | "ready" | "empty" | "stored" | "error";
@@ -90,10 +91,12 @@ export default function VariantsExplorer({
   defaultBusinessActivities,
   onAdvancedChange,
   filterEnabled: filterEnabledProp,
+  localFilterParams,
 }: VariantsExplorerProps) {
   const filterVersion = useFilterVersion();
   const filterEnabled = filterEnabledProp ?? true;
-  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+  const localFilterActive = !!localFilterParams && Object.keys(localFilterParams).length > 0;
+  const effectiveFilterVersion = localFilterActive ? 0 : (filterEnabled ? filterVersion : 0);
 
   // ---- settings -----------------------------------------------------------
   const [execution, setExecution] = useState<ExecutionSettings>(() => ({
@@ -221,8 +224,8 @@ export default function VariantsExplorer({
 
   const blocker = useMemo(() => settingsBlocker(execution, store), [execution, store]);
   const runKey = useMemo(
-    () => JSON.stringify({ fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion }),
-    [fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion],
+    () => JSON.stringify({ fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams }),
+    [fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams],
   );
   const stale = lastRunKey !== null && lastRunKey !== runKey;
   const optionsReady = !optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction));
@@ -239,7 +242,7 @@ export default function VariantsExplorer({
     setErrorMsg("");
     try {
       if (store.enabled) {
-        const result = await storeProcessExecutions(currentFileId, execution, grouping, store, filterEnabled);
+        const result = await storeProcessExecutions(currentFileId, execution, grouping, store, filterEnabled, localFilterParams);
         if (!isCurrent()) return;
         const list = result.variants ?? [];
         setStoreResult(result);
@@ -250,7 +253,7 @@ export default function VariantsExplorer({
           `Stored ${result.execution_count} process execution${result.execution_count === 1 ? "" : "s"} in column "${result.execution_column}".`,
         );
       } else {
-        const result = await fetchVariants(currentFileId, execution, grouping, filterEnabled);
+        const result = await fetchVariants(currentFileId, execution, grouping, filterEnabled, localFilterParams);
         if (!isCurrent()) return;
         setStoreResult(null);
         setVariants(result.variants);
@@ -268,7 +271,7 @@ export default function VariantsExplorer({
         ),
       );
     }
-  }, [fileId, blocker, runKey, store, execution, grouping, filterEnabled, onVariantsLoad]);
+  }, [fileId, blocker, runKey, store, execution, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
 
   // Automatic mode: (re)compute after every settings change, debounced so a
   // multi-select does not fire one request per click. Storing into the log
@@ -290,7 +293,7 @@ export default function VariantsExplorer({
     setProcessAreasLoading(true);
     setProcessAreasError(null);
     try {
-      const snapshot = await fetchProcessAreas(currentFileId, filterEnabled);
+      const snapshot = await fetchProcessAreas(currentFileId, filterEnabled, localFilterParams);
       if (fileIdRef.current !== currentFileId) return;
       useProcessAreaStore.getState().publish(snapshot);
     } catch (e: unknown) {
@@ -299,7 +302,7 @@ export default function VariantsExplorer({
     } finally {
       if (fileIdRef.current === currentFileId) setProcessAreasLoading(false);
     }
-  }, [fileId, filterEnabled]);
+  }, [fileId, filterEnabled, localFilterParams]);
 
   const sortedVariants = useMemo(
     () => [...variants].sort((a, b) => b.support - a.support),
