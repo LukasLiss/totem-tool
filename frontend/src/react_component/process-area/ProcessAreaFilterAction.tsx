@@ -73,8 +73,7 @@ export function ProcessAreaFilterAction({
       await applyGlobalFilterRules(numericFileId, rules);
       toast.success(`Global filter set to process area: ${describeObjectTypes(objectTypes)}`);
       setOpen(false);
-    } catch (error) {
-      console.error("[ProcessAreaFilterAction] failed to apply filter", error);
+    } catch {
       toast.error("Could not apply the process-area filter.");
     } finally {
       setApplying(false);

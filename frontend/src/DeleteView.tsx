@@ -6,10 +6,8 @@ export function DeleteView(){
 const handleDelete = async () => {
     try {
       await deleteUserData();
-      console.log('Successfull deletion')
       toast.success("All projects deleted successfully");
-    } catch (err) {
-      console.error("Deletion failed:", err);
+    } catch {
       toast.error("Deletion failed");
     }
   };

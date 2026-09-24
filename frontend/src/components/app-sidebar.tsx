@@ -25,6 +25,7 @@ import { NavEditor } from "./nav-editor";
 import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 // In the desktop build the only account is the auto-logged-in Guest, so
 // "Log out" would just drop the user's place and log them straight back in.
@@ -51,8 +52,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         const response = await getUserFiles();
         const data = response.results || response;
         setFiles(Array.isArray(data) ? data : []);
-      } catch (error: unknown) {
-        console.error(error);
+      } catch {
+        toast.error("Projects could not be loaded");
         setFiles([]);
       }
     };
@@ -69,8 +70,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         const response = await getDashboards(selectedFile.project);
         const data = response.results || response;
         setDashboards(Array.isArray(data) ? data : []);
-      } catch (error: unknown) {
-        console.error(error);
+      } catch {
+        toast.error("Dashboards could not be loaded");
         setDashboards([]);
       }
     };
@@ -106,8 +107,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
               const response = await getDashboards(selectedFile.project);
               const data = response.results || response;
               setDashboards(Array.isArray(data) ? data : []);
-            } catch (error: unknown) {
-              console.error(error);
+            } catch {
+              toast.error("Dashboards could not be loaded");
               setDashboards([]);
             }
           }}

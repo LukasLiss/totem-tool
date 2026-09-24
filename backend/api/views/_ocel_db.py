@@ -165,6 +165,31 @@ def _with_ocel_db(user_file):
             yield db
 
 
+def _close_ocel_db(pk: int) -> None:
+    """
+    Drop and close the cached connection for an event log, for good.
+
+    Call this before the event log's file is deleted: the registry holds a
+    live read-only DuckDB handle, which keeps the file open — and on Windows
+    keeps it locked, so the delete fails outright. Unlike
+    ``_rewrite_ocel_db_file`` nothing is reopened afterwards, because the file
+    is about to stop existing.
+    """
+    with _ocel_file_lock(pk):
+        with _OCEL_DB_REGISTRY_LOCK:
+            db = _OCEL_DB_REGISTRY.pop(pk, None)
+            _OCEL_OBJECT_TYPES_REGISTRY.pop(pk, None)
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+    # Only once the lock is released can it be dropped; a reader that is
+    # still queued on it holds a reference and is unaffected.
+    with _OCEL_DB_REGISTRY_LOCK:
+        _OCEL_DB_LOCKS.pop(pk, None)
+
+
 def _rewrite_ocel_db_file(user_file, mutate):
     """
     Let ``mutate(path)`` write to the event log's DuckDB file.

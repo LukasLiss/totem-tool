@@ -55,6 +55,7 @@ import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
+import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -159,16 +160,13 @@ export interface ComponentProps {
 
 // TextBoxComponent: Editable text with ShadCN UI
 export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
-  //console.log('TextBoxComponent render - isEditMode:', isEditMode, 'node.text:', node.text);
   const [text, setText] = React.useState(node.text || 'Enter text here');
   // Sync local state with node.text when it changes (e.g., from loading or updates)
   React.useEffect(() => {
-    //console.log('TextBoxComponent useEffect - updating text to:', node.text);
     setText(node.text || 'Enter text here');
   }, [node.text]);
 
   const handleTextChange = (value: string) => {
-    //console.log('TextBoxComponent handleTextChange - new value:', value);
     setText(value);
     onUpdate?.({ text: value });
   };
@@ -336,7 +334,7 @@ export const ImageComponent: React.FC<ComponentProps> = ({
       .then((data) => {
         if (!cancelled) setAssets(data);
       })
-      .catch((err) => console.error('Failed to load image assets:', err))
+      .catch(() => toast.error('Image assets could not be loaded'))
       .finally(() => {
         if (!cancelled) setLoadingAssets(false);
       });
@@ -387,7 +385,6 @@ export const ImageComponent: React.FC<ComponentProps> = ({
       setAssets((current) => [...current, created]);
       selectAsset(created);
     } catch (error) {
-      console.error('Image upload failed:', error);
       setUploadError(extractImageAssetApiError(error).message);
     } finally {
       setUploading(false);
@@ -638,8 +635,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
         ]);
         setAvailableTypes(types);
         setAvailableActivities(activities);
-      } catch (err) {
-        console.error('Failed to fetch object types:', err);
+      } catch {
+        toast.error('Object types could not be loaded');
       } finally {
         setLoadingTypes(false);
       }

@@ -1,4 +1,5 @@
-import { ChevronRight, BarChart3, Network, GitBranch, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
+import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
+import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext } from 'react'
 import {
   Collapsible,
@@ -18,13 +19,13 @@ import { DashboardContext, AnalysisComponent } from "@/contexts/DashboardContext
 import { TOUR_IDS } from "@/tour/tourIds"
 
 const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarChart3 }[] = [
-  { id: 'processArea', label: 'Process Area', icon: BarChart3 },
-  { id: 'ocdfg', label: 'OC-DFG', icon: Network },
-  { id: 'variants', label: 'Variants', icon: GitBranch },
-  { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
-  { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
-  { id: 'occn', label: 'OCCN', icon: Workflow },
+  { id: 'processArea', label: 'Process Area', icon: Network },
   { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
+  { id: 'occn', label: 'OCCN', icon: CausalNet },
+  { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
+  { id: 'ocdfg', label: 'OC-DFG', icon: BoxesArrowRight },
+  { id: 'variants', label: 'Variants', icon: TextAlignStart },
+  { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
   { id: 'sqlQuery', label: 'SQL Queries', icon: Database },
 ];
 
@@ -58,6 +59,7 @@ export function NavAnalysis() {
                     <SidebarMenuSubButton
                       onClick={() => setViewMode({ type: 'analysis', component: item.id })}
                       data-active={activeComponent === item.id}
+                      data-tour-id={item.id === 'dottedChart' ? TOUR_IDS.OPEN_DOTTED_CHART : undefined}
                     >
                       <item.icon className="w-4 h-4" />
                       <span>{item.label}</span>

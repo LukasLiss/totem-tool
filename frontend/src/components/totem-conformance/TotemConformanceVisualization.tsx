@@ -9,6 +9,8 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { TotemConformanceResponse } from "@/api/totemConformanceApi";
+import TotemObjectTypeNode from "@/components/totem/TotemObjectTypeNode";
+import TotemRelationEdge from "@/components/totem/TotemRelationEdge";
 import { cn } from "@/lib/utils";
 
 import {
@@ -23,8 +25,6 @@ import {
   TotemConformanceDetails,
   type TotemConformanceSelection,
 } from "./TotemConformanceDetails";
-import TotemConformanceEdge from "./TotemConformanceEdge";
-import TotemConformanceNode from "./TotemConformanceNode";
 import { TotemConformanceSummary } from "./TotemConformanceSummary";
 import {
   createTotemFlowElements,
@@ -33,8 +33,8 @@ import {
 } from "./visualizationFlow";
 import type { TotemVisualizationModel } from "./visualizationModel";
 
-const nodeTypes = { totemConformanceNode: TotemConformanceNode };
-const edgeTypes = { totemConformanceEdge: TotemConformanceEdge };
+const nodeTypes = { totemConformanceNode: TotemObjectTypeNode };
+const edgeTypes = { totemConformanceEdge: TotemRelationEdge };
 
 export interface TotemConformanceVisualizationProps {
   model: TotemVisualizationModel;

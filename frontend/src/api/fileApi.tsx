@@ -12,6 +12,21 @@ export async function getUserFiles() {
   return data;
 }
 
+/** Rename the project an event log belongs to (its switcher label). */
+export async function renameProject(fileId: string | number, name: string) {
+  const { data } = await axios.patch(
+    `/api/files/${fileId}/rename/`,
+    { name },
+    { _skipGlobalFilter: true }
+  );
+  return data;
+}
+
+/** Delete a project: its event log, dashboards, assets and uploaded files. */
+export async function deleteProject(fileId: string | number) {
+  await axios.delete(`/api/files/${fileId}/`, { _skipGlobalFilter: true });
+}
+
 export async function processFile(fileId: string | number) {
   // Honors the active global filter (the interceptor appends its params),
   // so the shown event count matches the rest of the tool.

@@ -9,7 +9,6 @@ export function DashboardView() {
 
   useEffect(() => {
     if (!dashboardId) return;
-    console.log("DashboardView: active dashboard is", dashboardId);
   }, [dashboardId]);
 
   return (

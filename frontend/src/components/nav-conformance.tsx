@@ -1,4 +1,4 @@
-import { ChevronRight, GitCompareArrows, Network } from "lucide-react"
+import { ChevronRight, GitCompareArrows, TriangleAlert } from "lucide-react"
 import { useContext } from "react"
 
 import {
@@ -20,14 +20,15 @@ import {
   DashboardContext,
 } from "@/contexts/DashboardContext"
 import { TOUR_IDS } from "@/tour/tourIds"
+import { CausalNetAlert, WorkflowAlert } from "./icons/totem-icons"
 
 const conformanceItems: {
   id: ConformanceComponent;
   label: string;
   icon: typeof GitCompareArrows;
 }[] = [
-  { id: "totem", label: "TOTeM Conformance", icon: GitCompareArrows },
-  { id: "occn", label: "OCCN Conformance", icon: Network },
+  { id: "totem", label: "TOTeM Conformance", icon: WorkflowAlert },
+  { id: "occn", label: "OCCN Conformance", icon: CausalNetAlert },
 ];
 
 export function NavConformance() {
@@ -46,7 +47,7 @@ export function NavConformance() {
                 data-active={viewMode.type === "conformance"}
                 data-tour-id={TOUR_IDS.NAV_CONFORMANCE}
               >
-                <GitCompareArrows />
+                <TriangleAlert />
                 <span>Conformance</span>
                 <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
               </SidebarMenuButton>
