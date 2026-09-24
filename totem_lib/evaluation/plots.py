@@ -18,10 +18,12 @@ rather than coloured lines. They are what the other algorithms build on, and the
 mostly file parsing, so they are a different kind of measurement. import_ocel is dashed
 and import_ocel_db is dotted.
 
-Colours are the validated categorical palette, assigned in a fixed order so an algorithm
-keeps its colour even if a run covers only some of them. Three of the colours are light
-against the background, so the figures should be read next to the results table in
-evaluation/results/ - that table is what makes them safe to use.
+Colours are the validated categorical palette. Each algorithm gets the colour of its
+place in ALGORITHMS (evaluation/algorithms.py), so it keeps its colour even if a run
+covers only some of them. The legend uses the same order, which is also the order of
+the results table in evaluation/results/. Three of the colours are light against the
+background, so the figures should be read next to that table - it is what makes them
+safe to use.
 
 The benchmark command writes the figures itself. To rebuild them from saved results
 without running anything, from the totem_lib/ directory:
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import matplotlib
 
@@ -45,6 +47,7 @@ import matplotlib.pyplot as plt  # noqa: E402  (must come after use())
 from matplotlib import ticker  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
+from evaluation.algorithms import ALGORITHM_NAMES  # noqa: E402
 from evaluation.datasets import LOGS, SIZE_METRICS, LogStatistics  # noqa: E402
 
 FIGURES_DIR = Path(__file__).resolve().parent.parent / "figures"
@@ -58,7 +61,7 @@ BASELINE_ALGORITHMS = {
 }
 
 # Validated categorical palette. Never reorder or cycle this: each algorithm takes the
-# next free slot, so it keeps its colour across runs.
+# slot of its place in ALGORITHMS, so it keeps its colour across runs.
 SERIES_COLORS = (
     "#2a78d6",  # blue
     "#eb6834",  # orange
@@ -173,6 +176,32 @@ def markers_for_logs(rows: Sequence) -> dict[str, str]:
     return {name: MARKERS[index % len(MARKERS)] for index, name in enumerate(ordered)}
 
 
+def colors_for_algorithms(names: Iterable[str]) -> dict[str, str]:
+    """
+    Pick one colour per algorithm, in the order the legend lists them.
+
+    The colour comes from the algorithm's place in ALGORITHMS, not from the algorithms
+    in this run. Counting only the algorithms in the run would give every later one a
+    new colour as soon as an earlier one is left out.
+
+    A name not in ALGORITHMS, such as one from an old results file, has no colour of
+    its own. It goes last and takes a colour that no other line uses. A colour only
+    repeats when all of them are taken.
+    """
+    names = set(names)
+    known = [name for name in ALGORITHM_NAMES if name not in BASELINE_ALGORITHMS]
+    colors = {
+        name: SERIES_COLORS[index % len(SERIES_COLORS)]
+        for index, name in enumerate(known)
+        if name in names
+    }
+    unused = [color for color in SERIES_COLORS if color not in colors.values()]
+    spare = unused or SERIES_COLORS
+    for index, name in enumerate(sorted(names - set(known))):
+        colors[name] = spare[index % len(spare)]
+    return colors
+
+
 # ---------------------------------------------------------------------------
 # Drawing
 # ---------------------------------------------------------------------------
@@ -222,8 +251,7 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
             draw(points, BASELINE_COLOR, name + " (loading step)", style, 2)
             baselines += points
 
-    for index, name in enumerate(sorted(series)):
-        color = SERIES_COLORS[index % len(SERIES_COLORS)]
+    for name, color in colors_for_algorithms(series).items():
         draw(series[name], color, name, "-", 4)
 
     axes.set_yscale("log")

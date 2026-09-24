@@ -15,11 +15,16 @@ import pytest
 # No display in CI. Must be set before pyplot is imported anywhere.
 matplotlib.use("Agg")
 
+import matplotlib.pyplot as plt
+
+from evaluation.algorithms import ALGORITHM_NAMES
 from evaluation.datasets import LOGS, SIZE_METRICS, LogStatistics
 from evaluation.export import write_csv
 from evaluation.harness import BenchmarkResult
 from evaluation.plots import (
+    BASELINE_ALGORITHMS,
     FILE_PREFIX,
+    colors_for_algorithms,
     markers_for_logs,
     plot_all,
     plot_metric,
@@ -29,6 +34,9 @@ from evaluation.plots import (
 from evaluation.run_benchmarks import BenchmarkRow
 
 PNG_MAGIC = b"\x89PNG"
+
+# Every algorithm drawn in colour: all of them except the grey loading steps.
+COLORED = [name for name in ALGORITHM_NAMES if name not in BASELINE_ALGORITHMS]
 
 
 def _stats(**overrides) -> LogStatistics:
@@ -59,6 +67,15 @@ def _row(log="log-a", algorithm="works", elapsed_s=1.5, statistics=None) -> Benc
 def _failed_row(log="log-a", algorithm="broken") -> BenchmarkRow:
     result = BenchmarkResult(name=algorithm, repeats=1, error="ValueError: boom")
     return BenchmarkRow(log=log, algorithm=algorithm, result=result, statistics=_stats())
+
+
+def _line_colors(figure) -> dict[str, str]:
+    """The colour of each line, by label. Lines without a label are the log markers."""
+    return {
+        line.get_label(): line.get_color()
+        for line in figure.axes[0].get_lines()
+        if not line.get_label().startswith("_")
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +152,51 @@ def test_series_drops_rows_without_statistics():
 
 
 # ---------------------------------------------------------------------------
+# colors_for_algorithms
+# ---------------------------------------------------------------------------
+
+def test_an_algorithm_keeps_its_colour_when_others_are_missing():
+    """
+    The colour belongs to the algorithm, not to its rank in the run. Leaving any one
+    algorithm out must not repaint the others.
+    """
+    full = colors_for_algorithms(COLORED)
+    for missing in COLORED:
+        partial = colors_for_algorithms(name for name in COLORED if name != missing)
+        for name, color in partial.items():
+            assert color == full[name], f"{name} changed colour without {missing}"
+
+
+def test_every_algorithm_gets_its_own_colour():
+    """
+    Two lines in one colour cannot be told apart. The palette has one colour per
+    algorithm, so this fails when an algorithm is added without a colour of its own.
+    """
+    colors = colors_for_algorithms(COLORED)
+    assert len(set(colors.values())) == len(COLORED)
+
+
+def test_colours_come_in_the_order_of_the_algorithms():
+    """The legend lists the algorithms in the same order as the results table."""
+    assert list(colors_for_algorithms(reversed(COLORED))) == COLORED
+
+
+def test_an_unknown_algorithm_does_not_move_the_known_ones():
+    """A name from an old results file goes last, and the others keep their colour."""
+    full = colors_for_algorithms(COLORED)
+    colors = colors_for_algorithms([*COLORED, "old-name"])
+    assert list(colors)[-1] == "old-name"
+    assert all(colors[name] == full[name] for name in COLORED)
+
+
+def test_an_unknown_algorithm_takes_a_colour_no_other_line_uses():
+    """Sharing a colour with a known algorithm would make the two look like one."""
+    present = COLORED[1:]
+    colors = colors_for_algorithms([*present, "old-name"])
+    assert colors["old-name"] not in [colors[name] for name in present]
+
+
+# ---------------------------------------------------------------------------
 # plot_metric
 # ---------------------------------------------------------------------------
 
@@ -158,6 +220,30 @@ def test_plot_metric_still_writes_when_everything_failed(tmp_path):
 def test_plot_metric_creates_a_missing_directory(tmp_path):
     path = plot_metric([_row()], "num_events", tmp_path / "deep" / "dir" / "f.png")
     assert path.exists()
+
+
+def test_a_missing_algorithm_does_not_repaint_the_figure(monkeypatch, tmp_path):
+    """
+    The committed example run leaves out find_variants. Its figures must still draw
+    every other algorithm in the colour a full run gives it.
+    """
+    figures = []
+    real_close = plt.close
+
+    def keep_and_close(figure):
+        figures.append(figure)
+        real_close(figure)
+
+    monkeypatch.setattr(plt, "close", keep_and_close)
+
+    full_run = [_row(algorithm=name) for name in ALGORITHM_NAMES]
+    committed_run = [row for row in full_run if row.algorithm != "find_variants"]
+    plot_metric(full_run, "num_events", tmp_path / "full.png")
+    plot_metric(committed_run, "num_events", tmp_path / "committed.png")
+
+    full, committed = (_line_colors(figure) for figure in figures)
+    assert "find_variants" in full and "find_variants" not in committed
+    assert committed == {name: full[name] for name in committed}
 
 
 # ---------------------------------------------------------------------------
