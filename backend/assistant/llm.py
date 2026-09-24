@@ -961,6 +961,17 @@ class MockProvider(BaseLLMProvider):
                 })
                 text = "Navigating to dashboard."
 
+            elif "highlight" in msg_lower or "tour" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-high",
+                    "name": "highlight_element",
+                    "arguments": {
+                        "tour_id": "nav-overview",
+                        "label": "Click here to view overall process metrics.",
+                    },
+                })
+                text = "Highlighting the navigation overview item."
+
             else:
                 text = f"Executing Act Mode command: '{user_message}'. The process mining copilot is active."
 
