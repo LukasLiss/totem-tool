@@ -97,10 +97,10 @@ export function LocalFilterDropdown({
   useEffect(() => {
     if (!dropdownOpen || optionsLoaded || !fileId) return;
     setOptionsLoaded(true);
-    axios.get<OptionItem[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true } as any)
+    axios.get<OptionItem[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
       .catch(() => setObjectTypes([]));
-    axios.get<OptionItem[]>(`/api/files/${fileId}/activities/`, { _skipGlobalFilter: true } as any)
+    axios.get<OptionItem[]>(`/api/files/${fileId}/activities/`, { _skipGlobalFilter: true })
       .then(({ data }) => setActivities(Array.isArray(data) ? data : []))
       .catch(() => setActivities([]));
   }, [dropdownOpen, fileId, optionsLoaded]);

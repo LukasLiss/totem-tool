@@ -75,9 +75,6 @@ import SqlQueryEditor, {
   type LinkedQuery,
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
-import KpiComponent from './sql-widgets/KpiComponent';
-import BarChartComponent from './sql-widgets/BarChartComponent';
-import ScatterPlotComponent from './sql-widgets/ScatterPlotComponent';
 import { useFilterVersion } from '@/store/filterStore';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
@@ -1202,84 +1199,6 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
 };
 
 
-// OCDFGComponent: Dashboard wrapper for Object-Centric Directly Follows Graph
-const OCDFGComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
-  isEditMode = false,
-  selectedFile
-}) => {
-  const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
-  const [showControls, setShowControls] = useState(node.show_controls ?? true);
-  const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-
-  useEffect(() => {
-    setShowControls(node.show_controls ?? true);
-    setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked } as any);
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked } as any);
-  };
-
-  if (isEditMode) {
-    // EDIT MODE: Show configuration controls
-    return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OCDFG Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Directly Follows Graph (OCDFG) visualization.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-controls">Show Controls Panel</Label>
-            <Switch
-              id="show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // VIEW MODE: Render OCDFGVisualizer
-  return (
-    <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
-      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <ReactFlowProvider>
-          <NewOCDFGVisualizer
-            height="100%"
-            fileId={selectedFile?.id}
-            showControls={showControls}
-            initialInteractionLocked={initialInteractionLocked}
-            filterEnabled={filterEnabled}
-            localFilterParams={localFilterParams}
-          />
-        </ReactFlowProvider>
-      </div>
-    </div>
-  );
-};
 
 const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   xAxis: { type: "time" },
@@ -1841,7 +1760,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
           localFilterParams={localFilterParams}
           onTimeoutSChange={(t) => {
             setTimeoutS(t);
-            onUpdate?.({ timeout_s: t } as any);
+            onUpdate?.({ timeout_s: t } as Partial<typeof node>);
           }}
         />
       </div>

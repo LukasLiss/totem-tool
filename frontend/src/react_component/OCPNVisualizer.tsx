@@ -187,7 +187,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
         params: { timeout_s: timeoutRef.current, ...(filterConfig.params ?? {}) },
         _skipGlobalFilter: filterConfig._skipGlobalFilter,
-      } as any);
+      });
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
       const flow = modelToFlow(parsed.model);
