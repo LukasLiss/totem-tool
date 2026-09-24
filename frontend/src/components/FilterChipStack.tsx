@@ -472,7 +472,12 @@ export default function FilterChipStack() {
 
   function handleSubmit(params: FilterRule["params"]) {
     if (editingRule) removeFilter(editingRule.id);
-    addFilter({ type: activeType, enabled: true, params });
+    const emptyInclude =
+      (activeType === "object_types" || activeType === "activity") &&
+      (params as { include: string[] }).include.length === 0;
+    if (!emptyInclude) {
+      addFilter({ type: activeType, enabled: true, params });
+    }
   }
 
   async function applyFilters() {

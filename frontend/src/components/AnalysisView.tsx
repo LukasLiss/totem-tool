@@ -16,6 +16,7 @@ import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import OCPNVisualizer from "@/react_component/OCPNVisualizer";
 import TotemMiner from "@/react_component/TotemMiner";
 import { SqlQueryAnalysis } from "@/components/SqlQueryAnalysis";
@@ -25,6 +26,11 @@ export function AnalysisView() {
   const { selectedFile } = useContext(SelectedFileContext);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+
+  // Reset local filter when switching components or files
+  const viewComponent = viewMode.type === "analysis" ? viewMode.component : null;
+  React.useEffect(() => { setLocalFilterParams({}); }, [viewComponent, selectedFile?.id]);
 
   if (viewMode.type !== "analysis") return null;
 
@@ -45,6 +51,7 @@ export function AnalysisView() {
                 <div className="flex items-center gap-2">
                   <CardTitle>Object-Centric DFG</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Directly-Follows Graph visualization</CardDescription>
               </CardHeader>
@@ -56,6 +63,7 @@ export function AnalysisView() {
                     filterEnabled={filterEnabled}
                     onToggleFilter={toggleFilter}
                     showTitle={false}
+                    localFilterParams={localFilterParams}
                   />
                 </ReactFlowProvider>
               </CardContent>
@@ -71,6 +79,7 @@ export function AnalysisView() {
                 <div className="flex items-center gap-2">
                   <CardTitle>Object-Centric Causal Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
               </CardHeader>
@@ -82,6 +91,7 @@ export function AnalysisView() {
                     showTitle={false}
                     filterEnabled={filterEnabled}
                     onToggleFilter={toggleFilter}
+                    localFilterParams={localFilterParams}
                   />
                 </ReactFlowProvider>
               </CardContent>
@@ -97,6 +107,7 @@ export function AnalysisView() {
                 <div className="flex items-center gap-2">
                   <CardTitle>Variants Explorer</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Object-centric variant analysis</CardDescription>
               </CardHeader>
@@ -106,6 +117,7 @@ export function AnalysisView() {
                   colWidth={120}
                   embedded={true}
                   filterEnabled={filterEnabled}
+                  localFilterParams={localFilterParams}
                 />
               </CardContent>
             </Card>
@@ -120,6 +132,7 @@ export function AnalysisView() {
                 <div className="flex items-center gap-2">
                   <CardTitle>OC Dotted Chart</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Object-centric event distribution</CardDescription>
               </CardHeader>
@@ -134,6 +147,7 @@ export function AnalysisView() {
                   maxPoints={10000}
                   showControls={true}
                   filterEnabled={filterEnabled}
+                  localFilterParams={localFilterParams}
                   className="min-h-[700px]"
                 />
               </CardContent>
@@ -149,6 +163,7 @@ export function AnalysisView() {
                 <div className="flex items-center gap-2">
                   <CardTitle>OC Petri Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>
                   Object-Centric Petri Net discovered from the event log
@@ -161,6 +176,7 @@ export function AnalysisView() {
                   autoStart={true}
                   showControls={true}
                   filterEnabled={filterEnabled}
+                  localFilterParams={localFilterParams}
                 />
               </CardContent>
             </Card>

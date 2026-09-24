@@ -1,5 +1,5 @@
 import axios from "axios";
-
+import { getEffectiveFilterConfig } from "@/store/filterStore";
 import type { ProcessAreaSnapshot, ProcessAreasSnapshot } from "@/store/processAreaStore";
 
 import { isLeadingExtraction, isResourceAware } from "./settings";
@@ -50,14 +50,20 @@ export async function fetchVariants(
   execution: ExecutionSettings,
   grouping: GroupingSettings,
   filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
 ): Promise<VariantsResponse> {
   const params = buildExtractionParams(execution);
   params.set("file_id", String(fileId));
   params.set("iso", grouping.iso);
   params.set("timeout_s", String(grouping.timeoutS));
+  const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (filterConfig._noResults) return { variants: [], object_types: [] };
+  if (filterConfig.params) {
+    Object.entries(filterConfig.params).forEach(([k, v]) => params.set(k, v));
+  }
   const { data } = await axios.get<VariantsResponse | VariantsResponse["variants"]>(
     `/api/variants/?${params.toString()}`,
-    { _skipGlobalFilter: !filterEnabled },
+    { _skipGlobalFilter: filterConfig._skipGlobalFilter },
   );
   // Older backends returned the bare list.
   return Array.isArray(data) ? { variants: data, object_types: [] } : data;
@@ -95,11 +101,15 @@ export async function storeProcessExecutions(
   grouping: GroupingSettings,
   store: StoreSettings,
   filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
 ): Promise<StoredExecutionsResponse> {
+  const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (filterConfig._noResults) return { executions: [], variants: [], object_types: [] } as any;
+  const body = { ...buildStoreBody(execution, grouping, store), ...(filterConfig.params ?? {}) };
   const { data } = await axios.post<StoredExecutionsResponse>(
     `/api/files/${fileId}/process_executions/`,
-    buildStoreBody(execution, grouping, store),
-    { _skipGlobalFilter: !filterEnabled },
+    body,
+    { _skipGlobalFilter: filterConfig._skipGlobalFilter },
   );
   return data;
 }
@@ -119,10 +129,13 @@ type ProcessAreaPayload = {
 export async function fetchProcessAreas(
   fileId: number,
   filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
 ): Promise<Omit<ProcessAreasSnapshot, "computedAt">> {
+  const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (filterConfig._noResults) return { areas: [], objectTypeToActivities: {} };
   const { data } = await axios.get<ProcessAreaPayload>(
     `/api/files/${fileId}/discover_process_areas/`,
-    { _skipGlobalFilter: !filterEnabled },
+    filterConfig,
   );
   const layers = [...(data.layers ?? [])].sort((a, b) => b.level - a.level);
   const areas: ProcessAreaSnapshot[] = layers.flatMap((layer) =>

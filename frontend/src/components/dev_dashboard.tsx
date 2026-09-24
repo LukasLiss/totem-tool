@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { ReactFlowProvider } from "@xyflow/react";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
@@ -22,8 +23,11 @@ export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
   const { setViewMode } = useContext(DashboardContext);
   const [ocdfgFilterEnabled, setOcdfgFilterEnabled] = useState(true);
+  const [ocdfgLocalFilter, setOcdfgLocalFilter] = useState<Record<string, string>>({});
   const [occnFilterEnabled, setOccnFilterEnabled] = useState(true);
+  const [occnLocalFilter, setOccnLocalFilter] = useState<Record<string, string>>({});
   const [variantsFilterEnabled, setVariantsFilterEnabled] = useState(true);
+  const [variantsLocalFilter, setVariantsLocalFilter] = useState<Record<string, string>>({});
 
   return (
     <div>
@@ -43,6 +47,8 @@ export function DevDashboard() {
               fileId={selectedFile?.id}
               filterEnabled={ocdfgFilterEnabled}
               onToggleFilter={() => setOcdfgFilterEnabled(p => !p)}
+              localFilterParams={ocdfgLocalFilter}
+              onLocalFilterChange={setOcdfgLocalFilter}
             />
           </ReactFlowProvider>
         </div>
@@ -51,6 +57,7 @@ export function DevDashboard() {
             <div className="flex items-center gap-2">
               <CardTitle>Object-Centric Causal Net</CardTitle>
               <GlobalFilterToggle filterEnabled={occnFilterEnabled} onToggle={() => setOccnFilterEnabled(p => !p)} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOccnLocalFilter} />
             </div>
             <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
           </CardHeader>
@@ -59,9 +66,8 @@ export function DevDashboard() {
               <OCCNVisualizer
                 height="100%"
                 fileId={selectedFile?.id}
-                showTitle={false}
                 filterEnabled={occnFilterEnabled}
-                onToggleFilter={() => setOccnFilterEnabled(p => !p)}
+                localFilterParams={occnLocalFilter}
               />
             </ReactFlowProvider>
           </CardContent>
@@ -71,6 +77,7 @@ export function DevDashboard() {
             <div className="flex items-center gap-2">
               <CardTitle>Variants Explorer</CardTitle>
               <GlobalFilterToggle filterEnabled={variantsFilterEnabled} onToggle={() => setVariantsFilterEnabled(p => !p)} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setVariantsLocalFilter} />
             </div>
             <CardDescription>Object-centric variant analysis</CardDescription>
           </CardHeader>
@@ -80,6 +87,7 @@ export function DevDashboard() {
               colWidth={120}
               embedded={true}
               filterEnabled={variantsFilterEnabled}
+              localFilterParams={variantsLocalFilter}
             />
           </CardContent>
         </Card>

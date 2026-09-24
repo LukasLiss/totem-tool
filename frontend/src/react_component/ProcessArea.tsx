@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -83,6 +84,7 @@ export default function ProcessArea({
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -106,6 +108,7 @@ export default function ProcessArea({
         embedded={true}
         onControlsReady={handleControlsReady}
         filterEnabled={filterEnabled}
+        localFilterParams={localFilterParams}
         initialAlgorithm={initialAlgorithm}
         initialParams={initialParams}
         onSettingsChange={onSettingsChange}
@@ -129,6 +132,7 @@ export default function ProcessArea({
         <div className="flex items-center gap-2">
           <CardTitle>Process Area Visualizer</CardTitle>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
+          <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
         </div>
         <CardAction className="flex items-center gap-2">
           {totemControls && (

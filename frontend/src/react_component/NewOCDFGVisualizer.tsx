@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -106,6 +106,7 @@ interface NewOCDFGVisualizerProps {
   showControls?: boolean;
   initialInteractionLocked?: boolean;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 }
 
 function resolveHeightValue(height: string | number) {
@@ -242,6 +243,7 @@ function NewOCDFGVisualizer({
   showControls = true,
   initialInteractionLocked = true,
   filterEnabled = true,
+  localFilterParams,
 }: NewOCDFGVisualizerProps) {
   console.log('[NewOCDFGVisualizer] ELK Layered MultiGraph Mode - Mounted!');
 
@@ -582,7 +584,9 @@ function NewOCDFGVisualizer({
     let cancelled = false;
     const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
-    axios.get<DfgData>(url, { _skipGlobalFilter: !filterEnabled })
+    const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+    if (filterConfig._noResults) { setDfgData({ nodes: [], links: [] }); return; }
+    axios.get<DfgData>(url, filterConfig)
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
@@ -597,7 +601,7 @@ function NewOCDFGVisualizer({
       });
 
     return () => { cancelled = true; };
-  }, [data, fileId, filterEnabled, effectiveFilterVersion]);
+  }, [data, fileId, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   const handleWeightLimitChange = useCallback(
     (otype: string, value: number) => {

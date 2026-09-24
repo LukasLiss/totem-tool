@@ -52,6 +52,7 @@ interface DottedChartProps {
   className?: string;
   onEventClick?: (event: OCEvent) => void;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 }
 
 const DEFAULT_X_AXIS: AxisOption = { type: "time" };
@@ -83,6 +84,7 @@ export default function DottedChart({
   className,
   onEventClick,
   filterEnabled = true,
+  localFilterParams,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({
@@ -151,6 +153,7 @@ export default function DottedChart({
     sampleSeed,
     filterEnabled,
     effectiveFilterVersion,
+    localFilterParams,
   });
 
   const events = data?.events ?? EMPTY_EVENTS;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -69,6 +69,7 @@ interface OCCNVisualizerProps {
   showTitle?: boolean;
   filterEnabled?: boolean;
   onToggleFilter?: () => void;
+  localFilterParams?: Record<string, string>;
   /** Activity ids to emphasize as OCCN replay stopping points. */
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
   /** Log activities shown only to explain why replay stopped. */
@@ -102,6 +103,7 @@ function OCCNVisualizer({
   showTitle = true,
   filterEnabled = true,
   onToggleFilter = () => {},
+  localFilterParams,
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
   unvisitedActivities = EMPTY_UNVISITED_ACTIVITIES,
@@ -145,6 +147,7 @@ function OCCNVisualizer({
   );
 
   const filterVersion = useFilterVersion();
+  const effectiveLocalParams = localFilterParams ?? {};
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Normalized to a string so the fetch effect doesn't re-run on array identity.
@@ -164,12 +167,17 @@ function OCCNVisualizer({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    const filterConfig = getEffectiveFilterConfig(
+      Object.keys(effectiveLocalParams).length > 0 ? effectiveLocalParams : undefined,
+      filterEnabled,
+    );
+    if (filterConfig._noResults) { setNet(null); return; }
     axios
       .get<OccnNet>(
         `/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
           objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
         }`,
-        { _skipGlobalFilter: !filterEnabled },
+        filterConfig,
       )
       .then(({ data: payload }) => {
         if (cancelled) return;
@@ -187,7 +195,7 @@ function OCCNVisualizer({
     return () => {
       cancelled = true;
     };
-  }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion]);
+  }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion, effectiveLocalParams]);
 
   const typeColors = useMemo(
     () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),

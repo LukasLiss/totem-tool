@@ -355,7 +355,13 @@ export function FilterConfigDialog({
     if (!existingRule) {
       setAfterDate("");
       setBeforeDate("");
-      setSelected(new Set());
+      if (filterType === "object_types") {
+        setSelected(new Set(availableObjectTypes.map((o) => o.name)));
+      } else if (filterType === "activity") {
+        setSelected(new Set(availableActivities.map((a) => a.name)));
+      } else {
+        setSelected(new Set());
+      }
       return;
     }
     if (existingRule.type === "time_range") {
@@ -372,7 +378,7 @@ export function FilterConfigDialog({
       setAfterDate("");
       setBeforeDate("");
     }
-  }, [open, existingRule]);
+  }, [open, existingRule, filterType, availableObjectTypes, availableActivities]);
 
   useEffect(() => {
     if (!open || filterType !== "time_range" || !fileId) return;
@@ -421,6 +427,25 @@ export function FilterConfigDialog({
 
   const logMinDate = logMin != null ? unixToDate(logMin) : "";
   const logMaxDate = logMax != null ? unixToDate(logMax) : "";
+
+  const isUnchanged = (() => {
+    if (filterType === "time_range") {
+      if (!existingRule) {
+        return (!afterDate && !beforeDate) ||
+               (afterDate === logMinDate && beforeDate === logMaxDate);
+      }
+      const p = existingRule.params as TimeRangeParams;
+      return afterDate === (p.after != null ? unixToDate(p.after) : "") &&
+             beforeDate === (p.before != null ? unixToDate(p.before) : "");
+    }
+    if (!existingRule) {
+      if (options.length === 0) return true;
+      return selected.size === options.length && options.every((o) => selected.has(o.name));
+    }
+    const existInclude = (existingRule.params as ObjectTypesParams | ActivityParams).include;
+    if (selected.size !== existInclude.length) return false;
+    return existInclude.every(item => selected.has(item));
+  })();
   const last90Date = logMax != null ? unixToDate(logMax - 90 * 86400) : "";
   const showCustomPill =
     !!afterDate &&
@@ -763,7 +788,7 @@ export function FilterConfigDialog({
             </Button>
             <Button
               onClick={handleSubmit}
-              disabled={!hasFile}
+              disabled={!hasFile || isUnchanged}
               style={{
                 background: "var(--primary)",
                 borderColor: "var(--primary)",

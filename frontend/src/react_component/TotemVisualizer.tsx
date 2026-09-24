@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -185,6 +185,7 @@ type TotemVisualizerProps = {
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
   /** Persisted starting values; changes to these re-seed the local state. */
   initialAlgorithm?: ProcessAreaAlgorithm;
   initialParams?: Partial<ProcessAreaParams>;
@@ -5036,12 +5037,15 @@ function TotemVisualizer({
   embedded = false,
   onControlsReady,
   filterEnabled = true,
+  localFilterParams,
   initialAlgorithm,
   initialParams,
   onSettingsChange,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -5782,6 +5786,8 @@ function TotemVisualizer({
     // Blanking it here would collapse every expanded process area and reset the
     // zoom on every slider commit.
     try {
+      const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+      if (filterConfig._noResults) { setRawTotem(null); if (isCurrent()) setLoading(false); return; }
       const url =
         algorithm === 'advanced'
           ? `${backendBaseUrl}/api/files/${eventLogId}/discover_process_areas/?` +
@@ -5791,11 +5797,12 @@ function TotemVisualizer({
               w_divergence: String(appliedParams.wDivergence),
               alpha: String(appliedParams.alpha),
               beta: String(appliedParams.beta),
+              ...(filterConfig.params ?? {}),
             }).toString()
           : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
       const { data: payload } = await axios.get<TotemApiResponse>(url, {
-        _skipGlobalFilter: !filterEnabled,
-      });
+        _skipGlobalFilter: filterConfig._skipGlobalFilter,
+      } as any);
       if (!isCurrent()) return;
       setRawTotem(payload);
       // Share the result so other components (the Variants Explorer's
@@ -5824,7 +5831,7 @@ function TotemVisualizer({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion]);
+  }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -5847,9 +5854,15 @@ function TotemVisualizer({
 
       try {
         const objectTypes = encodeURIComponent(area.objectTypes.join(','));
+        const detailFilterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+        if (detailFilterConfig._noResults) { setDetailLoading((p) => ({ ...p, [areaId]: false })); return; }
+        const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: objectTypes });
+        if (detailFilterConfig.params) {
+          Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
+        }
         const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: OcdfgGraph['trace_variants'] } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
-          { _skipGlobalFilter: !filterEnabled },
+          `${backendBaseUrl}/api/ocdfg/?${detailParams.toString()}`,
+          { _skipGlobalFilter: detailFilterConfig._skipGlobalFilter } as any,
         );
         if (payload?.filter_error || payload?.error) {
           throw new Error(payload.filter_error || payload.error);
@@ -5921,7 +5934,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams],
   );
 
   const toggleAreaDetail = useCallback(
