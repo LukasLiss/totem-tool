@@ -38,6 +38,7 @@ class ThrottledTokenRefreshView(jwt_views.TokenRefreshView):
 
 urlpatterns = [
     path('api/', include('api.urls')),
+    path('api/assistant/', include('assistant.urls')),
     path('token/', ThrottledTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
     path('', include('authentification.urls')),
