@@ -12,6 +12,7 @@ import {
   type HandoverViewMode,
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
+import { toast } from "sonner";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
@@ -1759,16 +1760,28 @@ type SimLink = SimulationLinkDatum<SimNode>;
 
 const CLUSTER_COLORS = ["#f43f5e","#f97316","#eab308","#22c55e","#06b6d4","#8b5cf6","#ec4899","#14b8a6"];
 
-function updateDotLayer(
-  layer: SVGGElement,
+/** One frame of the flow animation, in node coordinates. */
+type DotFrame = {
+  dots: { px: number; py: number; t: number; color: string }[];
+  connectors: { points: { x: number; y: number }[]; color: string; opacity: number }[];
+};
+
+/**
+ * Where every flow dot sits at `currentTime`, and the connector polylines
+ * joining dots that share a business object.
+ *
+ * Split out of the SVG renderer so the video recorder can paint the same
+ * frames onto a canvas without duplicating the component-merging and
+ * angular-sorting logic. It reads live path geometry, so the graph must be
+ * rendered when it is called.
+ */
+function computeDotFrame(
   pathMap: Map<string, SVGPathElement>,
   flows: FlowEvent[],
   currentTime: number,
   colorMap: Record<string, string>,
   connectorMode: "fade" | "persist" | "none",
-): void {
-  while (layer.firstChild) layer.removeChild(layer.firstChild);
-
+): DotFrame {
   type DotEntry = { px: number; py: number; t: number; color: string };
   const dots: DotEntry[] = [];
   // Inverted index: bo_id → dot indices that carry it
@@ -1807,8 +1820,9 @@ function updateDotLayer(
     for (let k = 0; k < componentOf.length; k++) if (componentOf[k] === -1) componentOf[k] = nextId++;
   }
 
-  // Draw a polyline per connected component (dots sharing any bo_id).
+  // A polyline per connected component (dots sharing any bo_id).
   // Angular sort around the centroid gives a non-crossing open line.
+  const connectors: DotFrame["connectors"] = [];
   if (componentOf) {
     const FADE_T = 0.35;
     const groups = new Map<number, number[]>();
@@ -1838,24 +1852,50 @@ function updateDotLayer(
         if (gap > maxGap) { maxGap = gap; startIdx = (k + 1) % byAngle.length; }
       }
       const ordered = [...byAngle.slice(startIdx), ...byAngle.slice(0, startIdx)];
-      const d = ordered.map(({ i }, k) => `${k === 0 ? "M" : "L"}${dots[i].px} ${dots[i].py}`).join(" ");
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", d);
-      path.setAttribute("stroke", dots[indices[0]].color);
-      path.setAttribute("stroke-width", "1.5");
-      path.setAttribute("fill", "none");
-      path.setAttribute("opacity", String(opacity));
-      path.setAttribute("pointer-events", "none");
-      layer.appendChild(path);
+      connectors.push({
+        points: ordered.map(({ i }) => ({ x: dots[i].px, y: dots[i].py })),
+        color: dots[indices[0]].color,
+        opacity,
+      });
     }
   }
 
-  // Draw dots on top of connectors
+  return { dots, connectors };
+}
+
+/** Radius of a flow dot, in node coordinates. */
+const DOT_R = 6;
+
+/** Paint a frame into the live SVG's dot layer. */
+function updateDotLayer(
+  layer: SVGGElement,
+  pathMap: Map<string, SVGPathElement>,
+  flows: FlowEvent[],
+  currentTime: number,
+  colorMap: Record<string, string>,
+  connectorMode: "fade" | "persist" | "none",
+): void {
+  while (layer.firstChild) layer.removeChild(layer.firstChild);
+  const { dots, connectors } = computeDotFrame(pathMap, flows, currentTime, colorMap, connectorMode);
+
+  for (const { points, color, opacity } of connectors) {
+    const d = points.map((p, k) => `${k === 0 ? "M" : "L"}${p.x} ${p.y}`).join(" ");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    path.setAttribute("stroke", color);
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("fill", "none");
+    path.setAttribute("opacity", String(opacity));
+    path.setAttribute("pointer-events", "none");
+    layer.appendChild(path);
+  }
+
+  // Dots on top of connectors
   for (const { px, py, color } of dots) {
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     c.setAttribute("cx", String(px));
     c.setAttribute("cy", String(py));
-    c.setAttribute("r", "6");
+    c.setAttribute("r", String(DOT_R));
     c.setAttribute("fill", color);
     c.setAttribute("stroke", "white");
     c.setAttribute("stroke-width", "1.5");
@@ -1864,51 +1904,83 @@ function updateDotLayer(
   }
 }
 
-// ── ZIP helpers (store / no compression) ─────────────────────────────────────
-function _crc32(data: Uint8Array): number {
-  let c = -1;
-  for (let i = 0; i < data.length; i++) {
-    c ^= data[i];
-    for (let j = 0; j < 8; j++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+/** Paint a frame onto a canvas, mapping node coordinates into `rect`. */
+function drawDotFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: DotFrame,
+  vb: { x: number; y: number; w: number; h: number },
+  rect: { x: number; y: number; width: number; height: number },
+) {
+  const scale = rect.width / vb.w;
+  const toX = (x: number) => rect.x + (x - vb.x) * scale;
+  const toY = (y: number) => rect.y + (y - vb.y) * scale;
+
+  ctx.save();
+  ctx.lineWidth = 1.5 * scale;
+  for (const { points, color, opacity } of frame.connectors) {
+    ctx.globalAlpha = opacity;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    points.forEach((p, k) => (k === 0 ? ctx.moveTo(toX(p.x), toY(p.y)) : ctx.lineTo(toX(p.x), toY(p.y))));
+    ctx.stroke();
   }
-  return (~c) >>> 0;
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "white";
+  for (const { px, py, color } of frame.dots) {
+    ctx.beginPath();
+    ctx.arc(toX(px), toY(py), DOT_R * scale, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
-function _buildZip(files: Array<{ name: string; data: Uint8Array }>): Uint8Array {
-  const enc = new TextEncoder();
-  const locals: Uint8Array[] = [];
-  const central: Uint8Array[] = [];
-  let offset = 0;
-  for (const { name, data } of files) {
-    const nb = enc.encode(name);
-    const crc = _crc32(data);
-    const sz = data.length;
-    const lh = new Uint8Array(30 + nb.length);
-    const lv = new DataView(lh.buffer);
-    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
-    lv.setUint16(8, 0, true);          // store
-    lv.setUint32(14, crc, true); lv.setUint32(18, sz, true); lv.setUint32(22, sz, true);
-    lv.setUint16(26, nb.length, true); lh.set(nb, 30);
-    const ch = new Uint8Array(46 + nb.length);
-    const cv = new DataView(ch.buffer);
-    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
-    cv.setUint16(10, 0, true);         // store
-    cv.setUint32(16, crc, true); cv.setUint32(20, sz, true); cv.setUint32(24, sz, true);
-    cv.setUint16(28, nb.length, true); cv.setUint32(42, offset, true); ch.set(nb, 46);
-    locals.push(lh, data); central.push(ch);
-    offset += lh.length + sz;
-  }
-  const cdSize = central.reduce((s, c) => s + c.length, 0);
-  const cdStart = offset;
-  const eocd = new Uint8Array(22);
-  const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
-  ev.setUint32(12, cdSize, true); ev.setUint32(16, cdStart, true);
-  const all = [...locals, ...central, eocd];
-  const out = new Uint8Array(all.reduce((s, a) => s + a.length, 0));
-  let pos = 0; for (const a of all) { out.set(a, pos); pos += a.length; }
-  return out;
+/** How much explanatory chrome an export carries alongside the graph. */
+type ExportDetail = "graph" | "legend" | "full";
+const EXPORT_DETAIL_OPTIONS: { value: ExportDetail; label: string }[] = [
+  { value: "graph", label: "Graph only" },
+  { value: "legend", label: "Legend" },
+  { value: "full", label: "Legend & settings" },
+];
+
+/** Frame rates offered for the recording. Higher is smoother but slower to record. */
+const EXPORT_FPS_OPTIONS = [15, 24, 30, 60];
+function formatSeconds(total: number) {
+  const s = Math.round(total);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 === 0 ? `${m} min` : `${m} min ${s % 60} s`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * The best container this browser will record, with its file extension.
+ *
+ * Safari records MP4/H.264 where Chrome and Firefox record WebM, so the
+ * format is negotiated rather than fixed. That keeps the export free of any
+ * encoder dependency and still hands every browser a file it can play.
+ */
+function pickRecordingFormat(): { mimeType: string; ext: string } | null {
+  if (typeof MediaRecorder === "undefined") return null;
+  const candidates = [
+    { mimeType: "video/mp4;codecs=avc1", ext: "mp4" },
+    { mimeType: "video/mp4", ext: "mp4" },
+    { mimeType: "video/webm;codecs=vp9", ext: "webm" },
+    { mimeType: "video/webm;codecs=vp8", ext: "webm" },
+    { mimeType: "video/webm", ext: "webm" },
+  ];
+  return candidates.find(c => MediaRecorder.isTypeSupported(c.mimeType)) ?? null;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2001,6 +2073,24 @@ function HandoverGraph({
   const panAnchor = useRef<{ x: number; y: number } | null>(null);
   const panMoved = useRef(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [exportDetail, setExportDetail] = useState<ExportDetail>("legend");
+  const [exportFps, setExportFps] = useState(30);
+  const [isRecording, setIsRecording] = useState(false);
+  /**
+   * How long the recording runs.
+   *
+   * Entirely the animation's playback speed: it is log-units per wall second,
+   * so the timeline takes span / speed, exactly as long as playing it on
+   * screen. The export panel only chooses quality. Deliberately unclamped —
+   * capping it would keep the whole timeline in a shorter video, which means
+   * silently recording at a speed the user did not pick.
+   */
+  const recordingSeconds = useMemo(() => {
+    if (!flowsData) return 0;
+    const span = flowsData.timeline.end - flowsData.timeline.start;
+    return Math.max(1, span / (playSpeedProp || 1));
+  }, [flowsData, playSpeedProp]);
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
@@ -2914,9 +3004,15 @@ function HandoverGraph({
 
   const handleMouseUp = () => { endPan(); setDragId(null); };
 
-  const downloadGraph = async () => {
+  /**
+   * Render the graph at `detail` onto a canvas.
+   *
+   * Shared by the PNG export and the video recorder: the recorder paints the
+   * moving dots over the canvas this returns, so both show the same chrome.
+   */
+  const renderExportCanvas = async (detail: ExportDetail) => {
     const svg = svgRef.current;
-    if (!svg) return;
+    if (!svg) return null;
     const EXPORT_W = 1600;
     const DPR = 2;
     const vb = viewBoxRef.current;
@@ -2955,6 +3051,20 @@ function HandoverGraph({
     const img = new Image();
     await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = svgUrl; });
     URL.revokeObjectURL(svgUrl);
+
+    // The graph area is the same in every detail level; only what sits under
+    // it differs, so the recorder can always paint dots into this rectangle.
+    const graphRect = { x: 0, y: 0, width: EXPORT_W, height: GRAPH_H };
+
+    if (detail === "graph") {
+      const bare = document.createElement("canvas");
+      bare.width = EXPORT_W * DPR; bare.height = GRAPH_H * DPR;
+      const bctx = bare.getContext("2d")!;
+      bctx.scale(DPR, DPR);
+      bctx.fillStyle = "white"; bctx.fillRect(0, 0, EXPORT_W, GRAPH_H);
+      bctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+      return { canvas: bare, ctx: bctx, graphRect, vb, dpr: DPR };
+    }
 
     // ── Graph-only canvas (graph + compact color legend, three columns) ──
     const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
@@ -3028,6 +3138,10 @@ function HandoverGraph({
       gCtx.restore();
       gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
       gCtx.fillText(`= ${maxWeight.toFixed(4)}`, SX + 38, cy + 4);
+    }
+
+    if (detail === "legend") {
+      return { canvas: graphCanvas, ctx: gCtx, graphRect, vb, dpr: DPR };
     }
 
     // ── Full canvas (graph + legend panel) ──
@@ -3171,20 +3285,81 @@ function HandoverGraph({
         fy += ROW_H;
       });
 
-    // Convert both canvases to Uint8Array and bundle into ZIP
-    const toBytes = (c: HTMLCanvasElement) => new Promise<Uint8Array>((res, rej) =>
-      c.toBlob(b => b ? b.arrayBuffer().then(ab => res(new Uint8Array(ab))).catch(rej) : rej(new Error("toBlob failed")), "image/png")
-    );
-    const date = new Date().toISOString().slice(0, 10);
-    const [fullBytes, graphBytes] = await Promise.all([toBytes(canvas), toBytes(graphCanvas)]);
-    const zip = _buildZip([
-      { name: `handover-graph-${date}.png`, data: fullBytes },
-      { name: `handover-graph-only-${date}.png`, data: graphBytes },
-    ]);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([zip.buffer as ArrayBuffer], { type: "application/zip" }));
-    a.download = `handover-graph-${date}.zip`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    return { canvas, ctx, graphRect, vb, dpr: DPR };
+  };
+
+  const exportFileName = (ext: string) =>
+    `handover-graph-${new Date().toISOString().slice(0, 10)}.${ext}`;
+
+  const downloadImage = async (detail: ExportDetail) => {
+    const rendered = await renderExportCanvas(detail);
+    if (!rendered) return;
+    rendered.canvas.toBlob(blob => {
+      if (!blob) { toast.error("Export failed"); return; }
+      downloadBlob(blob, exportFileName("png"));
+    }, "image/png");
+  };
+
+  /**
+   * Record the flow animation as a video.
+   *
+   * The static graph is rendered once and re-blitted each frame, with only
+   * the dots repainted on top — serialising the SVG per frame would cost an
+   * encode and a decode for every one of them. Frames are stepped through
+   * the timeline explicitly rather than played, because `computeDotFrame`
+   * renders any timestamp on demand.
+   */
+  const downloadAnimation = async (detail: ExportDetail) => {
+    if (!flowsData || flowsData.flows.length === 0) return;
+    const format = pickRecordingFormat();
+    if (!format) { toast.error("This browser cannot record video"); return; }
+
+    const rendered = await renderExportCanvas(detail);
+    if (!rendered) return;
+    const { canvas, ctx, graphRect, vb } = rendered;
+
+    // The static graph, kept so each frame can start from a clean copy.
+    const base = document.createElement("canvas");
+    base.width = canvas.width; base.height = canvas.height;
+    base.getContext("2d")!.drawImage(canvas, 0, 0);
+
+    const FPS = exportFps;
+    const totalFrames = Math.round(FPS * recordingSeconds);
+    const { start, end } = flowsData.timeline;
+    const step = (end - start) / totalFrames;
+
+    const stream = canvas.captureStream(FPS);
+    const recorder = new MediaRecorder(stream, { mimeType: format.mimeType });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    const finished = new Promise<void>(resolve => { recorder.onstop = () => resolve(); });
+
+    setIsRecording(true);
+    recorder.start();
+    try {
+      for (let i = 0; i <= totalFrames; i++) {
+        const frame = computeDotFrame(
+          pathMapRef.current,
+          flowsData.flows,
+          start + i * step,
+          typeColorMap,
+          connectorModeRef.current,
+        );
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(base, 0, 0);
+        ctx.restore();
+        drawDotFrame(ctx, frame, vb, graphRect);
+        // Yield so the stream samples this frame before the next is drawn.
+        await new Promise(r => setTimeout(r, 1000 / FPS));
+      }
+    } finally {
+      recorder.stop();
+      await finished;
+      stream.getTracks().forEach(t => t.stop());
+      setIsRecording(false);
+    }
+    downloadBlob(new Blob(chunks, { type: format.mimeType }), exportFileName(format.ext));
   };
 
   return (
@@ -3403,10 +3578,15 @@ function HandoverGraph({
           </div>
         )}
 
-        {(filterOpen || centralityOpen || timeMetricOpen) && (
+        {(filterOpen || centralityOpen || timeMetricOpen || downloadOpen) && (
           <div
             style={{ position: "absolute", inset: 0, zIndex: 19 }}
-            onClick={() => { setFilterOpen(false); setCentralityOpen(false); setTimeMetricOpen(false); }}
+            onClick={() => {
+              setFilterOpen(false); setCentralityOpen(false);
+              setTimeMetricOpen(false);
+              // A recording in progress owns this panel until it finishes.
+              if (!isRecording) setDownloadOpen(false);
+            }}
           />
         )}
 
@@ -3422,7 +3602,14 @@ function HandoverGraph({
           <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9">
             <ScanIcon className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" size="icon" onClick={downloadGraph} className="rounded-full h-9 w-9" title="Download graph as PNG">
+          <Button
+            type="button"
+            variant={downloadOpen ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => { setDownloadOpen(o => !o); setFilterOpen(false); setCentralityOpen(false); setTimeMetricOpen(false); }}
+            className="rounded-full h-9 w-9"
+            title="Download"
+          >
             <Download className="h-4 w-4" />
           </Button>
           <div style={{ position: "relative" }}>
@@ -3430,7 +3617,7 @@ function HandoverGraph({
               type="button"
               variant={selectedCentrality ? "secondary" : "outline"}
               size="icon"
-              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); setTimeMetricOpen(false); }}
+              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); setTimeMetricOpen(false); setDownloadOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Centrality measure"
             >
@@ -3451,7 +3638,7 @@ function HandoverGraph({
               type="button"
               variant={selectedTimeMetric ? "secondary" : "outline"}
               size="icon"
-              onClick={() => { setTimeMetricOpen(o => !o); setCentralityOpen(false); setFilterOpen(false); }}
+              onClick={() => { setTimeMetricOpen(o => !o); setCentralityOpen(false); setFilterOpen(false); setDownloadOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Time metric"
             >
@@ -3472,7 +3659,7 @@ function HandoverGraph({
               type="button"
               variant={filterActive ? "secondary" : "outline"}
               size="icon"
-              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); setTimeMetricOpen(false); }}
+              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); setTimeMetricOpen(false); setDownloadOpen(false); }}
               className="rounded-full h-9 w-9"
               title="Filter nodes"
             >
@@ -3524,6 +3711,104 @@ function HandoverGraph({
               })}
             </div>
           </FloatingPanel>
+        )}
+
+        {/* Download panel */}
+        {downloadOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Download</span>
+              <button
+                type="button"
+                onClick={() => setDownloadOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Detail</span>
+              <div style={{ marginTop: 8 }}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between font-normal h-8 text-xs">
+                      {EXPORT_DETAIL_OPTIONS.find(o => o.value === exportDetail)?.label}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[244px]">
+                    <DropdownMenuRadioGroup value={exportDetail} onValueChange={v => setExportDetail(v as ExportDetail)}>
+                      {EXPORT_DETAIL_OPTIONS.map(o => (
+                        <DropdownMenuRadioItem key={o.value} value={o.value}>{o.label}</DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            <div style={{ padding: "4px 14px 10px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
+                <span style={{ fontSize: 12, color: "#0F172A" }}>Image</span>
+                <Button
+                  type="button" variant="outline" size="icon" className="h-8 w-8"
+                  title="Download PNG"
+                  disabled={isRecording}
+                  onClick={() => { void downloadImage(exportDetail); }}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid #F1F5F9" }}>
+                <span style={{ fontSize: 12, color: flowsData ? "#0F172A" : "#94a3b8", flex: 1 }}>Animation</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild disabled={!flowsData || isRecording}>
+                    <Button
+                      variant="outline"
+                      className="h-8 px-2 text-xs font-normal tabular-nums"
+                      disabled={!flowsData || isRecording}
+                      title="Frames per second"
+                    >
+                      {exportFps} fps
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup value={String(exportFps)} onValueChange={v => setExportFps(Number(v))}>
+                      {EXPORT_FPS_OPTIONS.map(f => (
+                        <DropdownMenuRadioItem key={f} value={String(f)}>{f} fps</DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  type="button" variant="outline" size="icon" className="h-8 w-8"
+                  title={flowsData ? "Record the flow animation" : "Load the animation first"}
+                  disabled={!flowsData || isRecording}
+                  onClick={() => { void downloadAnimation(exportDetail); }}
+                >
+                  {isRecording
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Download className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+              <p style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                {isRecording
+                  ? "Recording — keep this tab in the foreground."
+                  : flowsData
+                    ? `${formatSeconds(recordingSeconds)} at the current playback speed, recorded in real time. Change the speed to change the length.`
+                    : "Press Animate to load the object flows first."}
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Filter panel */}
