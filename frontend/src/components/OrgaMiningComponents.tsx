@@ -1,12 +1,13 @@
 /**
  * Dashboard widgets for the organizational mining explorers.
  *
- * Edit mode shows a settings card with two dashboard-level switches — whether
- * the explorer's own settings panel is visible in the dashboard's view mode,
- * and whether the computation starts automatically — followed by the
- * preselected settings the explorer opens with. View mode hosts the explorer
- * itself. All settings persist through the layout (see `OCHandoverComponent`
- * and `ResourceProfilingComponent` on the backend).
+ * Edit mode shows a settings card: whether the computation starts
+ * automatically, followed by the preselected settings the explorer opens
+ * with. View mode hosts the explorer as a full-bleed canvas with its controls
+ * floating over it — the settings themselves are not reachable there, which
+ * is the same preselection-only contract the OCCN widget follows. All
+ * settings persist through the layout (see `OCHandoverComponent` and
+ * `ResourceProfilingComponent` on the backend).
  */
 import React, { useEffect, useState } from "react";
 import type { GridStackNode } from "gridstack";
@@ -116,41 +117,41 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide pt-2">{children}</p>;
 }
 
-/** The two dashboard-level switches every organizational mining widget has. */
-function DashboardSwitches({ id, showControls, automaticLoading, onShowControls, onAutomaticLoading }: {
+/** The dashboard-level switch every organizational mining widget has. */
+function DashboardSwitches({ id, automaticLoading, onAutomaticLoading }: {
   id: string;
-  showControls: boolean;
   automaticLoading: boolean;
-  onShowControls: (v: boolean) => void;
   onAutomaticLoading: (v: boolean) => void;
 }) {
   return (
-    <>
-      <SettingRow
-        label="Show settings in view mode"
-        htmlFor={`${id}-show-controls`}
-        hint="Off: the dashboard shows only the result (and a compute button when needed)."
-      >
-        <Switch id={`${id}-show-controls`} checked={showControls} onCheckedChange={onShowControls} />
-      </SettingRow>
-      <SettingRow
-        label="Compute automatically"
-        htmlFor={`${id}-auto`}
-        hint="Start the computation with the preselected settings when the dashboard opens."
-      >
-        <Switch id={`${id}-auto`} checked={automaticLoading} onCheckedChange={onAutomaticLoading} />
-      </SettingRow>
-    </>
+    <SettingRow
+      label="Compute automatically"
+      htmlFor={`${id}-auto`}
+      hint="Start the computation with the preselected settings when the dashboard opens."
+    >
+      <Switch id={`${id}-auto`} checked={automaticLoading} onCheckedChange={onAutomaticLoading} />
+    </SettingRow>
   );
 }
 
-function WidgetHeader({ title, filterEnabled, onToggle }: {
+/**
+ * Title and filter toggle, floating over the explorer's canvas.
+ *
+ * It used to be a header bar above the explorer, which cost a row of height
+ * in every tile; OCCN puts the same pair in the canvas's top-left corner.
+ */
+function WidgetTitle({ title, filterEnabled, onToggle }: {
   title: string; filterEnabled: boolean; onToggle: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-background shrink-0">
-      <span className="text-sm font-semibold">{title}</span>
-      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
+    <div
+      className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-none"
+      style={{ fontFamily: "var(--font-primary, Inter, sans-serif)" }}
+    >
+      <span className="text-sm font-semibold text-slate-900">{title}</span>
+      <span className="pointer-events-auto">
+        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} stopPropagation />
+      </span>
     </div>
   );
 }
@@ -171,7 +172,6 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   // state after a layout (re)load, without listing every field.
   const persistedJson = JSON.stringify(handoverSettingsToNode(handoverSettingsFromNode(node)));
   const [settings, setSettings] = useState<HandoverSettings>(() => handoverSettingsFromNode(node));
-  const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [maxGapText, setMaxGapText] = useState(settings.maxGap === null ? "" : String(settings.maxGap));
@@ -181,7 +181,6 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     setSettings(next);
     setMaxGapText(next.maxGap === null ? "" : String(next.maxGap));
   }, [persistedJson]);
-  useEffect(() => { setShowControls(node.show_controls ?? true); }, [node.show_controls]);
   useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
 
   const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
@@ -190,10 +189,6 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     const next = { ...settings, ...patch };
     setSettings(next);
     onUpdate?.(handoverSettingsToNode(next) as Partial<GridStackNode>);
-  };
-  const updateShowControls = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
   };
   const updateAutomaticLoading = (checked: boolean) => {
     setAutomaticLoading(checked);
@@ -222,9 +217,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
           <SectionTitle>Dashboard</SectionTitle>
           <DashboardSwitches
             id={id}
-            showControls={showControls}
             automaticLoading={automaticLoading}
-            onShowControls={updateShowControls}
             onAutomaticLoading={updateAutomaticLoading}
           />
 
@@ -396,22 +389,20 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     );
   }
 
-  // VIEW MODE: the explorer, re-mounted whenever the persisted settings change.
+  // VIEW MODE: the explorer owns the whole tile and floats its own controls;
+  // it is re-mounted whenever the persisted settings change.
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-background">
-      <WidgetHeader title="Handover of Work" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
-      <div className="flex-1 min-h-0 overflow-auto">
-        <OCHandoverExplorer
-          key={`${persistedJson}|${showControls}|${automaticLoading}`}
-          fileId={selectedFile?.id}
-          fileName={selectedFile?.file?.split("/").pop()}
-          embedded
-          initialSettings={settings}
-          showControls={showControls}
-          autoStart={automaticLoading}
-          filterEnabled={filterEnabled}
-        />
-      </div>
+    <div className="w-full h-full relative overflow-hidden bg-background">
+      <OCHandoverExplorer
+        key={`${persistedJson}|${automaticLoading}`}
+        fileId={selectedFile?.id}
+        fileName={selectedFile?.file?.split("/").pop()}
+        embedded
+        initialSettings={settings}
+        autoStart={automaticLoading}
+        filterEnabled={filterEnabled}
+      />
+      <WidgetTitle title="Handover of Work" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
     </div>
   );
 };
@@ -428,12 +419,10 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
 }) => {
   const persistedJson = JSON.stringify(profilingSettingsToNode(profilingSettingsFromNode(node)));
   const [settings, setSettings] = useState<ResourceProfilingSettings>(() => profilingSettingsFromNode(node));
-  const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
 
   useEffect(() => { setSettings(profilingSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);
-  useEffect(() => { setShowControls(node.show_controls ?? true); }, [node.show_controls]);
   useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
 
   const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
@@ -442,10 +431,6 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
     const next = { ...settings, ...patch };
     setSettings(next);
     onUpdate?.(profilingSettingsToNode(next) as Partial<GridStackNode>);
-  };
-  const updateShowControls = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
   };
   const updateAutomaticLoading = (checked: boolean) => {
     setAutomaticLoading(checked);
@@ -485,9 +470,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
           <SectionTitle>Dashboard</SectionTitle>
           <DashboardSwitches
             id={id}
-            showControls={showControls}
             automaticLoading={automaticLoading}
-            onShowControls={updateShowControls}
             onAutomaticLoading={updateAutomaticLoading}
           />
 
@@ -631,19 +614,16 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
   }
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-background">
-      <WidgetHeader title="Resource Profiling" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
-      <div className="flex-1 min-h-0 overflow-auto">
-        <OrgaMiningExplorer
-          key={`${persistedJson}|${showControls}|${automaticLoading}`}
-          fileId={selectedFile?.id}
-          embedded
-          initialSettings={settings}
-          showControls={showControls}
-          autoStart={automaticLoading}
-          filterEnabled={filterEnabled}
-        />
-      </div>
+    <div className="w-full h-full relative overflow-hidden bg-background">
+      <OrgaMiningExplorer
+        key={`${persistedJson}|${automaticLoading}`}
+        fileId={selectedFile?.id}
+        embedded
+        initialSettings={settings}
+        autoStart={automaticLoading}
+        filterEnabled={filterEnabled}
+      />
+      <WidgetTitle title="Resource Profiling" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
     </div>
   );
 };

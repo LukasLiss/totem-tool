@@ -19,7 +19,22 @@ import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronDown, CircleDashed, ScanIcon, Share2 } from "lucide-react";
+import { ChevronDown, CircleDashed, Palette, ScanIcon, Share2 } from "lucide-react";
+import {
+  CanvasMessage,
+  CanvasShell,
+  ControlPill,
+  FloatingPanel,
+  MetricChips,
+  SegmentedControl,
+} from "@/react_component/orgamining/canvas";
+import {
+  NARROW_CANVAS_WIDTH,
+  fitBoxToAspect,
+  pointsBounds,
+  type Size,
+  type ViewBox,
+} from "@/react_component/orgamining/canvasGeometry";
 
 /* ── Types ─────────────────────────────────────────────────── */
 
@@ -50,11 +65,14 @@ type ProfileMatrixData = {
 
 type OrgaMiningExplorerProps = {
   fileId?: number;
+  /**
+   * Render as a dashboard widget: one full-bleed canvas with floating chrome
+   * and no settings panel — the settings are preselected in the dashboard's
+   * edit mode. The analysis page uses the default, full form.
+   */
   embedded?: boolean;
   /** Preselected settings; dashboard widgets persist these. Read once on mount. */
   initialSettings?: Partial<ResourceProfilingSettings>;
-  /** Hide the settings panel (dashboard view mode); compute + result views stay. */
-  showControls?: boolean;
   /** Start the computation as soon as the object types are known. */
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
@@ -72,8 +90,20 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 const NODE_R = 8;
-/** Container width changes below this (px) keep the current MDS layout; see the measure effect. */
-const RESIZE_RECOMPUTE_THRESHOLD = 48;
+
+/**
+ * The canvas the backend lays the MDS out on.
+ *
+ * `ProfileMatrix.mds_2d` scales its embedding *uniformly* into this box
+ * (`scale = min(...)` over both axes), so the width and height only set the
+ * unit of `mds_scale` — the arrangement itself is identical whatever box is
+ * requested. Pinning it here means resizing a dashboard tile is a pure
+ * client-side viewBox change instead of another round trip that would return
+ * the same layout at a different zoom.
+ */
+const MDS_CANVAS = { width: 1000, height: 1000 };
+/** Padding around the point cloud in MDS canvas units. */
+const MDS_VIEW_PAD = NODE_R + 26;
 
 // Cluster colour palette — intentionally different hues from ACTIVITY_COLORS
 const CLUSTER_COLORS = [
@@ -94,7 +124,6 @@ export default function OrgaMiningExplorer({
   fileId,
   embedded = false,
   initialSettings,
-  showControls = true,
   autoStart = false,
   filterEnabled = true,
 }: OrgaMiningExplorerProps) {
@@ -124,60 +153,39 @@ export default function OrgaMiningExplorer({
   const filterEnabledRef = useRef(filterEnabled);
   useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
   const filterVersion = useFilterVersion();
-  const [graphSize, setGraphSize] = useState({ width: 700, height: 450 });
+  // Rendered size of the standalone graph; the embedded path measures its own
+  // tile through CanvasShell instead.
+  const [graphWidth, setGraphWidth] = useState(700);
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const viewModeRef = useRef(viewMode);
-  const statusRef = useRef(status);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
-  useEffect(() => { statusRef.current = status; }, [status]);
   const fileIdRef = useRef<number | undefined>(fileId);
   useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
 
-  // Measure the graph container. The MDS layout is computed server-side for
-  // this size, so a real width change after a computation (dashboard resize,
-  // sidebar toggle) recomputes it for the new size; the current result stays
-  // on screen until the new one arrives. Small changes are ignored: rendering
-  // the result can add a vertical scrollbar to the host, which narrows the
-  // box by ~15 px — recomputing for that would drop the result, remove the
-  // scrollbar, widen the box again, and never settle.
-  // Skip zero-width measurements (element hidden, e.g. in an inactive tab) so
-  // we don't fall back to the 700 px default and then compute with the wrong
-  // width.
-  // `computeTick` re-runs the computation with the current size; `sizeSettled`
-  // holds an automatic start until the container has stopped changing size
-  // (a dashboard widget animates to its final width right after mounting).
-  const [computeTick, setComputeTick] = useState(0);
-  const [sizeSettled, setSizeSettled] = useState(false);
-  const graphSizeRef = useRef(graphSize);
-  useEffect(() => { graphSizeRef.current = graphSize; }, [graphSize]);
+  // Track the standalone graph's width so it keeps its page-friendly shape.
+  // Zero-width measurements (hidden tab) are skipped so the 700 px default is
+  // not replaced by a bogus one. Resizing never triggers a recomputation: the
+  // MDS layout is canvas-independent (see MDS_CANVAS), so the graph just
+  // re-fits its viewBox.
   useEffect(() => {
     const el = graphContainerRef.current;
     if (!el) return;
-    let recompute: ReturnType<typeof setTimeout> | undefined;
-    let settle: ReturnType<typeof setTimeout> | undefined;
     const measure = () => {
       const w = Math.round(el.getBoundingClientRect().width);
-      if (w === 0) return;                         // not visible yet — wait for next event
-      clearTimeout(settle);
-      settle = setTimeout(() => setSizeSettled(true), 250);
-      const prev = graphSizeRef.current;
-      if (prev.width === w) return;
-      const computed = statusRef.current !== "idle";
-      if (computed && Math.abs(prev.width - w) < RESIZE_RECOMPUTE_THRESHOLD) return;
-      const next = { width: w, height: Math.min(1000, Math.max(400, Math.round(w * 0.62))) };
-      graphSizeRef.current = next;
-      setGraphSize(next);
-      if (computed && hasStartedLoadingRef.current) {
-        clearTimeout(recompute);
-        recompute = setTimeout(() => setComputeTick(t => t + 1), 200);
-      }
+      if (w === 0) return;
+      setGraphWidth(prev => (prev === w ? prev : w));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => { ro.disconnect(); clearTimeout(recompute); clearTimeout(settle); };
+    return () => ro.disconnect();
   }, []);
+
+  const standaloneSize = useMemo<Size>(() => ({
+    width: graphWidth,
+    height: Math.min(1000, Math.max(400, Math.round(graphWidth * 0.62))),
+  }), [graphWidth]);
 
   // Load object types when fileId changes
   useEffect(() => {
@@ -226,8 +234,8 @@ export default function OrgaMiningExplorer({
     const currentFileId = fileId;
     const params: Record<string, string> = { file_id: String(currentFileId) };
     if (resourceTypes.size > 0) params.resource_types = [...resourceTypes].join(",");
-    params.width      = String(graphSize.width);
-    params.height     = String(graphSize.height);
+    params.width      = String(MDS_CANVAS.width);
+    params.height     = String(MDS_CANVAS.height);
     params.feature_groups = [...featureGroups].join(",");
 
     const tooltipOnly = [...tooltipFeatureGroups].filter(g => !featureGroups.has(g));
@@ -276,7 +284,7 @@ export default function OrgaMiningExplorer({
     })();
 
     return () => { cancelled = true; };
-  }, [fileId, hasStartedLoading, computeTick]);
+  }, [fileId, hasStartedLoading]);
 
   // Lock height after graph loads
   useEffect(() => {
@@ -329,15 +337,16 @@ export default function OrgaMiningExplorer({
   const canCompute = resourceTypes.size > 0;
 
   // Auto start: once per file, as soon as the object types are known and a
-  // resource type is preselected.
+  // resource type is preselected. The computation no longer depends on the
+  // container's size, so there is nothing to wait for it to settle.
   const autoStartedForRef = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute || !sizeSettled) return;
+    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute) return;
     if (autoStartedForRef.current === fileId) return;
     autoStartedForRef.current = fileId;
     hasStartedLoadingRef.current = true;
     setHasStartedLoading(true);
-  }, [autoStart, fileId, objectTypes, canCompute, sizeSettled]);
+  }, [autoStart, fileId, objectTypes, canCompute]);
 
   // A changed global filter (or toggling it for this explorer) invalidates the
   // result; an auto-starting host recomputes, everyone else gets the button back.
@@ -363,15 +372,85 @@ export default function OrgaMiningExplorer({
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
-  const Wrapper = embedded ? "div" : Card;
+  // Dashboard widget: one full-bleed canvas, every control floating over it.
+  // Compute settings are not reachable here at all — they are preselected in
+  // the dashboard's edit mode, the same contract the OCCN widget follows.
+  if (embedded) {
+    return (
+      <CanvasShell>
+        {(size) => {
+          // The tile has not been laid out yet; drawing against a zero box
+          // would flash a collapsed graph before the first real measurement.
+          if (size.width === 0 || size.height === 0) return null;
+          const narrow = size.width < NARROW_CANVAS_WIDTH;
+          if (!fileId) {
+            return <CanvasMessage>Select an event log to profile its resources.</CanvasMessage>;
+          }
+          if (status === "error") {
+            return <CanvasMessage tone="error">{errorMsg}</CanvasMessage>;
+          }
+          if (status !== "ready" || !data) {
+            return (
+              <CanvasMessage>
+                {!canCompute && objectTypes.length > 0 ? (
+                  <span>No resource types preselected — configure this widget in the dashboard's edit mode.</span>
+                ) : (
+                  <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+                    {status === "loading" ? "Computing…" : "Compute Profile Matrix"}
+                  </Button>
+                )}
+                {status === "loading" && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                    Computing profile matrix…
+                  </div>
+                )}
+              </CanvasMessage>
+            );
+          }
+          const viewSwitcher = (
+            <SegmentedControl<ProfilingViewMode>
+              value={viewMode}
+              options={[
+                { value: "graph", label: "Graph", short: "G" },
+                { value: "table", label: "Table", short: "T" },
+              ]}
+              onChange={setViewMode}
+              compact={narrow}
+            />
+          );
+          if (viewMode === "table") {
+            return (
+              <>
+                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingBottom: 60 }}>
+                  <ProfileTable data={data} maxHeight={null} fill />
+                </div>
+                <ControlPill>{viewSwitcher}</ControlPill>
+              </>
+            );
+          }
+          return (
+            <ResourceGraph
+              data={data}
+              typeColorMap={typeColorMap}
+              size={size}
+              clusterColors={CLUSTER_COLORS}
+              showClusters={data.cluster_labels !== undefined}
+              embedded
+              narrow={narrow}
+              pillLeading={viewSwitcher}
+            />
+          );
+        }}
+      </CanvasShell>
+    );
+  }
 
   return (
-    <Wrapper className="w-full">
-      {!embedded && (
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Resource Profiling</CardTitle>
-        </CardHeader>
-      )}
+    <Card className="w-full">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg">Resource Profiling</CardTitle>
+      </CardHeader>
 
       <CardContent className="space-y-4">
         {!fileId && (
@@ -380,7 +459,7 @@ export default function OrgaMiningExplorer({
 
         {fileId && <div ref={graphContainerRef} className="w-full" />}
 
-        {fileId && showControls && objectTypes.length > 0 && (
+        {fileId && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap items-start">
             <TypeSelector
               title="Resource types"
@@ -581,18 +660,11 @@ export default function OrgaMiningExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && (showControls || status !== "ready") && (
+        {fileId && objectTypes.length > 0 && (
           <div className="flex flex-col gap-3 items-center py-4">
-            {showControls && (
-              <div className="text-sm text-muted-foreground text-center">
-                Click below when ready to start the computation.
-              </div>
-            )}
-            {!showControls && !canCompute && (
-              <div className="text-sm text-muted-foreground text-center">
-                No resource types preselected — configure this widget in the dashboard's edit mode.
-              </div>
-            )}
+            <div className="text-sm text-muted-foreground text-center">
+              Click below when ready to start the computation.
+            </div>
             <Button
               onClick={handleCompute}
               disabled={status === "loading" || !canCompute}
@@ -626,23 +698,44 @@ export default function OrgaMiningExplorer({
 
             <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
               {viewMode === "graph" && (
-                <ResourceGraph data={data} typeColorMap={typeColorMap} size={graphSize} clusterColors={CLUSTER_COLORS} showClusters={data.cluster_labels !== undefined} />
+                <ResourceGraph data={data} typeColorMap={typeColorMap} size={standaloneSize} clusterColors={CLUSTER_COLORS} showClusters={data.cluster_labels !== undefined} />
               )}
 
-              {viewMode === "table" && (() => {
-                const MAX_ROWS = 500;
-                const truncated = data.resources.length > MAX_ROWS;
-                const visibleResources = truncated ? data.resources.slice(0, MAX_ROWS) : data.resources;
-                return (
-                  <div className="space-y-2">
+              {viewMode === "table" && <ProfileTable data={data} maxHeight={lockedHeight} />}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ── ProfileTable ───────────────────────────────────────────── */
+/**
+ * The raw profile matrix.
+ *
+ * `fill` makes the scroll box fill its parent instead of capping at
+ * `maxHeight`. The scroll box has to be the element with the bounded height,
+ * or the sticky header pins to a container that never scrolls.
+ */
+function ProfileTable({ data, maxHeight, fill = false }: {
+  data: ProfileMatrixData;
+  maxHeight: number | null;
+  fill?: boolean;
+}) {
+  const MAX_ROWS = 500;
+  const truncated = data.resources.length > MAX_ROWS;
+  const visibleResources = truncated ? data.resources.slice(0, MAX_ROWS) : data.resources;
+  return (
+                  <div className={fill ? "flex flex-col gap-2 h-full min-h-0" : "space-y-2"}>
                     {truncated && (
                       <div className="text-xs text-muted-foreground px-1">
                         Showing first {MAX_ROWS} of {data.resources.length} resources.
                       </div>
                     )}
                     <div
-                      className="overflow-auto rounded-md border"
-                      style={lockedHeight ? { maxHeight: lockedHeight } : undefined}
+                      className={`overflow-auto rounded-md border${fill ? " flex-1 min-h-0" : ""}`}
+                      style={!fill && maxHeight ? { maxHeight } : undefined}
                     >
                       <table className="w-full text-sm border-collapse">
                         <thead>
@@ -745,13 +838,6 @@ export default function OrgaMiningExplorer({
                       </table>
                     </div>
                   </div>
-                );
-              })()}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Wrapper>
   );
 }
 
@@ -842,12 +928,21 @@ function ResourceGraph({
   size,
   clusterColors,
   showClusters,
+  embedded = false,
+  narrow = false,
+  pillLeading,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
-  size: { width: number; height: number };
+  size: Size;
   clusterColors: string[];
   showClusters: boolean;
+  /** Fill the parent and float every control over the canvas (dashboard tile). */
+  embedded?: boolean;
+  /** Start the floating panels collapsed — the tile is too narrow for them. */
+  narrow?: boolean;
+  /** Rendered at the start of the control pill (the explorer's view switcher). */
+  pillLeading?: React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -912,7 +1007,27 @@ function ResourceGraph({
   // Current viewBox — always normalized to the container aspect ratio so
   // preserveAspectRatio="meet" never letterboxes and toUser stays a simple linear map.
   const BADGE_R = 5;
-  const vb = zoomed ?? { x: 0, y: 0, w: size.width, h: size.height };
+  // The MDS positions live in the fixed MDS_CANVAS space, which has nothing to
+  // do with the size this graph is rendered at. The base view is the point
+  // cloud's own bounds grown to the rendered aspect ratio, so the plot fills
+  // whatever shape the tile has without ever scaling the axes differently.
+  const baseView = useMemo<ViewBox>(() => {
+    const bounds = pointsBounds(data.mds_positions) ?? {
+      minX: 0, minY: 0, maxX: MDS_CANVAS.width, maxY: MDS_CANVAS.height,
+    };
+    return fitBoxToAspect(bounds, size.width / (size.height || 1), MDS_VIEW_PAD, NODE_R * 10);
+  }, [data.mds_positions, size.width, size.height]);
+  // A stored zoom region is re-fitted to the current aspect ratio too, so
+  // resizing the tile while zoomed in never letterboxes the view.
+  const vb = useMemo<ViewBox>(() => {
+    if (!zoomed) return baseView;
+    return fitBoxToAspect(
+      { minX: zoomed.x, minY: zoomed.y, maxX: zoomed.x + zoomed.w, maxY: zoomed.y + zoomed.h },
+      size.width / (size.height || 1),
+      0,
+      0,
+    );
+  }, [zoomed, baseView, size.width, size.height]);
   // Because vb is always aspect-ratio-matched, both axes have the same scale factor.
   const effectiveScale = size.width / vb.w;
   const nodeR  = NODE_R  / effectiveScale;
@@ -1024,9 +1139,9 @@ function ResourceGraph({
   const positions = useMemo(() =>
     groups.map(g => {
       const idx = data.resources.indexOf(g.resources[0]);
-      return idx >= 0 ? data.mds_positions[idx] : { x: size.width / 2, y: size.height / 2 };
+      return idx >= 0 ? data.mds_positions[idx] : { x: MDS_CANVAS.width / 2, y: MDS_CANVAS.height / 2 };
     }),
-  [groups, data.resources, data.mds_positions, size]);
+  [groups, data.resources, data.mds_positions]);
 
   // Map each group key → cluster label (via first resource index)
   const groupClusterLabel = useMemo(() => {
@@ -1128,18 +1243,24 @@ function ResourceGraph({
     return result.slice(0, 300);
   }, [edgeMode, data]);
 
-  // Scale bar: pick the nicest round distance whose pixel length is closest to 80 px
+  // Scale bar: the nicest round distance that renders closest to 80 screen px.
+  // `mds_scale` is user units per distance unit, so a distance d covers
+  // d * mds_scale * effectiveScale screen px — the step has to be re-picked
+  // per zoom level, otherwise the bar keeps its length and starts lying about
+  // the distance it represents.
   const scaleBar = useMemo(() => {
     const s = data.mds_scale;
-    if (!s || s <= 0) return null;
-    const niceSteps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0];
-    const target = 80; // desired length in pixels (SVG user space at zoom 1)
+    if (!s || s <= 0 || !Number.isFinite(effectiveScale) || effectiveScale <= 0) return null;
+    const niceSteps = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0];
+    const target = 80; // desired rendered length in screen px
+    const screenPx = (step: number) => step * s * effectiveScale;
     const best = niceSteps.reduce((b, v) =>
-      Math.abs(v * s - target) < Math.abs(b * s - target) ? v : b, niceSteps[0]);
-    const pixels = best * s;
-    const label = best < 0.1 ? best.toFixed(2) : best < 1 ? best.toFixed(1) : best.toFixed(0);
-    return { pixels, label };
-  }, [data.mds_scale]);
+      Math.abs(screenPx(v) - target) < Math.abs(screenPx(b) - target) ? v : b, niceSteps[0]);
+    const label = best < 0.01 ? best.toFixed(3) : best < 0.1 ? best.toFixed(2) : best < 1 ? best.toFixed(1) : best.toFixed(0);
+    // Length in SVG user units: constant per zoom level, so the bar is drawn
+    // in the same space as the points it measures.
+    return { userLength: best * s, label };
+  }, [data.mds_scale, effectiveScale]);
 
   // Whether the current data contains any HDBSCAN noise points
   const hasOutliers = useMemo(
@@ -1154,8 +1275,15 @@ function ResourceGraph({
   }, [data.resource_object_types]);
 
   return (
-    <div className="space-y-3">
-      <div ref={containerRef} className="w-full border rounded-md bg-background relative flex justify-center">
+    <div className={embedded ? "absolute inset-0" : "space-y-3"}>
+      <div
+        ref={containerRef}
+        className={
+          embedded
+            ? "w-full h-full relative bg-background overflow-hidden"
+            : "w-full border rounded-md bg-background relative flex justify-center"
+        }
+      >
         <svg
           ref={svgRef}
           width={size.width}
@@ -1323,7 +1451,7 @@ function ResourceGraph({
             const margin = 20 / effectiveScale;
             const bx = vb.x + margin;
             const by = vb.y + vb.h - margin;
-            const len = scaleBar.pixels / effectiveScale;
+            const len = scaleBar.userLength;
             const tick = 5 / effectiveScale;
             const sw = 1 / effectiveScale;
             const fs = 9 / effectiveScale;
@@ -1348,14 +1476,8 @@ function ResourceGraph({
         </svg>
 
         {/* Control pill — bottom-right of the graph canvas */}
-        <div style={{
-          position: "absolute", bottom: 12, right: 12,
-          display: "flex", gap: 8, alignItems: "center",
-          background: "#FFFFFF", border: "1px solid #E2E8F0",
-          borderRadius: 9999, padding: "6px 10px",
-          boxShadow: "0 10px 24px rgba(15,23,42,0.14)",
-          flexWrap: "wrap", maxWidth: "calc(100% - 24px)",
-        }}>
+        <ControlPill>
+          {pillLeading}
           {zoomed && (
             <Button type="button" variant="outline" size="icon" onClick={() => setZoomed(null)}
               className="rounded-full h-9 w-9" title="Reset zoom">
@@ -1425,7 +1547,69 @@ function ResourceGraph({
               )}
             </div>
           )}
-        </div>
+        </ControlPill>
+
+        {embedded && (
+          <>
+            <FloatingPanel
+              title="Resources"
+              icon={<Palette style={{ width: 13, height: 13, color: "#64748b" }} />}
+              narrow={narrow}
+              badge={legendTypes.length}
+              style={{ position: "absolute", top: 12, left: 12, zIndex: 8 }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
+                {legendTypes.map(t => (
+                  <div key={t} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: typeColorMap[t] ?? "#94a3b8", flexShrink: 0 }} />
+                    {t}
+                  </div>
+                ))}
+                {showClusters && (data.n_clusters || hasOutliers) && (
+                  <>
+                    <div style={{ marginTop: 6, fontWeight: 700, fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                      Clusters
+                    </div>
+                    {Array.from({ length: data.n_clusters ?? 0 }, (_, ci) => (
+                      <div key={`c-${ci}`} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: clusterColors[ci % clusterColors.length], flexShrink: 0 }} />
+                        Cluster {ci + 1}
+                      </div>
+                    ))}
+                    {hasOutliers && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px dashed #94a3b8", flexShrink: 0 }} />
+                        Outlier
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </FloatingPanel>
+            <MetricChips
+              narrow={narrow}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 8 }}
+              metrics={[
+                {
+                  label: "stress",
+                  value: data.mds_stress.toFixed(3),
+                  title:
+                    "Normalised stress-1 — how much the 2D embedding distorts the original distances. " +
+                    "0 = perfect, 1 = complete distortion; below 0.1 is good, above 0.2 is poor. " +
+                    "Computed on unique profiles only.",
+                },
+                {
+                  label: "explained var.",
+                  value: `${(data.mds_explained_variance * 100).toFixed(1)}%`,
+                  title:
+                    "Fraction of total variance captured by the 2D projection, from the eigenvalue spectrum " +
+                    "of the distance matrix. Low values mean the data has more intrinsic dimensions than 2 can show.",
+                },
+                { label: "resources", value: String(data.resources.length) },
+              ]}
+            />
+          </>
+        )}
 
         {edgeTooltip && (() => {
           const isCooc = edgeMode === "cooccurrence";

@@ -12,7 +12,7 @@ import {
   type HandoverViewMode,
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -32,6 +32,19 @@ import {
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  CanvasMessage,
+  CanvasShell,
+  ControlPill,
+  FloatingPanel,
+  SegmentedControl,
+} from "@/react_component/orgamining/canvas";
+import {
+  NARROW_CANVAS_WIDTH,
+  fitBoxToAspect,
+  pointsBounds,
+  type Size,
+} from "@/react_component/orgamining/canvasGeometry";
 
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -77,12 +90,15 @@ type BindingPattern = {
 type OCHandoverExplorerProps = {
   fileId?: number;
   onDataLoad?: (data: HandoverData) => void;
+  /**
+   * Render as a dashboard widget: one full-bleed canvas with floating chrome
+   * and no settings panel — the settings are preselected in the dashboard's
+   * edit mode. The analysis page uses the default, full form.
+   */
   embedded?: boolean;
   fileName?: string;
   /** Preselected settings; dashboard widgets persist these. Read once on mount. */
   initialSettings?: Partial<HandoverSettings>;
-  /** Hide the settings panel (dashboard view mode); compute + result views stay. */
-  showControls?: boolean;
   /** Start the computation as soon as the object types are known. */
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
@@ -134,6 +150,18 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 /* ── Graph constants ────────────────────────────────────────── */
 const NODE_R = 26;
 
+/**
+ * The space the force layout runs in.
+ *
+ * It used to be the rendered size, which tied the arrangement to the
+ * container's pixel dimensions: a dashboard tile that changed shape would
+ * have had to re-run the simulation and scramble the graph. Pinning it here
+ * makes the layout stable and turns a resize into a viewBox re-fit.
+ */
+const HANDOVER_CANVAS = { width: 1100, height: 760 };
+/** Padding around the node cloud when fitting the view, in canvas units. */
+const HANDOVER_VIEW_PAD = NODE_R + 20;
+
 // Interpolate between grey (#CBD5E1) and a hex color; t=0 → grey, t=1 → color
 function mixHex(hex: string, t: number): string {
   const gr = [203, 213, 225]; // #CBD5E1
@@ -170,7 +198,6 @@ export default function OCHandoverExplorer({
   embedded = false,
   fileName,
   initialSettings,
-  showControls = true,
   autoStart = false,
   filterEnabled = true,
 }: OCHandoverExplorerProps) {
@@ -653,6 +680,367 @@ export default function OCHandoverExplorer({
     return { _global: total };
   }, [sortedEdges, normalizationScope]);
 
+  // The edge table without its scroll container, so the page and the widget
+  // can each wrap it in the box their layout needs.
+  const edgeTableEl = (
+    <table className="w-full text-sm">
+      <thead className="sticky top-0 z-10">
+        <tr className="border-b bg-muted">
+          {(["source", "target", "bo_type", "count", "weight"] as SortCol[]).map((col, i) => {
+            const labels: Record<SortCol, string> = {
+              source: "Source", target: "Target", bo_type: "Business object type",
+              count: "Count", weight: "Weight",
+            };
+            const active = sortCol === col;
+            const Icon = active ? (sortDir === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
+            return (
+              <th
+                key={col}
+                onClick={() => handleSort(col)}
+                className={`px-3 py-2 text-left font-medium cursor-pointer select-none hover:bg-muted/80${i === 4 ? " w-40" : ""}`}
+              >
+                <div className="flex items-center gap-1">
+                  {labels[col]}
+                  <Icon className={`h-3 w-3 flex-shrink-0${active ? "" : " opacity-30"}`} />
+                </div>
+              </th>
+            );
+          })}
+          <th className="px-3 py-2 text-left font-medium">Avg time</th>
+          <th className="px-3 py-2 text-left font-medium">Min time</th>
+          <th className="px-3 py-2 text-left font-medium">Max time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sortedEdges.map((edge, i) => {
+          const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
+          const denom = normalizationScope === "per_bo_type"
+            ? (weightDenominators[edge.businessobject_type] ?? 1)
+            : (weightDenominators._global ?? 1);
+          const barPct = denom > 0 ? (edge.weight / denom) * 100 : 0;
+          return (
+            <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+              <td className="px-3 py-2 font-mono">{edge.source}</td>
+              <td className="px-3 py-2 font-mono">{edge.target}</td>
+              <td className="px-3 py-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-white text-xs" style={{ background: color }}>
+                  {edge.businessobject_type}
+                </span>
+              </td>
+              <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-muted rounded overflow-hidden">
+                    <div className="h-full rounded" style={{ width: `${barPct}%`, background: color }} />
+                  </div>
+                  <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
+                </div>
+              </td>
+              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.avg_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.min_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.max_time)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+
+  // Dashboard widget: one full-bleed canvas, every control floating over it.
+  // Compute settings are not reachable here — they are preselected in the
+  // dashboard's edit mode, the same contract the OCCN widget follows.
+  if (embedded) {
+    return (
+      <CanvasShell>
+        {(size) => {
+          // The tile has not been laid out yet; drawing against a zero box
+          // would flash a collapsed graph before the first real measurement.
+          if (size.width === 0 || size.height === 0) return null;
+          const narrow = size.width < NARROW_CANVAS_WIDTH;
+          if (!fileId) {
+            return <CanvasMessage>Select an event log to see who hands work over.</CanvasMessage>;
+          }
+          if (status === "error") {
+            return <CanvasMessage tone="error">{errorMsg}</CanvasMessage>;
+          }
+          if (status === "empty") {
+            return <CanvasMessage>No handover edges found for this selection.</CanvasMessage>;
+          }
+          if (status !== "ready" || !data) {
+            return (
+              <CanvasMessage>
+                {!canCompute && objectTypes.length > 0 ? (
+                  <span>No object types preselected — configure this widget in the dashboard's edit mode.</span>
+                ) : (
+                  <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+                    {status === "loading" ? "Computing…" : "Compute Handover"}
+                  </Button>
+                )}
+                {status === "loading" && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                    Computing handover graph…
+                  </div>
+                )}
+              </CanvasMessage>
+            );
+          }
+
+          const viewSwitcher = (
+            <SegmentedControl<ViewMode>
+              value={viewMode}
+              options={[
+                { value: "graph", label: "Graph", short: "G" },
+                { value: "table", label: "Table", short: "T" },
+                { value: "log", label: "Log", short: "L" },
+              ]}
+              onChange={setViewMode}
+              compact={narrow}
+            />
+          );
+
+          if (viewMode !== "graph") {
+            return (
+              <>
+                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingBottom: 60 }}>
+                  {viewMode === "table" ? (
+                    <div className="overflow-auto rounded-md border flex-1 min-h-0">{edgeTableEl}</div>
+                  ) : (
+                    <EventLogTable
+                      logData={logData}
+                      logStatus={logStatus}
+                      logError={logError}
+                      typeColorMap={typeColorMap}
+                      lockedHeight={null}
+                      fill
+                    />
+                  )}
+                </div>
+                <ControlPill>{viewSwitcher}</ControlPill>
+              </>
+            );
+          }
+
+          if (selectedNode) {
+            return (
+              <div className="absolute inset-0 overflow-auto">
+                <NodeDetailView
+                  selectedNode={selectedNode}
+                  data={data}
+                  typeColorMap={typeColorMap}
+                  onBack={() => setSelectedNode(null)}
+                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                />
+              </div>
+            );
+          }
+
+          return (
+            <>
+              <HandoverGraph
+                nodes={data.nodes}
+                edges={data.edges}
+                typeColorMap={typeColorMap}
+                onNodeClick={setSelectedNode}
+                clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                positionsRef={graphPositionsRef}
+                savedViewBoxRef={graphViewBoxRef}
+                onVisibleNodesChange={setVisibleGraphNodes}
+                clustered={(useClusters && !!clusterInfo) || clusterByOt}
+                parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
+                normalization={normalization}
+                normalizationScope={normalizationScope}
+                maxGap={maxGap}
+                fileName={fileName}
+                flowsData={flowsData}
+                playSpeed={animPlaySpeed}
+                connectorMode={connectorMode}
+                onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
+                playRef={animPlayRef}
+                pauseRef={animPauseRef}
+                scrubRef={animScrubRef}
+                bindingsData={bindingsData}
+                embedded
+                narrow={narrow}
+                renderedSize={size}
+                pillLeading={
+                  <>
+                    {viewSwitcher}
+                    {method === "oc" && (
+                      <Button
+                        type="button"
+                        variant={bindingsData ? "secondary" : "outline"}
+                        size="icon"
+                        className="rounded-full h-9 w-9"
+                        title={bindingsData ? "Hide C-net bindings" : "Show C-net bindings"}
+                        disabled={bindingsStatus === "loading"}
+                        onClick={bindingsData
+                          ? () => { setBindingsData(null); setBindingsStatus("idle"); }
+                          : fetchBindings}
+                      >
+                        {bindingsStatus === "loading"
+                          ? <Loader2 className="h-4 w-4 animate-spin" />
+                          : <Network className="h-4 w-4" />}
+                      </Button>
+                    )}
+                    {clusterInfo && (
+                      // Organizational units come from a resource profiling
+                      // widget at runtime, so this cannot be preselected. It
+                      // changes the request, hence the immediate recompute.
+                      <Button
+                        type="button"
+                        variant={useClusters ? "secondary" : "outline"}
+                        size="icon"
+                        className="rounded-full h-9 w-9"
+                        title={useClusters ? "Use individual resources" : "Group into organizational units"}
+                        onClick={() => {
+                          setUseClusters(prev => {
+                            if (!prev) setClusterByOt(false);
+                            return !prev;
+                          });
+                          handleCompute();
+                        }}
+                      >
+                        <Users className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </>
+                }
+              />
+              <FloatingPanel
+                title="Find"
+                icon={<Search style={{ width: 13, height: 13, color: "#64748b" }} />}
+                narrow
+                style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}
+              >
+                <div ref={nodeSearchRef} className="relative" style={{ width: 220 }}>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Find resource…"
+                    value={nodeSearch}
+                    onChange={e => { setNodeSearch(e.target.value); setNodeSearchOpen(true); }}
+                    onFocus={() => setNodeSearchOpen(true)}
+                  />
+                  {nodeSearchOpen && nodeSearch.trim() !== "" && (() => {
+                    const q = nodeSearch.trim().toLowerCase();
+                    const matches = visibleGraphNodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
+                    if (matches.length === 0) return null;
+                    return (
+                      <div className="absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto" style={{ maxHeight: 220 }}>
+                        {matches.map(n => (
+                          <button
+                            key={n.id}
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
+                            onMouseDown={e => {
+                              e.preventDefault();
+                              setSelectedNode(n.id);
+                              setNodeSearch("");
+                              setNodeSearchOpen(false);
+                            }}
+                          >
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
+                            <span className="truncate">{n.id}</span>
+                            <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </FloatingPanel>
+              {method === "oc" && (
+                <FloatingPanel
+                  title="Animation"
+                  icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
+                  narrow
+                  style={{ position: "absolute", top: 62, right: 12, zIndex: 13 }}
+                >
+                  <div className="flex flex-col gap-2" style={{ width: 220 }}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={flowsData ? "secondary" : "outline"}
+                      disabled={flowsStatus === "loading"}
+                      onClick={flowsData
+                        ? () => { setFlowsData(null); setFlowsStatus("idle"); }
+                        : fetchFlows}
+                    >
+                      {flowsStatus === "loading"
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : flowsData
+                          ? <><Square className="h-3.5 w-3.5" /> Stop</>
+                          : <><Play className="h-3.5 w-3.5" /> Animate</>}
+                    </Button>
+                    {flowsData && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8 shrink-0"
+                            onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                            title={animIsPlaying ? "Pause" : "Play"}
+                          >
+                            {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0 tabular-nums">
+                                <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
+                                <ChevronDown className="h-3 w-3 shrink-0" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                              <DropdownMenuRadioGroup value={String(animPlaySpeed)} onValueChange={v => setAnimPlaySpeed(Number(v))}>
+                                {_SPEED_OPTIONS.map(s => (
+                                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0">
+                                <span className="flex-1 text-center capitalize">{connectorMode}</span>
+                                <ChevronDown className="h-3 w-3 shrink-0" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                              <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                                <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                        <Slider
+                          min={flowsData.timeline.start}
+                          max={flowsData.timeline.end}
+                          step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
+                          value={[animSliderTime]}
+                          onValueChange={([v]) => animScrubRef.current?.(v)}
+                        />
+                        <div className="text-[11px] text-muted-foreground tabular-nums">
+                          {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                          {" "}
+                          {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {" · "}
+                          {flowsData.flows.length.toLocaleString()} flows
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </FloatingPanel>
+              )}
+            </>
+          );
+        }}
+      </CanvasShell>
+    );
+  }
+
   const Wrapper = embedded ? "div" : Card;
 
   return (
@@ -668,7 +1056,7 @@ export default function OCHandoverExplorer({
           <p className="text-sm text-muted-foreground">Select a file to start.</p>
         )}
 
-        {fileId && showControls && objectTypes.length > 0 && (
+        {fileId && objectTypes.length > 0 && (
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
               <Tooltip delayDuration={600}>
@@ -849,7 +1237,7 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && showControls && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
+        {fileId && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
           <div className="border rounded-md p-3 self-center">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -895,21 +1283,21 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && showControls && objectTypes.length > 0 && method === "oc" && (
+        {fileId && objectTypes.length > 0 && method === "oc" && (
           <div className="flex gap-4 flex-wrap justify-center">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
             <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
           </div>
         )}
 
-        {fileId && showControls && objectTypes.length > 0 && method === "flattened" && (
+        {fileId && objectTypes.length > 0 && method === "flattened" && (
           <div className="flex gap-4 flex-wrap justify-center">
             <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
             <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
           </div>
         )}
 
-        {fileId && showControls && objectTypes.length > 0 && (
+        {fileId && objectTypes.length > 0 && (
           <div className="border rounded-md p-3 min-w-[180px] self-center">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters</p>
             <div className={`flex items-center gap-2 ${!clusterInfo ? "opacity-40 pointer-events-none" : ""}`}>
@@ -947,34 +1335,22 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && (() => {
-          // With the settings hidden, only a "compute" button (or the running
-          // computation) is shown; without a usable preselection, say why.
-          if (!showControls && (status === "ready" || status === "empty")) return null;
-          return (
-            <div className="flex flex-col gap-3 items-center py-4">
-              {showControls && (
-                <div className="text-sm text-muted-foreground text-center">
-                  Click below when ready to start the computation.
-                </div>
-              )}
-              {!showControls && !canCompute && (
-                <div className="text-sm text-muted-foreground text-center">
-                  No object types preselected — configure this widget in the dashboard's edit mode.
-                </div>
-              )}
-              <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
-                {status === "loading" ? "Computing…" : "Compute Handover"}
-              </Button>
-              {status === "loading" && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-                  Computing handover graph…
-                </div>
-              )}
+        {fileId && objectTypes.length > 0 && (
+          <div className="flex flex-col gap-3 items-center py-4">
+            <div className="text-sm text-muted-foreground text-center">
+              Click below when ready to start the computation.
             </div>
-          );
-        })()}
+            <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+              {status === "loading" ? "Computing…" : "Compute Handover"}
+            </Button>
+            {status === "loading" && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                Computing handover graph…
+              </div>
+            )}
+          </div>
+        )}
 
         {status === "error" && (
           <div className="text-sm text-destructive">Error: {errorMsg}</div>
@@ -1182,67 +1558,7 @@ export default function OCHandoverExplorer({
 
             {viewMode === "table" && (
               <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="border-b bg-muted">
-                      {(["source", "target", "bo_type", "count", "weight"] as SortCol[]).map((col, i) => {
-                        const labels: Record<SortCol, string> = {
-                          source: "Source", target: "Target", bo_type: "Business object type",
-                          count: "Count", weight: "Weight",
-                        };
-                        const active = sortCol === col;
-                        const Icon = active ? (sortDir === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
-                        return (
-                          <th
-                            key={col}
-                            onClick={() => handleSort(col)}
-                            className={`px-3 py-2 text-left font-medium cursor-pointer select-none hover:bg-muted/80${i === 4 ? " w-40" : ""}`}
-                          >
-                            <div className="flex items-center gap-1">
-                              {labels[col]}
-                              <Icon className={`h-3 w-3 flex-shrink-0${active ? "" : " opacity-30"}`} />
-                            </div>
-                          </th>
-                        );
-                      })}
-                      <th className="px-3 py-2 text-left font-medium">Avg time</th>
-                      <th className="px-3 py-2 text-left font-medium">Min time</th>
-                      <th className="px-3 py-2 text-left font-medium">Max time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedEdges.map((edge, i) => {
-                      const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
-                      const denom = normalizationScope === "per_bo_type"
-                        ? (weightDenominators[edge.businessobject_type] ?? 1)
-                        : (weightDenominators._global ?? 1);
-                      const barPct = denom > 0 ? (edge.weight / denom) * 100 : 0;
-                      return (
-                        <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
-                          <td className="px-3 py-2 font-mono">{edge.source}</td>
-                          <td className="px-3 py-2 font-mono">{edge.target}</td>
-                          <td className="px-3 py-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-white text-xs" style={{ background: color }}>
-                              {edge.businessobject_type}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 h-2 bg-muted rounded overflow-hidden">
-                                <div className="h-full rounded" style={{ width: `${barPct}%`, background: color }} />
-                              </div>
-                              <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.avg_time)}</td>
-                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.min_time)}</td>
-                          <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.max_time)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                {edgeTableEl}
               </div>
             )}
             </div>
@@ -1308,13 +1624,19 @@ function SingleTypeSelector({
 
 /* ── EventLogTable ──────────────────────────────────────────── */
 function EventLogTable({
-  logData, logStatus, logError, typeColorMap, lockedHeight,
+  logData, logStatus, logError, typeColorMap, lockedHeight, fill = false,
 }: {
   logData: EventLogData | null;
   logStatus: "idle" | "loading" | "ready" | "error";
   logError: string;
   typeColorMap: Record<string, string>;
   lockedHeight: number | null;
+  /**
+   * Fill the parent instead of capping at `lockedHeight`. The scroll box has
+   * to be the element with the bounded height, or the sticky header pins to a
+   * container that never scrolls.
+   */
+  fill?: boolean;
 }) {
   if (logStatus === "loading") {
     return (
@@ -1339,13 +1661,16 @@ function EventLogTable({
   };
 
   return (
-    <div className="space-y-2">
+    <div className={fill ? "flex flex-col gap-2 h-full min-h-0" : "space-y-2"}>
       {truncated && (
         <div className="text-xs text-muted-foreground px-1">
           Showing first {MAX_ROWS} of {logData.events.length} events — export the file to see the full log.
         </div>
       )}
-      <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
+      <div
+        className={`overflow-auto rounded-md border${fill ? " flex-1 min-h-0" : ""}`}
+        style={!fill && lockedHeight ? { maxHeight: lockedHeight } : undefined}
+      >
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="border-b bg-muted">
@@ -1571,6 +1896,10 @@ function HandoverGraph({
   pauseRef,
   scrubRef,
   bindingsData,
+  embedded = false,
+  narrow = false,
+  pillLeading,
+  renderedSize,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -1594,12 +1923,24 @@ function HandoverGraph({
   pauseRef?: React.RefObject<(() => void) | null>;
   scrubRef?: React.RefObject<((t: number) => void) | null>;
   bindingsData?: BindingPattern[] | null;
+  /** Fill the parent and float every control over the canvas (dashboard tile). */
+  embedded?: boolean;
+  /** Start the floating panels collapsed — the tile is too narrow for them. */
+  narrow?: boolean;
+  /** Rendered at the start of the control pill (the explorer's view switcher). */
+  pillLeading?: React.ReactNode;
+  /** Size to render at; when omitted the graph measures its own container. */
+  renderedSize?: Size;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [size, setSize] = useState({ width: 700, height: 450 });
-  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 700, h: 450 });
+  const [measured, setMeasured] = useState({ width: 700, height: 450 });
+  const size = renderedSize ?? measured;
+  // Read by the layout effect, which must not re-run when the box changes.
+  const aspectRef = useRef(size.width / (size.height || 1));
+  useEffect(() => { aspectRef.current = size.width / (size.height || 1); }, [size.width, size.height]);
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: HANDOVER_CANVAS.width, h: HANDOVER_CANVAS.height });
   const [minWeightStr, setMinWeightStr] = useState("0.00");
   const viewBoxRef = useRef(viewBox);
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
@@ -1973,12 +2314,24 @@ function HandoverGraph({
     return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
   }, []);
 
-  // Measure container
+  // Measure the container. A host that dictates the size (a dashboard tile)
+  // passes `renderedSize` and this stays idle. Unlike before, the measurement
+  // is live: the graph used to read its width once and keep a 0.62 aspect
+  // ratio forever, so resizing a widget did nothing at all.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const w = containerRef.current.getBoundingClientRect().width || 700;
-    setSize({ width: w, height: Math.max(400, w * 0.62) });
-  }, []);
+    if (renderedSize) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.round(el.getBoundingClientRect().width) || 700;
+      const next = { width: w, height: Math.max(400, Math.round(w * 0.62)) };
+      setMeasured(prev => (prev.width === next.width && prev.height === next.height ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [renderedSize]);
 
   // Sync dragged positions back to the ref so they survive unmount
   useEffect(() => {
@@ -1998,7 +2351,7 @@ function HandoverGraph({
       return;
     }
 
-    const { width, height } = size;
+    const { width, height } = HANDOVER_CANVAS;
     const cx = width / 2, cy = height / 2;
 
     // Weighted degree: sum of edge weights incident to each node
@@ -2055,19 +2408,35 @@ function HandoverGraph({
     });
     if (positionsRef) positionsRef.current = pos;
     setPositions(pos);
-    const fxs = Object.values(pos).map(p => p.x);
-    const fys = Object.values(pos).map(p => p.y);
-    const fpad = NODE_R + 20;
-    const fminX = Math.min(...fxs) - fpad, fmaxX = Math.max(...fxs) + fpad;
-    const fminY = Math.min(...fys) - fpad, fmaxY = Math.max(...fys) + fpad;
-    const MIN_VB = NODE_R * 10;
-    let fw = Math.max((fmaxX - fminX) * 1.15, MIN_VB), fh = Math.max((fmaxY - fminY) * 1.15, MIN_VB);
+    const bounds = pointsBounds(Object.values(pos));
+    if (bounds) {
+      const computedVb = fitBoxToAspect(bounds, aspectRef.current, HANDOVER_VIEW_PAD, NODE_R * 10);
+      setViewBox(computedVb);
+      if (savedViewBoxRef) savedViewBoxRef.current = computedVb;
+    }
+    // `size` is deliberately absent: the layout lives in HANDOVER_CANVAS, so a
+    // resize only re-fits the view (see the effect below) instead of
+    // rearranging every node under the user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges]);
+
+  // Keep the viewBox aspect-matched to the rendered box. Without this a
+  // resized tile would letterbox, and every screen→user coordinate mapping
+  // (drag, tooltips, rubber band) assumes the two ratios agree.
+  useEffect(() => {
     const ratio = size.width / (size.height || 1);
-    if (fw / fh < ratio) fw = fh * ratio; else fh = fw / ratio;
-    const computedVb = { x: fminX - (fw - (fmaxX - fminX)) / 2, y: fminY - (fh - (fmaxY - fminY)) / 2, w: fw, h: fh };
-    setViewBox(computedVb);
-    if (savedViewBoxRef) savedViewBoxRef.current = computedVb;
-  }, [nodes, edges, size]);
+    if (!Number.isFinite(ratio) || ratio <= 0) return;
+    const prev = viewBoxRef.current;
+    if (Math.abs(prev.w / prev.h - ratio) < 1e-6) return;
+    const next = fitBoxToAspect(
+      { minX: prev.x, minY: prev.y, maxX: prev.x + prev.w, maxY: prev.y + prev.h },
+      ratio,
+      0,
+      0,
+    );
+    setViewBox(next);
+    if (savedViewBoxRef) savedViewBoxRef.current = next;
+  }, [size.width, size.height, savedViewBoxRef]);
 
   const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
   const visibleEdges = useMemo(() => {
@@ -2210,6 +2579,14 @@ function HandoverGraph({
   }, [edges]);
 
   const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
+  // Legend entries: the types that actually carry a colour on screen — node
+  // object types plus the business object types the arcs are coloured by.
+  // Only the latter can be highlighted, since highlighting filters arcs.
+  const boTypeSet = useMemo(() => new Set(boTypes), [boTypes]);
+  const legendTypes = useMemo(
+    () => [...new Set([...nodes.map(n => n.object_type), ...boTypes])].sort(),
+    [nodes, boTypes],
+  );
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
   // header ~37px, slider row ~30px, slider overhead ~37px, bottom (search+chips+all/none+checklist) ~290px
   const filterPanelHeight = 37 + (clustered ? 0 : 37 + nodeTypes.length * 30) + 290;
@@ -2370,24 +2747,12 @@ function HandoverGraph({
   };
 
   const fitToView = () => {
-    let newVb: { x: number; y: number; w: number; h: number };
-    if (Object.keys(positions).length === 0) {
-      newVb = { x: 0, y: 0, w: size.width, h: size.height };
-    } else {
-      const xs = Object.values(positions).map(p => p.x);
-      const ys = Object.values(positions).map(p => p.y);
-      const pad = NODE_R + 20;
-      const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
-      const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
-      const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-      // Minimum size ensures self-loops (which arch ~NODE_R*2.4 above the node) remain visible.
-      const MIN_VB = NODE_R * 10;
-      let w = Math.max((maxX - minX) * 1.15, MIN_VB);
-      let h = Math.max((maxY - minY) * 1.15, MIN_VB);
-      const ratio = size.width / (size.height || 1);
-      if (w / h < ratio) w = h * ratio; else h = w / ratio;
-      newVb = { x: cx - w / 2, y: cy - h / 2, w, h };
-    }
+    const ratio = size.width / (size.height || 1);
+    const bounds = pointsBounds(Object.values(positions)) ?? {
+      minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height,
+    };
+    // The minimum keeps self-loops (which arch ~NODE_R*2.4 above the node) visible.
+    const newVb = fitBoxToAspect(bounds, ratio, HANDOVER_VIEW_PAD, NODE_R * 10);
     setViewBox(newVb);
     if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
@@ -2703,9 +3068,16 @@ function HandoverGraph({
   };
 
   return (
-    <div className="space-y-3">
-      <div className="relative">
-      <div ref={containerRef} className="w-full border rounded-md overflow-hidden bg-background">
+    <div className={embedded ? "absolute inset-0" : "space-y-3"}>
+      <div className={embedded ? "w-full h-full relative" : "relative"}>
+      <div
+        ref={containerRef}
+        className={
+          embedded
+            ? "w-full h-full overflow-hidden bg-background"
+            : "w-full border rounded-md overflow-hidden bg-background"
+        }
+      >
         <svg
           ref={svgRef}
           width={size.width}
@@ -2883,7 +3255,8 @@ function HandoverGraph({
 
         {highlightedObjectType && (
           <div style={{
-            position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
+            // Below the widget title, which the dashboard floats at top: 12.
+            position: "absolute", top: embedded ? 40 : 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
             display: "flex", alignItems: "center", gap: 7,
             background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 9999,
             padding: "5px 12px 5px 10px",
@@ -2912,19 +3285,8 @@ function HandoverGraph({
         )}
 
         {/* Button bar */}
-        <div style={{
-          position: "absolute",
-          bottom: 12,
-          right: 12,
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          background: "#FFFFFF",
-          border: "1px solid #E2E8F0",
-          borderRadius: 9999,
-          padding: "6px 12px",
-          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
-        }}>
+        <ControlPill>
+          {pillLeading}
           <div style={{
             display: "flex", alignItems: "center", gap: 6,
             height: 36, padding: "0 12px",
@@ -3041,7 +3403,42 @@ function HandoverGraph({
               </span>
             )}
           </div>
-        </div>
+        </ControlPill>
+
+        {embedded && legendTypes.length > 0 && (
+          <FloatingPanel
+            title="Object types"
+            icon={<Network style={{ width: 13, height: 13, color: "#64748b" }} />}
+            narrow={narrow}
+            badge={legendTypes.length}
+            style={{ position: "absolute", top: 12, left: 12, zIndex: 12 }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
+              {legendTypes.map(t => {
+                const highlightable = boTypeSet.has(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={!highlightable}
+                    title={highlightable ? `Highlight ${t} arcs` : t}
+                    onClick={() => setHighlightedObjectType(prev => (prev === t ? null : t))}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 7,
+                      background: "none", border: "none", padding: 0,
+                      cursor: highlightable ? "pointer" : "default",
+                      font: "inherit", color: "inherit", textAlign: "left",
+                      opacity: highlightedObjectType && highlightedObjectType !== t ? 0.4 : 1,
+                    }}
+                  >
+                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: typeColorMap[t] ?? "#94a3b8", flexShrink: 0 }} />
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </FloatingPanel>
+        )}
 
         {/* Filter panel */}
         {filterOpen && (

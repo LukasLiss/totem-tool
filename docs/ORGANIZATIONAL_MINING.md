@@ -57,9 +57,6 @@ them; the three routes are registered as data endpoints there.
 `OCHandoverComponent` and `ResourceProfilingComponent` (`backend/api/models.py`,
 frontend `components/OrgaMiningComponents.tsx`) persist:
 
-* `show_controls` — whether the explorer's settings panel is shown in the
-  dashboard's **view mode**. Off, the widget shows only the result (and a
-  compute button when it has not run yet).
 * `automatic_loading` — start the computation with the preselected settings
   when the dashboard opens.
 * the preselected settings of the explorer (object types, method,
@@ -67,10 +64,44 @@ frontend `components/OrgaMiningComponents.tsx`) persist:
   see `react_component/orgamining/settings.ts` for the mapping between the
   persisted snake_case fields and the explorer settings).
 
-In edit mode the widget shows a settings card with those switches and the
-preselection controls; in view mode it hosts the explorer with the persisted
-settings. Layout saves validate choices and clamp numeric ranges server-side
-(`api/views/dashboards.py`).
+In edit mode the widget shows a settings card with that switch and the
+preselection controls. Layout saves validate choices and clamp numeric ranges
+server-side (`api/views/dashboards.py`). The `show_controls` column is still
+there so older layouts load, but nothing reads it.
+
+### View mode is one canvas
+
+In view mode the explorer fills the tile as a single full-bleed canvas and
+floats its chrome over it — the same shape `OCCNVisualizer` uses. The legend,
+the metric readouts and the animation controls are floating panels that
+collapse to an icon chip in a narrow tile; the view switcher and the graph
+controls share the rounded pill in the bottom-right corner.
+
+Compute settings are **not reachable in view mode**: they are preselected in
+edit mode, so a widget's result is reproducible from its saved layout. The two
+exceptions are controls that cannot be preselected because they depend on
+runtime state — the organizational-units toggle (fed by a resource profiling
+widget through the cluster store) recomputes when flipped.
+
+`react_component/orgamining/canvas.tsx` holds the shared chrome (`CanvasShell`,
+`FloatingPanel`, `ControlPill`, `SegmentedControl`, `MetricChips`) and
+`canvasGeometry.ts` the fitting helpers.
+
+### Why the layouts are canvas-independent
+
+Both explorers lay their graphs out in a fixed coordinate space
+(`MDS_CANVAS`, `HANDOVER_CANVAS`) and fit that space into the rendered box by
+growing the shorter side of the viewBox — never by scaling the axes
+differently. Distances stay faithful at every tile shape, which matters most
+for resource profiling, where the dot positions must match the `mds_stress`
+and scale-bar values the backend computed.
+
+For the MDS this is exact rather than approximate: `ProfileMatrix.mds_2d`
+scales its embedding *uniformly* into the requested box
+(`scale = min(...)` over both axes), so the width and height it is given only
+set the unit of `mds_scale` — the arrangement is identical whatever box is
+requested. Resizing a tile is therefore a client-side viewBox change, not
+another round trip.
 
 Clusters found by a resource profiling explorer are shared with handover
 explorers through `store/clusterStore.ts` (a zustand store, so it also works

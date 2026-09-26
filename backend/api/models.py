@@ -417,9 +417,12 @@ class OCCNComponent(DashboardComponent):
 class OCHandoverComponent(DashboardComponent):
     """Dashboard widget for the object-centric handover-of-work explorer.
 
-    ``show_controls`` decides whether the explorer's settings panel is shown
-    in the dashboard's view mode; the remaining fields preselect those
-    settings. Object types are stored as JSON lists of type names.
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Object types are stored as JSON
+    lists of type names.
+
+    ``show_controls`` is retained so older saved layouts still load, but
+    nothing reads it: the view mode has no settings panel to show.
     """
     show_controls = models.BooleanField(default=True)
     # Start the computation as soon as the dashboard opens.
@@ -455,9 +458,12 @@ class OCHandoverComponent(DashboardComponent):
 class ResourceProfilingComponent(DashboardComponent):
     """Dashboard widget for the resource profiling (organizational mining) explorer.
 
-    ``show_controls`` decides whether the explorer's settings panel is shown
-    in the dashboard's view mode; the remaining fields preselect those
-    settings. Type and feature-group selections are JSON lists.
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Type and feature-group
+    selections are JSON lists.
+
+    ``show_controls`` is retained so older saved layouts still load, but
+    nothing reads it: the view mode has no settings panel to show.
     """
     show_controls = models.BooleanField(default=True)
     automatic_loading = models.BooleanField(default=False)
