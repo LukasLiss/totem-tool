@@ -10,6 +10,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, X } from "lucide-react";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 import type { Size } from "./canvasGeometry";
 
 /**
@@ -62,6 +70,10 @@ const PANEL_SHELL: React.CSSProperties = {
 /**
  * A card floating over the canvas that collapses to a chip.
  *
+ * Two collapsed shapes: an icon-only button for tool panels, or a labelled
+ * chip with a chevron (`collapsedLabel`) for panels whose headline number is
+ * worth reading without opening them. Expanded, both close with an ✕.
+ *
  * `narrow` sets the initial state only — once the user has clicked, their
  * choice wins and a later resize will not overrule it. Without that, dragging
  * a tile across the breakpoint would keep reopening a panel the user closed.
@@ -72,15 +84,18 @@ export function FloatingPanel({
   narrow,
   children,
   style,
-  badge,
+  collapsedLabel,
 }: {
   title: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   narrow: boolean;
   children: React.ReactNode;
   style?: React.CSSProperties;
-  badge?: string | number;
+  /** Chip text while collapsed, e.g. "4 object types". Omit for an icon-only chip. */
+  collapsedLabel?: string;
 }) {
+  // Without either an icon or a label the chip would be an empty button.
+  const chipLabel = collapsedLabel ?? (icon ? null : title);
   const [open, setOpen] = useState(!narrow);
   const touched = useRef(false);
   useEffect(() => {
@@ -102,7 +117,7 @@ export function FloatingPanel({
       <button
         type="button"
         onClick={toggle}
-        title={title}
+        title={`Show ${title}`}
         aria-label={`Show ${title}`}
         {...stop}
         style={{
@@ -110,17 +125,23 @@ export function FloatingPanel({
           ...style,
           display: "flex",
           alignItems: "center",
-          gap: 5,
+          gap: 6,
           padding: "6px 9px",
           cursor: "pointer",
           fontSize: 11,
           fontWeight: 600,
           color: "#334155",
           lineHeight: 1,
+          whiteSpace: "nowrap",
         }}
       >
         {icon}
-        {badge != null && <span style={{ fontVariantNumeric: "tabular-nums" }}>{badge}</span>}
+        {chipLabel != null && (
+          <>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{chipLabel}</span>
+            <ChevronDown style={{ width: 12, height: 12, color: "#94a3b8", flexShrink: 0 }} />
+          </>
+        )}
       </button>
     );
   }
@@ -132,23 +153,24 @@ export function FloatingPanel({
         ...PANEL_SHELL,
         ...style,
         padding: "8px 12px 10px",
-        maxHeight: "min(50%, 320px)",
+        maxHeight: "min(75%, 380px)",
         overflowY: "auto",
         minWidth: 132,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
         {icon}
-        <span style={{ fontWeight: 700, fontSize: 11, color: "#0F172A", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: "#0F172A", textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
           {title}
         </span>
         <button
           type="button"
           onClick={toggle}
+          title={`Hide ${title}`}
           aria-label={`Hide ${title}`}
           style={{
             marginLeft: "auto", background: "none", border: "none", cursor: "pointer",
-            padding: 0, color: "#94a3b8", display: "flex", alignItems: "center",
+            padding: 0, paddingLeft: 8, color: "#94a3b8", display: "flex", alignItems: "center",
           }}
         >
           <X style={{ width: 12, height: 12 }} />
@@ -156,6 +178,67 @@ export function FloatingPanel({
       </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * A chip that opens a dropdown, styled like a collapsed FloatingPanel: the
+ * current choice plus the same chevron, so a panel that expands and a chip
+ * that opens a menu read as the same kind of control.
+ */
+export function CanvasSelect<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+  style,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  /** Accessible name; the chip itself shows only the current choice. */
+  label: string;
+  style?: React.CSSProperties;
+}) {
+  const current = options.find((option) => option.value === value);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          title={label}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            ...PANEL_SHELL,
+            ...style,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 9px",
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 600,
+            color: "#334155",
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span>{current?.label ?? value}</span>
+          <ChevronDown style={{ width: 12, height: 12, color: "#94a3b8", flexShrink: 0 }} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup value={value} onValueChange={(v) => onChange(v as T)}>
+          {options.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

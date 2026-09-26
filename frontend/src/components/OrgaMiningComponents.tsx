@@ -205,7 +205,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     const singleTypeLabels = { ...typeLabels, "": "Select…" } as Record<string, string>;
 
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
+      <Card className="w-full h-full rounded-none overflow-y-auto text-left">
         <CardHeader>
           <CardTitle>Handover of Work Settings</CardTitle>
         </CardHeader>
@@ -392,7 +392,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: the explorer owns the whole tile and floats its own controls;
   // it is re-mounted whenever the persisted settings change.
   return (
-    <div className="w-full h-full relative overflow-hidden bg-background">
+    <div className="w-full h-full relative overflow-hidden bg-background text-left">
       <OCHandoverExplorer
         key={`${persistedJson}|${automaticLoading}`}
         fileId={selectedFile?.id}
@@ -458,7 +458,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
     };
 
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
+      <Card className="w-full h-full rounded-none overflow-y-auto text-left">
         <CardHeader>
           <CardTitle>Resource Profiling Settings</CardTitle>
         </CardHeader>
@@ -614,7 +614,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
   }
 
   return (
-    <div className="w-full h-full relative overflow-hidden bg-background">
+    <div className="w-full h-full relative overflow-hidden bg-background text-left">
       <OrgaMiningExplorer
         key={`${persistedJson}|${automaticLoading}`}
         fileId={selectedFile?.id}

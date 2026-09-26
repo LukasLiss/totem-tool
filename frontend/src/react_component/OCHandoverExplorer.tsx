@@ -34,10 +34,10 @@ import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CanvasMessage,
+  CanvasSelect,
   CanvasShell,
   ControlPill,
   FloatingPanel,
-  SegmentedControl,
 } from "@/react_component/orgamining/canvas";
 import {
   NARROW_CANVAS_WIDTH,
@@ -161,6 +161,33 @@ const NODE_R = 26;
 const HANDOVER_CANVAS = { width: 1100, height: 760 };
 /** Padding around the node cloud when fitting the view, in canvas units. */
 const HANDOVER_VIEW_PAD = NODE_R + 20;
+/** One press of the pill's zoom buttons. */
+const ZOOM_STEP = 1.25;
+
+/* ── View box maths, shared by the pill's controls and the opening view ──
+   The graph opens on exactly what the fit button followed by one zoom-out
+   gives, so these are the single definition of both. */
+
+/** What the fit button shows: the node cloud framed at the canvas's ratio. */
+function fittedToNodes(positions: Record<string, { x: number; y: number }>, ratio: number) {
+  const bounds = pointsBounds(Object.values(positions)) ?? {
+    minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height,
+  };
+  // The minimum keeps self-loops (which arch ~NODE_R*2.4 above the node) visible.
+  return fitBoxToAspect(bounds, ratio, HANDOVER_VIEW_PAD, NODE_R * 10);
+}
+
+/** One press of the zoom-out button: a wider box shows the graph smaller. */
+function zoomedOut(vb: { x: number; y: number; w: number; h: number }) {
+  const w = vb.w * ZOOM_STEP, h = vb.h * ZOOM_STEP;
+  return { x: vb.x - (w - vb.w) / 2, y: vb.y - (h - vb.h) / 2, w, h };
+}
+
+/** One press of the zoom-in button. */
+function zoomedIn(vb: { x: number; y: number; w: number; h: number }) {
+  const w = vb.w / ZOOM_STEP, h = vb.h / ZOOM_STEP;
+  return { x: vb.x + (vb.w - w) / 2, y: vb.y + (vb.h - h) / 2, w, h };
+}
 
 // Interpolate between grey (#CBD5E1) and a hex color; t=0 → grey, t=1 → color
 function mixHex(hex: string, t: number): string {
@@ -786,23 +813,23 @@ export default function OCHandoverExplorer({
             );
           }
 
-          const viewSwitcher = (
-            <SegmentedControl<ViewMode>
+          const viewSelect = (
+            <CanvasSelect<ViewMode>
+              label="View"
               value={viewMode}
               options={[
-                { value: "graph", label: "Graph", short: "G" },
-                { value: "table", label: "Table", short: "T" },
-                { value: "log", label: "Log", short: "L" },
+                { value: "graph", label: "Graph" },
+                { value: "table", label: "Table" },
+                { value: "log", label: "Log" },
               ]}
               onChange={setViewMode}
-              compact={narrow}
             />
           );
 
           if (viewMode !== "graph") {
             return (
               <>
-                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingBottom: 60 }}>
+                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
                   {viewMode === "table" ? (
                     <div className="overflow-auto rounded-md border flex-1 min-h-0">{edgeTableEl}</div>
                   ) : (
@@ -816,7 +843,7 @@ export default function OCHandoverExplorer({
                     />
                   )}
                 </div>
-                <ControlPill>{viewSwitcher}</ControlPill>
+                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}>{viewSelect}</div>
               </>
             );
           }
@@ -865,7 +892,6 @@ export default function OCHandoverExplorer({
                 renderedSize={size}
                 pillLeading={
                   <>
-                    {viewSwitcher}
                     {method === "oc" && (
                       <Button
                         type="button"
@@ -907,13 +933,22 @@ export default function OCHandoverExplorer({
                   </>
                 }
               />
-              <FloatingPanel
-                title="Find"
-                icon={<Search style={{ width: 13, height: 13, color: "#64748b" }} />}
-                narrow
-                style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}
-              >
-                <div ref={nodeSearchRef} className="relative" style={{ width: 220 }}>
+              {/* Top-right cluster: the view dropdown sits to the right of the
+                  search chip, and the row is right-anchored so expanding the
+                  search panel grows it leftwards instead of off the tile. */}
+              <div style={{
+                position: "absolute", top: 12, right: 12, zIndex: 14,
+                display: "flex", alignItems: "flex-start", gap: 8,
+              }}>
+                <FloatingPanel
+                  title="Find"
+                  icon={<Search style={{ width: 13, height: 13, color: "#64748b" }} />}
+                  narrow
+                >
+                {/* The matches sit in the panel's own flow rather than in an
+                    absolutely positioned popover: the panel scrolls its
+                    overflow, so a popover would be clipped by it. */}
+                <div ref={nodeSearchRef} style={{ width: 220 }}>
                   <Input
                     className="h-8 text-xs"
                     placeholder="Find resource…"
@@ -924,13 +959,15 @@ export default function OCHandoverExplorer({
                   {nodeSearchOpen && nodeSearch.trim() !== "" && (() => {
                     const q = nodeSearch.trim().toLowerCase();
                     const matches = visibleGraphNodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
-                    if (matches.length === 0) return null;
+                    if (matches.length === 0) {
+                      return <p className="mt-1.5 px-1 text-xs text-muted-foreground">No matching resource.</p>;
+                    }
                     return (
-                      <div className="absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto" style={{ maxHeight: 220 }}>
+                      <div className="mt-1.5 rounded-md border overflow-y-auto" style={{ maxHeight: 200 }}>
                         {matches.map(n => (
                           <button
                             key={n.id}
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
+                            className="w-full text-left px-2 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
                             onMouseDown={e => {
                               e.preventDefault();
                               setSelectedNode(n.id);
@@ -947,13 +984,15 @@ export default function OCHandoverExplorer({
                     );
                   })()}
                 </div>
-              </FloatingPanel>
+                </FloatingPanel>
+                {viewSelect}
+              </div>
               {method === "oc" && (
                 <FloatingPanel
                   title="Animation"
                   icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
                   narrow
-                  style={{ position: "absolute", top: 62, right: 12, zIndex: 13 }}
+                  style={{ position: "absolute", top: 54, right: 12, zIndex: 13 }}
                 >
                   <div className="flex flex-col gap-2" style={{ width: 220 }}>
                     <Button
@@ -1937,11 +1976,21 @@ function HandoverGraph({
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [measured, setMeasured] = useState({ width: 700, height: 450 });
   const size = renderedSize ?? measured;
-  // Read by the layout effect, which must not re-run when the box changes.
-  const aspectRef = useRef(size.width / (size.height || 1));
-  useEffect(() => { aspectRef.current = size.width / (size.height || 1); }, [size.width, size.height]);
+  /**
+   * Whether the view is the user's rather than the one the graph opened with.
+   *
+   * Until they zoom, fit, pan or drag a node, the opening view is re-derived
+   * on every size change. A tile is not its final size when it mounts —
+   * GridStack animates it, and the analysis page starts from a placeholder —
+   * so framing once against the first size seen left the graph fitted to a
+   * box that no longer existed.
+   */
+  const userAdjustedRef = useRef(false);
+  // Tile size the current viewBox was built for, so a resize can follow it.
+  const prevSizeRef = useRef({ width: 0, height: 0 });
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: HANDOVER_CANVAS.width, h: HANDOVER_CANVAS.height });
   const [minWeightStr, setMinWeightStr] = useState("0.00");
+  const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
   const viewBoxRef = useRef(viewBox);
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -2288,8 +2337,10 @@ function HandoverGraph({
     [percentagePassingIds, checkedNodes],
   );
 
-  const filterActive = filteredNodeIds.size < nodes.length;
   const hiddenCount = nodes.length - filteredNodeIds.size;
+  // The panel now holds an arc filter too, so the button has to light up for
+  // a min-weight cutoff as well; the badge keeps counting hidden nodes only.
+  const filterActive = hiddenCount > 0 || minWeightVal > 0;
 
   useEffect(() => {
     if (onVisibleNodesChange) onVisibleNodesChange(nodes.filter(n => filteredNodeIds.has(n.id)));
@@ -2347,7 +2398,11 @@ function HandoverGraph({
     if (nodes.every(n => saved[n.id])) {
       setPositions({ ...saved });
       // Restore the viewBox the user had before unmounting (preserves zoom/pan)
-      if (savedViewBoxRef?.current) setViewBox(savedViewBoxRef.current);
+      if (savedViewBoxRef?.current) {
+        setViewBox(savedViewBoxRef.current);
+        // Theirs, not a fresh opening view — do not re-frame it.
+        userAdjustedRef.current = true;
+      }
       return;
     }
 
@@ -2408,37 +2463,55 @@ function HandoverGraph({
     });
     if (positionsRef) positionsRef.current = pos;
     setPositions(pos);
-    const bounds = pointsBounds(Object.values(pos));
-    if (bounds) {
-      const computedVb = fitBoxToAspect(bounds, aspectRef.current, HANDOVER_VIEW_PAD, NODE_R * 10);
-      setViewBox(computedVb);
-      if (savedViewBoxRef) savedViewBoxRef.current = computedVb;
-    }
+    // A new layout gets a fresh opening view; the effect below applies it
+    // once the tile's real size is known.
+    userAdjustedRef.current = false;
     // `size` is deliberately absent: the layout lives in HANDOVER_CANVAS, so a
-    // resize only re-fits the view (see the effect below) instead of
+    // resize only moves the view (see the effects below) instead of
     // rearranging every node under the user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges]);
 
-  // Keep the viewBox aspect-matched to the rendered box. Without this a
-  // resized tile would letterbox, and every screen→user coordinate mapping
-  // (drag, tooltips, rubber band) assumes the two ratios agree.
+  /**
+   * The view the graph opens with: exactly what the fit button plus one
+   * zoom-out gives, for the size the tile actually has.
+   *
+   * Re-derived on every size change until the user adjusts the view, so it
+   * settles on the tile's final size rather than whatever it measured first.
+   */
   useEffect(() => {
-    const ratio = size.width / (size.height || 1);
-    if (!Number.isFinite(ratio) || ratio <= 0) return;
+    if (userAdjustedRef.current) return;
+    if (size.width === 0 || size.height === 0) return;
+    if (Object.keys(positions).length === 0) return;
+    const next = zoomedOut(fittedToNodes(positions, size.width / size.height));
+    setViewBox(next);
+    if (savedViewBoxRef) savedViewBoxRef.current = next;
+    prevSizeRef.current = { width: size.width, height: size.height };
+  }, [positions, size.width, size.height, savedViewBoxRef]);
+
+  /**
+   * Follow a resize of a view the user has set up themselves.
+   *
+   * Both axes are scaled by how much the tile grew, which keeps pixels per
+   * node-unit constant — their graph stays the size it was, and the viewBox
+   * ratio keeps matching the element's, which every screen→user coordinate
+   * mapping (drag, tooltips, rubber band) depends on.
+   */
+  useEffect(() => {
+    if (size.width === 0 || size.height === 0) return;
+    const prevSize = prevSizeRef.current;
+    prevSizeRef.current = { width: size.width, height: size.height };
+    if (!userAdjustedRef.current) return;   // the opening view owns the box
+    if (prevSize.width === 0 || prevSize.height === 0) return;
+    if (prevSize.width === size.width && prevSize.height === size.height) return;
     const prev = viewBoxRef.current;
-    if (Math.abs(prev.w / prev.h - ratio) < 1e-6) return;
-    const next = fitBoxToAspect(
-      { minX: prev.x, minY: prev.y, maxX: prev.x + prev.w, maxY: prev.y + prev.h },
-      ratio,
-      0,
-      0,
-    );
+    const w = prev.w * (size.width / prevSize.width);
+    const h = prev.h * (size.height / prevSize.height);
+    const next = { x: prev.x + (prev.w - w) / 2, y: prev.y + (prev.h - h) / 2, w, h };
     setViewBox(next);
     if (savedViewBoxRef) savedViewBoxRef.current = next;
   }, [size.width, size.height, savedViewBoxRef]);
 
-  const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
   const visibleEdges = useMemo(() => {
     let result = minWeightVal <= 0 ? edges : edges.filter(e => Math.round(e.weight * 10000) / 10000 >= minWeightVal);
     if (filteredNodeIds.size < nodes.length) result = result.filter(e => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target));
@@ -2588,8 +2661,16 @@ function HandoverGraph({
     [nodes, boTypes],
   );
   const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
-  // header ~37px, slider row ~30px, slider overhead ~37px, bottom (search+chips+all/none+checklist) ~290px
-  const filterPanelHeight = 37 + (clustered ? 0 : 37 + nodeTypes.length * 30) + 290;
+  /**
+   * Height of the node checklist's scroll box.
+   *
+   * Deliberately independent of how many nodes are in it. The panel is
+   * anchored to its bottom edge and grows upward, so a list that resized with
+   * its contents moved everything above it — the percentage slider slid out
+   * from under the cursor mid-drag, and the type chips got squashed as rows
+   * were added. It tracks the canvas instead, which only changes on resize.
+   */
+  const nodeListHeight = Math.max(120, Math.min(220, size.height - 360));
 
   // Pre-compute all edge paths
   const edgePaths = useMemo(() => {
@@ -2730,32 +2811,19 @@ function HandoverGraph({
     return result;
   }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight, maxWeightPerType, normalizationScope]);
 
-  const zoomIn = () => {
-    const vb = viewBoxRef.current;
-    const nw = vb.w / 1.25, nh = vb.h / 1.25;
-    const newVb = { x: vb.x + (vb.w - nw) / 2, y: vb.y + (vb.h - nh) / 2, w: nw, h: nh };
+  // Each of these is the user taking over the view; from here it is theirs to
+  // keep, and a resize follows it instead of re-framing.
+  const applyUserViewBox = (newVb: { x: number; y: number; w: number; h: number }) => {
+    userAdjustedRef.current = true;
     setViewBox(newVb);
     if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
 
-  const zoomOut = () => {
-    const vb = viewBoxRef.current;
-    const nw = vb.w * 1.25, nh = vb.h * 1.25;
-    const newVb = { x: vb.x - (nw - vb.w) / 2, y: vb.y - (nh - vb.h) / 2, w: nw, h: nh };
-    setViewBox(newVb);
-    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
-  };
+  const zoomIn = () => applyUserViewBox(zoomedIn(viewBoxRef.current));
 
-  const fitToView = () => {
-    const ratio = size.width / (size.height || 1);
-    const bounds = pointsBounds(Object.values(positions)) ?? {
-      minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height,
-    };
-    // The minimum keeps self-loops (which arch ~NODE_R*2.4 above the node) visible.
-    const newVb = fitBoxToAspect(bounds, ratio, HANDOVER_VIEW_PAD, NODE_R * 10);
-    setViewBox(newVb);
-    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
-  };
+  const zoomOut = () => applyUserViewBox(zoomedOut(viewBoxRef.current));
+
+  const fitToView = () => applyUserViewBox(fittedToNodes(positions, size.width / (size.height || 1)));
 
   // Node drag handlers
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
@@ -2771,6 +2839,9 @@ function HandoverGraph({
     dragOffset.current = { x: userX - pos.x, y: userY - pos.y };
     mouseDownPos.current = { x: e.clientX, y: e.clientY };
     dragHasMoved.current = false;
+    // Moving a node makes the arrangement theirs; re-framing it on the next
+    // resize would undo the placement they just chose.
+    userAdjustedRef.current = true;
     setDragId(id);
   };
 
@@ -3287,45 +3358,6 @@ function HandoverGraph({
         {/* Button bar */}
         <ControlPill>
           {pillLeading}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 6,
-            height: 36, padding: "0 12px",
-            border: "1px solid #E2E8F0", borderRadius: 9999,
-            background: "white",
-          }}>
-            <span style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>min weight</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={minWeightStr}
-              onChange={e => setMinWeightStr(e.target.value)}
-              onBlur={e => {
-                const n = Math.max(0, parseFloat(e.target.value.replace(",", ".")) || 0);
-                let s = n.toFixed(4);
-                while (s.endsWith("0") && s.split(".")[1].length > 2) s = s.slice(0, -1);
-                setMinWeightStr(s);
-              }}
-              onKeyDown={e => {
-                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-                  e.preventDefault();
-                  const cur = Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0);
-                  const next = Math.max(0, Math.round((cur + (e.key === "ArrowUp" ? 0.01 : -0.01)) * 100) / 100);
-                  setMinWeightStr(next.toFixed(2));
-                }
-              }}
-              style={{ width: 44, border: "none", fontSize: 12, textAlign: "center", outline: "none", background: "transparent" }}
-            />
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <button type="button" tabIndex={-1}
-                onClick={() => setMinWeightStr(s => (Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) + 0.01) * 100) / 100).toFixed(2))}
-                style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
-              >▲</button>
-              <button type="button" tabIndex={-1}
-                onClick={() => setMinWeightStr(s => (Math.max(0, Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) - 0.01) * 100) / 100)).toFixed(2))}
-                style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
-              >▼</button>
-            </div>
-          </div>
           <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9">
             <PlusIcon className="h-4 w-4" />
           </Button>
@@ -3408,9 +3440,8 @@ function HandoverGraph({
         {embedded && legendTypes.length > 0 && (
           <FloatingPanel
             title="Object types"
-            icon={<Network style={{ width: 13, height: 13, color: "#64748b" }} />}
             narrow={narrow}
-            badge={legendTypes.length}
+            collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
             style={{ position: "absolute", top: 12, left: 12, zIndex: 12 }}
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
@@ -3444,7 +3475,7 @@ function HandoverGraph({
         {filterOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, height: filterPanelHeight, zIndex: 20,
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
               background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
               display: "flex", flexDirection: "column",
@@ -3452,8 +3483,8 @@ function HandoverGraph({
             onMouseDown={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Node Filter</span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Filters</span>
               <button
                 type="button"
                 onClick={() => setFilterOpen(false)}
@@ -3463,46 +3494,110 @@ function HandoverGraph({
               </button>
             </div>
 
-            {/* Top % by type */}
-            {!clustered && (
-              <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Top % by type</span>
-                  {Object.values(typePercentages).some(v => v < 100) && (
-                    <button
-                      type="button"
-                      onClick={() => setTypePercentages({})}
-                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
-                    >
-                      Reset all
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {nodeTypes.map(ot => {
-                    const pct = typePercentages[ot] ?? 100;
-                    const color = typeColorMap[ot] ?? "#94a3b8";
-                    return (
-                      <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                        <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
-                        <Slider
-                          min={0} max={100} step={1}
-                          value={[pct]}
-                          onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
-                          className="w-20"
-                        />
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
-                      </div>
-                    );
-                  })}
+            {/* Arcs */}
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Arcs</span>
+                {minWeightVal > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMinWeightStr("0.00")}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#334155", flex: 1 }}>Min weight</span>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  height: 30, padding: "0 6px",
+                  border: "1px solid #E2E8F0", borderRadius: 6, background: "#F8FAFC",
+                }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={minWeightStr}
+                    onChange={e => setMinWeightStr(e.target.value)}
+                    onBlur={e => {
+                      const n = Math.max(0, parseFloat(e.target.value.replace(",", ".")) || 0);
+                      let s = n.toFixed(4);
+                      while (s.endsWith("0") && s.split(".")[1].length > 2) s = s.slice(0, -1);
+                      setMinWeightStr(s);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                        e.preventDefault();
+                        const cur = Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0);
+                        const next = Math.max(0, Math.round((cur + (e.key === "ArrowUp" ? 0.01 : -0.01)) * 100) / 100);
+                        setMinWeightStr(next.toFixed(2));
+                      }
+                    }}
+                    style={{ width: 48, border: "none", fontSize: 12, textAlign: "center", outline: "none", background: "transparent" }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <button type="button" tabIndex={-1}
+                      onClick={() => setMinWeightStr(s => (Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) + 0.01) * 100) / 100).toFixed(2))}
+                      style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+                    >▲</button>
+                    <button type="button" tabIndex={-1}
+                      onClick={() => setMinWeightStr(s => (Math.max(0, Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) - 0.01) * 100) / 100)).toFixed(2))}
+                      style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+                    >▼</button>
+                  </div>
                 </div>
               </div>
-            )}
+              <p style={{ fontSize: 10, color: "#94a3b8", marginTop: 6 }}>
+                Hides arcs weighing less than this.
+              </p>
+            </div>
 
-            {/* Node search + checklist */}
-            <div style={{ padding: "10px 14px", flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              <div style={{ position: "relative", marginBottom: 8 }}>
+            {/* Nodes. Everything here is flexShrink: 0 — the rows above the
+                list used to get squashed as entries were added to it. */}
+            <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8, flexShrink: 0 }}>
+                Nodes
+              </span>
+
+              {!clustered && (
+                <div style={{ flexShrink: 0, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: "#475569" }}>Top %</span>
+                    {Object.values(typePercentages).some(v => v < 100) && (
+                      <button
+                        type="button"
+                        onClick={() => setTypePercentages({})}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                      >
+                        Reset all
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {nodeTypes.map(ot => {
+                      const pct = typePercentages[ot] ?? 100;
+                      const color = typeColorMap[ot] ?? "#94a3b8";
+                      return (
+                        <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                          <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
+                          <Slider
+                            min={0} max={100} step={1}
+                            value={[pct]}
+                            onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
+                            className="w-20"
+                          />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <span style={{ fontSize: 11, fontWeight: 500, color: "#475569", marginBottom: 6, flexShrink: 0 }}>Selection</span>
+              <div style={{ position: "relative", marginBottom: 8, flexShrink: 0 }}>
                 <Search style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: 12, height: 12, color: "#94a3b8", pointerEvents: "none" }} />
                 <input
                   type="text"
@@ -3517,7 +3612,7 @@ function HandoverGraph({
                 />
               </div>
               {/* Object type chips */}
-              <div style={{ display: "flex", gap: 4, overflowX: "auto", marginBottom: 8, paddingBottom: 2, scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}>
+              <div style={{ display: "flex", gap: 4, overflowX: "auto", marginBottom: 8, paddingBottom: 2, flexShrink: 0, scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}>
                 {nodeTypes
                   .filter(ot => nodes.some(n => n.object_type === ot && percentagePassingIds.has(n.id)))
                   .map(ot => {
@@ -3552,7 +3647,7 @@ function HandoverGraph({
                   })}
               </div>
 
-              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6, flexShrink: 0 }}>
                 <button
                   type="button"
                   onClick={() => setCheckedNodes(prev => { const next = new Set(prev); searchedNodes.forEach(n => next.add(n.id)); return next; })}
@@ -3568,7 +3663,7 @@ function HandoverGraph({
                   None
                 </button>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ height: nodeListHeight, flexShrink: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
                 {searchedNodes.map(n => {
                   const checked = checkedNodes.has(n.id);
                   const color = typeColorMap[n.object_type] ?? "#94a3b8";

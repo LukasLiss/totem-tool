@@ -1555,7 +1555,7 @@ function ResourceGraph({
               title="Resources"
               icon={<Palette style={{ width: 13, height: 13, color: "#64748b" }} />}
               narrow={narrow}
-              badge={legendTypes.length}
+              collapsedLabel={`${legendTypes.length} Resource Type${legendTypes.length === 1 ? "" : "s"}`}
               style={{ position: "absolute", top: 12, left: 12, zIndex: 8 }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
