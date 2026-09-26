@@ -1995,6 +1995,12 @@ function HandoverGraph({
   useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
+  // Background pan: the grabbed point in node coordinates, held under the
+  // cursor for the length of the drag. `panMoved` tells a pan from a click,
+  // so releasing after a pan does not also clear the tooltip or highlight.
+  const panAnchor = useRef<{ x: number; y: number } | null>(null);
+  const panMoved = useRef(false);
+  const [isPanning, setIsPanning] = useState(false);
   const dragHasMoved = useRef(false);
   const mouseDownPos = useRef({ x: 0, y: 0 });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
@@ -2825,9 +2831,51 @@ function HandoverGraph({
 
   const fitToView = () => applyUserViewBox(fittedToNodes(positions, size.width / (size.height || 1)));
 
+  /**
+   * Drag the background to pan the graph.
+   *
+   * The anchor is kept in node coordinates: converting the cursor afresh each
+   * move and holding that point still under it means the graph tracks the
+   * pointer exactly, at any zoom level.
+   */
+  const handleBackgroundMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    panAnchor.current = {
+      x: (e.clientX - rect.left) * (vb.w / rect.width) + vb.x,
+      y: (e.clientY - rect.top) * (vb.h / rect.height) + vb.y,
+    };
+    panMoved.current = false;
+    setIsPanning(true);
+  };
+
+  const handlePanMove = (e: React.MouseEvent) => {
+    const anchor = panAnchor.current;
+    if (!anchor) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    const cursorX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const cursorY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
+    const dx = cursorX - anchor.x;
+    const dy = cursorY - anchor.y;
+    if (!panMoved.current && Math.hypot(dx, dy) * (rect.width / vb.w) > 3) panMoved.current = true;
+    if (dx === 0 && dy === 0) return;
+    applyUserViewBox({ ...vb, x: vb.x - dx, y: vb.y - dy });
+  };
+
+  const endPan = () => {
+    panAnchor.current = null;
+    setIsPanning(false);
+  };
+
   // Node drag handlers
   const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
     e.preventDefault();
+    // Without this the background would start panning under the node drag.
+    e.stopPropagation();
     setNodeTooltip(null);
     const pos = positions[id];
     if (!pos) return;
@@ -2846,6 +2894,7 @@ function HandoverGraph({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (panAnchor.current) { handlePanMove(e); return; }
     if (!dragId) return;
     if (Math.hypot(e.clientX - mouseDownPos.current.x, e.clientY - mouseDownPos.current.y) > 4)
       dragHasMoved.current = true;
@@ -2863,7 +2912,7 @@ function HandoverGraph({
     }));
   };
 
-  const handleMouseUp = () => setDragId(null);
+  const handleMouseUp = () => { endPan(); setDragId(null); };
 
   const downloadGraph = async () => {
     const svg = svgRef.current;
@@ -3154,11 +3203,17 @@ function HandoverGraph({
           width={size.width}
           height={size.height}
           viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
+          onMouseDown={handleBackgroundMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          onClick={() => { setNodeTooltip(t => t?.pinned ? null : t); setHighlightedObjectType(null); }}
-          style={{ cursor: dragId ? "grabbing" : "default", display: "block" }}
+          onClick={() => {
+            // A pan ends in a click; treat it as the drag it was.
+            if (panMoved.current) { panMoved.current = false; return; }
+            setNodeTooltip(t => t?.pinned ? null : t);
+            setHighlightedObjectType(null);
+          }}
+          style={{ cursor: dragId || isPanning ? "grabbing" : "grab", display: "block" }}
         >
           <defs>
             {boTypes.map(bt => {
