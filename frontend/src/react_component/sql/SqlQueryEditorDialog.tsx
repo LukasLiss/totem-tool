@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { updateQueryAsset } from "@/api/assetsApi";
+import { toast } from "sonner";
 import SqlQueryEditor, {
   SQL_QUERY_DEFAULT,
   type ExpectedResult,
@@ -89,7 +91,18 @@ export function SqlQueryEditorDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => {
+            onClick={async () => {
+              if (draftLink && draft !== query) {
+                try {
+                  await updateQueryAsset({
+                    assetId: draftLink.id,
+                    query: draft,
+                  });
+                  toast.success(`Updated stored query "${draftLink.name}"`);
+                } catch {
+                  toast.error("Could not update stored query asset");
+                }
+              }
               onApply(draft, draftLink);
               onOpenChange(false);
             }}

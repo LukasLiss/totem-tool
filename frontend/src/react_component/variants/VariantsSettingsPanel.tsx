@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { LoaderCircle, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -268,19 +269,10 @@ export function VariantsSettingsPanel({
           <Hint>{isoOption?.hint}</Hint>
         </Field>
         <Field label="Timeout (seconds)" htmlFor="variants-timeout">
-          <Input
-            id="variants-timeout"
-            type="number"
-            min={1}
-            max={600}
-            step={1}
+          <TimeoutInput
             value={grouping.timeoutS}
-            onChange={(event) => {
-              const n = Number(event.target.value);
-              onGroupingChange({ ...grouping, timeoutS: Number.isFinite(n) && n > 0 ? n : 10 });
-            }}
+            onChange={(timeoutS) => onGroupingChange({ ...grouping, timeoutS })}
             disabled={disabled}
-            className="w-full"
           />
           <Hint>Wall-clock budget per computation; a timed-out run returns an error instead of blocking.</Hint>
         </Field>
@@ -437,6 +429,51 @@ function SwitchRow({
         {hint ? <Hint>{hint}</Hint> : null}
       </div>
     </div>
+  );
+}
+
+function TimeoutInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(String(value));
+
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      id="variants-timeout"
+      type="number"
+      min={1}
+      max={600}
+      step={1}
+      value={text}
+      onChange={(event) => {
+        const val = event.target.value;
+        setText(val);
+        const n = Number(val);
+        if (Number.isFinite(n) && n > 0) {
+          onChange(n);
+        }
+      }}
+      onBlur={() => {
+        const n = Number(text);
+        if (!Number.isFinite(n) || n <= 0) {
+          setText(String(value));
+        } else {
+          onChange(n);
+        }
+      }}
+      disabled={disabled}
+      className="w-full"
+    />
   );
 }
 

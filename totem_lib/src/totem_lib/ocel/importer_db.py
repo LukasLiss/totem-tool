@@ -236,6 +236,9 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
 
     conn.execute("DETACH src")
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         errors = []
         union_all_parts = [f'SELECT ocel_id FROM src."event_{act}"' for act in activities]
@@ -254,9 +257,6 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -526,6 +526,9 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True, stric
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     json_errors = []
     if strict_mode:
         seen = set()
@@ -544,9 +547,6 @@ def _import_json_bulk(file_path: str, db_path: str, graceful: bool = True, stric
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -695,6 +695,9 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True, strict
         })
         inserter(conn, "object_relations", o2o_df, ["source_obj_id", "target_obj_id", "qualifier"])
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     xml_errors = []
     if strict_mode:
         seen = set()
@@ -712,9 +715,6 @@ def _import_xml_bulk(file_path: str, db_path: str, graceful: bool = True, strict
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -843,14 +843,14 @@ def _import_csv_bulk(file_path: str, db_path: str, graceful: bool = True, strict
         for ev_id in sorted(dups)[:10]:
             csv_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         errors = csv_errors + validate_ocel(conn)
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -899,14 +899,14 @@ def _import_sqlite(file_path: str, db_path: str, graceful: bool = True, strict_m
 
     con.close()
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         errors = sqlite_errors + validate_ocel(conn)
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -1239,14 +1239,14 @@ def _import_json(file_path: str, db_path: str, graceful: bool = True, strict_mod
         flusher(conn, "object_attribute_history", hist_ph, hist_rows)
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         errors = json_errors + validate_ocel(conn)
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(
         conn, event_attr_cols_sorted, obj_attr_cols_sorted
@@ -1452,6 +1452,9 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True, strict_mode
     _flush_ignore(conn, "object_relations", "?, ?, ?", o2o_rows)
 
     xml_errors = []
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         for ev_id in sorted(dup_event_ids)[:10]:
             xml_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
@@ -1461,9 +1464,6 @@ def _import_xml(file_path: str, db_path: str, graceful: bool = True, strict_mode
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(
         conn, event_attr_cols_sorted, obj_attr_cols_sorted
@@ -1593,14 +1593,14 @@ def _import_csv(file_path: str, db_path: str, graceful: bool = True, strict_mode
         for ev_id in sorted(dup_event_ids)[:10]:
             csv_errors.append(f"Validation Failed: Found duplicate Event ID '{ev_id}' in source data.")
 
+    if graceful:
+        _graceful_cleanup(conn)
+
     if strict_mode:
         errors = csv_errors + validate_ocel(conn)
         if errors:
             conn.close()
             raise OCELValidationException(errors)
-
-    if graceful:
-        _graceful_cleanup(conn)
 
     return OcelDuckDB._from_prepared_connection(conn, event_attr_cols, obj_attr_cols)
 
@@ -1613,6 +1613,19 @@ def _parse_ts(ts_str: str) -> int:
     """Parse an ISO 8601 timestamp string to Unix epoch seconds. Returns 0 on failure."""
     if not ts_str:
         return 0
+    clean = ts_str.strip()
+    try:
+        # Normalize Z/z suffix to standard +00:00 offset
+        norm = clean
+        if norm.endswith("Z") or norm.endswith("z"):
+            norm = norm[:-1] + "+00:00"
+        dt = datetime.fromisoformat(norm)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except (ValueError, TypeError):
+        pass
+
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
@@ -1623,7 +1636,7 @@ def _parse_ts(ts_str: str) -> int:
         "%Y-%m-%d",
     ):
         try:
-            dt = datetime.strptime(ts_str, fmt)
+            dt = datetime.strptime(clean, fmt)
             return int(dt.replace(tzinfo=timezone.utc).timestamp())
         except ValueError:
             continue

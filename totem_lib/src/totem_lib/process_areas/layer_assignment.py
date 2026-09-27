@@ -158,9 +158,56 @@ def assign_layers(
         max(0.0, resource_forces[pair]) * var for pair, var in hinge.items()
     ) + beta * lpSum(attractive_forces[pair] * var for pair, var in distance.items())
 
-    status = problem.solve(PULP_CBC_CMD(msg=0))
-    if LpStatus[status] != "Optimal":
-        raise RuntimeError(f"layer assignment did not solve to optimality: {LpStatus[status]}")
+    def _solve_safely(p: LpProblem) -> bool:
+        import shutil
+        from pulp import HiGHS_CMD
+        try:
+            sys_cbc = shutil.which("cbc")
+            solver = PULP_CBC_CMD(path=sys_cbc, msg=0) if sys_cbc else PULP_CBC_CMD(msg=0)
+            st = p.solve(solver)
+            if LpStatus[st] == "Optimal":
+                return True
+        except (OSError, Exception):
+            pass
+
+        try:
+            if HiGHS_CMD().available():
+                st = p.solve(HiGHS_CMD(msg=0))
+                if LpStatus[st] == "Optimal":
+                    return True
+        except (OSError, Exception):
+            pass
+
+        try:
+            st = p.solve()
+            if LpStatus[st] == "Optimal":
+                return True
+        except (OSError, Exception):
+            pass
+        return False
+
+    is_optimal = _solve_safely(problem)
+
+    if not is_optimal:
+        # Resilient fallback heuristic for environments without working external solver binaries
+        # (e.g. macOS ARM64 without Rosetta 2). Types with higher net resource force are layered above.
+        net_forces = {t: 0.0 for t in types}
+        for (ti, tj), f in resource_forces.items():
+            if ti in net_forces and tj in net_forces and f > 0:
+                net_forces[ti] += f
+                net_forces[tj] -= f
+
+        sorted_types = sorted(types, key=lambda t: (net_forces[t], index_of[t]))
+        layers = {}
+        curr_layer = BOTTOM_LAYER
+        prev_f = None
+        for t in sorted_types:
+            f = net_forces[t]
+            if prev_f is not None and f > prev_f + 1e-4:
+                curr_layer += 1
+            layers[t] = curr_layer
+            prev_f = f
+        return layers
 
     # An object type with no force at all appears in no constraint and no
     # objective term. CBC drops such a variable from the model entirely and

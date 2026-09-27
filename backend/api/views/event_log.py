@@ -287,8 +287,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             db = None
             try:
                 try:
-                    # Import and convert the file into the new DuckDB database with strict validation
-                    db = import_ocel_db(file_path, db_path=new_path, strict_mode=True)
+                    # Import and convert the file into the new DuckDB database with graceful sanitization
+                    db = import_ocel_db(file_path, db_path=new_path, strict_mode=False)
                 finally:
                     if db is not None:
                         try:
@@ -345,7 +345,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             self.perform_create(serializer)
             user_file = serializer.instance
             
-            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
+            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db

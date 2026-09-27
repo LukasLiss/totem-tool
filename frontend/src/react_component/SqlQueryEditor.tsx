@@ -36,6 +36,7 @@ import {
 import {
   BookmarkPlus,
   ChevronDown,
+  ChevronRight,
   Database,
   FolderOpen,
   Link2,
@@ -45,6 +46,7 @@ import {
   TableProperties,
   Unlink,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   executeQuery as runSqlQuery,
@@ -55,6 +57,7 @@ import {
   listQueryAssets,
   queryAssetDescription,
   queryAssetSql,
+  updateQueryAsset,
   type ProjectAsset,
 } from "@/api/assetsApi";
 import { SqlHighlightedTextarea } from "./sql/SqlHighlightedTextarea";
@@ -159,6 +162,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   const [name, setName] = useState(value.name ?? "");
   const [query, setQuery] = useState(value.query ?? SQL_QUERY_DEFAULT);
   const [schema, setSchema] = useState<TableSchema[]>(SQL_FALLBACK_SCHEMA);
+  const [tablesVisible, setTablesVisible] = useState(true);
   const [expanded, setExpanded] = useState<string | null>("events");
   const [result, setResult] = useState<SqlQueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -696,15 +700,41 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           </DropdownMenu>
         )}
         {linked && (
-          <Badge
-            variant="secondary"
-            className="min-w-0 shrink gap-1 truncate text-[10px]"
-            title={`linked to stored query "${linkedQuery?.name}"`}
-          >
-            <Link2 className="size-3 shrink-0" />
-            <span className="truncate">{stored.asset?.name ?? linkedQuery?.name}</span>
-            {dirtyAgainstStore && <span className="shrink-0 text-amber-600">· unsaved</span>}
-          </Badge>
+          <div className="flex items-center gap-1.5">
+            <Badge
+              variant="secondary"
+              className="min-w-0 shrink gap-1 truncate text-[10px]"
+              title={`linked to stored query "${linkedQuery?.name}"`}
+            >
+              <Link2 className="size-3 shrink-0" />
+              <span className="truncate">{stored.asset?.name ?? linkedQuery?.name}</span>
+              {dirtyAgainstStore && <span className="shrink-0 text-amber-600">· unsaved</span>}
+            </Badge>
+            {dirtyAgainstStore && stored.asset && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-6 gap-1 px-2 text-[10px] text-amber-700 hover:text-amber-800"
+                onClick={async () => {
+                  try {
+                    await updateQueryAsset({
+                      assetId: stored.asset.id,
+                      query,
+                      current: stored.asset.content_json,
+                    });
+                    setStoredRefresh((n) => n + 1);
+                    toast.success(`Updated stored query "${stored.asset.name}"`);
+                  } catch {
+                    toast.error("Failed to update stored query");
+                  }
+                }}
+                title={`Save changes back to stored query "${stored.asset.name}"`}
+              >
+                <Save className="size-3" /> Save to store
+              </Button>
+            )}
+          </div>
         )}
         <span className="ml-auto min-w-0 flex-1 truncate whitespace-nowrap text-right text-[11px] text-muted-foreground">
           DuckDB · SELECT-only
@@ -732,56 +762,71 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         />
 
         {/* table chips */}
-        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3.5 py-2">
-          <span className="mr-1 text-xs font-semibold text-muted-foreground">Tables</span>
-          {schema.map((t) => {
-            const active = expanded === t.name;
-            return (
-              <button
-                key={t.name}
-                type="button"
-                onClick={() => {
-                  // A double-click fires two "click" events before "dblclick",
-                  // so defer the single-click toggle and let a following
-                  // dblclick within the window cancel it.
-                  if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
-                  chipClickTimer.current = window.setTimeout(() => {
-                    setExpanded((prev) => (prev === t.name ? null : t.name));
-                    chipClickTimer.current = null;
-                  }, 220);
-                }}
-                onDoubleClick={() => {
-                  if (chipClickTimer.current != null) {
-                    clearTimeout(chipClickTimer.current);
-                    chipClickTimer.current = null;
+        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3.5 py-1.5">
+          <button
+            type="button"
+            onClick={() => setTablesVisible((v) => !v)}
+            className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+            title={tablesVisible ? "Collapse schema browser" : "Expand schema browser"}
+          >
+            {tablesVisible ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            <span>Tables</span>
+          </button>
+          {tablesVisible &&
+            schema.map((t) => {
+              const active = expanded === t.name;
+              return (
+                <button
+                  key={t.name}
+                  type="button"
+                  onClick={() => {
+                    // A double-click fires two "click" events before "dblclick",
+                    // so defer the single-click toggle and let a following
+                    // dblclick within the window cancel it.
+                    if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
+                    chipClickTimer.current = window.setTimeout(() => {
+                      setExpanded((prev) => (prev === t.name ? null : t.name));
+                      chipClickTimer.current = null;
+                    }, 220);
+                  }}
+                  onDoubleClick={() => {
+                    if (chipClickTimer.current != null) {
+                      clearTimeout(chipClickTimer.current);
+                      chipClickTimer.current = null;
+                    }
+                    insertTable(t.name);
+                  }}
+                  title="Click to browse columns, double-click to insert the table name"
+                  className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
+                  style={
+                    active
+                      ? {
+                          background: "hsl(142,60%,90%)",
+                          borderColor: "hsl(142,45%,70%)",
+                          color: "hsl(142,60%,22%)",
+                        }
+                      : undefined
                   }
-                  insertTable(t.name);
-                }}
-                title="Click to browse columns, double-click to insert the table name"
-                className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
-                style={
-                  active
-                    ? {
-                        background: "hsl(142,60%,90%)",
-                        borderColor: "hsl(142,45%,70%)",
-                        color: "hsl(142,60%,22%)",
-                      }
-                    : undefined
-                }
-              >
-                {t.name}
-              </button>
-            );
-          })}
-          <span className="ml-auto text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
-            double-click a table or column to insert
-          </span>
+                >
+                  {t.name}
+                </button>
+              );
+            })}
+          {tablesVisible && (
+            <span className="ml-auto text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
+              double-click a table or column to insert
+            </span>
+          )}
         </div>
 
         {/* column browser */}
-        {expandedTable && (
-          <div className="border-b">
-            <div className="flex items-center gap-2 px-4 pb-1 pt-2">
+        {tablesVisible && expandedTable && (
+          <div className="border-b bg-muted/10">
+            <div
+              className="flex cursor-pointer items-center gap-2 px-4 pb-1 pt-2 hover:bg-muted/30"
+              onClick={() => setExpanded(null)}
+              title="Click to collapse columns"
+            >
               <ChevronDown className="size-3.5 text-muted-foreground" />
               <span className="font-mono text-[13px] font-medium">{expandedTable.name}</span>
               <span className="text-[11px] text-muted-foreground">
@@ -793,8 +838,20 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
                     }`
                   : "schema unavailable — could not load the table list"}
               </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="ml-auto h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(null);
+                }}
+              >
+                Close
+              </Button>
             </div>
-            <div className="grid grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
+            <div className="grid max-h-[180px] grid-cols-2 gap-x-6 overflow-y-auto px-4 pb-3 pt-1">
               {expandedTable.columns.map((c) => (
                 <div
                   key={c.name}

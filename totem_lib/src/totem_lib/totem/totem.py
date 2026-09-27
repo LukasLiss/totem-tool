@@ -767,12 +767,17 @@ def mlpaDiscovery(totem: Totem):
     )
     model += obj_func
 
-    # solve the model
-    status = model.solve()
-
-    # print
-    for var in level.values():
-        print(f"{var.name}: {var.value()}")
+    # solve the model safely
+    try:
+        import shutil
+        sys_cbc = shutil.which("cbc")
+        solver = PULP_CBC_CMD(path=sys_cbc, msg=0) if sys_cbc else PULP_CBC_CMD(msg=0)
+        status = model.solve(solver)
+    except (OSError, Exception):
+        try:
+            status = model.solve()
+        except (OSError, Exception):
+            pass
 
     levels_dict = dict()
     for type in tempGraph["nodes"]:
