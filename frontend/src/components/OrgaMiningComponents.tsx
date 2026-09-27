@@ -139,13 +139,18 @@ function DashboardSwitches({ id, automaticLoading, onAutomaticLoading }: {
  *
  * It used to be a header bar above the explorer, which cost a row of height
  * in every tile; OCCN puts the same pair in the canvas's top-left corner.
+ *
+ * It sits at the bottom of the canvas's stacking order (the explorer's own
+ * panels are 12–14, its popovers 20, its tooltips 40). The title is a label
+ * and everything above it is something the user is operating, so an expanded
+ * panel covers the title rather than opening underneath it.
  */
 function WidgetTitle({ title, filterEnabled, onToggle }: {
   title: string; filterEnabled: boolean; onToggle: () => void;
 }) {
   return (
     <div
-      className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 pointer-events-none"
+      className="absolute top-3 left-1/2 -translate-x-1/2 z-[5] flex items-center gap-2 pointer-events-none"
       style={{ fontFamily: "var(--font-primary, Inter, sans-serif)" }}
     >
       <span className="text-sm font-semibold text-slate-900">{title}</span>

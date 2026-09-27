@@ -258,6 +258,10 @@ export function ControlPill({
         position: "absolute",
         bottom: 12,
         right: 12,
+        // Above the canvas's panels and the widget title, below its popovers,
+        // which open from this bar. Without an explicit value the pill paints
+        // below anything with a positive z-index, including the title.
+        zIndex: 16,
         display: "flex",
         gap: 8,
         alignItems: "center",

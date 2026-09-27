@@ -1944,6 +1944,15 @@ const EXPORT_DETAIL_OPTIONS: { value: ExportDetail; label: string }[] = [
   { value: "full", label: "Legend & settings" },
 ];
 
+/**
+ * Stacking order for hover cards.
+ *
+ * Above every piece of floating chrome — the legend and tool panels sit at
+ * 12–14, the pill's popovers and the widget title at 20 — so a tooltip is
+ * never read half-hidden behind a heading or a button.
+ */
+const TOOLTIP_Z = 40;
+
 /** Frame rates offered for the recording. Higher is smoother but slower to record. */
 const EXPORT_FPS_OPTIONS = [15, 24, 30, 60];
 function formatSeconds(total: number) {
@@ -4154,7 +4163,7 @@ function HandoverGraph({
             fontSize: 12,
             boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
             pointerEvents: "none",
-            zIndex: 10,
+            zIndex: TOOLTIP_Z,
             whiteSpace: "nowrap",
           }}>
             <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
@@ -4216,7 +4225,7 @@ function HandoverGraph({
           const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
           const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
           return (
-            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: TOOLTIP_Z, whiteSpace: "nowrap", maxWidth: TW }}>
               <div style={{ fontWeight: 600 }}>{nId}</div>
               {node != null && <div style={{ color: "#64748b", marginTop: 2 }}>Events: {node.event_count}</div>}
             </div>
@@ -4623,7 +4632,7 @@ function NodeDetailView({
             fontSize: 12,
             boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
             pointerEvents: "none",
-            zIndex: 10,
+            zIndex: TOOLTIP_Z,
             whiteSpace: "nowrap",
           }}>
             <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
@@ -4684,7 +4693,7 @@ function NodeDetailView({
           const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
           const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
           return (
-            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: 11, whiteSpace: "nowrap", maxWidth: TW }}>
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: TOOLTIP_Z, whiteSpace: "nowrap", maxWidth: TW }}>
               {nId}
             </div>
           );

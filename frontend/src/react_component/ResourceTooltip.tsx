@@ -185,7 +185,9 @@ export default function TooltipBox({
       className="orga-tooltip"
       style={{
         position: "absolute", left, top,
-        background: "white", borderRadius: 8, zIndex: 10,
+        // Above the canvas's floating chrome (legend, metrics, control pill),
+        // so a profile is never read half-hidden behind one of them.
+        background: "white", borderRadius: 8, zIndex: 40,
         border: tooltip.pinned ? "1.5px solid #6366f1" : "1px solid #e2e8f0",
         boxShadow: tooltip.pinned ? "0 4px 16px rgba(99,102,241,0.18)" : "0 4px 12px rgba(0,0,0,0.12)",
         padding: "10px 12px", minWidth: estW, maxWidth: estW,
