@@ -384,7 +384,7 @@ const DEFAULT_STATS: FilterStats = {
 };
 
 export default function FilterChipStack() {
-  const { filters, addFilter, removeFilter } = useFilterStack();
+  const { filters, addFilter, removeFilter, replaceFilters } = useFilterStack();
   const { selectedFile } = useContext(SelectedFileContext);
   const fileId: number | undefined = selectedFile?.id;
 
@@ -411,9 +411,34 @@ export default function FilterChipStack() {
 
 
   useEffect(() => {
-    useFilterStore.getState().clear();
-    useFilterStore.getState().setStats(null);
-    if (!fileId) { setObjectTypes([]); setActivities([]); return; }
+    if (!fileId) {
+      useFilterStore.getState().clear();
+      useFilterStore.getState().setStats(null);
+      setObjectTypes([]);
+      setActivities([]);
+      return;
+    }
+
+    // Restore filter preferences from sessionStorage for this fileId
+    const sessionKey = `totem_filters_${fileId}`;
+    let restoredRules: FilterRule[] | null = null;
+    try {
+      const stored = sessionStorage.getItem(sessionKey);
+      if (stored) {
+        restoredRules = JSON.parse(stored);
+      }
+    } catch {
+      restoredRules = null;
+    }
+
+    if (restoredRules && Array.isArray(restoredRules) && restoredRules.length > 0) {
+      replaceFilters(["time_range", "object_types", "activity"], restoredRules);
+      applyGlobalFilterRules(fileId, restoredRules).catch(() => {});
+    } else {
+      useFilterStore.getState().clear();
+      useFilterStore.getState().setStats(null);
+    }
+
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
       .catch(() => { toast.error("Object types could not be loaded"); setObjectTypes([]); });
@@ -424,14 +449,16 @@ export default function FilterChipStack() {
     axios.get<{ num_objects: number; num_events: number }>(
       `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
     ).then(({ data }) => {
-      useFilterStore.getState().setStats({
-        objectPct:    1,
-        eventPct:     1,
-        objectBefore: data.num_objects,
-        objectAfter:  data.num_objects,
-        eventBefore:  data.num_events,
-        eventAfter:   data.num_events,
-      });
+      if (!restoredRules || restoredRules.length === 0) {
+        useFilterStore.getState().setStats({
+          objectPct:    1,
+          eventPct:     1,
+          objectBefore: data.num_objects,
+          objectAfter:  data.num_objects,
+          eventBefore:  data.num_events,
+          eventAfter:   data.num_events,
+        });
+      }
     }).catch(() => {});
   }, [fileId]);
 
@@ -481,6 +508,13 @@ export default function FilterChipStack() {
     setApplying(true);
     try {
       await applyGlobalFilterRules(fileId, filters);
+      try {
+        if (filters.length > 0) {
+          sessionStorage.setItem(`totem_filters_${fileId}`, JSON.stringify(filters));
+        } else {
+          sessionStorage.removeItem(`totem_filters_${fileId}`);
+        }
+      } catch {}
     } catch {
       toast.error("Filter could not be applied");
     } finally {

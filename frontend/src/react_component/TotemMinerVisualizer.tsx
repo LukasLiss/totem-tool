@@ -287,17 +287,24 @@ function computeHierarchicalLayout(
     if (degree.has(e.to)) degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
   }
 
+  // Separate connected nodes from isolated (degree 0) nodes
+  const connectedNodeIds = nodeIds.filter((id) => (degree.get(id) ?? 0) > 0);
+  const isolatedNodes = nodeIds.filter((id) => (degree.get(id) ?? 0) === 0);
+
+  const activeNodes = connectedNodeIds.length > 0 ? connectedNodeIds : nodeIds;
+
   // Find hub node (node with maximum degree)
-  let hubNode = nodeIds[0];
+  let hubNode = activeNodes[0];
   let maxDeg = -1;
-  for (const [id, deg] of degree.entries()) {
+  for (const id of activeNodes) {
+    const deg = degree.get(id) ?? 0;
     if (deg > maxDeg) {
       maxDeg = deg;
       hubNode = id;
     }
   }
 
-  const nonHubNodes = nodeIds.filter((id) => id !== hubNode);
+  const nonHubNodes = activeNodes.filter((id) => id !== hubNode);
 
   // Build adjacency list for non-hub nodes (subgraph)
   const nonHubAdj = new Map<string, string[]>(nonHubNodes.map((id) => [id, []]));
@@ -341,22 +348,59 @@ function computeHierarchicalLayout(
 
   const cx = width / 2;
   const cy = height / 2;
-  const rx = Math.max(180, width * 0.32);
-  const ry = Math.max(130, height * 0.3);
-
   const positions = new Map<string, { x: number; y: number }>();
-  positions.set(hubNode, { x: cx, y: cy });
 
-  // Map sorted non-hub nodes around a circle starting from bottom-left (1.92 rad ~ 110 degrees)
-  const startAngle = 1.92;
-  const angleStep = (2 * Math.PI) / sortedNonHub.length;
+  if (sortedNonHub.length === 0) {
+    positions.set(hubNode, { x: cx, y: cy });
+  } else {
+    // Determine number of concentric/staggered rings to avoid node overlap
+    // For many nodes (like Bundestag with 30+ types and long labels),
+    // a single ring creates severe overlapping.
+    const M = sortedNonHub.length;
+    const maxW = Math.max(...sortedNonHub.map((id) => nodeWidth(id)), 120);
 
-  sortedNonHub.forEach((id, idx) => {
-    const angle = startAngle + idx * angleStep;
-    const x = cx + rx * Math.cos(angle);
-    const y = cy + ry * Math.sin(angle);
-    positions.set(id, { x, y });
-  });
+    const numRings = M <= 8 ? 1 : M <= 18 ? 2 : 3;
+    const nodesPerRing = Math.ceil(M / numRings);
+    const requiredArcPerNode = Math.max(maxW + 40, 200);
+    const ringCircumference = nodesPerRing * requiredArcPerNode;
+
+    const baseR = Math.max(width * 0.35, ringCircumference / (2 * Math.PI));
+    const baseRx = Math.max(260, baseR * 1.15);
+    const baseRy = Math.max(200, baseR * 0.85);
+
+    positions.set(hubNode, { x: cx, y: cy });
+
+    const startAngle = 1.92;
+    const angleStep = (2 * Math.PI) / M;
+
+    sortedNonHub.forEach((id, idx) => {
+      const ring = numRings > 1 ? idx % numRings : 0;
+      const ringScale = 1 + ring * 0.4;
+      const rx = baseRx * ringScale;
+      const ry = baseRy * ringScale;
+
+      const angle = startAngle + idx * angleStep;
+      const x = cx + rx * Math.cos(angle);
+      const y = cy + ry * Math.sin(angle);
+      positions.set(id, { x, y });
+    });
+  }
+
+  // Position any isolated (degree 0) nodes in a clean row below the graph
+  if (connectedNodeIds.length > 0 && isolatedNodes.length > 0) {
+    let maxY = cy;
+    positions.forEach((p) => {
+      if (p.y > maxY) maxY = p.y;
+    });
+    const isolatedStartY = maxY + 140;
+    const totalIsoW = isolatedNodes.reduce((acc, id) => acc + nodeWidth(id) + 20, 0);
+    let curX = cx - totalIsoW / 2;
+    isolatedNodes.forEach((id) => {
+      const w = nodeWidth(id);
+      positions.set(id, { x: curX + w / 2, y: isolatedStartY });
+      curX += w + 20;
+    });
+  }
 
   return positions;
 }

@@ -105,10 +105,12 @@ function EventChart({
   distribution,
   afterDate,
   beforeDate,
+  onSelectPeriod,
 }: {
   distribution: Distribution;
   afterDate: string;
   beforeDate: string;
+  onSelectPeriod?: (period: string) => void;
 }) {
   if (distribution.length === 0) return null;
 
@@ -152,8 +154,14 @@ function EventChart({
               width={Math.max(barW - 2, 1)}
               height={h}
               rx={1}
-              style={{ fill: inRange ? "var(--primary)" : "var(--border)" }}
-            />
+              style={{
+                fill: inRange ? "var(--primary)" : "var(--border)",
+                cursor: onSelectPeriod ? "pointer" : "default",
+              }}
+              onClick={() => onSelectPeriod?.(d.period)}
+            >
+              <title>{`${periodLabel(d.period)}: ${d.count.toLocaleString()} events (click to filter)`}</title>
+            </rect>
           );
         })}
         <text
@@ -584,6 +592,14 @@ export function FilterConfigDialog({
                     distribution={distribution}
                     afterDate={afterDate}
                     beforeDate={beforeDate}
+                    onSelectPeriod={(period) => {
+                      const [yStr, mStr] = period.split("-");
+                      const y = parseInt(yStr, 10);
+                      const m = parseInt(mStr, 10);
+                      const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+                      setAfterDate(`${period}-01`);
+                      setBeforeDate(`${period}-${String(lastDay).padStart(2, "0")}`);
+                    }}
                   />
                 )}
 
@@ -774,7 +790,7 @@ export function FilterConfigDialog({
                 color: "var(--primary-foreground)",
               }}
             >
-              Apply
+              Done
             </Button>
           </div>
         </DialogFooter>
