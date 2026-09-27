@@ -134,6 +134,126 @@ const SORT_LABELS: Record<SortCol, string> = {
 };
 /** Duration columns — sorted numerically and right aligned. */
 const TIME_COLS: SortCol[] = ["avg_time", "min_time", "max_time"];
+
+/**
+ * Resource search with keyboard navigation.
+ *
+ * Owns its own query and highlight state so the dashboard widget and the
+ * analysis page can each drop it into their own layout — `inline` picks
+ * between a list in the flow (inside a floating panel, which clips a
+ * popover) and one that floats over the page.
+ */
+function NodeSearch({
+  nodes, typeColorMap, onSelect, inline = false, className, width,
+}: {
+  nodes: HandoverNode[];
+  typeColorMap: Record<string, string>;
+  onSelect: (id: string) => void;
+  inline?: boolean;
+  className?: string;
+  width?: number;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  /**
+   * The row Enter will pick. Only the arrow keys move it.
+   *
+   * Hover is deliberately not the same thing: it is a lighter CSS-only tint
+   * on whatever the cursor is over. Letting hover move this made the
+   * highlight jump back to the keyboard's row when the mouse left, and left
+   * Enter pointing at whatever was hovered last.
+   */
+  const [active, setActive] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return nodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
+  }, [query, nodes]);
+
+  // A new query invalidates the old highlight position.
+  useEffect(() => { setActive(0); }, [query]);
+
+  // Follow the keyboard when arrowing past the visible part of the list.
+  useEffect(() => {
+    (listRef.current?.children[active] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const choose = (id: string) => {
+    onSelect(id);
+    setQuery("");
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { setOpen(false); return; }
+    if (matches.length === 0) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive(i => (i + step + matches.length) % matches.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(matches[active].id);
+    }
+  };
+
+  const showList = open && query.trim() !== "";
+  const listClass = inline
+    ? "mt-1.5 rounded-md border overflow-y-auto"
+    : "absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto";
+
+  return (
+    <div ref={rootRef} className={inline ? className : `relative ${className ?? ""}`} style={width ? { width } : undefined}>
+      {!inline && (
+        <Search
+          className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none z-10"
+          style={{ width: 14, height: 14 }}
+        />
+      )}
+      <Input
+        className={inline ? "h-8 text-xs" : "h-8 pl-7 pr-3 text-xs w-72"}
+        placeholder="Find resource…"
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+      />
+      {showList && matches.length === 0 && (
+        <p className="mt-1.5 px-1 text-xs text-muted-foreground">No matching resource.</p>
+      )}
+      {showList && matches.length > 0 && (
+        <div ref={listRef} className={listClass} style={{ maxHeight: inline ? 200 : 260 }}>
+          {matches.map((n, i) => (
+            <button
+              key={n.id}
+              // Two weights, two meanings: the solid one is what Enter picks,
+              // the tint is only where the cursor happens to be.
+              className={`w-full text-left px-2 py-1.5 text-xs flex items-center gap-2 truncate ${
+                i === active ? "bg-accent" : "hover:bg-muted"
+              }`}
+              onMouseDown={e => { e.preventDefault(); choose(n.id); }}
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
+              <span className="truncate">{n.id}</span>
+              <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 type SortDir = "asc" | "desc";
 
 /* ── API helpers ─────────────────────────────────────────────── */
@@ -270,9 +390,6 @@ export default function OCHandoverExplorer({
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   const [visibleGraphNodes, setVisibleGraphNodes] = useState<HandoverNode[]>([]);
-  const [nodeSearch, setNodeSearch] = useState("");
-  const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
-  const nodeSearchRef = useRef<HTMLDivElement>(null);
   const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const graphViewBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const { clusterInfo } = useCluster();
@@ -465,16 +582,6 @@ export default function OCHandoverExplorer({
     }, 50);
     return () => clearTimeout(id);
   }, [status, lockedHeight]);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (nodeSearchRef.current && !nodeSearchRef.current.contains(e.target as Node)) {
-        setNodeSearchOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   // Phase 2: compute handover when triggered
   useEffect(() => {
@@ -974,42 +1081,13 @@ export default function OCHandoverExplorer({
                 {/* The matches sit in the panel's own flow rather than in an
                     absolutely positioned popover: the panel scrolls its
                     overflow, so a popover would be clipped by it. */}
-                <div ref={nodeSearchRef} style={{ width: 220 }}>
-                  <Input
-                    className="h-8 text-xs"
-                    placeholder="Find resource…"
-                    value={nodeSearch}
-                    onChange={e => { setNodeSearch(e.target.value); setNodeSearchOpen(true); }}
-                    onFocus={() => setNodeSearchOpen(true)}
-                  />
-                  {nodeSearchOpen && nodeSearch.trim() !== "" && (() => {
-                    const q = nodeSearch.trim().toLowerCase();
-                    const matches = visibleGraphNodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
-                    if (matches.length === 0) {
-                      return <p className="mt-1.5 px-1 text-xs text-muted-foreground">No matching resource.</p>;
-                    }
-                    return (
-                      <div className="mt-1.5 rounded-md border overflow-y-auto" style={{ maxHeight: 200 }}>
-                        {matches.map(n => (
-                          <button
-                            key={n.id}
-                            className="w-full text-left px-2 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
-                            onMouseDown={e => {
-                              e.preventDefault();
-                              setSelectedNode(n.id);
-                              setNodeSearch("");
-                              setNodeSearchOpen(false);
-                            }}
-                          >
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
-                            <span className="truncate">{n.id}</span>
-                            <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
+                <NodeSearch
+                  inline
+                  width={220}
+                  nodes={visibleGraphNodes}
+                  typeColorMap={typeColorMap}
+                  onSelect={setSelectedNode}
+                />
                 </FloatingPanel>
                 {viewSelect}
               </div>
@@ -1538,41 +1616,12 @@ export default function OCHandoverExplorer({
                 </button>
               )}
               {viewMode === "graph" && (
-                <div ref={nodeSearchRef} className="relative shrink-0 ml-auto">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ width: 14, height: 14 }} />
-                  <Input
-                    className="h-8 pl-7 pr-3 text-xs w-72"
-                    placeholder="Find resource…"
-                    value={nodeSearch}
-                    onChange={e => { setNodeSearch(e.target.value); setNodeSearchOpen(true); }}
-                    onFocus={() => setNodeSearchOpen(true)}
-                  />
-                  {nodeSearchOpen && nodeSearch.trim() !== "" && (() => {
-                    const q = nodeSearch.trim().toLowerCase();
-                    const matches = visibleGraphNodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
-                    if (matches.length === 0) return null;
-                    return (
-                      <div className="absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto" style={{ maxHeight: 260 }}>
-                        {matches.map(n => (
-                          <button
-                            key={n.id}
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent flex items-center gap-2 truncate"
-                            onMouseDown={e => {
-                              e.preventDefault();
-                              setSelectedNode(n.id);
-                              setNodeSearch("");
-                              setNodeSearchOpen(false);
-                            }}
-                          >
-                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
-                            <span className="truncate">{n.id}</span>
-                            <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
+                <NodeSearch
+                  className="shrink-0 ml-auto"
+                  nodes={visibleGraphNodes}
+                  typeColorMap={typeColorMap}
+                  onSelect={setSelectedNode}
+                />
               )}
             </div>
 
