@@ -514,7 +514,9 @@ export default function FilterChipStack() {
         } else {
           sessionStorage.removeItem(`totem_filters_${fileId}`);
         }
-      } catch {}
+      } catch {
+        /* ignore storage quota or serialization errors */
+      }
     } catch {
       toast.error("Filter could not be applied");
     } finally {
