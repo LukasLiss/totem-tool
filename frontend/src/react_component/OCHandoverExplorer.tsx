@@ -119,7 +119,21 @@ type EventLogData = {
   }[];
 };
 type Normalization = HandoverNormalization;
-type SortCol = "source" | "target" | "bo_type" | "count" | "weight";
+type SortCol =
+  | "source" | "target" | "bo_type" | "count" | "weight"
+  | "avg_time" | "min_time" | "max_time";
+const SORT_LABELS: Record<SortCol, string> = {
+  source: "Source",
+  target: "Target",
+  bo_type: "Business object type",
+  count: "Count",
+  weight: "Weight",
+  avg_time: "Avg time",
+  min_time: "Min time",
+  max_time: "Max time",
+};
+/** Duration columns — sorted numerically and right aligned. */
+const TIME_COLS: SortCol[] = ["avg_time", "min_time", "max_time"];
 type SortDir = "asc" | "desc";
 
 /* ── API helpers ─────────────────────────────────────────────── */
@@ -687,12 +701,23 @@ export default function OCHandoverExplorer({
 
   const sortedEdges = useMemo(() => {
     if (!data) return [];
+    // An edge with no timing measured sorts last whichever way the column
+    // runs, rather than pretending to be the fastest.
+    const timed = (v: number | null | undefined) => (v == null ? null : v);
     return [...data.edges].sort((a, b) => {
       let cmp = 0;
       if (sortCol === "source") cmp = a.source.localeCompare(b.source);
       else if (sortCol === "target") cmp = a.target.localeCompare(b.target);
       else if (sortCol === "bo_type") cmp = a.businessobject_type.localeCompare(b.businessobject_type);
       else if (sortCol === "count") cmp = a.raw_weight - b.raw_weight;
+      else if (sortCol === "avg_time" || sortCol === "min_time" || sortCol === "max_time") {
+        const av = timed(a[sortCol]);
+        const bv = timed(b[sortCol]);
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        cmp = av - bv;
+      }
       else cmp = a.weight - b.weight;
       return sortDir === "desc" ? -cmp : cmp;
     });
@@ -714,29 +739,27 @@ export default function OCHandoverExplorer({
     <table className="w-full text-sm">
       <thead className="sticky top-0 z-10">
         <tr className="border-b bg-muted">
-          {(["source", "target", "bo_type", "count", "weight"] as SortCol[]).map((col, i) => {
-            const labels: Record<SortCol, string> = {
-              source: "Source", target: "Target", bo_type: "Business object type",
-              count: "Count", weight: "Weight",
-            };
+          {(["source", "target", "bo_type", "count", "weight", "avg_time", "min_time", "max_time"] as SortCol[]).map((col) => {
             const active = sortCol === col;
             const Icon = active ? (sortDir === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
+            // Durations read as quantities, so they hang off the right edge
+            // where their length tracks their magnitude.
+            const alignRight = TIME_COLS.includes(col);
             return (
               <th
                 key={col}
                 onClick={() => handleSort(col)}
-                className={`px-3 py-2 text-left font-medium cursor-pointer select-none hover:bg-muted/80${i === 4 ? " w-40" : ""}`}
+                className={`px-3 py-2 font-medium cursor-pointer select-none hover:bg-muted/80${alignRight ? " text-right" : " text-left"}${col === "weight" ? " w-40" : ""}`}
               >
-                <div className="flex items-center gap-1">
-                  {labels[col]}
+                {/* Headers wrap: keeping them on one line costs the weight
+                    bar the width it needs and collapses it to a dot. */}
+                <div className={`flex items-center gap-1${alignRight ? " justify-end" : ""}`}>
+                  {SORT_LABELS[col]}
                   <Icon className={`h-3 w-3 flex-shrink-0${active ? "" : " opacity-30"}`} />
                 </div>
               </th>
             );
           })}
-          <th className="px-3 py-2 text-left font-medium">Avg time</th>
-          <th className="px-3 py-2 text-left font-medium">Min time</th>
-          <th className="px-3 py-2 text-left font-medium">Max time</th>
         </tr>
       </thead>
       <tbody>
@@ -747,7 +770,7 @@ export default function OCHandoverExplorer({
             : (weightDenominators._global ?? 1);
           const barPct = denom > 0 ? (edge.weight / denom) * 100 : 0;
           return (
-            <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+            <tr key={i} className="border-b hover:bg-muted/30">
               <td className="px-3 py-2 font-mono">{edge.source}</td>
               <td className="px-3 py-2 font-mono">{edge.target}</td>
               <td className="px-3 py-2">
@@ -758,15 +781,17 @@ export default function OCHandoverExplorer({
               <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-2 bg-muted rounded overflow-hidden">
+                  {/* The minimum stops a narrow column shrinking the track to
+                      a dot, where it reads as a bullet rather than a bar. */}
+                  <div className="flex-1 min-w-[40px] h-2 bg-muted rounded overflow-hidden">
                     <div className="h-full rounded" style={{ width: `${barPct}%`, background: color }} />
                   </div>
                   <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
                 </div>
               </td>
-              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.avg_time)}</td>
-              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.min_time)}</td>
-              <td className="px-3 py-2 tabular-nums text-xs">{fmtDuration(edge.max_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.avg_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.min_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.max_time)}</td>
             </tr>
           );
         })}
@@ -1729,7 +1754,7 @@ function EventLogTable({
           </thead>
           <tbody>
             {visibleEvents.map((ev, i) => (
-              <tr key={i} className="border-b last:border-0 hover:bg-muted/30">
+              <tr key={i} className="border-b hover:bg-muted/30">
                 <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">{ev.event_id}</td>
                 <td className="px-3 py-2 whitespace-nowrap">{ev.activity}</td>
                 <td className="px-3 py-2 font-mono text-xs tabular-nums whitespace-nowrap text-muted-foreground">{fmt(ev.timestamp)}</td>

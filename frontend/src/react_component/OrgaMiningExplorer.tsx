@@ -819,7 +819,7 @@ function ProfileTable({ data, maxHeight, fill = false }: {
                         </thead>
                         <tbody>
                           {visibleResources.map((resource, ri) => (
-                            <tr key={ri} className="border-b last:border-0 hover:bg-muted/30">
+                            <tr key={ri} className="border-b hover:bg-muted/30">
                               <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">
                                 {resource}
                               </td>
