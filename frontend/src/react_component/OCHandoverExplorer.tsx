@@ -13,7 +13,7 @@ import {
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -982,9 +982,12 @@ export default function OCHandoverExplorer({
           }
 
           if (selectedNode) {
+            // Same insets as the table and log views, so switching between
+            // them does not shift the content around inside the tile.
             return (
-              <div className="absolute inset-0 overflow-auto">
+              <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
                 <NodeDetailView
+                  embedded
                   selectedNode={selectedNode}
                   data={data}
                   typeColorMap={typeColorMap}
@@ -1031,7 +1034,7 @@ export default function OCHandoverExplorer({
                         variant={bindingsData ? "secondary" : "outline"}
                         size="icon"
                         className="rounded-full h-9 w-9"
-                        title={bindingsData ? "Hide C-net bindings" : "Show C-net bindings"}
+                        title={bindingsData ? "Hide bindings" : "Show bindings"}
                         disabled={bindingsStatus === "loading"}
                         onClick={bindingsData
                           ? () => { setBindingsData(null); setBindingsStatus("idle"); }
@@ -1039,7 +1042,7 @@ export default function OCHandoverExplorer({
                       >
                         {bindingsStatus === "loading"
                           ? <Loader2 className="h-4 w-4 animate-spin" />
-                          : <Network className="h-4 w-4" />}
+                          : <Waypoints className="h-4 w-4" />}
                       </Button>
                     )}
                     {clusterInfo && (
@@ -1612,7 +1615,7 @@ export default function OCHandoverExplorer({
                 >
                   {bindingsStatus === "loading"
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : <><Network className="h-3.5 w-3.5" />{!bindingsData && <span>Bindings</span>}</>}
+                    : <><Waypoints className="h-3.5 w-3.5" />{!bindingsData && <span>Bindings</span>}</>}
                 </button>
               )}
               {viewMode === "graph" && (
@@ -3676,13 +3679,13 @@ function HandoverGraph({
         {/* Button bar */}
         <ControlPill>
           {pillLeading}
-          <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9">
+          <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9" title="Zoom in">
             <PlusIcon className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" size="icon" onClick={zoomOut} className="rounded-full h-9 w-9">
+          <Button type="button" variant="outline" size="icon" onClick={zoomOut} className="rounded-full h-9 w-9" title="Zoom out">
             <MinusIcon className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9">
+          <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9" title="Fit graph to view">
             <ScanIcon className="h-4 w-4" />
           </Button>
           <Button
@@ -3744,7 +3747,7 @@ function HandoverGraph({
               size="icon"
               onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); setTimeMetricOpen(false); setDownloadOpen(false); }}
               className="rounded-full h-9 w-9"
-              title="Filter nodes"
+              title="Filter"
             >
               <SlidersHorizontal className="h-4 w-4" />
             </Button>
@@ -4386,12 +4389,16 @@ function NodeDetailView({
   typeColorMap,
   onBack,
   clusterInfo,
+  embedded = false,
 }: {
   selectedNode: string;
   data: HandoverData;
   typeColorMap: Record<string, string>;
   onBack: () => void;
   clusterInfo?: ClusterInfo;
+  /** In a dashboard tile: fill the host box and drop the legend, which the
+   *  canvas already carries in its floating object-types panel. */
+  embedded?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -4414,10 +4421,15 @@ function NodeDetailView({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    // clientWidth/clientHeight, not getBoundingClientRect: the latter is the
+    // border box, so on this bordered container it reported 2px more than the
+    // drawable area. Both SVGs were then sized 2px too large — the scroll
+    // content always overflowed by 2px, and the absolutely positioned overlay
+    // painted its last 2px on top of the border, which is the arrowhead
+    // crossing the rounded edge.
     const update = () => {
-      const r = el.getBoundingClientRect();
-      setWidth(r.width || 700);
-      setDetailH(r.height || 400);
+      setWidth(el.clientWidth || 700);
+      setDetailH(el.clientHeight || 400);
     };
     update();
     const ro = new ResizeObserver(update);
@@ -4557,7 +4569,9 @@ function NodeDetailView({
     });
   });
 
-  const lbl = (id: string) => id.length > 11 ? id.slice(0, 11) + "…" : id;
+  // Same truncation the main graph uses; the clip paths below are the other
+  // half of it, catching anything still too wide for the circle.
+  const lbl = (id: string) => id.length > 9 ? id.slice(0, 8) + "…" : id;
 
   const nodeHandlers = (nodeId: string) => ({
     onMouseEnter: (e: React.MouseEvent<SVGGElement>) => {
@@ -4588,7 +4602,7 @@ function NodeDetailView({
   ].filter(Boolean) as string[])];
 
   return (
-    <div className="flex flex-col gap-3 h-full">
+    <div className={`flex flex-col gap-3 ${embedded ? "flex-1 min-h-0" : "h-full"}`}>
       <div className="flex items-center justify-between gap-2 flex-shrink-0">
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={onBack}>← Back</Button>
@@ -4616,6 +4630,13 @@ function NodeDetailView({
           onScroll={e => setScrollTop(e.currentTarget.scrollTop)}
         >
           <svg width={width} height={svgHeight} style={{ display: "block" }}>
+            <defs>
+              {/* Its own id: the main graph is still mounted (just hidden)
+                  while the ego view is open, so a shared one would clash. */}
+              <clipPath id="ego-list-label-clip">
+                <circle r={NODE_R - 1} />
+              </clipPath>
+            </defs>
             {counterpartIds.map((cpId, i) => {
               const cy = midYOf(i);
               const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
@@ -4624,11 +4645,13 @@ function NodeDetailView({
                   <g transform={`translate(${LEFT_X},${cy})`} {...nodeHandlers(cpId)}>
                     <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                     <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                      clipPath="url(#ego-list-label-clip)"
                       style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
                   </g>
                   <g transform={`translate(${RIGHT_X},${cy})`} {...nodeHandlers(cpId)}>
                     <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
                     <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                      clipPath="url(#ego-list-label-clip)"
                       style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
                   </g>
                 </g>
@@ -4687,9 +4710,15 @@ function NodeDetailView({
           ))}
 
           {/* Ego node — fixed at vertical center of the overlay */}
+          <defs>
+            <clipPath id="ego-node-label-clip">
+              <circle r={NODE_R - 1} />
+            </clipPath>
+          </defs>
           <g transform={`translate(${MID_X},${OEY})`} style={{ pointerEvents: "auto" }} {...nodeHandlers(selectedNode)}>
             <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
             <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+              clipPath="url(#ego-node-label-clip)"
               style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
           </g>
         </svg>
@@ -4774,31 +4803,34 @@ function NodeDetailView({
         })()}
       </div>
 
-      {/* Legend */}
-      <div className="flex gap-8 text-xs flex-wrap flex-shrink-0">
-        <div>
-          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Resources</p>
-          <div className="space-y-1">
-            {nodeTypesPresent.map(t => (
-              <div key={t} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
-                <span>{t}</span>
-              </div>
-            ))}
+      {/* Legend — omitted in a tile, where the canvas's own object-types
+          panel already covers it and the height is better spent on the graph. */}
+      {!embedded && (
+        <div className="flex gap-8 text-xs flex-wrap flex-shrink-0">
+          <div>
+            <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Resources</p>
+            <div className="space-y-1">
+              {nodeTypesPresent.map(t => (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                  <span>{t}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Handover object type</p>
+            <div className="space-y-1">
+              {allBoTypes.map(t => (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                  <span>{t}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-        <div>
-          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Handover object type</p>
-          <div className="space-y-1">
-            {allBoTypes.map(t => (
-              <div key={t} className="flex items-center gap-2">
-                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
-                <span>{t}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
