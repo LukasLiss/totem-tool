@@ -10,9 +10,6 @@
 export type Size = { width: number; height: number };
 export type ViewBox = { x: number; y: number; w: number; h: number };
 
-/** Below this rendered width a FloatingPanel starts collapsed to its chip. */
-export const NARROW_CANVAS_WIDTH = 520;
-
 /**
  * Fit a bounding box into a viewBox with the given aspect ratio.
  *

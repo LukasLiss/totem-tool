@@ -29,7 +29,6 @@ import {
   MetricChips,
 } from "@/react_component/orgamining/canvas";
 import {
-  NARROW_CANVAS_WIDTH,
   fitBoxToAspect,
   pointsBounds,
   type Size,
@@ -382,7 +381,6 @@ export default function OrgaMiningExplorer({
           // The tile has not been laid out yet; drawing against a zero box
           // would flash a collapsed graph before the first real measurement.
           if (size.width === 0 || size.height === 0) return null;
-          const narrow = size.width < NARROW_CANVAS_WIDTH;
           if (!fileId) {
             return <CanvasMessage>Select an event log to profile its resources.</CanvasMessage>;
           }
@@ -437,7 +435,6 @@ export default function OrgaMiningExplorer({
               clusterColors={CLUSTER_COLORS}
               showClusters={data.cluster_labels !== undefined}
               embedded
-              narrow={narrow}
               topRight={viewSelect}
             />
           );
@@ -929,7 +926,6 @@ function ResourceGraph({
   clusterColors,
   showClusters,
   embedded = false,
-  narrow = false,
   topRight,
 }: {
   data: ProfileMatrixData;
@@ -939,8 +935,6 @@ function ResourceGraph({
   showClusters: boolean;
   /** Fill the parent and float every control over the canvas (dashboard tile). */
   embedded?: boolean;
-  /** Start the floating panels collapsed — the tile is too narrow for them. */
-  narrow?: boolean;
   /** Rendered beside the metric chips, top right (the explorer's view select). */
   topRight?: React.ReactNode;
 }) {
@@ -1552,7 +1546,9 @@ function ResourceGraph({
           <>
             <FloatingPanel
               title="Object Types"
-              narrow={narrow}
+              // Always starts collapsed: the chip already carries the count, and
+              // expanded it covers a corner of the graph.
+              narrow
               collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
               style={{ position: "absolute", top: 12, left: 12, zIndex: 8 }}
             >

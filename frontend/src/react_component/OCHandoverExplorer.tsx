@@ -41,7 +41,6 @@ import {
 } from "@/react_component/orgamining/canvas";
 import { GLASS_SURFACE } from "@/react_component/orgamining/canvasSurface";
 import {
-  NARROW_CANVAS_WIDTH,
   fitBoxToAspect,
   pointsBounds,
   type Size,
@@ -924,7 +923,6 @@ export default function OCHandoverExplorer({
           // The tile has not been laid out yet; drawing against a zero box
           // would flash a collapsed graph before the first real measurement.
           if (size.width === 0 || size.height === 0) return null;
-          const narrow = size.width < NARROW_CANVAS_WIDTH;
           if (!fileId) {
             return <CanvasMessage>Select an event log to see who hands work over.</CanvasMessage>;
           }
@@ -1032,7 +1030,6 @@ export default function OCHandoverExplorer({
                 scrubRef={animScrubRef}
                 bindingsData={bindingsData}
                 embedded
-                narrow={narrow}
                 renderedSize={size}
                 pillLeading={
                   <>
@@ -2105,7 +2102,6 @@ function HandoverGraph({
   scrubRef,
   bindingsData,
   embedded = false,
-  narrow = false,
   pillLeading,
   renderedSize,
 }: {
@@ -2133,8 +2129,6 @@ function HandoverGraph({
   bindingsData?: BindingPattern[] | null;
   /** Fill the parent and float every control over the canvas (dashboard tile). */
   embedded?: boolean;
-  /** Start the floating panels collapsed — the tile is too narrow for them. */
-  narrow?: boolean;
   /** Rendered at the start of the control pill (the explorer's view switcher). */
   pillLeading?: React.ReactNode;
   /** Size to render at; when omitted the graph measures its own container. */
@@ -3779,7 +3773,9 @@ function HandoverGraph({
         {embedded && legendTypes.length > 0 && (
           <FloatingPanel
             title="Object types"
-            narrow={narrow}
+            // Always starts collapsed: the chip already carries the count, and
+            // expanded it covers a corner of the graph.
+            narrow
             collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
             style={{ position: "absolute", top: 12, left: 12, zIndex: 12 }}
           >
