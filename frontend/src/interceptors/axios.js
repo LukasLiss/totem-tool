@@ -126,7 +126,10 @@ axios.interceptors.request.use((config) => {
     url.includes("/api/new-ocdfg/") ||
     url.includes("/api/variants/") ||
     url.includes("/api/occn/") ||
-    url.includes("/api/ocpn/");
+    url.includes("/api/ocpn/") ||
+    url.includes("/api/handover/") ||
+    url.includes("/api/profile-matrix/") ||
+    url.includes("/api/event-log/");
   if (isApplied && isDataEndpoint) {
     const filterParams = buildFilterParams(appliedRules);
     config.params = { ...config.params, ...filterParams };

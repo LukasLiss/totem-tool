@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table
 from . import views_ocel_editor
 from . import views_process_executions
 
@@ -23,6 +23,9 @@ urlpatterns = [
     path("files/<int:pk>/process_executions/", views_process_executions.process_executions, name="process-executions"),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
+    path("handover/", ochandover, name="handover"),
+    path("profile-matrix/", profile_matrix, name="profile_matrix"),
+    path("event-log/", event_log_table, name="event_log_table"),
     path("playout/", playout, name="playout"),
     path("playout/export-ocel/", playout_export_ocel, name="playout-export-ocel"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
