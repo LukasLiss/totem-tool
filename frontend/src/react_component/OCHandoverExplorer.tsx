@@ -823,7 +823,23 @@ export default function OCHandoverExplorer({
     setSelectedMlpaLevel(null);
   };
 
+  /**
+   * Resource object types the organizational units are built from; empty
+   * unless grouping is on. While it is, these are dictated by the profiling
+   * result and cannot be claimed as business object types — the resource
+   * selector is already locked, and this closes the other side of the door.
+   */
+  const clusterResourceTypes = useMemo(
+    () => (useClusters && clusterInfo
+      ? new Set(Object.values(clusterInfo.resourceObjectTypes))
+      : new Set<string>()),
+    [useClusters, clusterInfo],
+  );
+
   const toggleBoType = (t: string) => {
+    // Adding one here would drop it from the resource types below, breaking
+    // the match the grouping depends on.
+    if (clusterResourceTypes.has(t)) return;
     setBoTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
     setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
     setSelectedMlpaLevel(null);
@@ -1474,7 +1490,14 @@ export default function OCHandoverExplorer({
         {fileId && objectTypes.length > 0 && method === "oc" && (
           <div className="flex gap-4 flex-wrap justify-center">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
-            <TypeSelector title="Business object types" types={objectTypes} selected={boTypes} onToggle={toggleBoType} />
+            <TypeSelector
+              title="Business object types"
+              types={objectTypes}
+              selected={boTypes}
+              onToggle={toggleBoType}
+              lockedTypes={clusterResourceTypes}
+              lockedHint="Used as a resource type by the organizational units"
+            />
           </div>
         )}
 
@@ -1741,18 +1764,36 @@ function fmtDuration(seconds: number | null | undefined): string {
 
 /* ── TypeSelector ───────────────────────────────────────────── */
 function TypeSelector({
-  title, types, selected, onToggle, disabled = false,
-}: { title: string; types: string[]; selected: Set<string>; onToggle: (t: string) => void; disabled?: boolean }) {
+  title, types, selected, onToggle, disabled = false, lockedTypes, lockedHint,
+}: {
+  title: string;
+  types: string[];
+  selected: Set<string>;
+  onToggle: (t: string) => void;
+  disabled?: boolean;
+  /** Individual types that cannot be toggled while the rest stay editable. */
+  lockedTypes?: Set<string>;
+  /** Why those types are locked, shown on hover. */
+  lockedHint?: string;
+}) {
   return (
     <div className={`border rounded-md p-3 min-w-[180px] ${disabled ? "opacity-60" : ""}`}>
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
       <div className="space-y-1.5">
-        {types.map(t => (
-          <div key={t} className="flex items-center gap-2">
-            <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={disabled} />
-            <Label htmlFor={`${title}-${t}`} className={`text-sm ${disabled ? "cursor-default" : "cursor-pointer"}`}>{t}</Label>
-          </div>
-        ))}
+        {types.map(t => {
+          const locked = disabled || (lockedTypes?.has(t) ?? false);
+          return (
+            <div key={t} className="flex items-center gap-2" title={!disabled && lockedTypes?.has(t) ? lockedHint : undefined}>
+              <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={locked} />
+              <Label
+                htmlFor={`${title}-${t}`}
+                className={`text-sm ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
+              >
+                {t}
+              </Label>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

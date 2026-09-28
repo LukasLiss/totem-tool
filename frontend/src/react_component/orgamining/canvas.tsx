@@ -251,6 +251,13 @@ export function ControlPill({
   children: React.ReactNode;
   style?: React.CSSProperties;
 }) {
+  // Every control in the profiling pill is conditional — reset zoom, the
+  // cluster overlay, the relationship edges — so with none of them applicable
+  // the bar rendered as an empty rounded box that read as a broken control.
+  // toArray drops the `false`s those conditions leave behind, which
+  // Children.count would have counted as children.
+  if (React.Children.toArray(children).length === 0) return null;
+
   return (
     <div
       onPointerDown={(e) => e.stopPropagation()}
