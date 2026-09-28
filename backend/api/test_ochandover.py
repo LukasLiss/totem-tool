@@ -208,12 +208,18 @@ class OrganizationalMiningEndpointTests(APITestCase):
         with self.settings():
             # A second identical request is served from the results cache and
             # never touches the registry lock.
+            from importlib import import_module
             from unittest.mock import patch
-            with patch("api.views.ochandover._with_ocel_db") as locked:
+            # The module has to be resolved explicitly: api/views/__init__.py
+            # re-exports the view function `ochandover`, which shadows the
+            # submodule of the same name, so patch("api.views.ochandover.…")
+            # walks into the function and finds no _with_ocel_db on it.
+            ochandover_views = import_module("api.views.ochandover")
+            with patch.object(ochandover_views, "_with_ocel_db") as locked:
                 self.assertEqual(self._handover().json(), first)
                 locked.assert_not_called()
             # Different parameters compute again.
-            with patch("api.views.ochandover._with_ocel_db", wraps=views._with_ocel_db) as locked:
+            with patch.object(ochandover_views, "_with_ocel_db", wraps=views._with_ocel_db) as locked:
                 self.assertEqual(self._handover(max_gap=0).status_code, 200)
                 locked.assert_called_once()
 
