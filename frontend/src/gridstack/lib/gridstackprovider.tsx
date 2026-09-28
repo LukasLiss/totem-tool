@@ -356,11 +356,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           show_controls: node.show_controls ?? true,
           automatic_loading: node.automatic_loading ?? false,
-          method: node.method ?? 'oc',
           resource_types: node.resource_types ?? [],
           businessobject_types: node.businessobject_types ?? [],
-          case_type: node.case_type ?? '',
-          flat_resource_type: node.flat_resource_type ?? '',
           max_gap: node.max_gap ?? null,
           normalization: node.normalization ?? 'by_arcs_in_eog',
           normalization_scope: node.normalization_scope ?? 'global',
@@ -562,11 +559,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             x_label: item.x_label,
             y_label: item.y_label,
             // OCHandoverComponent / ResourceProfilingComponent
-            method: item.method,
             resource_types: item.resource_types,
             businessobject_types: item.businessobject_types,
-            case_type: item.case_type,
-            flat_resource_type: item.flat_resource_type,
             max_gap: item.max_gap,
             normalization: item.normalization,
             normalization_scope: item.normalization_scope,
@@ -659,11 +653,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.x_label = item.x_label;
               node.y_label = item.y_label;
               // OCHandoverComponent / ResourceProfilingComponent
-              node.method = item.method;
               node.resource_types = item.resource_types;
               node.businessobject_types = item.businessobject_types;
-              node.case_type = item.case_type;
-              node.flat_resource_type = item.flat_resource_type;
               node.max_gap = item.max_gap;
               node.normalization = item.normalization;
               node.normalization_scope = item.normalization_scope;

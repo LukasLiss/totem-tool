@@ -25,7 +25,7 @@ from ._ocel_db import _filter_shadow, _object_types, _with_ocel_db
 
 VALID_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
 VALID_NORMALIZATION_SCOPES = ("global", "per_bo_type")
-VALID_METHODS = ("oc", "flattened")
+VALID_METHODS = ("oc",)
 VALID_FEATURE_GROUPS = (
     "activity_fractions",
     "cooccurrence_fractions",
@@ -138,16 +138,6 @@ def _parse_handover_params(p, cluster_map) -> dict:
 
     max_gap = _int_param(p, "max_gap", default=None, minimum=0)
 
-    if method == "flattened":
-        case_type = p.get("case_type", "")
-        resource_type = p.get("resource_type", "")
-        if not case_type or not resource_type:
-            raise _BadRequest("Missing case_type or resource_type")
-        return {
-            "method": method,
-            "kwargs": {"case_type": case_type, "resource_type": resource_type, "max_gap": max_gap},
-        }
-
     resource_types = _csv_list(p.get("resource_types"))
     businessobject_types = _csv_list(p.get("businessobject_types"))
     if not resource_types or not businessobject_types:
@@ -247,10 +237,7 @@ def ochandover(request):
     try:
         with _with_ocel_db(user_file) as db:
             with _filter_shadow(db, fp):
-                if method == "flattened":
-                    graph = OCHANDOVER.from_ocel_db_flattened(db, **kwargs)
-                else:
-                    graph = OCHANDOVER.from_ocel_db(db, **kwargs)
+                graph = OCHANDOVER.from_ocel_db(db, **kwargs)
     except Exception as exc:
         traceback.print_exc()
         return Response(

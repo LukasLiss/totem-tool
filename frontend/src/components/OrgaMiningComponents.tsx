@@ -33,8 +33,6 @@ import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
 import {
   BUSINESS_OBJECT_FEATURE_GROUPS,
   FEATURE_GROUP_OPTIONS,
-  HANDOVER_METHODS,
-  HANDOVER_METHOD_LABELS,
   HANDOVER_NORMALIZATIONS,
   HANDOVER_VIEW_MODES,
   NORMALIZATION_LABELS,
@@ -202,12 +200,8 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
 
   if (isEditMode) {
     const id = `handover-${node.component_id}`;
-    const isOc = settings.method === "oc";
     const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
     const resourceOptions = types.filter((t) => !settings.businessObjectTypes.includes(t));
-    const typeLabels = Object.fromEntries(types.map((t) => [t, t])) as Record<string, string>;
-    const singleTypeOptions = [""].concat(types);
-    const singleTypeLabels = { ...typeLabels, "": "Select…" } as Record<string, string>;
 
     return (
       <Card className="w-full h-full rounded-none overflow-y-auto text-left">
@@ -227,62 +221,30 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
           />
 
           <SectionTitle>Preselected settings</SectionTitle>
-          <SettingRow label="Method">
-            <ChoiceDropdown
-              value={settings.method}
-              options={HANDOVER_METHODS}
-              labels={HANDOVER_METHOD_LABELS}
-              onChange={(method) => update({ method })}
+          <SettingRow label="Resource types">
+            <MultiSelectPopover
+              label="Resource types"
+              options={resourceOptions}
+              selected={settings.resourceTypes}
+              onChange={(resourceTypes) => update({ resourceTypes })}
+              loading={loading}
+              disabled={!selectedFile?.id}
+              placeholder="Select…"
+              className="w-[200px]"
             />
           </SettingRow>
-
-          {isOc ? (
-            <>
-              <SettingRow label="Resource types">
-                <MultiSelectPopover
-                  label="Resource types"
-                  options={resourceOptions}
-                  selected={settings.resourceTypes}
-                  onChange={(resourceTypes) => update({ resourceTypes })}
-                  loading={loading}
-                  disabled={!selectedFile?.id}
-                  placeholder="Select…"
-                  className="w-[200px]"
-                />
-              </SettingRow>
-              <SettingRow label="Business object types">
-                <MultiSelectPopover
-                  label="Business object types"
-                  options={businessOptions}
-                  selected={settings.businessObjectTypes}
-                  onChange={(businessObjectTypes) => update({ businessObjectTypes })}
-                  loading={loading}
-                  disabled={!selectedFile?.id}
-                  placeholder="Select…"
-                  className="w-[200px]"
-                />
-              </SettingRow>
-            </>
-          ) : (
-            <>
-              <SettingRow label="Case type">
-                <ChoiceDropdown
-                  value={singleTypeOptions.includes(settings.caseType) ? settings.caseType : ""}
-                  options={singleTypeOptions}
-                  labels={singleTypeLabels}
-                  onChange={(caseType) => update({ caseType })}
-                />
-              </SettingRow>
-              <SettingRow label="Resource type">
-                <ChoiceDropdown
-                  value={singleTypeOptions.includes(settings.flatResourceType) ? settings.flatResourceType : ""}
-                  options={singleTypeOptions}
-                  labels={singleTypeLabels}
-                  onChange={(flatResourceType) => update({ flatResourceType })}
-                />
-              </SettingRow>
-            </>
-          )}
+          <SettingRow label="Business object types">
+            <MultiSelectPopover
+              label="Business object types"
+              options={businessOptions}
+              selected={settings.businessObjectTypes}
+              onChange={(businessObjectTypes) => update({ businessObjectTypes })}
+              loading={loading}
+              disabled={!selectedFile?.id}
+              placeholder="Select…"
+              className="w-[200px]"
+            />
+          </SettingRow>
 
           <SettingRow
             label="Max gap"
@@ -307,79 +269,75 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
             />
           </SettingRow>
 
-          {isOc && (
-            <>
-              <SettingRow label="Normalization">
-                <ChoiceDropdown
-                  value={settings.normalization}
-                  options={HANDOVER_NORMALIZATIONS}
-                  labels={NORMALIZATION_LABELS}
-                  onChange={(normalization) => update({ normalization })}
-                />
-              </SettingRow>
-              <SettingRow label="Normalize per object type" htmlFor={`${id}-scope`}>
-                <Switch
-                  id={`${id}-scope`}
-                  checked={settings.normalizationScope === "per_bo_type"}
-                  onCheckedChange={(v) => update({ normalizationScope: v ? "per_bo_type" : "global" })}
-                />
-              </SettingRow>
-              <SettingRow
-                label="Parallel filter"
-                htmlFor={`${id}-parallel`}
-                hint="Removes direct handovers between resources working in parallel."
-              >
-                <Switch
-                  id={`${id}-parallel`}
-                  checked={settings.parallelFilterEnabled}
-                  onCheckedChange={(parallelFilterEnabled) => update({ parallelFilterEnabled })}
-                />
-              </SettingRow>
-              {settings.parallelFilterEnabled && (
-                <div className="space-y-3 pl-3 border-l">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Dependency threshold</Label>
-                      <span className="text-sm text-muted-foreground font-mono">
-                        {settings.parallelThreshold.toFixed(2)}
-                      </span>
-                    </div>
-                    <Slider
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={[settings.parallelThreshold]}
-                      onValueChange={([v]) => update({ parallelThreshold: v })}
-                    />
+            <SettingRow label="Normalization">
+              <ChoiceDropdown
+                value={settings.normalization}
+                options={HANDOVER_NORMALIZATIONS}
+                labels={NORMALIZATION_LABELS}
+                onChange={(normalization) => update({ normalization })}
+              />
+            </SettingRow>
+            <SettingRow label="Normalize per object type" htmlFor={`${id}-scope`}>
+              <Switch
+                id={`${id}-scope`}
+                checked={settings.normalizationScope === "per_bo_type"}
+                onCheckedChange={(v) => update({ normalizationScope: v ? "per_bo_type" : "global" })}
+              />
+            </SettingRow>
+            <SettingRow
+              label="Parallel filter"
+              htmlFor={`${id}-parallel`}
+              hint="Removes direct handovers between resources working in parallel."
+            >
+              <Switch
+                id={`${id}-parallel`}
+                checked={settings.parallelFilterEnabled}
+                onCheckedChange={(parallelFilterEnabled) => update({ parallelFilterEnabled })}
+              />
+            </SettingRow>
+            {settings.parallelFilterEnabled && (
+              <div className="space-y-3 pl-3 border-l">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Dependency threshold</Label>
+                    <span className="text-sm text-muted-foreground font-mono">
+                      {settings.parallelThreshold.toFixed(2)}
+                    </span>
                   </div>
-                  <SettingRow label="Min. observations" htmlFor={`${id}-min-obs`}>
-                    <Input
-                      id={`${id}-min-obs`}
-                      type="number"
-                      min={1}
-                      className="w-24 text-center"
-                      value={settings.minParallelObservations}
-                      onChange={(e) => {
-                        const n = parseInt(e.target.value, 10);
-                        if (!Number.isNaN(n) && n >= 1) update({ minParallelObservations: n });
-                      }}
-                    />
-                  </SettingRow>
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={[settings.parallelThreshold]}
+                    onValueChange={([v]) => update({ parallelThreshold: v })}
+                  />
                 </div>
-              )}
-              <SettingRow
-                label="Cluster by object type"
-                htmlFor={`${id}-cluster-ot`}
-                hint="Collapse every resource into its object type."
-              >
-                <Switch
-                  id={`${id}-cluster-ot`}
-                  checked={settings.clusterByOt}
-                  onCheckedChange={(clusterByOt) => update({ clusterByOt })}
-                />
-              </SettingRow>
-            </>
-          )}
+                <SettingRow label="Min. observations" htmlFor={`${id}-min-obs`}>
+                  <Input
+                    id={`${id}-min-obs`}
+                    type="number"
+                    min={1}
+                    className="w-24 text-center"
+                    value={settings.minParallelObservations}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!Number.isNaN(n) && n >= 1) update({ minParallelObservations: n });
+                    }}
+                  />
+                </SettingRow>
+              </div>
+            )}
+            <SettingRow
+              label="Cluster by object type"
+              htmlFor={`${id}-cluster-ot`}
+              hint="Collapse every resource into its object type."
+            >
+              <Switch
+                id={`${id}-cluster-ot`}
+                checked={settings.clusterByOt}
+                onCheckedChange={(clusterByOt) => update({ clusterByOt })}
+              />
+            </SettingRow>
 
           <SettingRow label="Default view">
             <ChoiceDropdown

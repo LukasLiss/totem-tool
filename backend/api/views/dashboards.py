@@ -127,7 +127,7 @@ def _optional_non_negative_int(item, key: str):
 
 
 # Choice sets of the organizational mining widgets; mirror totem_lib.ochandover.
-_HANDOVER_METHODS = ("oc", "flattened")
+_HANDOVER_METHODS = ("oc",)
 _HANDOVER_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
 _HANDOVER_SCOPES = ("global", "per_bo_type")
 _HANDOVER_VIEW_MODES = ("graph", "table", "log")
@@ -541,8 +541,6 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     method=_choice_field(item, 'method', _HANDOVER_METHODS, 'oc'),
                     resource_types=_string_list_field(item, 'resource_types'),
                     businessobject_types=_string_list_field(item, 'businessobject_types'),
-                    case_type=item.get('case_type') or '',
-                    flat_resource_type=item.get('flat_resource_type') or '',
                     max_gap=_optional_non_negative_int(item, 'max_gap'),
                     normalization=_choice_field(item, 'normalization', _HANDOVER_NORMALIZATIONS, 'by_arcs_in_eog'),
                     normalization_scope=_choice_field(item, 'normalization_scope', _HANDOVER_SCOPES, 'global'),

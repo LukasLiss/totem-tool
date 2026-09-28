@@ -134,9 +134,7 @@ class OrganizationalMiningEndpointTests(APITestCase):
         self.assertEqual(self._handover(min_parallel_observations="0").status_code, 400)
         self.assertEqual(self._handover(max_gap="-1").status_code, 400)
         self.assertEqual(self._handover(method="weird").status_code, 400)
-        response = self.client.get("/api/handover/", {"file_id": self.log.pk, "method": "flattened"})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("case_type", response.json()["error"])
+        self.assertEqual(self._handover(method="flattened").status_code, 400)
 
     def test_handover_graph_from_duckdb_log(self):
         response = self._handover()
@@ -171,16 +169,6 @@ class OrganizationalMiningEndpointTests(APITestCase):
         self.assertIn("bindings", body)
         self.assertGreater(len(body["flows"]), 0)
         self.assertEqual(body["timeline"]["start"], 1_700_000_000)
-
-    def test_handover_flattened_method(self):
-        response = self.client.get(
-            "/api/handover/",
-            {"file_id": self.log.pk, "method": "flattened", "case_type": "order", "resource_type": "employee"},
-        )
-        self.assertEqual(response.status_code, 200, response.data)
-        body = response.json()
-        self.assertEqual({n["id"] for n in body["nodes"]}, {"Mike", "Anna"})
-        self.assertTrue(all(e["businessobject_type"] == "order" for e in body["edges"]))
 
     def test_handover_post_with_cluster_map_collapses_resources(self):
         response = self.client.post(

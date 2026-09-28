@@ -14,16 +14,10 @@ import type { GridStackWidget } from "gridstack";
 // Handover of work
 // ---------------------------------------------------------------------------
 
-export type HandoverMethod = "oc" | "flattened";
 export type HandoverNormalization = "by_source" | "by_target" | "by_arcs_in_eog" | "by_total_weight";
 export type HandoverNormalizationScope = "global" | "per_bo_type";
 export type HandoverViewMode = "graph" | "table" | "log";
 
-export const HANDOVER_METHODS: HandoverMethod[] = ["oc", "flattened"];
-export const HANDOVER_METHOD_LABELS: Record<HandoverMethod, string> = {
-  oc: "Object-centric",
-  flattened: "Flattened (single case type)",
-};
 export const HANDOVER_NORMALIZATIONS: HandoverNormalization[] = [
   "by_source",
   "by_target",
@@ -39,12 +33,8 @@ export const NORMALIZATION_LABELS: Record<HandoverNormalization, string> = {
 export const HANDOVER_VIEW_MODES: HandoverViewMode[] = ["graph", "table", "log"];
 
 export type HandoverSettings = {
-  method: HandoverMethod;
   resourceTypes: string[];
   businessObjectTypes: string[];
-  /** Flattened method only. */
-  caseType: string;
-  flatResourceType: string;
   /** `null` = unlimited. */
   maxGap: number | null;
   normalization: HandoverNormalization;
@@ -57,11 +47,8 @@ export type HandoverSettings = {
 };
 
 export const DEFAULT_HANDOVER_SETTINGS: HandoverSettings = {
-  method: "oc",
   resourceTypes: [],
   businessObjectTypes: [],
-  caseType: "",
-  flatResourceType: "",
   maxGap: null,
   normalization: "by_arcs_in_eog",
   normalizationScope: "global",
@@ -160,11 +147,8 @@ function finiteNumber(value: unknown, fallback: number): number {
 
 /** The persisted (snake_case) fields of the handover widget. */
 export type HandoverWidgetFields = {
-  method?: HandoverMethod;
   resource_types?: string[];
   businessobject_types?: string[];
-  case_type?: string;
-  flat_resource_type?: string;
   max_gap?: number | null;
   normalization?: HandoverNormalization;
   normalization_scope?: HandoverNormalizationScope;
@@ -183,11 +167,8 @@ export function handoverSettingsFromNode(node: HandoverWidgetFields): HandoverSe
       ? null
       : Math.max(0, Math.round(finiteNumber(maxGapRaw, 0)));
   return {
-    method: oneOf(node.method, HANDOVER_METHODS, d.method),
     resourceTypes: stringList(node.resource_types),
     businessObjectTypes: stringList(node.businessobject_types),
-    caseType: typeof node.case_type === "string" ? node.case_type : d.caseType,
-    flatResourceType: typeof node.flat_resource_type === "string" ? node.flat_resource_type : d.flatResourceType,
     maxGap,
     normalization: oneOf(node.normalization, HANDOVER_NORMALIZATIONS, d.normalization),
     normalizationScope: oneOf(node.normalization_scope, ["global", "per_bo_type"] as const, d.normalizationScope),
@@ -201,11 +182,8 @@ export function handoverSettingsFromNode(node: HandoverWidgetFields): HandoverSe
 
 export function handoverSettingsToNode(s: HandoverSettings): Partial<GridStackWidget> {
   return {
-    method: s.method,
     resource_types: s.resourceTypes,
     businessobject_types: s.businessObjectTypes,
-    case_type: s.caseType,
-    flat_resource_type: s.flatResourceType,
     max_gap: s.maxGap,
     normalization: s.normalization,
     normalization_scope: s.normalizationScope,

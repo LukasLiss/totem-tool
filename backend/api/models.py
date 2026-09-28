@@ -421,8 +421,13 @@ class OCHandoverComponent(DashboardComponent):
     editable from the dashboard's view mode. Object types are stored as JSON
     lists of type names.
 
-    ``show_controls`` is retained so older saved layouts still load, but
-    nothing reads it: the view mode has no settings panel to show.
+    ``show_controls``, ``method``, ``case_type`` and ``flat_resource_type``
+    are retained so older saved layouts still load, but nothing reads or
+    writes them. The view mode has no settings panel, and the flattened
+    (single case type) method was removed — the explorer is object-centric
+    only. They are left exactly as they were, columns and choices included,
+    so that removing the feature needs no migration against existing
+    dashboards.
     """
     show_controls = models.BooleanField(default=True)
     # Start the computation as soon as the dashboard opens.
@@ -434,7 +439,6 @@ class OCHandoverComponent(DashboardComponent):
     )
     resource_types = models.JSONField(default=list, blank=True)
     businessobject_types = models.JSONField(default=list, blank=True)
-    # Flattened method: the single case type and resource type.
     case_type = models.CharField(max_length=100, blank=True, default="")
     flat_resource_type = models.CharField(max_length=100, blank=True, default="")
     # Maximum number of non-resource events between two handover events; null = unlimited.

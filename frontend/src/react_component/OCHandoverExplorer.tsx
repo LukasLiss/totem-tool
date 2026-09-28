@@ -6,7 +6,6 @@ import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
 import {
   DEFAULT_HANDOVER_SETTINGS,
   NORMALIZATION_LABELS,
-  type HandoverMethod,
   type HandoverNormalization,
   type HandoverSettings,
   type HandoverViewMode,
@@ -108,7 +107,6 @@ type OCHandoverExplorerProps = {
 };
 
 type ViewMode = HandoverViewMode;
-type Method = HandoverMethod;
 
 type EventLogData = {
   object_types: string[];
@@ -367,12 +365,8 @@ export default function OCHandoverExplorer({
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
-  // The method is preselected by the host (analysis view: object-centric).
-  const [method] = useState<Method>(initial.method);
   const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
   const [boTypes, setBoTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
-  const [caseType, setCaseType] = useState<string>(initial.caseType);
-  const [flatResourceType, setFlatResourceType] = useState<string>(initial.flatResourceType);
   const [data, setData] = useState<HandoverData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -458,8 +452,6 @@ export default function OCHandoverExplorer({
     setObjectTypes([]);
     setResourceTypes(new Set(initial.resourceTypes));
     setBoTypes(new Set(initial.businessObjectTypes));
-    setCaseType(initial.caseType);
-    setFlatResourceType(initial.flatResourceType);
     setData(null);
     setStatus("idle");
     hasStartedLoadingRef.current = false;
@@ -479,8 +471,6 @@ export default function OCHandoverExplorer({
         const known = new Set(types);
         setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
         setBoTypes(prev => new Set([...prev].filter(t => known.has(t))));
-        setCaseType(prev => (known.has(prev) ? prev : ""));
-        setFlatResourceType(prev => (known.has(prev) ? prev : ""));
       } catch (e: unknown) {
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setStatus("error");
@@ -490,17 +480,6 @@ export default function OCHandoverExplorer({
 
     return () => { cancelled = true; };
   }, [fileId, initial]);
-
-  // Reset results when the method changes (not for the preselected method on mount)
-  useEffect(() => {
-    if (isFirstRender.current) return;
-    setData(null);
-    setStatus("idle");
-    hasStartedLoadingRef.current = false;
-    setHasStartedLoading(false);
-    setErrorMsg("");
-    setMaxGap(null);
-  }, [method]);
 
   // Reset results when normalization, scope, or parallel filter changes
   useEffect(() => {
@@ -521,13 +500,13 @@ export default function OCHandoverExplorer({
     setLogError("");
   }, [fileId]);
 
-  // Reset and fetch MLPA layers when fileId or method changes
+  // Reset and fetch MLPA layers when fileId changes
   useEffect(() => {
     setMlpaLayers(null);
     setMlpaStatus("idle");
     setSelectedMlpaLevel(null);
 
-    if (!fileId || method !== "oc") return;
+    if (!fileId) return;
 
     let cancelled = false;
     setMlpaStatus("loading");
@@ -542,7 +521,7 @@ export default function OCHandoverExplorer({
       }
     })();
     return () => { cancelled = true; };
-  }, [fileId, method]);
+  }, [fileId]);
 
   // Fetch event log lazily when the Log view is opened
   useEffect(() => {
@@ -587,28 +566,20 @@ export default function OCHandoverExplorer({
   // Phase 2: compute handover when triggered
   useEffect(() => {
     if (!fileId || !hasStartedLoadingRef.current) return;
-    const currentMethod = method;
-    if (currentMethod === "oc" && (resourceTypes.size === 0 || boTypes.size === 0)) return;
-    if (currentMethod === "flattened" && (!caseType || !flatResourceType)) return;
+    if (resourceTypes.size === 0 || boTypes.size === 0) return;
 
     const currentFileId = fileId;
-    const params: Record<string, string> = { file_id: String(currentFileId), method: currentMethod };
-    if (currentMethod === "oc") {
-      params.resource_types = [...resourceTypes].join(",");
-      params.businessobject_types = [...boTypes].join(",");
-      if (maxGap !== null) params.max_gap = String(maxGap);
-      params.normalization = normalization;
-      params.normalization_scope = normalizationScope;
-      if (parallelFilterEnabled) {
-        params.parallel_threshold = String(parallelThreshold);
-        params.min_parallel_observations = String(minParallelObs);
-      }
-      if (clusterByOt) params.cluster_by_ot = "true";
-    } else {
-      params.case_type = caseType;
-      params.resource_type = flatResourceType;
-      if (maxGap !== null) params.max_gap = String(maxGap);
+    const params: Record<string, string> = { file_id: String(currentFileId), method: "oc" };
+    params.resource_types = [...resourceTypes].join(",");
+    params.businessobject_types = [...boTypes].join(",");
+    if (maxGap !== null) params.max_gap = String(maxGap);
+    params.normalization = normalization;
+    params.normalization_scope = normalizationScope;
+    if (parallelFilterEnabled) {
+      params.parallel_threshold = String(parallelThreshold);
+      params.min_parallel_observations = String(minParallelObs);
     }
+    if (clusterByOt) params.cluster_by_ot = "true";
     let cancelled = false;
 
     (async () => {
@@ -643,9 +614,7 @@ export default function OCHandoverExplorer({
     setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
   };
 
-  const canCompute = method === "oc"
-    ? resourceTypes.size > 0 && boTypes.size > 0
-    : caseType !== "" && flatResourceType !== "";
+  const canCompute = resourceTypes.size > 0 && boTypes.size > 0;
 
   /**
    * Why grouping into organizational units is unavailable, or null when it is.
@@ -659,9 +628,6 @@ export default function OCHandoverExplorer({
    * because the type selectors are right there to show the change.
    */
   const groupingIssue = useMemo<string | null>(() => {
-    if (method !== "oc") {
-      return "Grouping is only available for the object-centric method.";
-    }
     if (!clusterInfo) {
       return "No resource profiling result available. Add a Resource Profiling widget and compute it.";
     }
@@ -678,7 +644,7 @@ export default function OCHandoverExplorer({
       return "Resource types do not match the resource profiling result.";
     }
     return null;
-  }, [method, clusterInfo, boTypes, resourceTypes]);
+  }, [clusterInfo, boTypes, resourceTypes]);
 
   // Auto start: once per file, as soon as the object types are known and the
   // preselected settings allow a computation.
@@ -727,10 +693,10 @@ export default function OCHandoverExplorer({
 
     const params: Record<string, string> = {
       file_id: String(fileId),
-      method,
+      method: "oc",
       include_flows: "true",
     };
-    if (method === "oc") {
+    {
       params.resource_types = [...resourceTypes].join(",");
       params.businessobject_types = [...boTypes].join(",");
       if (maxGap !== null) params.max_gap = String(maxGap);
@@ -741,10 +707,6 @@ export default function OCHandoverExplorer({
         params.min_parallel_observations = String(minParallelObs);
       }
       if (clusterByOt) params.cluster_by_ot = "true";
-    } else {
-      params.case_type = caseType;
-      params.resource_type = flatResourceType;
-      if (maxGap !== null) params.max_gap = String(maxGap);
     }
 
     try {
@@ -769,10 +731,10 @@ export default function OCHandoverExplorer({
     setBindingsData(null);
     const params: Record<string, string> = {
       file_id: String(fileId),
-      method,
+      method: "oc",
       include_bindings: "true",
     };
-    if (method === "oc") {
+    {
       params.resource_types = [...resourceTypes].join(",");
       params.businessobject_types = [...boTypes].join(",");
       if (maxGap !== null) params.max_gap = String(maxGap);
@@ -783,10 +745,6 @@ export default function OCHandoverExplorer({
         params.min_parallel_observations = String(minParallelObs);
       }
       if (clusterByOt) params.cluster_by_ot = "true";
-    } else {
-      params.case_type = caseType;
-      params.resource_type = flatResourceType;
-      if (maxGap !== null) params.max_gap = String(maxGap);
     }
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
@@ -1078,7 +1036,7 @@ export default function OCHandoverExplorer({
                 renderedSize={size}
                 pillLeading={
                   <>
-                    {method === "oc" && (
+                    {(
                       <Button
                         type="button"
                         variant={bindingsData ? "secondary" : "outline"}
@@ -1152,7 +1110,7 @@ export default function OCHandoverExplorer({
                 </FloatingPanel>
                 {viewSelect}
               </div>
-              {method === "oc" && (
+              {(
                 <FloatingPanel
                   title="Animation"
                   icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
@@ -1307,7 +1265,7 @@ export default function OCHandoverExplorer({
                 </Button>
               </div>
             </div>
-            {method === "oc" && (
+            {(
               <div className="flex items-center gap-2">
                 <Tooltip delayDuration={600}>
                   <TooltipTrigger asChild>
@@ -1336,7 +1294,7 @@ export default function OCHandoverExplorer({
                 </DropdownMenu>
               </div>
             )}
-            {method === "oc" && (
+            {(
               <div className="flex items-center gap-2">
                 <Switch
                   id="norm-scope"
@@ -1355,7 +1313,7 @@ export default function OCHandoverExplorer({
                 </Tooltip>
               </div>
             )}
-            {method === "oc" && (
+            {(
               <div className="flex items-center gap-2 flex-wrap">
                 <Switch
                   id="parallel-filter"
@@ -1441,7 +1399,7 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && method === "oc" && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
+        {fileId && objectTypes.length > 0 && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
           <div className="border rounded-md p-3 self-center">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -1487,7 +1445,7 @@ export default function OCHandoverExplorer({
           </div>
         )}
 
-        {fileId && objectTypes.length > 0 && method === "oc" && (
+        {fileId && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap justify-center">
             <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
             <TypeSelector
@@ -1498,13 +1456,6 @@ export default function OCHandoverExplorer({
               lockedTypes={clusterResourceTypes}
               lockedHint="Used as a resource type by the organizational units"
             />
-          </div>
-        )}
-
-        {fileId && objectTypes.length > 0 && method === "flattened" && (
-          <div className="flex gap-4 flex-wrap justify-center">
-            <SingleTypeSelector title="Case type" types={objectTypes} selected={caseType} onSelect={setCaseType} />
-            <SingleTypeSelector title="Resource type" types={objectTypes} selected={flatResourceType} onSelect={setFlatResourceType} />
           </div>
         )}
 
@@ -1585,10 +1536,10 @@ export default function OCHandoverExplorer({
                 Log
               </Button>
               </div>
-              {viewMode === "graph" && method === "oc" && !selectedNode && (
+              {viewMode === "graph" && !selectedNode && (
                 <div className="w-px h-5 bg-border self-center shrink-0" />
               )}
-              {viewMode === "graph" && method === "oc" && !selectedNode && (
+              {viewMode === "graph" && !selectedNode && (
                 <div className={`flex items-center border rounded-md overflow-hidden transition-all${flowsData && !selectedNode ? " flex-1 min-w-0" : ""}`}>
                   {/* Animate / Stop button */}
                   <button
@@ -1669,7 +1620,7 @@ export default function OCHandoverExplorer({
                   )}
                 </div>
               )}
-              {viewMode === "graph" && method === "oc" && !selectedNode && (
+              {viewMode === "graph" && !selectedNode && (
                 <button
                   className={`flex items-center gap-1.5 h-8 px-3 text-sm font-medium border rounded-md hover:bg-accent transition-colors shrink-0 disabled:opacity-50${bindingsData ? " bg-accent" : ""}`}
                   onClick={bindingsData
@@ -1794,29 +1745,6 @@ function TypeSelector({
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-/* ── SingleTypeSelector ─────────────────────────────────────── */
-function SingleTypeSelector({
-  title, types, selected, onSelect,
-}: { title: string; types: string[]; selected: string; onSelect: (t: string) => void }) {
-  return (
-    <div className="border rounded-md p-3 min-w-[180px]">
-      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
-      <div className="space-y-1.5">
-        {types.map(t => (
-          <button key={t} className="flex items-center gap-2 w-full text-left" onClick={() => onSelect(t)}>
-            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-              selected === t ? "border-primary" : "border-muted-foreground/40"
-            }`}>
-              {selected === t && <div className="w-2 h-2 rounded-full bg-primary" />}
-            </div>
-            <span className="text-sm">{t}</span>
-          </button>
-        ))}
       </div>
     </div>
   );

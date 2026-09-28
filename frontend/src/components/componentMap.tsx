@@ -145,11 +145,8 @@ export interface ComponentProps {
     alpha?: number;
     beta?: number;
     // OCHandoverComponent / ResourceProfilingComponent properties
-    method?: 'oc' | 'flattened';
     resource_types?: string[];
     businessobject_types?: string[];
-    case_type?: string;
-    flat_resource_type?: string;
     max_gap?: number | null;
     normalization?: 'by_source' | 'by_target' | 'by_arcs_in_eog' | 'by_total_weight';
     normalization_scope?: 'global' | 'per_bo_type';
