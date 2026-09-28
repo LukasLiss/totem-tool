@@ -40,6 +40,7 @@ import {
   ControlPill,
   FloatingPanel,
 } from "@/react_component/orgamining/canvas";
+import { GLASS_SURFACE } from "@/react_component/orgamining/canvasSurface";
 import {
   NARROW_CANVAS_WIDTH,
   fitBoxToAspect,
@@ -3845,7 +3846,7 @@ function HandoverGraph({
           <div
             style={{
               position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
-              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
             }}
             onMouseDown={e => e.stopPropagation()}
@@ -3943,7 +3944,7 @@ function HandoverGraph({
           <div
             style={{
               position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
-              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
               display: "flex", flexDirection: "column",
             }}
@@ -4164,7 +4165,7 @@ function HandoverGraph({
           <div
             style={{
               position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
-              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
             }}
             onMouseDown={e => e.stopPropagation()}
@@ -4221,7 +4222,7 @@ function HandoverGraph({
           <div
             style={{
               position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
-              background: "white", border: "1px solid #E2E8F0", borderRadius: 12,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
             }}
             onMouseDown={e => e.stopPropagation()}

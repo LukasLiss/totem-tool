@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+import { GLASS_SURFACE } from "./canvasSurface";
 import type { Size } from "./canvasGeometry";
 
 /**
@@ -60,7 +61,7 @@ export function CanvasShell({
 }
 
 const PANEL_SHELL: React.CSSProperties = {
-  background: "#FFFFFF",
+  ...GLASS_SURFACE,
   border: "1px solid #E5E7EB",
   borderRadius: 12,
   boxShadow: "0 6px 16px rgba(15, 23, 42, 0.05)",
@@ -268,7 +269,7 @@ export function ControlPill({
         flexWrap: "wrap",
         justifyContent: "flex-end",
         maxWidth: "calc(100% - 24px)",
-        background: "#FFFFFF",
+        ...GLASS_SURFACE,
         border: "1px solid #E2E8F0",
         borderRadius: 9999,
         padding: "6px 12px",
