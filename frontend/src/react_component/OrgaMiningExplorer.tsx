@@ -19,14 +19,14 @@ import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronDown, CircleDashed, Palette, ScanIcon, Share2 } from "lucide-react";
+import { ChevronDown, CircleDashed, ScanIcon, Share2 } from "lucide-react";
 import {
   CanvasMessage,
+  CanvasSelect,
   CanvasShell,
   ControlPill,
   FloatingPanel,
   MetricChips,
-  SegmentedControl,
 } from "@/react_component/orgamining/canvas";
 import {
   NARROW_CANVAS_WIDTH,
@@ -408,24 +408,24 @@ export default function OrgaMiningExplorer({
               </CanvasMessage>
             );
           }
-          const viewSwitcher = (
-            <SegmentedControl<ProfilingViewMode>
+          const viewSelect = (
+            <CanvasSelect<ProfilingViewMode>
+              label="View"
               value={viewMode}
               options={[
-                { value: "graph", label: "Graph", short: "G" },
-                { value: "table", label: "Table", short: "T" },
+                { value: "graph", label: "Graph" },
+                { value: "table", label: "Table" },
               ]}
               onChange={setViewMode}
-              compact={narrow}
             />
           );
           if (viewMode === "table") {
             return (
               <>
-                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingBottom: 60 }}>
+                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
                   <ProfileTable data={data} maxHeight={null} fill />
                 </div>
-                <ControlPill>{viewSwitcher}</ControlPill>
+                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}>{viewSelect}</div>
               </>
             );
           }
@@ -438,7 +438,7 @@ export default function OrgaMiningExplorer({
               showClusters={data.cluster_labels !== undefined}
               embedded
               narrow={narrow}
-              pillLeading={viewSwitcher}
+              topRight={viewSelect}
             />
           );
         }}
@@ -930,7 +930,7 @@ function ResourceGraph({
   showClusters,
   embedded = false,
   narrow = false,
-  pillLeading,
+  topRight,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
@@ -941,8 +941,8 @@ function ResourceGraph({
   embedded?: boolean;
   /** Start the floating panels collapsed — the tile is too narrow for them. */
   narrow?: boolean;
-  /** Rendered at the start of the control pill (the explorer's view switcher). */
-  pillLeading?: React.ReactNode;
+  /** Rendered beside the metric chips, top right (the explorer's view select). */
+  topRight?: React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1477,7 +1477,6 @@ function ResourceGraph({
 
         {/* Control pill — bottom-right of the graph canvas */}
         <ControlPill>
-          {pillLeading}
           {zoomed && (
             <Button type="button" variant="outline" size="icon" onClick={() => setZoomed(null)}
               className="rounded-full h-9 w-9" title="Reset zoom">
@@ -1552,10 +1551,9 @@ function ResourceGraph({
         {embedded && (
           <>
             <FloatingPanel
-              title="Resources"
-              icon={<Palette style={{ width: 13, height: 13, color: "#64748b" }} />}
+              title="Object Types"
               narrow={narrow}
-              collapsedLabel={`${legendTypes.length} Resource Type${legendTypes.length === 1 ? "" : "s"}`}
+              collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
               style={{ position: "absolute", top: 12, left: 12, zIndex: 8 }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
@@ -1586,9 +1584,17 @@ function ResourceGraph({
                 )}
               </div>
             </FloatingPanel>
+            {/* Top-right cluster: the metrics sit beside the view select, the
+                same arrangement the handover canvas uses. Right anchored, so
+                expanding the metrics grows the row leftwards. */}
+            <div style={{
+              position: "absolute", top: 12, right: 12, zIndex: 14,
+              display: "flex", alignItems: "flex-start", gap: 8,
+            }}>
             <MetricChips
-              narrow={narrow}
-              style={{ position: "absolute", top: 12, right: 12, zIndex: 8 }}
+              // Always starts collapsed: the readouts are a detail to check,
+              // not something to keep on screen beside the view select.
+              narrow
               metrics={[
                 {
                   label: "stress",
@@ -1605,9 +1611,10 @@ function ResourceGraph({
                     "Fraction of total variance captured by the 2D projection, from the eigenvalue spectrum " +
                     "of the distance matrix. Low values mean the data has more intrinsic dimensions than 2 can show.",
                 },
-                { label: "resources", value: String(data.resources.length) },
               ]}
             />
+            {topRight}
+            </div>
           </>
         )}
 

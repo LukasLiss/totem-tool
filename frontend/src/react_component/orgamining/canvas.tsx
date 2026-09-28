@@ -386,6 +386,9 @@ export function MetricChips({
         gap: 10,
         padding: "6px 10px",
         fontSize: 11,
+        // Matches the collapsed panel chip and the select, so chips sharing a
+        // row are all exactly the same height.
+        lineHeight: 1,
         color: "#334155",
       }}
     >
