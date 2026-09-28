@@ -646,6 +646,39 @@ export default function OCHandoverExplorer({
     ? resourceTypes.size > 0 && boTypes.size > 0
     : caseType !== "" && flatResourceType !== "";
 
+  /**
+   * Why grouping into organizational units is unavailable, or null when it is.
+   *
+   * Grouping replays the handover with a resource profiling widget's clusters,
+   * so both must be describing the same resources. The check is deliberately
+   * strict: a mismatch would produce a graph that is not the analysis this
+   * widget is configured for. On a dashboard the preselection is the widget's
+   * saved definition, so this refuses and says what is wrong rather than
+   * quietly rewriting it — which is what the analysis page can afford to do,
+   * because the type selectors are right there to show the change.
+   */
+  const groupingIssue = useMemo<string | null>(() => {
+    if (method !== "oc") {
+      return "Grouping is only available for the object-centric method.";
+    }
+    if (!clusterInfo) {
+      return "No resource profiling result available. Add a Resource Profiling widget and compute it.";
+    }
+    if (!clusterInfo.nClusters) {
+      return "No resource clusters available.";
+    }
+    const profileTypes = new Set(Object.values(clusterInfo.resourceObjectTypes));
+    if ([...profileTypes].some(t => boTypes.has(t))) {
+      return "Conflicts with resource profiling: a type cannot be both a resource type and a business object type.";
+    }
+    const matches = profileTypes.size === resourceTypes.size
+      && [...profileTypes].every(t => resourceTypes.has(t));
+    if (!matches) {
+      return "Resource types do not match the resource profiling result.";
+    }
+    return null;
+  }, [method, clusterInfo, boTypes, resourceTypes]);
+
   // Auto start: once per file, as soon as the object types are known and the
   // preselected settings allow a computation.
   const autoStartedForRef = useRef<number | undefined>(undefined);
@@ -1045,27 +1078,35 @@ export default function OCHandoverExplorer({
                           : <Waypoints className="h-4 w-4" />}
                       </Button>
                     )}
-                    {clusterInfo && (
-                      // Organizational units come from a resource profiling
-                      // widget at runtime, so this cannot be preselected. It
-                      // changes the request, hence the immediate recompute.
-                      <Button
-                        type="button"
-                        variant={useClusters ? "secondary" : "outline"}
-                        size="icon"
-                        className="rounded-full h-9 w-9"
-                        title={useClusters ? "Use individual resources" : "Group into organizational units"}
-                        onClick={() => {
-                          setUseClusters(prev => {
-                            if (!prev) setClusterByOt(false);
-                            return !prev;
-                          });
+                    {/* Organizational units come from a resource profiling
+                        widget at runtime, so this cannot be preselected. It
+                        changes the request, hence the immediate recompute.
+                        Always shown, so its absence never reads as a bug; it
+                        explains itself instead of disappearing. */}
+                    <Button
+                      type="button"
+                      variant={useClusters ? "secondary" : "outline"}
+                      size="icon"
+                      className={`rounded-full h-9 w-9${!useClusters && groupingIssue ? " opacity-50" : ""}`}
+                      title={useClusters
+                        ? "Use individual resources"
+                        : groupingIssue ?? "Group into organizational units"}
+                      onClick={() => {
+                        // Ungrouping is never blocked, so a widget cannot get
+                        // stuck grouped when the profiling result changes.
+                        if (useClusters) {
+                          setUseClusters(false);
                           handleCompute();
-                        }}
-                      >
-                        <Users className="h-4 w-4" />
-                      </Button>
-                    )}
+                          return;
+                        }
+                        if (groupingIssue) { toast.error(groupingIssue); return; }
+                        setUseClusters(true);
+                        setClusterByOt(false);
+                        handleCompute();
+                      }}
+                    >
+                      <Users className="h-4 w-4" />
+                    </Button>
                   </>
                 }
               />
