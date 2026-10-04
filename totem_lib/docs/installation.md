@@ -1,13 +1,27 @@
 # Installation
 
-totem-lib needs Python 3.10 or newer. It is not on PyPI yet, so install it
-from GitHub:
+totem-lib needs Python 3.10 or newer. It is published on PyPI as
+[`totem-tool`](https://pypi.org/project/totem-tool/), and in Python it is
+imported as `totem_lib`:
+
+```bash
+pip install totem-tool "pulp<4"
+```
+
+```python
+import totem_lib
+```
+
+This also installs all Python dependencies. The `"pulp<4"` part is only needed
+until the next release. Release 0.1.0 came out before PuLP 4, which breaks
+pm4py, one of its dependencies. On Python 3.12 and newer, `import totem_lib`
+then fails with `cannot import name 'LpStatus' from 'pulp'`.
+
+To get the latest code from GitHub instead of the last release:
 
 ```bash
 pip install "git+https://github.com/LukasLiss/totem-tool.git#subdirectory=totem_lib"
 ```
-
-This also installs all Python dependencies.
 
 ## Graphviz
 
