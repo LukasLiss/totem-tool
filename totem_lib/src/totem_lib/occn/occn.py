@@ -411,28 +411,27 @@ class OCCausalNet(object):
         Parameters
         ----------
         marker_groups : dict[str, ]
-            Dict of marker groups per activity. Syntax:
-            ```python
-            {
-                "activity_name": {
-                    # Specify input marker groups (img) and output marker groups (omg)
-                    "img": [
-                        # Each marker group is a list of markers:
-                        [
-                            (activity, object_type, (min_count, max_count), marker_key),
-                            # max_count = -1 for infinity
-                            # marker_key = 0 will assign a unique key automatically
+            Dict of marker groups per activity. Syntax::
+
+                {
+                    "activity_name": {
+                        # Specify input marker groups (img) and output marker groups (omg)
+                        "img": [
+                            # Each marker group is a list of markers:
+                            [
+                                (activity, object_type, (min_count, max_count), marker_key),
+                                # max_count = -1 for infinity
+                                # marker_key = 0 will assign a unique key automatically
+                                ...
+                            ],
                             ...
                         ],
-                        ...
-                    ],
-                    "omg": [
-                        ...
-                    ]
-                },
-                ...
-            }
-            ```
+                        "omg": [
+                            ...
+                        ]
+                    },
+                    ...
+                }
 
         Returns
         -------
@@ -452,16 +451,13 @@ class OCCausalNetState(defaultdict):
 
     Example:
     An outstanding obligation from activity `A` to activity `B` for object `o1` of type `order`
-    is represented as the tuple `(A, 'o1', 'order')` in the multiset for activity `B`.
+    is represented as the tuple `(A, 'o1', 'order')` in the multiset for activity `B`::
 
-    ```python
-    state = OCCausalNetState({'B': Counter([('A', 'o1', 'order')])})
-    ```
+        state = OCCausalNetState({'B': Counter([('A', 'o1', 'order')])})
 
-    Supports standard multiset operations: equality, subset (<=), addition (+), subtraction (-), e.g.,
-    ```python
-    new_state = state + OCCausalNetState({'C': Counter([('B', 'o2', 'item')])})
-    ```
+    Supports standard multiset operations: equality, subset (<=), addition (+), subtraction (-), e.g.::
+
+        new_state = state + OCCausalNetState({'C': Counter([('B', 'o2', 'item')])})
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

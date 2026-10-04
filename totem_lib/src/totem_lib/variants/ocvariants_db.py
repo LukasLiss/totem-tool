@@ -183,28 +183,32 @@ def find_variants(
 
     :param ocel_db: A populated OcelDuckDB instance.
     :param extraction: Process-execution extraction technique.
+
         - "leading_1hop":   case = leading object ∪ direct neighbours (fast).
         - "leading_bfs":    paper Definition 6 — BFS with per-type distance pruning.
         - "connected":      paper Definition 5 — one case per connected component.
         - "resource_aware": one case per connected component of the *business
-                            objects*, where two business objects are connected
-                            iff they share an event of a *business activity*.
-                            Resources (object types that are not business
-                            objects) never merge executions and do not induce
-                            edges in the variant graphs.
+          objects*, where two business objects are connected
+          iff they share an event of a *business activity*.
+          Resources (object types that are not business
+          objects) never merge executions and do not induce
+          edges in the variant graphs.
+
     :param leading_type: Required for "leading_*" extraction; ignored otherwise.
     :param business_object_types: Required for "resource_aware"; ignored otherwise.
     :param business_activities: Optional for "resource_aware" (``None`` = every
         activity connects business objects); ignored otherwise.
     :param iso: Equivalence-class (graph isomorphism) strategy.
+
         - "db_signature": SQL multiset signature. Cheapest, may over-merge.
         - "trace":        SQL timestamp-ordered sequence of
-                          (activity, obj_type:count) tuples. Over-separates
-                          isomorphic cases whose linearisations differ.
+          (activity, obj_type:count) tuples. Over-separates
+          isomorphic cases whose linearisations differ.
         - "signature":    in-Python multiset of (labels, edges).
         - "wl":           Weisfeiler-Lehman hash only.
         - "wl+vf2":       WL bucketing + VF2 refinement (recommended default).
         - "exact":        full pairwise VF2.
+
     :param timeout_s: Wall-clock budget for the whole call in seconds.
         On expiry, in-flight SQL is interrupted via `conn.interrupt()` and
         pure-Python iso loops abort between cases; `TimeoutError` is raised.

@@ -12,8 +12,13 @@ dependencies and can be used on its own.
 ## Installation
 
 ```bash
-pip install totem-lib
+pip install totem-tool
 ```
+
+The package is called `totem-tool` on PyPI and `totem_lib` in Python
+(`import totem_lib`). Release 0.1.0 came out before PuLP 4, which breaks the
+import on Python 3.12 and newer. For that release, use
+`pip install totem-tool "pulp<4"` instead.
 
 Requires Python 3.10 or newer. All Python dependencies are installed
 automatically. The [Graphviz](https://graphviz.org/download/) system binary
@@ -123,7 +128,7 @@ strategy, replay, result, and limitation contract.
 
 ## Development setup
 
-To work on totem-lib itself (not needed for `pip install totem-lib`), clone the
+To work on totem-lib itself (not needed for `pip install totem-tool`), clone the
 repository and follow these steps inside `totem_lib/`.
 
 ### 1. Create a Virtual Environment
@@ -157,6 +162,24 @@ To run all tests, execute:
 ```bash
 pytest ./tests/
 ```
+
+### 4. Build the Documentation
+
+The documentation lives in `docs/` and is built with Sphinx. The API pages are
+generated from the docstrings. Write new docstrings in
+[Google style](https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings)
+([rendered example](https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html)).
+
+```bash
+pip install -e ".[docs]"
+sphinx-build -W --keep-going docs docs/_build/html
+```
+
+Then open `docs/_build/html/index.html`. As in CI, any warning fails the build,
+and the notebooks in `docs/examples/` are run, so a broken example fails it too.
+
+When you add a name to `__all__` in `src/totem_lib/__init__.py`, also list it on
+one of the pages in `docs/api/`. `tests/test_docs_api.py` fails until you do.
 
 ## Acknowledgements
 

@@ -5,3 +5,7 @@ build/
 dist/
 *.egg-info/
 
+# Docs build output and the API pages Sphinx generates
+docs/_build/
+docs/api/generated/
+

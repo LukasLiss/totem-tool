@@ -451,10 +451,6 @@ class ObjectCentricEventLog:
 
     ### NEW X sonntag ###
 
-    from collections import defaultdict
-    import networkx as nx
-    from functools import cached_property
-
     @cached_property
     def eog(self) -> nx.DiGraph:
         """

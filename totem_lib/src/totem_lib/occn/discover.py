@@ -34,8 +34,9 @@ def discover_occn(
     relativeOccuranceThreshold
         The threshold for relative occurrence of markers (between 0 and 1).
         Markers with occurrence below this threshold will be filtered out.
-    parameters (Optional)
+    parameters : dict, optional
         A dictionary of advanced parameters for the mining process. Possible keys:
+
         - `object_types`: If set, only these object types will be considered 
         - `dependency_threshold`: Dependency threshold for the internal Heuristics
           Miner (default: 0.5).
@@ -48,25 +49,24 @@ def discover_occn(
         - `inconsumableObjects`: List of object types considered inconsumable
           (default: None).
         - `inconsumableThreshold`: Threshold for inconsumable objects (default: 1).
-    
-    When using multiple values for relativeOccuranceThreshold, it is recommended
-    to conduct the expensive discovery only once without filtering and then 
-    filter the resulting OCCN for different thresholds:
-    
-    ```python
-    
-    # Discover with no filtering
-    base_occn = discover_occn(ocel, relativeOccuranceThreshold=0)
-    
-    # Filter for different thresholds
-    occn_1 = base_occn.apply_relative_occurrence_threshold(0.1)
-    occn_2 = base_occn.apply_relative_occurrence_threshold(0.2)
-    ```
-    
+
     Returns
     --------
     OCCausalNet
         An OCCausalNet object representing the discovered object-centric causal net.
+
+    Notes
+    -----
+    When using multiple values for relativeOccuranceThreshold, it is recommended
+    to conduct the expensive discovery only once without filtering and then
+    filter the resulting OCCN for different thresholds::
+
+        # Discover with no filtering
+        base_occn = discover_occn(ocel, relativeOccuranceThreshold=0)
+
+        # Filter for different thresholds
+        occn_1 = base_occn.apply_relative_occurrence_threshold(0.1)
+        occn_2 = base_occn.apply_relative_occurrence_threshold(0.2)
     """
     if parameters is None:
         parameters = {}

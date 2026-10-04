@@ -65,6 +65,7 @@ class Totem:
     ):
         """
         Initialize the Totem object with the temporal graph and related information.
+
         :param tempgraph: A dictionary representing the temporal graph with nodes and edges categorized by temporal relations.
         :param type_relations: A set of sets representing all connected object type pairs.
         :param all_event_types: A set of all event types present in the Object Centric Event Log.
@@ -104,9 +105,9 @@ class Totem:
         This method is adapted from the implementation by Löseke et al.
 
         Parameters:
-        - output_dir (Path): Directory to save the output PDF.
-        - output_file (str): Filename for the output PDF.
-        - ot_to_hex_color (dict): A mapping of object types to their hex color codes.
+            output_dir (Path): Directory to save the output PDF.
+            output_file (str): Filename for the output PDF.
+            ot_to_hex_color (dict): A mapping of object types to their hex color codes.
         """
         # --- Corrected Data Transformation Step ---
         # 1. Extract nodes directly from the tempgraph
@@ -343,6 +344,7 @@ def connected_components_undirected(used_nodes, edges):
 def totemDiscovery(ocel, tau=0.9):
     """
     Given an Object Centric Event Log, compute the temporal graph and related information.
+
     :param ocel: The Object Centric Event Log to analyze.
     :param tau: The threshold for determining strong relations (default is 0.9).
     :return: A Totem object containing the temporal graph and related information.

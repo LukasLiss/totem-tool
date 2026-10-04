@@ -43,7 +43,7 @@ dependencies = [
     "graphviz>=0.21",
     "networkx>=3.4.2",
     "polars>=1.32.2",
-    "PuLP>=3.3.0",
+    "PuLP>=3.3.0,<4.0.0",
     "pm4py>=2.7.17.1",
     "pyarrow>=21.0.0",
     "matplotlib>=3.10.0",
@@ -62,6 +62,12 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest",
+]
+docs = [
+    "sphinx>=8.1,<10",
+    "furo>=2024.8.6",
+    "myst-nb>=1.1,<2",
+    "sphinx-copybutton>=0.5,<1",
 ]
 
 [tool.setuptools.packages.find]

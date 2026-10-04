@@ -68,7 +68,7 @@ An OCCN binding sequence.
 class OCCausalNetSemantics:
     """
     Class for the semantics of object-centric causal nets.
-    Start activities are prefixed with "START_" and end activities with "END_".
+    Start activities are prefixed with ``START_`` and end activities with ``END_``.
 
     Reference:
     Liss et al. (2025). Object-Centric Causal Nets.
