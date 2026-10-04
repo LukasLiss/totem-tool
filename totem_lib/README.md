@@ -12,8 +12,13 @@ dependencies and can be used on its own.
 ## Installation
 
 ```bash
-pip install totem-lib
+pip install totem-tool
 ```
+
+The package is called `totem-tool` on PyPI and `totem_lib` in Python
+(`import totem_lib`). Release 0.1.0 came out before PuLP 4, which breaks the
+import on Python 3.12 and newer. For that release, use
+`pip install totem-tool "pulp<4"` instead.
 
 Requires Python 3.10 or newer. All Python dependencies are installed
 automatically. The [Graphviz](https://graphviz.org/download/) system binary
@@ -123,7 +128,7 @@ strategy, replay, result, and limitation contract.
 
 ## Development setup
 
-To work on totem-lib itself (not needed for `pip install totem-lib`), clone the
+To work on totem-lib itself (not needed for `pip install totem-tool`), clone the
 repository and follow these steps inside `totem_lib/`.
 
 ### 1. Create a Virtual Environment
