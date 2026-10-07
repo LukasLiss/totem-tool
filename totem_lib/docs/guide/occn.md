@@ -1,9 +1,11 @@
-# Get Started - Object-Centric Causal Nets (OCCN)
+# Object-Centric Causal Nets (OCCN)
 
 Object-centric causal nets consist of an object-centric dependency graph annotated with marker groups. For more information, consult:
 Liss et al. (2025). Object-Centric Causal Nets. CAiSE 2025. https://doi.org/10.1007/978-3-031-94571-7_6.
 
 The miner and visualizer in this library are ported from the original standalone implementation: https://github.com/LukasLiss/OCCN-Miner.
+
+The examples on this page run from the `totem_lib/` folder of a clone of the [repository](https://github.com/LukasLiss/totem-tool). They use example logs and helper modules that are not part of the installed package.
 
 ## Discovering OCCNs
 
@@ -15,7 +17,7 @@ from totem_lib import import_ocel, discover_occn, OCCausalNet
 ocel = import_ocel("example_data/ContainerLogistics.json")
 occn: OCCausalNet = discover_occn(ocel, relativeOccuranceThreshold=0)
 ```
-Alternatively, OCCNs can be created manually using its ```create_from_dict``` factory. See ```tests/assets/example_occns.py``` for an example.
+Alternatively, OCCNs can be created manually using its ```create_from_dict``` factory. See [`tests/assets/example_occns.py`](https://github.com/LukasLiss/totem-tool/blob/main/totem_lib/tests/assets/example_occns.py) for an example.
 
 ### Relative Occurence Threshold
 The only mandatory parameter for ```discover_occn``` is the relative occurence threshold. This parameter filters out infrequent marker groups. A value of `0` applies no filtering whereas a value of `0 < n <= 1` keeps only marker groups that occur in at least `n*100` percent of the firings of its activity.
@@ -47,7 +49,7 @@ occn = discover_occn(db, relativeOccuranceThreshold=0)
 
 `import_ocel_db` accepts existing `.duckdb` databases as well as OCEL 2.0 files in `.json`, `.sqlite`, `.xml` and `.csv` format, which are converted on import.
 
-See `examples/example_occn_duckdb.py` for a runnable end-to-end example (discovery → thresholding → serialization).
+See [`examples/example_occn_duckdb.py`](https://github.com/LukasLiss/totem-tool/blob/main/totem_lib/examples/example_occn_duckdb.py) for a runnable end-to-end example (discovery → thresholding → serialization).
 
 ## Serializing to JSON
 
@@ -80,7 +82,7 @@ The serialized dict has six top-level keys:
 
 A `MarkerGroup` is one binding alternative of an activity:
 
-```jsonc
+```js
 {
   "support_count": 594,   // how often this binding fired in the log; null = unknown
   "markers": [
@@ -97,7 +99,7 @@ A `MarkerGroup` is one binding alternative of an activity:
 
 For rendering, an activity's `input_marker_groups` are the alternative ways it can consume obligations (XOR across groups, AND within a group's markers), and its `output_marker_groups` the alternative sets of obligations it creates.
 
-# Play-Out
+## Play-Out
 
 In play-out, the language of valid sequences for an OCCN is computed. Since this language is usually intractably (or infinitely) large, we usually compute a subset of it.
 Furthermore, we have to define a set of objects per object type. Every sequence generated will feature exactly these objects. Consider the following small example.
@@ -128,7 +130,7 @@ In the output, we can see that the first computed sequence fires the activities 
 This very small OCCN has a language of 252 sequences in total with the specified objects. 
 The `return_ocel` parameter can be enabled to get the generated sequences an an OCEL instead of an iterator of sequences. In this case, it may be useful to set the `make_objects_unique_per_sequence` parameter as well. 
 
-## Parameters
+### Parameters
 The only mandatory parameter is `max_bindings_per_activity`. This limits the amount that each acivity can be fired in a generated sequence. Setting this parameter to a finite value renders the language of the OCCN finitely large.
 
 Since the OCCN language is intractably large in general, it is often required to set the `branching_factor_activities` and `branching_factor_bindings` parameters. These limit the branching factor in the state space search that powers the play-out. Smaller values (usually `1 < n < 2`) speed up the computation and reduce the size of the subset of the language generated. Larger values (usually `n > 1.5`) have the opposite effect. Too small values usually lead to the play-out not generating any sequences. Too large values increase the runtime exponentially, leading to memory issues.
@@ -164,9 +166,11 @@ print(len(valid_sequences))
 
 Try executing the code multiple times. The number of generated sequences should be between 0 and 20. Finding applicable branching factors is usually tricky.
 
-# Precision
+## Precision
 
-The precision of an OCCN with respect to an OCEL measures how much of the behavior allowed by the model is actually observed in the log (escaping-edges style). See `docs/OCCN_PRECISION.md` in the repository root for the formal definitions and the algorithm.
+The precision of an OCCN with respect to an OCEL measures how much of the behavior allowed by the model is actually observed in the log (escaping-edges style). See [Precision for Object-Centric Causal Nets](occn_precision.md) for the formal definitions and the algorithm. Replay fitness, the other conformance measure, is described in [OCCN Replay Fitness](occn_replay_fitness.md).
+
+The example below is slow on the full log. The note on runtime at the end of the precision page lists ways to speed it up.
 
 ```python
 from totem_lib import import_ocel, discover_occn, occn_precision

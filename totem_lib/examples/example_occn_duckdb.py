@@ -2,7 +2,7 @@
 End-to-end OCCN example: DuckDB import -> discovery -> thresholding -> JSON.
 
 This is the same pipeline the TOTeM web application runs behind its
-/api/occn/ endpoint. See examples/OCCN.md for the full documentation and
+/api/occn/ endpoint. See docs/guide/occn.md for the full documentation and
 the JSON schema, and https://doi.org/10.1007/978-3-031-94571-7_6 for the
 underlying paper (original miner: https://github.com/LukasLiss/OCCN-Miner).
 

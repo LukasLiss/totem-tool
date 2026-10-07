@@ -392,6 +392,10 @@ event-object graph.
 
 ## 8 Usage
 
+The example runs from the `totem_lib/` folder of a clone of the
+[repository](https://github.com/LukasLiss/totem-tool); the example log is not
+part of the installed package.
+
 ```python
 from totem_lib import import_ocel, discover_occn, occn_precision
 

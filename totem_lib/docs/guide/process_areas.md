@@ -1,4 +1,4 @@
-# Get Started - Advanced Resource-Based Process Areas
+# Advanced Resource-Based Process Areas
 
 A **process area** groups object types that belong to the same perspective of a
 process, and stacks those groups into layers so that resources sit above the
@@ -15,6 +15,10 @@ objects they serve. `totem_lib` has two algorithms for finding that layering:
 Both return the same structure, so they are interchangeable at the call site.
 
 ## Quick start
+
+The examples on this page run from the `totem_lib/` folder of a clone of the
+[repository](https://github.com/LukasLiss/totem-tool). They use test logs that
+are not part of the installed package.
 
 ```python
 from totem_lib import import_ocel
@@ -39,7 +43,7 @@ for level in sorted(process_view):
 Level `0` is the bottom. Resources receive the **higher** numbers — forklifts and
 trucks end up above the containers and handling units they move.
 
-See [`example_process_areas.py`](example_process_areas.py) for a runnable script.
+See [`example_process_areas.py`](https://github.com/LukasLiss/totem-tool/blob/main/totem_lib/examples/example_process_areas.py) for a runnable script.
 
 ### Discovering from DuckDB
 

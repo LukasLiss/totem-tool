@@ -22,7 +22,7 @@ The reference implementation accompanying the thesis calls these ``push`` and
 
 Deviations from the thesis text are inherited from the reference
 implementation, which is what produced the thesis's evaluation numbers. They are
-documented per class below and collected in ``examples/PROCESS_AREAS.md``.
+documented per class below and collected in ``docs/guide/process_areas.md``.
 """
 
 from abc import ABC, abstractmethod

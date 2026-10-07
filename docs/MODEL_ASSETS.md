@@ -542,7 +542,7 @@ the matching model type. They can also be used as `content_json` for direct JSON
 creation.
 
 The OCCN example is also used by the
-[OCCN replay-fitness documentation](OCCN_REPLAY_FITNESS.md#canonical-example)
+[OCCN replay-fitness documentation](../totem_lib/docs/guide/occn_replay_fitness.md#canonical-example)
 to demonstrate fitting and non-fitting exact-object replay.
 
 ## Adding a New Asset Type

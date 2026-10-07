@@ -17,7 +17,7 @@ Vocabulary follows the thesis:
 
 The reference implementation accompanying the thesis calls these ``push`` and
 ``pull``, and swaps the meanings of ``alpha`` and ``beta`` relative to the
-thesis text. See ``examples/PROCESS_AREAS.md`` for the full list of deviations.
+thesis text. See ``docs/guide/process_areas.md`` for the full list of deviations.
 """
 
 from .aggregates import (

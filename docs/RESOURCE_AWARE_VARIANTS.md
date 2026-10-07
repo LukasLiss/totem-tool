@@ -122,7 +122,8 @@ loading*, which recompute after settings changes — never when storing.
 execution_column="process execution", object_types=...)` builds one replay
 unit per distinct value of the column (`stored_column:<id>`); events without
 a value are skipped. `object_types` projects every event onto the given
-types first and applies to all strategies (see `docs/OCCN_REPLAY_FITNESS.md`).
+types first and applies to all strategies (see
+`totem_lib/docs/guide/occn_replay_fitness.md`).
 
 In the OCCN conformance view choose **Stored process executions** as the
 replay unit strategy, pick the column, and switch on **Ignore object types
