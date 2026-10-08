@@ -475,7 +475,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def event_distribution(self, request, pk=None):
-        """Returns monthly event counts for the time range histogram."""
+        """Returns event counts bucketed at an auto-selected granularity.
+
+        The granularity is chosen from the log's actual time span so the
+        histogram always has a useful number of bars:
+          < 3 days   → hourly   (period: "YYYY-MM-DDTHH",  ≤ 72 bars)
+          < 90 days  → daily    (period: "YYYY-MM-DD",     ≤ 90 bars)
+          < 5 years  → monthly  (period: "YYYY-MM",        ≤ 60 bars)
+          ≥ 5 years  → yearly   (period: "YYYY",           one bar per year)
+
+        Response: {"distribution": [...], "granularity": "<level>"}
+        """
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
@@ -483,20 +493,50 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                rows = db.conn.execute("""
-                    SELECT
-                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
-                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
-                        COUNT(*) AS count
+                span = db.conn.execute(
+                    "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
+                ).fetchone()
+
+                if span is None or span[0] is None:
+                    return Response(
+                        {"distribution": [], "granularity": "month"},
+                        status=status.HTTP_200_OK,
+                    )
+
+                ts_min, ts_max = span
+                span_s = max(ts_max - ts_min, 1)
+
+                if span_s < 3 * 86_400:
+                    granularity = "hour"
+                    fmt = "%Y-%m-%dT%H"
+                elif span_s < 90 * 86_400:
+                    granularity = "day"
+                    fmt = "%Y-%m-%d"
+                elif span_s < 5 * 365 * 86_400:
+                    granularity = "month"
+                    fmt = "%Y-%m"
+                else:
+                    granularity = "year"
+                    fmt = "%Y"
+
+                rows = db.conn.execute(
+                    f"""
+                    SELECT strftime(to_timestamp(timestamp_unix), '{fmt}') AS period,
+                           COUNT(*) AS count
                     FROM events
-                    GROUP BY yr, mo
-                    ORDER BY yr, mo
-                """).fetchall()
-            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+                    GROUP BY period
+                    ORDER BY period
+                    """
+                ).fetchall()
+
+            distribution = [{"period": r[0], "count": r[1]} for r in rows]
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response(distribution, status=status.HTTP_200_OK)
+        return Response(
+            {"distribution": distribution, "granularity": granularity},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"])
     def apply_filters(self, request, pk=None):

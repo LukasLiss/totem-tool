@@ -8,7 +8,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import {
   Background,
   BackgroundVariant,
@@ -60,6 +60,7 @@ export interface OCPNVisualizerProps {
   /** Called when the user edits the timeout (e.g. to persist it). */
   onTimeoutSChange?: (timeoutS: number) => void;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 }
 
 /**
@@ -134,6 +135,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   showControls = true,
   onTimeoutSChange,
   filterEnabled = true,
+  localFilterParams,
 }) => {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
@@ -171,15 +173,20 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   const filterEnabledRef = useRef(filterEnabled);
   filterEnabledRef.current = filterEnabled;
 
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
+
   const discover = useCallback(async () => {
     if (!fileId) return;
     const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
+      const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabledRef.current);
+      if (filterConfig._noResults) { setLoading(false); setNodes([]); setEdges([]); return; }
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
-        params: { timeout_s: timeoutRef.current },
-        _skipGlobalFilter: !filterEnabledRef.current,
+        params: { timeout_s: timeoutRef.current, ...(filterConfig.params ?? {}) },
+        _skipGlobalFilter: filterConfig._skipGlobalFilter,
       });
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
@@ -212,11 +219,11 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     }
   }, [fileId]);
 
-  // Re-discover when filter is toggled or version changes.
+  // Re-discover when filter is toggled, version changes, or local filter changes.
   useEffect(() => {
     if (!fileId || !autoStart) return;
     discover();
-  }, [filterEnabled, effectiveFilterVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterEnabled, effectiveFilterVersion, localFilterParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start discovery (once per file).
   useEffect(() => {

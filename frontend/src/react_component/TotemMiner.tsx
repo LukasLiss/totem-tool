@@ -8,6 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { RefreshCcw } from 'lucide-react';
 import TotemMinerVisualizer from './TotemMinerVisualizer';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 export type TotemMinerProps = {
@@ -32,6 +33,7 @@ export default function TotemMiner({
   const [relayoutSignal, setRelayoutSignal] = useState(0);
   const [tau, setTau] = useState(0.8);
   const [sliderTau, setSliderTau] = useState(0.8);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
 
   const handleRelayout = useCallback(() => {
     setRelayoutSignal((prev) => prev + 1);
@@ -49,6 +51,7 @@ export default function TotemMiner({
       embedded={true}
       tau={tau}
       filterEnabled={filterEnabled}
+      localFilterParams={localFilterParams}
     />
   );
 
@@ -73,6 +76,7 @@ export default function TotemMiner({
           {onToggleFilter && (
             <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
           )}
+          <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
         </div>
         <div className="flex items-center gap-5">
           {/* τ slider */}

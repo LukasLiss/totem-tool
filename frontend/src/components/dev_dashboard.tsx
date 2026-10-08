@@ -7,6 +7,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
@@ -23,6 +24,7 @@ import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
   const [occnFilterEnabled, setOccnFilterEnabled] = useState(true);
+  const [occnLocalFilter, setOccnLocalFilter] = useState<Record<string, string>>({});
 
   return (
     <div>
@@ -33,6 +35,7 @@ export function DevDashboard() {
             <div className="flex items-center gap-2">
               <CardTitle>Object-Centric Causal Net</CardTitle>
               <GlobalFilterToggle filterEnabled={occnFilterEnabled} onToggle={() => setOccnFilterEnabled(p => !p)} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOccnLocalFilter} />
             </div>
             <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
           </CardHeader>
@@ -41,9 +44,9 @@ export function DevDashboard() {
               <OCCNVisualizer
                 height="100%"
                 fileId={selectedFile?.id}
-                showTitle={false}
                 filterEnabled={occnFilterEnabled}
-                onToggleFilter={() => setOccnFilterEnabled(p => !p)}
+                localFilterParams={occnLocalFilter}
+                showTitle={false}
               />
             </ReactFlowProvider>
           </CardContent>

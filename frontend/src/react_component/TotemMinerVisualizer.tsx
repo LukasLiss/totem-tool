@@ -20,7 +20,7 @@ import {
 } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import { Button } from '@/components/ui/button';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import {
@@ -113,6 +113,7 @@ type TotemMinerVisualizerProps = {
   onControlsReady?: (controls: TotemMinerVisualizerControls) => void;
   tau?: number;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -438,9 +439,12 @@ function TotemMinerVisualizer({
   onControlsReady,
   tau = 0.8,
   filterEnabled = true,
+  localFilterParams,
 }: TotemMinerVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawData, setRawData] = useState<TotemApiResponse | null>(null);
@@ -484,12 +488,14 @@ function TotemMinerVisualizer({
   // ── Fetch ────────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!eventLogId) { setRawData(null); return; }
+    const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+    if (filterConfig._noResults) { setRawData(null); return; }
     setLoading(true);
     setError(null);
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { _skipGlobalFilter: !filterEnabled },
+        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter },
       );
       setRawData(data);
     } catch (err) {
@@ -498,7 +504,7 @@ function TotemMinerVisualizer({
     } finally {
       setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion]);
+  }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
 
