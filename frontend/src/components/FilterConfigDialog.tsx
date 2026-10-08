@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Calendar, Search } from "lucide-react";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
 
 type OptionItem = { name: string; count: number };
 type Distribution = { period: string; count: number }[];
+type Granularity = "hour" | "day" | "month" | "year";
 
 const MONTHS = [
   "Jan",
@@ -38,18 +39,21 @@ const MONTHS = [
 ];
 
 function unixToDate(unix: number): string {
-  return new Date(unix * 1000).toISOString().slice(0, 10);
+  // Returns YYYY-MM-DDTHH:MM in UTC 
+  return new Date(unix * 1000).toISOString().slice(0, 16);
 }
 
 function fmtSpan(unix: number): string {
   const d = new Date(unix * 1000);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
 function fmtPill(after: string, before: string): string {
-  const a = new Date(after + "T00:00:00");
-  const b = new Date(before + "T00:00:00");
-  return `${MONTHS[a.getMonth()]} '${String(a.getFullYear()).slice(2)} – ${MONTHS[b.getMonth()]} '${String(b.getFullYear()).slice(2)}`;
+  // after/before are YYYY-MM-DDTHH:MM UTC strings.
+  const a = new Date(after + ":00Z");
+  const b = new Date(before + ":00Z");
+  return `${MONTHS[a.getUTCMonth()]} '${String(a.getUTCFullYear()).slice(2)} – ${MONTHS[b.getUTCMonth()]} '${String(b.getUTCFullYear()).slice(2)}`;
 }
 
 const CHART_H = 150;
@@ -73,11 +77,14 @@ function DateInput({
 }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-      <Label htmlFor={id}>{label}</Label>
+      <Label htmlFor={id} style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+        {label}
+        <span style={{ fontSize: 10, color: "var(--muted-foreground)", fontWeight: 400 }}>UTC</span>
+      </Label>
       <div style={{ position: "relative" }}>
         <Input
           id={id}
-          type="date"
+          type="datetime-local"
           className="filter-date-input"
           value={value}
           min={min}
@@ -101,79 +108,295 @@ function DateInput({
   );
 }
 
-function EventChart({
-  distribution,
+function periodToAfterDate(period: string, granularity: Granularity): string {
+  switch (granularity) {
+    case "hour":  return `${period}:00`;               
+    case "day":   return `${period}T00:00`;             
+    case "month": return `${period}-01T00:00`;          
+    case "year":  return `${period}-01-01T00:00`;       
+  }
+}
+function periodToBeforeDate(period: string, granularity: Granularity): string {
+  switch (granularity) {
+    case "hour":  return `${period}:59`;               
+    case "day":   return `${period}T23:59`;            
+    case "month": {
+      const [y, m] = period.split("-").map(Number);
+      const d = new Date(y, m, 0).getDate();
+      return `${period}-${String(d).padStart(2, "0")}T23:59`;
+    }
+    case "year":  return `${period}-12-31T23:59`;       
+  }
+}
+
+
+function RangeSlider({
+  logMin,
+  logMax,
   afterDate,
   beforeDate,
+  onChange,
 }: {
-  distribution: Distribution;
+  logMin: number;
+  logMax: number;
   afterDate: string;
   beforeDate: string;
+  onChange: (after: string, before: string) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef<"left" | "right" | null>(null);
+  const span = Math.max(logMax - logMin, 1);
+
+  function dateStrToUnix(date: string): number {
+    if (!date) return logMin;
+    try { return Math.floor(new Date(date + ":00Z").getTime() / 1000); }
+    catch { return logMin; }
+  }
+
+  const afterUnix  = Math.max(logMin, Math.min(logMax, dateStrToUnix(afterDate)));
+  const beforeUnix = Math.max(logMin, Math.min(logMax, dateStrToUnix(beforeDate)));
+
+  const loFrac = (afterUnix  - logMin) / span;
+  const hiFrac = (beforeUnix - logMin) / span;
+
+  function unixFromPointer(e: React.PointerEvent): number {
+    const rect = trackRef.current!.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    return Math.round(logMin + frac * span);
+  }
+
+  function onThumbDown(e: React.PointerEvent, thumb: "left" | "right") {
+    e.preventDefault();
+    dragging.current = thumb;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onMove(e: React.PointerEvent) {
+    if (!dragging.current) return;
+    const unix = unixFromPointer(e);
+    if (dragging.current === "left") {
+      onChange(unixToDate(Math.max(logMin, Math.min(unix, beforeUnix - 60))), beforeDate);
+    } else {
+      onChange(afterDate, unixToDate(Math.min(logMax, Math.max(unix, afterUnix + 60))));
+    }
+  }
+
+  function onUp() { dragging.current = null; }
+
+  const thumbStyle = (frac: number, zIdx: number): React.CSSProperties => ({
+    position: "absolute",
+    top: "50%",
+    left: `${frac * 100}%`,
+    width: 16,
+    height: 16,
+    borderRadius: "50%",
+    background: "var(--primary)",
+    border: "2px solid var(--background)",
+    transform: "translate(-50%, -50%)",
+    cursor: "grab",
+    boxShadow: "0 1px 4px rgba(0,0,0,0.25)",
+    zIndex: zIdx,
+    touchAction: "none",
+  });
+
+  return (
+    <div style={{ padding: "4px 8px 0" }}>
+      <div
+        ref={trackRef}
+        style={{ position: "relative", height: 20, cursor: "pointer" }}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+      >
+        <div style={{
+          position: "absolute", top: "50%", left: 0, right: 0,
+          height: 4, borderRadius: 2, background: "var(--border)",
+          transform: "translateY(-50%)",
+        }} />
+        <div style={{
+          position: "absolute", top: "50%",
+          left: `${loFrac * 100}%`,
+          right: `${(1 - hiFrac) * 100}%`,
+          height: 4, borderRadius: 2, background: "var(--primary)",
+          transform: "translateY(-50%)",
+        }} />
+        <div
+          title={afterDate}
+          style={thumbStyle(loFrac, loFrac >= hiFrac - 0.01 ? 3 : 2)}
+          onPointerDown={(e) => onThumbDown(e, "left")}
+        />
+        <div
+          title={beforeDate}
+          style={thumbStyle(hiFrac, 2)}
+          onPointerDown={(e) => onThumbDown(e, "right")}
+        />
+      </div>
+    </div>
+  );
+}
+
+// How many chars of a YYYY-MM-DDTHH:MM datetime string identify a bar's period.
+const GRANULARITY_PREFIX_LEN: Record<Granularity, number> = {
+  hour: 13,   // "YYYY-MM-DDTHH"
+  day:  10,   // "YYYY-MM-DD"
+  month: 7,   // "YYYY-MM"
+  year:  4,   // "YYYY"
+};
+
+const GRANULARITY_LABELS: Record<Granularity, string> = {
+  hour: "by hour",
+  day: "by day",
+  month: "by month",
+  year: "by year",
+};
+
+function EventChart({
+  distribution,
+  granularity,
+  afterDate,
+  beforeDate,
+  onRangeChange,
+}: {
+  distribution: Distribution;
+  granularity: Granularity;
+  afterDate: string;
+  beforeDate: string;
+  onRangeChange: (after: string, before: string) => void;
 }) {
   if (distribution.length === 0) return null;
 
-  const maxCount = Math.max(...distribution.map((d) => d.count), 1);
-  const afterMonth = afterDate.slice(0, 7);
-  const beforeMonth = beforeDate.slice(0, 7);
-  const barW = SVG_W / distribution.length;
-  const first = distribution[0];
-  const last = distribution[distribution.length - 1];
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragCurrent, setDragCurrent] = useState<number | null>(null);
 
-  function periodLabel(period: string) {
-    return `${MONTHS[parseInt(period.slice(5)) - 1]} ${period.slice(0, 4)}`;
+  const n = distribution.length;
+  const maxCount = Math.max(...distribution.map((d) => d.count), 1);
+  const barW = SVG_W / n;
+  const first = distribution[0];
+  const last = distribution[n - 1];
+
+  function periodLabel(p: string): string {
+    switch (granularity) {
+      case "hour": {
+        const [datePart, hr] = p.split("T");
+        const [, mo, dy] = datePart.split("-");
+        return `${MONTHS[parseInt(mo) - 1]} ${parseInt(dy)} ${hr}:00`;
+      }
+      case "day": {
+        const [y, mo, dy] = p.split("-");
+        return `${MONTHS[parseInt(mo) - 1]} ${parseInt(dy)}, ${y}`;
+      }
+      case "month":
+        return `${MONTHS[parseInt(p.slice(5)) - 1]} ${p.slice(0, 4)}`;
+      case "year":
+        return p;
+    }
+  }
+
+  const prefixLen = GRANULARITY_PREFIX_LEN[granularity];
+
+  const dateToIdx = useCallback(
+    (date: string, edge: "lo" | "hi"): number => {
+      if (!date) return edge === "lo" ? 0 : n - 1;
+      const prefix = date.slice(0, prefixLen);
+      if (edge === "lo") {
+        for (let i = 0; i < n; i++) if (distribution[i].period >= prefix) return i;
+        return n - 1;
+      } else {
+        for (let i = n - 1; i >= 0; i--) if (distribution[i].period <= prefix) return i;
+        return 0;
+      }
+    },
+    [distribution, n, prefixLen],
+  );
+
+  const afterIdx  = dateToIdx(afterDate,  "lo");
+  const beforeIdx = dateToIdx(beforeDate, "hi");
+
+  const dispLo = dragStart !== null ? Math.min(dragStart, dragCurrent ?? dragStart) : afterIdx;
+  const dispHi = dragStart !== null ? Math.max(dragStart, dragCurrent ?? dragStart) : beforeIdx;
+
+  function getBarIdx(e: React.PointerEvent<SVGSVGElement>): number {
+    const rect = svgRef.current!.getBoundingClientRect();
+    const svgX = ((e.clientX - rect.left) / rect.width) * SVG_W;
+    return Math.max(0, Math.min(n - 1, Math.floor(svgX / barW)));
+  }
+
+  function commit(lo: number, hi: number) {
+    onRangeChange(
+      periodToAfterDate(distribution[lo].period,  granularity),
+      periodToBeforeDate(distribution[hi].period, granularity),
+    );
   }
 
   return (
     <div>
-      <p
-        style={{
-          fontSize: 12,
-          color: "var(--muted-foreground)",
-          marginBottom: 6,
-        }}
-      >
-        Event distribution
+      <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 6 }}>
+        Event distribution {GRANULARITY_LABELS[granularity]} — drag to set range, fine-tune above
       </p>
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-        style={{ width: "100%", display: "block" }}
+        style={{
+          width: "100%",
+          display: "block",
+          cursor: dragStart !== null ? "col-resize" : "default",
+          userSelect: "none",
+        }}
         preserveAspectRatio="none"
+        onPointerDown={(e) => {
+          svgRef.current?.setPointerCapture(e.pointerId);
+          const idx = getBarIdx(e);
+          setDragStart(idx);
+          setDragCurrent(idx);
+        }}
+        onPointerMove={(e) => {
+          if (dragStart === null) return;
+          setDragCurrent(getBarIdx(e));
+        }}
+        onPointerUp={() => {
+          if (dragStart !== null) {
+            const lo = Math.min(dragStart, dragCurrent ?? dragStart);
+            const hi = Math.max(dragStart, dragCurrent ?? dragStart);
+            commit(lo, hi);
+          }
+          setDragStart(null);
+          setDragCurrent(null);
+        }}
+        onPointerCancel={() => { setDragStart(null); setDragCurrent(null); }}
       >
         {distribution.map((d, i) => {
-          const inRange =
-            (!afterDate || d.period >= afterMonth) &&
-            (!beforeDate || d.period <= beforeMonth);
+          const inRange = i >= dispLo && i <= dispHi;
           const h = Math.max((d.count / maxCount) * CHART_H, 2);
+          // Gap between bars: 1px when bars are wide enough, 0px when very narrow.
+          const gap = barW > 3 ? 1 : 0;
           return (
             <rect
               key={d.period}
-              x={i * barW + 1}
+              x={i * barW + gap}
               y={CHART_H - h}
-              width={Math.max(barW - 2, 1)}
+              width={Math.max(barW - gap * 2, 1)}
               height={h}
-              rx={1}
-              style={{ fill: inRange ? "var(--primary)" : "var(--border)" }}
+              rx={barW > 6 ? 1 : 0}
+              style={{
+                fill: inRange ? "var(--primary)" : "var(--border)",
+                transition: dragStart === null ? "fill 0.08s" : "none",
+              }}
             />
           );
         })}
-        <text
-          x={0}
-          y={SVG_H}
-          fontSize={9}
-          style={{ fill: "var(--muted-foreground)" }}
-        >
+        <text x={0} y={SVG_H} fontSize={9} style={{ fill: "var(--muted-foreground)" }}>
           {periodLabel(first.period)}
         </text>
-        <text
-          x={SVG_W}
-          y={SVG_H}
-          fontSize={9}
-          textAnchor="end"
-          style={{ fill: "var(--muted-foreground)" }}
-        >
+        <text x={SVG_W} y={SVG_H} fontSize={9} textAnchor="end" style={{ fill: "var(--muted-foreground)" }}>
           {periodLabel(last.period)}
         </text>
       </svg>
+      {n === 1 && (
+        <p style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 4, textAlign: "center" }}>
+          All events fall within one {granularity} - use the inputs above to narrow the range.
+        </p>
+      )}
     </div>
   );
 }
@@ -347,6 +570,7 @@ export function FilterConfigDialog({
   const [logMin, setLogMin] = useState<number | null>(null);
   const [logMax, setLogMax] = useState<number | null>(null);
   const [distribution, setDistribution] = useState<Distribution>([]);
+  const [granularity, setGranularity] = useState<Granularity>("month");
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -397,8 +621,14 @@ export function FilterConfigDialog({
       })
       .catch(() => {});
     axios
-      .get<Distribution>(`/api/files/${fileId}/event_distribution/`, { _skipGlobalFilter: true })
-      .then(({ data }) => setDistribution(data))
+      .get<{ distribution: Distribution; granularity: Granularity }>(
+        `/api/files/${fileId}/event_distribution/`,
+        { _skipGlobalFilter: true },
+      )
+      .then(({ data }) => {
+        setDistribution(data.distribution);
+        setGranularity(data.granularity);
+      })
       .catch(() => {});
   }, [open, filterType, fileId, existingRule]);
 
@@ -496,10 +726,10 @@ export function FilterConfigDialog({
       filterType === "time_range"
         ? {
             after: afterDate
-              ? Math.floor(new Date(afterDate + "T00:00:00Z").getTime() / 1000)
+              ? Math.floor(new Date(afterDate + ":00Z").getTime() / 1000)
               : undefined,
             before: beforeDate
-              ? Math.floor(new Date(beforeDate + "T23:59:59Z").getTime() / 1000)
+              ? Math.floor(new Date(beforeDate + ":59Z").getTime() / 1000)
               : undefined,
           }
         : { include: [...selected] };
@@ -605,11 +835,30 @@ export function FilterConfigDialog({
                 </div>
 
                 {distribution.length > 0 && (
-                  <EventChart
-                    distribution={distribution}
-                    afterDate={afterDate}
-                    beforeDate={beforeDate}
-                  />
+                  <>
+                    <EventChart
+                      distribution={distribution}
+                      granularity={granularity}
+                      afterDate={afterDate}
+                      beforeDate={beforeDate}
+                      onRangeChange={(after, before) => {
+                        setAfterDate(after);
+                        setBeforeDate(before);
+                      }}
+                    />
+                    {logMin != null && logMax != null && (
+                      <RangeSlider
+                        logMin={logMin}
+                        logMax={logMax}
+                        afterDate={afterDate}
+                        beforeDate={beforeDate}
+                        onChange={(after, before) => {
+                          setAfterDate(after);
+                          setBeforeDate(before);
+                        }}
+                      />
+                    )}
+                  </>
                 )}
 
                 {pills.length > 0 && (
