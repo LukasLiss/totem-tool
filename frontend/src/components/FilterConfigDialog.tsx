@@ -263,8 +263,6 @@ function EventChart({
   beforeDate: string;
   onRangeChange: (after: string, before: string) => void;
 }) {
-  if (distribution.length === 0) return null;
-
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragCurrent, setDragCurrent] = useState<number | null>(null);
@@ -309,6 +307,10 @@ function EventChart({
     },
     [distribution, n, prefixLen],
   );
+
+  // Bail out only after every hook has run — hooks must be called in the same
+  // order on every render.
+  if (n === 0) return null;
 
   const afterIdx  = dateToIdx(afterDate,  "lo");
   const beforeIdx = dateToIdx(beforeDate, "hi");
