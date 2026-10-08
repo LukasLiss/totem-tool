@@ -12,6 +12,8 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !docs/RESOURCE_AWARE_VARIANTS.md
 !docs/EDGE_CASE_TAXONOMY.md
 !totem_lib/test_data/edge_cases/README.md
+!.claude/**/*.md
+!backend/assistant/knowledge/*.md
 *.txt
 !*requirements*.txt
 !backend/requirements.txt
@@ -207,6 +209,7 @@ $RECYCLE.BIN/
 # Temporary folders
 tmp/
 temp/
+.mimosa/
 
 # Log files
 *.log

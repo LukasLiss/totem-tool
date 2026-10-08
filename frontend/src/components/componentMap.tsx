@@ -202,22 +202,20 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
 };
 
 
-// NumberOfEventsComponent: Static display with a button (customize as needed)
+// NumberOfEventsComponent: Displays total event count for the selected log
 export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
-  const [processedResult, setProcessedResult] = useState(null);
-
-  // Refetch when the global filter changes so the count follows the filter.
+  const [processedResult, setProcessedResult] = useState<number | null>(null);
   const filterVersion = useFilterVersion();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [, setIsLoading] = useState(false);
-  const [, setError] = useState(null);
-
+  const nodeFileId = (node as unknown as { file_id?: number })?.file_id;
 
   useEffect(() => {
+    let isMounted = true;
     const handleProcessFile = async () => {
-
-
-      if (!selectedFile?.id) {
+      const fileId = selectedFile?.id || (selectedFile as unknown as { file?: { id?: number } })?.file?.id || nodeFileId;
+      if (!fileId) {
         setProcessedResult(null);
         return;
       }
@@ -226,28 +224,52 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
       setError(null);
 
       try {
-        const result = await processFile(selectedFile.id);
-        setProcessedResult(result);
-      } catch {
-        setError("Failed to load data");
+        const result = await processFile(fileId);
+        if (isMounted) {
+          let count: number = 0;
+          if (typeof result === "number") {
+            count = result;
+          } else if (Array.isArray(result) && typeof result[0] === "number") {
+            count = result[0];
+          } else if (result && typeof result === "object") {
+            count = result.num_events ?? result.count ?? result.events ?? 0;
+          }
+          setProcessedResult(count);
+        }
+      } catch (err) {
+        if (isMounted) {
+          console.error("Failed to process file in NumberOfEventsComponent:", err);
+          setError("Failed to load");
+        }
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     };
 
     handleProcessFile();
-  }, [selectedFile, filterVersion]); // Re-run when the file or global filter changes
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedFile, nodeFileId, filterVersion]);
+
+  const display = processedResult !== null
+    ? processedResult.toLocaleString()
+    : (isLoading ? "Loading..." : (error || "No File"));
 
   return (
-    <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardDescription>
-            Number of Events
+    <div className="w-full h-full p-2 flex flex-col justify-center items-center">
+      <Card className="w-full h-full flex flex-col justify-center items-center shadow-xs border bg-card text-card-foreground">
+        <CardHeader className="pb-1 text-center">
+          <CardDescription className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Total Event Count
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
+        <CardContent className="pt-0 text-center">
+          <p className="text-3xl font-extrabold tracking-tight text-primary">
+            {display}
+          </p>
         </CardContent>
       </Card>
     </div>

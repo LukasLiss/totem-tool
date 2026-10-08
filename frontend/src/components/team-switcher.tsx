@@ -33,6 +33,7 @@ import { deleteProject, getUserFiles, renameProject } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner"
 import { DashboardContext } from "@/contexts/DashboardContext.tsx";
+import { TOUR_IDS } from "@/tour/tourIds";
 
 /** One row of GET /api/files/ — a project as the switcher knows it. */
 type ProjectFile = {
@@ -146,6 +147,7 @@ export function Switcher() {
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
+              data-tour-id={TOUR_IDS.PROJECT_SWITCHER}
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
