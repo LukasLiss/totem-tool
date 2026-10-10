@@ -196,43 +196,28 @@ class DashboardViewSet(viewsets.ModelViewSet):
         return Response({"status": "saved"})
 
     def _replace_components(self, dashboard, layout, request):
-        # Clear existing components
         dashboard.components.all().delete()
 
         for item in layout:
             component_name = item["component_name"]
+            base = {
+                "dashboard": dashboard,
+                "x": item["x"],
+                "y": item["y"],
+                "w": item["w"],
+                "h": item["h"],
+                "component_name": component_name,
+            }
             if component_name == "TextBoxComponent":
                 TextBoxComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
-                    text=item.get("text", ""),
-                    font_size=item.get("font_size", 14),
+                    **base, text=item.get("text", ""), font_size=item.get("font_size", 14)
                 )
-
             elif component_name == "NumberOfEventsComponent":
-                NumberofEventsComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
-                    color=item.get("color", "blue"),
-                )
+                NumberofEventsComponent.objects.create(**base, color=item.get("color", "blue"))
             elif component_name == "ImageComponent":
-                # Legacy image path: only keep it when it points at an
-                # existing upload of this dashboard's project. Anything else
-                # (arbitrary paths, other projects' files) is dropped.
                 image_path = _validated_legacy_image_path(
                     item.get("image"), dashboard.project
                 )
-
-                # Image asset reference: only accept assets of this
-                # dashboard's project the user can actually see.
                 image_asset = None
                 image_asset_id = item.get("image_asset")
                 if image_asset_id:
@@ -247,25 +232,13 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     image_fit = "contain"
                 image_alignment = item.get("image_alignment") or "center"
                 if image_alignment not in (
-                    "center",
-                    "top",
-                    "bottom",
-                    "left",
-                    "right",
-                    "top left",
-                    "top right",
-                    "bottom left",
-                    "bottom right",
+                    "center", "top", "bottom", "left", "right",
+                    "top left", "top right", "bottom left", "bottom right",
                 ):
                     image_alignment = "center"
 
                 ImageComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     image=image_path,
                     image_asset=image_asset,
                     image_fit=image_fit,
@@ -273,12 +246,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == "VariantsComponent":
                 VariantsComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     automatic_loading=item.get("automatic_loading", False),
                     leading_object_type=item.get("leading_object_type", ""),
                     extraction=item.get("extraction") or "leading_1hop",
@@ -289,12 +257,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     algorithm=item.get("algorithm") or "advanced",
                     w_temporal=item.get("w_temporal", 1.0),
                     w_cardinality=item.get("w_cardinality", 1.0),
@@ -303,22 +266,10 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     beta=item.get("beta", 1.0),
                 )
             elif component_name == "TotemMinerComponent":
-                TotemMinerComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
-                )
+                TotemMinerComponent.objects.create(**base)
             elif component_name == "LogStatisticsComponent":
                 LogStatisticsComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     show_num_events=item.get("show_num_events", True),
                     show_num_activities=item.get("show_num_activities", True),
                     show_num_objects=item.get("show_num_objects", True),
@@ -329,12 +280,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == "OCDottedChartComponent":
                 OCDottedChartComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     file_id=item.get("file_id"),
                     x_axis=item.get("x_axis") or "time",
                     y_axis=item.get("y_axis") or "activity",
@@ -347,12 +293,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name in ("NewOCDFGComponent", "NewOCDFGVariantsComponent"):
                 NewOCDFGComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     show_controls=item.get("show_controls", True),
                     initial_interaction_locked=item.get(
                         "initial_interaction_locked", True
@@ -361,12 +302,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 )
             elif component_name == "OCCNComponent":
                 OCCNComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item["x"],
-                    y=item["y"],
-                    w=item["w"],
-                    h=item["h"],
-                    component_name=component_name,
+                    **base,
                     relative_occurrence_threshold=item.get(
                         "relative_occurrence_threshold", 0.0
                     ),
@@ -377,107 +313,71 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     layout_direction=item.get("layout_direction", "LR"),
                     object_types=item.get("object_types") or "",
                 )
-            elif component_name == 'OCPNComponent':
+            elif component_name == "OCPNComponent":
                 OCPNComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    automatic_loading=item.get('automatic_loading', False),
-                    timeout_s=item.get('timeout_s', 30.0),
+                    **base,
+                    automatic_loading=item.get("automatic_loading", False),
+                    timeout_s=item.get("timeout_s", 30.0),
                 )
-            elif component_name == 'FilterStackComponent':
+            elif component_name == "FilterStackComponent":
                 FilterStackComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    filter_stack_json=item.get('filter_stack_json', []),
+                    **base,
+                    filter_stack_json=item.get("filter_stack_json", []),
                 )
-            elif component_name == 'SqlQueryComponent':
+            elif component_name == "SqlQueryComponent":
                 SqlQueryComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    name=item.get('name', ''),
-                    query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
+                    **base,
+                    name=item.get("name", ""),
+                    query=item.get("query") or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
                     query_asset=_query_asset_for(item, dashboard, request),
-                    row_limit=_bounded_int(item, 'row_limit', 25, 1, 1000),
+                    row_limit=_bounded_int(item, "row_limit", 25, 1, 1000),
                 )
-            # Add more as needed
-            elif component_name == 'PieChartComponent':
+            elif component_name == "PieChartComponent":
                 PieChartComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    query=item.get('query', ''),
+                    **base,
+                    query=item.get("query", ""),
                     query_asset=_query_asset_for(item, dashboard, request),
-                    ring_text=item.get('ring_text', ''),
-                    chart_type=item.get('chart_type', 'donut'),
-                    title=item.get('title', ''),
-                    show_legend=item.get('show_legend', True),
-                    show_tooltip=item.get('show_tooltip', True),
-                    label_column=item.get('label_column', ''),
-                    value_column=item.get('value_column', ''),
+                    ring_text=item.get("ring_text", ""),
+                    chart_type=item.get("chart_type", "donut"),
+                    title=item.get("title", ""),
+                    show_legend=item.get("show_legend", True),
+                    show_tooltip=item.get("show_tooltip", True),
+                    label_column=item.get("label_column", ""),
+                    value_column=item.get("value_column", ""),
                 )
-            elif component_name == 'KpiComponent':
+            elif component_name == "KpiComponent":
                 KpiComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    title=item.get('title') or '',
-                    query=item.get('query') or '',
+                    **base,
+                    title=item.get("title") or "",
+                    query=item.get("query") or "",
                     query_asset=_query_asset_for(item, dashboard, request),
-                    value_column=item.get('value_column') or '',
-                    prefix=item.get('prefix') or '',
-                    suffix=item.get('suffix') or '',
-                    decimals=_bounded_int(item, 'decimals', 0, 0, 10),
+                    value_column=item.get("value_column") or "",
+                    prefix=item.get("prefix") or "",
+                    suffix=item.get("suffix") or "",
+                    decimals=_bounded_int(item, "decimals", 0, 0, 10),
                 )
-            elif component_name == 'BarChartComponent':
+            elif component_name == "BarChartComponent":
                 BarChartComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    title=item.get('title') or '',
-                    query=item.get('query') or '',
+                    **base,
+                    title=item.get("title") or "",
+                    query=item.get("query") or "",
                     query_asset=_query_asset_for(item, dashboard, request),
-                    label_column=item.get('label_column') or '',
-                    value_column=item.get('value_column') or '',
-                    horizontal=bool(item.get('horizontal', False)),
-                    show_values=bool(item.get('show_values', False)),
+                    label_column=item.get("label_column") or "",
+                    value_column=item.get("value_column") or "",
+                    horizontal=bool(item.get("horizontal", False)),
+                    show_values=bool(item.get("show_values", False)),
                 )
-            elif component_name == 'ScatterPlotComponent':
+            elif component_name == "ScatterPlotComponent":
                 ScatterPlotComponent.objects.create(
-                    dashboard=dashboard,
-                    x=item['x'],
-                    y=item['y'],
-                    w=item['w'],
-                    h=item['h'],
-                    component_name=component_name,
-                    title=item.get('title') or '',
-                    query=item.get('query') or '',
+                    **base,
+                    title=item.get("title") or "",
+                    query=item.get("query") or "",
                     query_asset=_query_asset_for(item, dashboard, request),
-                    x_column=item.get('x_column') or '',
-                    y_column=item.get('y_column') or '',
-                    series_column=item.get('series_column') or '',
-                    x_label=item.get('x_label') or '',
-                    y_label=item.get('y_label') or '',
+                    x_column=item.get("x_column") or "",
+                    y_column=item.get("y_column") or "",
+                    series_column=item.get("series_column") or "",
+                    x_label=item.get("x_label") or "",
+                    y_label=item.get("y_label") or "",
                 )
 
         return Response({"status": "saved"})

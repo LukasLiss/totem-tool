@@ -7,12 +7,6 @@ import os
 import uuid
 # Create your models here.
 
-#This is the general OCM datastructure
-
-def user_directory_path(instance, filename):
-    # Redirect to the new function (or just return a flat path)
-    return os.path.join("legacy", filename)
-
 def project_directory_path(instance, filename):
     return os.path.join(instance.dashboard.project.name, filename)
 

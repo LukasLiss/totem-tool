@@ -355,44 +355,25 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 )
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
-        except OCELValidationException as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
+        except (OCELValidationException, Exception) as e:
+            user_file = getattr(serializer, "instance", None)
+            if user_file:
+                if getattr(user_file, "file", None) and os.path.exists(user_file.file.path):
+                    _remove_file(user_file.file.path)
+                if getattr(user_file, "project", None):
                     try:
                         user_file.project.delete()
                     except Exception:
                         pass
-                if user_file.pk:
+                if getattr(user_file, "pk", None):
                     try:
                         user_file.delete()
                     except Exception:
                         pass
-            return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
-                    try:
-                        user_file.project.delete()
-                    except Exception:
-                        pass
-                if user_file.pk:
-                    try:
-                        user_file.delete()
-                    except Exception:
-                        pass
+            if isinstance(e, OCELValidationException):
+                return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
