@@ -12,14 +12,14 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
+import LogStatistics from "@/components/LogStatistics";
 
 /**
  * The Overview page: a first look at the selected event log.
  *
- * Deliberately only the Process Area and the OCCN. Everything else this page
- * used to repeat — log statistics, OC-DFG variants, the variants explorer and
- * the dotted chart — lives in the Analysis section, where it can be worked
- * with properly.
+ * Log statistics, the Process Area and the OCCN. Everything else this page
+ * used to repeat — OC-DFG variants, the variants explorer and the dotted
+ * chart — lives in the Analysis section, where it can be worked with properly.
  */
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
@@ -29,6 +29,13 @@ export function DevDashboard() {
   return (
     <div>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
+        <LogStatistics
+          fileId={selectedFile?.id}
+          showNumEvents={true}
+          showNumActivities={true}
+          showNumObjects={true}
+          showNumObjectTypes={true}
+        />
         <ProcessArea fileId={selectedFile?.id} />
         <Card className="@container/card">
           <CardHeader className="items-center relative z-10 justify-between">
