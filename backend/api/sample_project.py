@@ -26,6 +26,8 @@ from django.core.files import File
 from django.core.files.base import ContentFile
 from django.db import transaction
 
+from .asset_formats import SQL_QUERY_ASSET_SCHEMA, SQL_QUERY_ASSET_VERSION
+
 logger = logging.getLogger(__name__)
 
 # One row in SeedState under this key means the sample project has been
@@ -120,6 +122,133 @@ QUERY_ACTIVITY_WORKLOAD = """SELECT label, sum(value) AS value FROM (
 )
 GROUP BY label
 ORDER BY value DESC"""
+
+
+# --- The project's stored SQL queries ----------------------------------------
+#
+# These fill the query store (Project Assets > SQL Queries) so the sample
+# project arrives with the kind of saved queries an operations team would
+# actually keep, and the SQL editor opens onto something real.
+#
+# They deliberately do not repeat the generic example library in
+# frontend/src/react_component/sql/exampleQueries.ts ("Add from examples"),
+# which already covers log-agnostic questions like events per activity or
+# objects per type. These are about *this* business: orders, containers,
+# vehicles and the exceptions in between.
+
+QUERY_STORE_ORDER_LEAD_TIME = """SELECT eo.obj_id AS customer_order,
+       to_timestamp(min(e.timestamp_unix)) AS registered_at,
+       to_timestamp(max(e.timestamp_unix)) AS last_event_at,
+       round((max(e.timestamp_unix) - min(e.timestamp_unix)) / 86400.0, 2) AS lead_days,
+       count(*) AS recorded_steps
+FROM event_object eo
+JOIN events e USING (event_id)
+JOIN objects o ON o.obj_id = eo.obj_id
+WHERE o.obj_type = 'CustomerOrder'
+GROUP BY eo.obj_id
+ORDER BY lead_days DESC"""
+
+# Builds on the stored query above by name. A stored query can be used like a
+# table; the backend folds the referenced one in as a CTE before running it
+# (api/query_refs.py), so the two never drift apart.
+QUERY_STORE_DELAYED_ORDERS = """SELECT customer_order, registered_at, lead_days
+FROM "Order Lead Time"
+WHERE lead_days > 7
+ORDER BY lead_days DESC"""
+
+QUERY_STORE_CONTAINER_TURNAROUND = """SELECT eo.obj_id AS container,
+       o.Status AS status,
+       try_cast(o.Weight AS DOUBLE) AS weight_kg,
+       to_timestamp(min(e.timestamp_unix)) AS first_seen,
+       to_timestamp(max(e.timestamp_unix)) AS last_seen,
+       round((max(e.timestamp_unix) - min(e.timestamp_unix)) / 3600.0, 1) AS turnaround_hours,
+       count(*) AS handling_steps
+FROM event_object eo
+JOIN events e USING (event_id)
+JOIN objects o ON o.obj_id = eo.obj_id
+WHERE o.obj_type = 'Container'
+GROUP BY eo.obj_id, o.Status, o.Weight
+ORDER BY turnaround_hours DESC"""
+
+QUERY_STORE_VEHICLE_LOADING = """SELECT v.obj_id AS vehicle,
+       count(DISTINCT c.obj_id) AS containers_loaded,
+       to_timestamp(min(e.timestamp_unix)) AS first_load,
+       to_timestamp(max(e.timestamp_unix)) AS last_load
+FROM events e
+JOIN event_object ev ON ev.event_id = e.event_id
+JOIN objects v ON v.obj_id = ev.obj_id AND v.obj_type = 'Vehicle'
+JOIN event_object ec ON ec.event_id = e.event_id
+JOIN objects c ON c.obj_id = ec.obj_id AND c.obj_type = 'Container'
+WHERE e.activity = 'LoadtoVehicle'
+GROUP BY v.obj_id
+ORDER BY containers_loaded DESC"""
+
+QUERY_STORE_RESCHEDULED = """SELECT to_timestamp(e.timestamp_unix) AS rescheduled_at,
+       eo.obj_id AS container,
+       o.Status AS status,
+       try_cast(o.Weight AS DOUBLE) AS weight_kg
+FROM events e
+JOIN event_object eo ON eo.event_id = e.event_id
+JOIN objects o ON o.obj_id = eo.obj_id
+WHERE e.activity = 'RescheduleContainer'
+  AND o.obj_type = 'Container'
+ORDER BY rescheduled_at"""
+
+
+# (name, description, sql). Names are what the SQL editor shows in its
+# "Queries" menu, and what another query references them by -- so renaming one
+# breaks any query built on it, exactly as it would for a table.
+SAMPLE_QUERIES = [
+    (
+        "Order Lead Time",
+        "One row per customer order: when it was registered, when it was last "
+        "touched, and how many days it took end to end.",
+        QUERY_STORE_ORDER_LEAD_TIME,
+    ),
+    (
+        "Delayed Orders",
+        "Orders that took more than a week. Built on the “Order Lead Time” "
+        "query — a stored query can be used like a table.",
+        QUERY_STORE_DELAYED_ORDERS,
+    ),
+    (
+        "Container Turnaround",
+        "How long each container stayed in the network, with its weight, status "
+        "and how many handling steps it took.",
+        QUERY_STORE_CONTAINER_TURNAROUND,
+    ),
+    (
+        "Vehicle Loading Summary",
+        "Containers loaded per vehicle, with the first and last loading time.",
+        QUERY_STORE_VEHICLE_LOADING,
+    ),
+    (
+        "Rescheduled Containers",
+        "Every container that had to be rescheduled — the exception list.",
+        QUERY_STORE_RESCHEDULED,
+    ),
+    (
+        "Monthly Order Volume",
+        "Customer orders registered per month. Drives the dashboard's bar chart.",
+        QUERY_MONTHLY_ORDERS,
+    ),
+    (
+        "Terminal Workload by Activity",
+        "Events per activity, with the long tail grouped. Drives the dashboard's "
+        "donut chart.",
+        QUERY_ACTIVITY_WORKLOAD,
+    ),
+]
+
+# Dashboard widgets that link a stored query instead of owning their SQL, so
+# editing the query in the store updates the widget too. Only queries whose
+# text is identical to the widget's own are linked: if the user deletes the
+# asset the FK is set to NULL and the widget falls back to that same SQL, so
+# the dashboard cannot be broken from the query store.
+LINKED_QUERY_BY_TITLE = {
+    "Monthly Order Volume": "Monthly Order Volume",
+    "Terminal Workload by Activity": "Terminal Workload by Activity",
+}
 
 
 def _bundled_sample_log_path() -> Path:
@@ -229,7 +358,13 @@ def _sample_user():
 
 
 def _create_sample_project(user, source_log: Path):
-    from .models import Dashboard, EventLog, ImageAsset, Project
+    from .models import (
+        Dashboard,
+        EventLog,
+        ImageAsset,
+        Project,
+        ProjectAsset,
+    )
 
     project = Project.objects.create(
         name=SAMPLE_PROJECT_NAME,
@@ -259,6 +394,23 @@ def _create_sample_project(user, source_log: Path):
     )
     logo.save()
 
+    # The query store. Created before the dashboard so the widgets below can
+    # link the ones they share SQL with.
+    stored_queries = {}
+    for name, description, sql in SAMPLE_QUERIES:
+        stored_queries[name] = ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={
+                "schema": SQL_QUERY_ASSET_SCHEMA,
+                "version": SQL_QUERY_ASSET_VERSION,
+                "query": sql,
+                "description": description,
+            },
+            created_by=user,
+        )
+
     dashboard = Dashboard.objects.create(
         project=project,
         name=SAMPLE_DASHBOARD_NAME,
@@ -271,6 +423,9 @@ def _create_sample_project(user, source_log: Path):
         extra = dict(fields)
         if component_name == "ImageComponent":
             extra["image_asset"] = logo
+        linked = LINKED_QUERY_BY_TITLE.get(extra.get("title"))
+        if linked:
+            extra["query_asset"] = stored_queries[linked]
         model.objects.create(
             dashboard=dashboard,
             component_name=component_name,

@@ -4867,11 +4867,18 @@ from pathlib import Path
 from django.conf import settings
 
 from .models import ImageAsset as _ImageAsset, SeedState
+from .asset_formats import (
+    SQL_QUERY_ASSET_SCHEMA as _SQL_SCHEMA,
+    validate_sql_query_asset_dict,
+)
+from .query_refs import resolve_query_references
 from .sample_project import (
+    LINKED_QUERY_BY_TITLE,
     SAMPLE_DASHBOARD_NAME,
     SAMPLE_LOGO_ASSET_NAME,
     SAMPLE_PROJECT_DISPLAY_NAME,
     SAMPLE_PROJECT_NAME,
+    SAMPLE_QUERIES,
     SAMPLE_SEED_KEY,
     _bundled_sample_log_path,
     sample_dashboard_layout,
@@ -5033,3 +5040,73 @@ class SampleProjectSeedTests(TestCase):
 
         self._seed()
         self.assertEqual(Project.objects.count(), 1)
+
+    def test_seeds_the_stored_query_library(self):
+        self._seed()
+
+        project = Project.objects.get()
+        assets = ProjectAsset.objects.filter(
+            project=project, asset_type=ProjectAsset.AssetType.QUERY
+        )
+        self.assertEqual(
+            sorted(assets.values_list("name", flat=True)),
+            sorted(name for name, _d, _s in SAMPLE_QUERIES),
+        )
+        for asset in assets:
+            with self.subTest(query=asset.name):
+                # Exactly what POST /api/assets/ would enforce on an upload.
+                validate_sql_query_asset_dict(asset.content_json)
+                self.assertEqual(asset.content_json["schema"], _SQL_SCHEMA)
+                self.assertTrue(asset.content_json["description"].strip())
+                self.assertEqual(asset.created_by_id, project.users.get().pk)
+
+    def test_stored_query_references_resolve(self):
+        """A seeded query may build on another by name; all must resolve."""
+        self._seed()
+
+        stored = {
+            asset.name: asset.content_json["query"]
+            for asset in ProjectAsset.objects.filter(
+                asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        composed = 0
+        for name, sql in stored.items():
+            with self.subTest(query=name):
+                resolved = resolve_query_references(sql, stored)
+                if resolved != sql:
+                    composed += 1
+        # The library is meant to demonstrate composition, not just contain it
+        # by accident -- if this drops to zero the demo value is gone.
+        self.assertGreaterEqual(composed, 1)
+
+    def test_linked_widgets_share_the_stored_query(self):
+        self._seed()
+
+        from .models import BarChartComponent, PieChartComponent
+
+        for model in (BarChartComponent, PieChartComponent):
+            widget = model.objects.get()
+            with self.subTest(widget=widget.component_name):
+                expected = LINKED_QUERY_BY_TITLE[widget.title]
+                self.assertIsNotNone(widget.query_asset_id)
+                self.assertEqual(widget.query_asset.name, expected)
+                # The widget keeps the same SQL inline, so deleting the asset
+                # (which nulls the FK) leaves it rendering exactly as before.
+                self.assertEqual(
+                    widget.query.strip(),
+                    widget.query_asset.content_json["query"].strip(),
+                )
+
+    def test_deleting_a_linked_query_leaves_the_widget_working(self):
+        self._seed()
+
+        from .models import BarChartComponent
+
+        widget = BarChartComponent.objects.get()
+        sql_before = widget.query
+        widget.query_asset.delete()
+
+        widget.refresh_from_db()
+        self.assertIsNone(widget.query_asset_id)
+        self.assertEqual(widget.query, sql_before)
