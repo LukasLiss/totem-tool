@@ -234,8 +234,8 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
     _sqlite_bulk_objects(conn, obj_types, type_cols_map, obj_attr_cols, graceful)
     _sqlite_bulk_o2o(conn)
 
-    conn.execute("DETACH src")
-
+    # The duplicate-ID check below reads the per-activity tables from `src`,
+    # so the source database stays attached until strict validation is done.
     if strict_mode:
         errors = []
         union_all_parts = [f'SELECT ocel_id FROM src."event_{act}"' for act in activities]
@@ -254,6 +254,8 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
         if errors:
             conn.close()
             raise OCELValidationException(errors)
+
+    conn.execute("DETACH src")
 
     if graceful:
         _graceful_cleanup(conn)
