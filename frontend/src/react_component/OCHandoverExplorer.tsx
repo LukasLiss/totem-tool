@@ -54,7 +54,7 @@ export type HandoverEdge = {
   target: string;
   businessobject_type: string;
   weight: number;
-  raw_weight: number;
+  count: number;
   avg_time: number | null;
   min_time: number | null;
   max_time: number | null;
@@ -823,7 +823,7 @@ export default function OCHandoverExplorer({
       if (sortCol === "source") cmp = a.source.localeCompare(b.source);
       else if (sortCol === "target") cmp = a.target.localeCompare(b.target);
       else if (sortCol === "bo_type") cmp = a.businessobject_type.localeCompare(b.businessobject_type);
-      else if (sortCol === "count") cmp = a.raw_weight - b.raw_weight;
+      else if (sortCol === "count") cmp = a.count - b.count;
       else if (sortCol === "avg_time" || sortCol === "min_time" || sortCol === "max_time") {
         const av = timed(a[sortCol]);
         const bv = timed(b[sortCol]);
@@ -892,7 +892,7 @@ export default function OCHandoverExplorer({
                   {edge.businessobject_type}
                 </span>
               </td>
-              <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
+              <td className="px-3 py-2 tabular-nums">{edge.count}</td>
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
                   {/* The minimum stops a narrow column shrinking the track to
@@ -2600,8 +2600,8 @@ function HandoverGraph({
     const degree: Record<string, number> = {};
     nodes.forEach(n => { degree[n.id] = 0; });
     edges.forEach(e => {
-      degree[e.source] = (degree[e.source] ?? 0) + e.raw_weight;
-      degree[e.target] = (degree[e.target] ?? 0) + e.raw_weight;
+      degree[e.source] = (degree[e.source] ?? 0) + e.count;
+      degree[e.target] = (degree[e.target] ?? 0) + e.count;
     });
     const maxDeg = Math.max(...Object.values(degree), 1);
 
@@ -2928,7 +2928,7 @@ function HandoverGraph({
           result.push({
             key: `${pairKey}-${edge.businessobject_type}-${idx}`,
             d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
-            color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
+            color, strokeWidth, markerId, count: edge.count, weight: edge.weight,
             avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time,
             businessobject_type: edge.businessobject_type, source: srcId, target: tgtId,
           });
@@ -2991,7 +2991,7 @@ function HandoverGraph({
           d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
         }
 
-        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.count, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
       });
     });
 
@@ -4489,11 +4489,11 @@ function NodeDetailView({
 
   const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
-  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.raw_weight, 0);
+  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.count, 0);
 
   const getW = (edge: HandoverEdge) => {
     if (!egoNorm) return edge.weight;
-    return allEdgesTotal > 0 ? edge.raw_weight / allEdgesTotal : 0;
+    return allEdgesTotal > 0 ? edge.count / allEdgesTotal : 0;
   };
 
   const displayWeights = egoNorm
@@ -4524,7 +4524,7 @@ function NodeDetailView({
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
       strokeWidth: strokeFor(getW(edge)),
       markerId: arrowId(edge.businessobject_type),
-      count: edge.raw_weight,
+      count: edge.count,
       weight: getW(edge),
       avg_time: edge.avg_time,
       min_time: edge.min_time,
@@ -4568,7 +4568,7 @@ function NodeDetailView({
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
       strokeWidth: strokeFor(getW(edge)),
       markerId: arrowId(edge.businessobject_type),
-      count: edge.raw_weight,
+      count: edge.count,
       weight: getW(edge),
       avg_time: edge.avg_time,
       min_time: edge.min_time,

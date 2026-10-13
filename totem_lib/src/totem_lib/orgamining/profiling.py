@@ -1,27 +1,27 @@
 """Resource profiling (organizational mining) on object-centric event logs.
 
-Profiles are computed from an
-:class:`~totem_lib.ochandover._source.EventObjectSource`, so the same code
-serves the polars ``ObjectCentricEventLog`` (``ProfileMatrix.from_ocel``) and
-the relational :class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB` the backend
-works on (``ProfileMatrix.from_ocel_db``).
+The entry point is :func:`discover_resource_profiles`, which accepts the polars
+``ObjectCentricEventLog`` as well as an
+:class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB`. Profiles are computed from an
+:class:`~totem_lib.orgamining._source.EventObjectSource`, so the computation is
+the same for both representations.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Literal
+from typing import TYPE_CHECKING, List, Literal, get_args
 
 import polars as pl
 import numpy as np
 
 from ._source import EventObjectSource
+from ..ocel.ocel_duckdb import OcelDuckDB
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..ocel.ocel import ObjectCentricEventLog as OCEL
-    from ..ocel.ocel_duckdb import OcelDuckDB
 
-FEATURE_GROUPS = Literal[
+FeatureGroup = Literal[
     "activity_fractions",
     "cooccurrence_fractions",
     "object_collaboration_fractions",
@@ -29,6 +29,50 @@ FEATURE_GROUPS = Literal[
     "time_fractions",
     "weekday_fractions",
 ]
+ClusterMethod = Literal["kmeans", "agglomerative", "hdbscan"]
+DistanceMetric = Literal["euclidean", "hellinger"]
+
+# Allowed values of ``feature_groups``, ``method`` / ``cluster_method`` and
+# ``distance_metric``.
+FEATURE_GROUPS: tuple[str, ...] = get_args(FeatureGroup)
+CLUSTER_METHODS: tuple[str, ...] = get_args(ClusterMethod)
+DISTANCE_METRICS: tuple[str, ...] = get_args(DistanceMetric)
+
+
+def discover_resource_profiles(
+    ocel: "OCEL | OcelDuckDB",
+    resource_types: List[str] | None = None,
+    feature_groups: List[str] | None = None,
+    business_object_types: List[str] | None = None,
+    tooltip_only_groups: List[str] | None = None,
+) -> "ProfileMatrix":
+    """
+    Compute a feature profile for every resource of the log.
+
+    Parameters
+    ----------
+    ocel
+        The event log, either an ``ObjectCentricEventLog`` or an ``OcelDuckDB``.
+        For an ``OcelDuckDB`` shared between threads the caller holds ``db.lock``.
+    resource_types
+        Object types treated as resources. Defaults to all object types.
+    feature_groups
+        Feature groups to compute, a subset of :data:`FEATURE_GROUPS`.
+        Defaults to ``["activity_fractions"]``.
+    business_object_types
+        Object types considered as business objects for the
+        ``object_collaboration_fractions`` / ``object_portfolio_fractions``
+        groups. Defaults to all non-resource object types.
+    tooltip_only_groups
+        Groups that are computed but excluded from distances, MDS and clustering.
+    """
+    if isinstance(ocel, OcelDuckDB):
+        return ProfileMatrix.from_ocel_db(
+            ocel, resource_types, feature_groups, business_object_types, tooltip_only_groups,
+        )
+    return ProfileMatrix.from_ocel(
+        ocel, resource_types, feature_groups, business_object_types, tooltip_only_groups,
+    )
 
 
 @dataclass
@@ -597,7 +641,7 @@ class ProfileMatrix:
     def combined_distance_matrix(
         self,
         weights: dict[str, float] | None = None,
-        distance_metric: str = "euclidean",
+        distance_metric: DistanceMetric = "euclidean",
     ) -> np.ndarray:
         """
         Weighted sum of per-group distance matrices.
@@ -708,7 +752,7 @@ class ProfileMatrix:
     def cluster(
         self,
         n_clusters: int = 3,
-        method: Literal["kmeans", "agglomerative", "hdbscan"] = "hdbscan",
+        method: ClusterMethod = "hdbscan",
         min_cluster_size: int = 2,
         precomputed_D: np.ndarray | None = None,
     ) -> list[int]:
@@ -970,11 +1014,11 @@ class ProfileMatrix:
         width: int | None = None,
         height: int | None = None,
         n_clusters: int = 3,
-        cluster_method: Literal["kmeans", "agglomerative", "hdbscan"] = "kmeans",
+        cluster_method: ClusterMethod = "kmeans",
         compute_clusters: bool = True,
         min_cluster_size: int = 2,
         group_weights: dict[str, float] | None = None,
-        distance_metric: str = "euclidean",
+        distance_metric: DistanceMetric = "euclidean",
     ) -> dict:
         """
         Serialisable representation for the API response.

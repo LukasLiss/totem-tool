@@ -1,42 +1,137 @@
 """Object-centric handover-of-work discovery.
 
-The algorithm reads a log through :class:`~totem_lib.ochandover._source.EventObjectSource`,
-so it runs unchanged on the polars ``ObjectCentricEventLog`` (``from_ocel``) and
-on the relational :class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB` the backend
-keeps every uploaded log in (``from_ocel_db``).
+Entry points are :func:`discover_handover` and :func:`compute_footprint`; both
+accept the polars ``ObjectCentricEventLog`` as well as an
+:class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB`. The algorithm reads either
+through :class:`~totem_lib.orgamining._source.EventObjectSource`, so the
+computation is the same for both representations.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Literal
+from typing import TYPE_CHECKING, List, Literal, get_args
 
 import polars as pl
 import networkx as nx
 
 from ._source import EventObjectSource
+from ..ocel.ocel_duckdb import OcelDuckDB
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..ocel.ocel import ObjectCentricEventLog as OCEL
-    from ..ocel.ocel_duckdb import OcelDuckDB
 
 logger = logging.getLogger(__name__)
 
 Normalization = Literal["by_source", "by_target", "by_arcs_in_eog", "by_total_weight"]
 NormalizationScope = Literal["global", "per_bo_type"]
 
+# Allowed values of ``normalization`` / ``normalization_scope``.
+NORMALIZATIONS: tuple[str, ...] = get_args(Normalization)
+NORMALIZATION_SCOPES: tuple[str, ...] = get_args(NormalizationScope)
 
-class OCHANDOVER(nx.MultiDiGraph):
+
+def discover_handover(
+    ocel: "OCEL | OcelDuckDB",
+    resource_types: List[str],
+    business_object_types: List[str],
+    max_gap: int | None = None,
+    normalization: Normalization = "by_arcs_in_eog",
+    normalization_scope: NormalizationScope = "global",
+    parallel_threshold: float | None = None,
+    min_parallel_observations: int = 1,
+    cluster_map: dict[str, str] | None = None,
+    cluster_by_ot: bool = False,
+    include_flows: bool = False,
+    include_bindings: bool = False,
+) -> "HandoverGraph":
+    """
+    Discover the object-centric handover-of-work graph.
+
+    Parameters
+    ----------
+    ocel
+        The event log, either an ``ObjectCentricEventLog`` or an ``OcelDuckDB``.
+        For an ``OcelDuckDB`` shared between threads the caller holds ``db.lock``.
+    resource_types
+        Object types whose objects are the resources (graph nodes).
+    business_object_types
+        Object types whose objects are handed over between resources.
+    max_gap
+        Maximum number of intermediate events without a resource between two
+        resource events; ``None`` for no limit.
+    normalization
+        How an edge's ``count`` is normalised into its ``weight``, one of
+        :data:`NORMALIZATIONS`.
+    normalization_scope
+        ``"global"`` or ``"per_bo_type"`` (one denominator per business object type).
+    parallel_threshold
+        If set, directly-follows pairs of business object activities that the
+        footprint marks as parallel (``|dependency| <= parallel_threshold``)
+        are not treated as handovers.
+    min_parallel_observations
+        Minimum number of observations for an activity pair to count as parallel.
+    cluster_map
+        ``{resource id: cluster id}``; resources are collapsed into clusters
+        before handovers are counted.
+    cluster_by_ot
+        Collapse every resource into its object type.
+    include_flows
+        Store the individual handovers in ``graph.graph["animation_flows"]``.
+    include_bindings
+        Store the binding annotations in ``graph.graph["bindings"]``
+        (see :meth:`HandoverGraph.bindings_table`).
+
+    Returns
+    -------
+    HandoverGraph
+        Nodes carry ``object_type`` and ``event_count``. Each edge carries
+        ``count`` (number of handovers), ``weight`` (``count`` normalised
+        according to ``normalization``), ``businessobject_type`` and
+        ``avg_time`` / ``min_time`` / ``max_time`` (time between the source
+        and the target event, in seconds).
+    """
+    kwargs = dict(
+        max_gap=max_gap,
+        normalization=normalization,
+        normalization_scope=normalization_scope,
+        parallel_threshold=parallel_threshold,
+        min_parallel_observations=min_parallel_observations,
+        cluster_map=cluster_map,
+        cluster_by_ot=cluster_by_ot,
+        include_flows=include_flows,
+        include_bindings=include_bindings,
+    )
+    if isinstance(ocel, OcelDuckDB):
+        return HandoverGraph.from_ocel_db(ocel, resource_types, business_object_types, **kwargs)
+    return HandoverGraph.from_ocel(ocel, resource_types, business_object_types, **kwargs)
+
+
+def compute_footprint(ocel: "OCEL | OcelDuckDB", object_types: List[str]) -> pl.DataFrame:
+    """
+    Footprint matrix over activities, computed per object type from its lifecycles.
+
+    Accepts an ``ObjectCentricEventLog`` or an ``OcelDuckDB``. Returns one row
+    per (object type, activity a, activity b) with the columns
+    ``businessobject_type``, ``activity_a``, ``activity_b``, ``relation``
+    (``→``, ``←``, ``||``, ``#``), ``count_ab``, ``count_ba`` and ``dependency``.
+    """
+    if isinstance(ocel, OcelDuckDB):
+        return HandoverGraph.compute_footprint_db(ocel, object_types)
+    return HandoverGraph.compute_footprint(ocel, object_types)
+
+
+class HandoverGraph(nx.MultiDiGraph):
     """
     Handover-of-work graph: resources as nodes, one edge per (source resource,
-    target resource, business object type) carrying the normalised and raw
-    handover counts plus timing statistics.
+    target resource, business object type) carrying the handover ``count``,
+    its normalised ``weight`` and timing statistics.
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def from_ocel(cls, ocel: "OCEL", resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
+    def from_ocel(cls, ocel: "OCEL", resource_types: List[str], business_object_types: List[str], max_gap: int | None = None,
                   normalization: Normalization = "by_arcs_in_eog",
                   normalization_scope: NormalizationScope = "global",
                   parallel_threshold: float | None = None,
@@ -44,11 +139,11 @@ class OCHANDOVER(nx.MultiDiGraph):
                   cluster_map: dict[str, str] | None = None,
                   cluster_by_ot: bool = False,
                   include_flows: bool = False,
-                  include_bindings: bool = False) -> 'OCHANDOVER':
+                  include_bindings: bool = False) -> 'HandoverGraph':
         """Discover the handover graph from a polars ``ObjectCentricEventLog``."""
-        source = EventObjectSource.from_ocel(ocel, list(resource_types) + list(businessobject_types))
+        source = EventObjectSource.from_ocel(ocel, list(resource_types) + list(business_object_types))
         return cls._from_source(
-            source, resource_types, businessobject_types, max_gap=max_gap,
+            source, resource_types, business_object_types, max_gap=max_gap,
             normalization=normalization, normalization_scope=normalization_scope,
             parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations,
             cluster_map=cluster_map, cluster_by_ot=cluster_by_ot,
@@ -56,7 +151,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         )
 
     @classmethod
-    def from_ocel_db(cls, db: "OcelDuckDB", resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
+    def from_ocel_db(cls, db: "OcelDuckDB", resource_types: List[str], business_object_types: List[str], max_gap: int | None = None,
                      normalization: Normalization = "by_arcs_in_eog",
                      normalization_scope: NormalizationScope = "global",
                      parallel_threshold: float | None = None,
@@ -64,7 +159,7 @@ class OCHANDOVER(nx.MultiDiGraph):
                      cluster_map: dict[str, str] | None = None,
                      cluster_by_ot: bool = False,
                      include_flows: bool = False,
-                     include_bindings: bool = False) -> 'OCHANDOVER':
+                     include_bindings: bool = False) -> 'HandoverGraph':
         """Discover the handover graph from an :class:`OcelDuckDB`.
 
         Only the event/object rows of the requested resource and business
@@ -72,9 +167,9 @@ class OCHANDOVER(nx.MultiDiGraph):
         else is shared with :meth:`from_ocel`. The caller is responsible for
         holding ``db.lock`` when the connection is shared between threads.
         """
-        source = EventObjectSource.from_ocel_db(db, list(resource_types) + list(businessobject_types))
+        source = EventObjectSource.from_ocel_db(db, list(resource_types) + list(business_object_types))
         return cls._from_source(
-            source, resource_types, businessobject_types, max_gap=max_gap,
+            source, resource_types, business_object_types, max_gap=max_gap,
             normalization=normalization, normalization_scope=normalization_scope,
             parallel_threshold=parallel_threshold, min_parallel_observations=min_parallel_observations,
             cluster_map=cluster_map, cluster_by_ot=cluster_by_ot,
@@ -82,7 +177,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         )
 
     @classmethod
-    def _from_source(cls, source: EventObjectSource, resource_types: List[str], businessobject_types: List[str], max_gap: int | None = None,
+    def _from_source(cls, source: EventObjectSource, resource_types: List[str], business_object_types: List[str], max_gap: int | None = None,
                      normalization: Normalization = "by_arcs_in_eog",
                      normalization_scope: NormalizationScope = "global",
                      parallel_threshold: float | None = None,
@@ -90,21 +185,18 @@ class OCHANDOVER(nx.MultiDiGraph):
                      cluster_map: dict[str, str] | None = None,
                      cluster_by_ot: bool = False,
                      include_flows: bool = False,
-                     include_bindings: bool = False) -> 'OCHANDOVER':
+                     include_bindings: bool = False) -> 'HandoverGraph':
         """
         Core of the discovery, independent of the log representation.
 
         ``source.event_objects`` holds one row per (event, object) pair for
         the resource and business object types; ``source.object_type_by_id``
         maps every such object to its type.
-
-        Normalization still an issue
-            For example when differentiating the different object types, do we divide for each type individually or with the same value
         """
 
         # Get the object ids of the resources and business objects
         resource_ids = source.object_ids_of_types(resource_types)
-        businessobject_ids = source.object_ids_of_types(businessobject_types)
+        businessobject_ids = source.object_ids_of_types(business_object_types)
 
         event_objects = source.event_objects
 
@@ -153,7 +245,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         }
 
         # Get the type of the objects by their id
-        businessobject_type_by_id = source.type_map_for(businessobject_types)
+        businessobject_type_by_id = source.type_map_for(business_object_types)
         resource_type_by_id = dict(source.type_map_for(resource_types))
 
         if cluster_map:
@@ -259,7 +351,7 @@ class OCHANDOVER(nx.MultiDiGraph):
         )
 
         if parallel_threshold is not None:
-            footprint = cls._footprint_from_source(source, businessobject_types)
+            footprint = cls._footprint_from_source(source, business_object_types)
 
             logger.debug("footprint\n%s", footprint)
 
@@ -345,30 +437,6 @@ class OCHANDOVER(nx.MultiDiGraph):
                                 })
                                 break
 
-            # # Remove dominated orphan arcs (Definition 4.6 refinement):
-            # # an orphan repair arc (src, tgt) is dominated if every resource at tgt
-            # # is already covered by a non-orphan arc from the same src event.
-            # _event_res: dict[str, frozenset] = {
-            #     r["_eventId"]: frozenset(r["resources"])
-            #     for r in event_resources.to_dicts()
-            # }
-            # _src_covered: dict[str, set] = {}
-            # _non_orphan_pairs: set[tuple[str, str]] = set()
-            # for _arc in _new_arcs:
-            #     if not _arc["_orphan"]:
-            #         _s, _t = _arc["source_event"], _arc["target_event"]
-            #         _non_orphan_pairs.add((_s, _t))
-            #         _src_covered.setdefault(_s, set()).update(_event_res.get(_t, frozenset()))
-            #
-            # _new_arcs = [
-            #     _arc for _arc in _new_arcs
-            #     if not _arc["_orphan"]
-            #     or (_arc["source_event"], _arc["target_event"]) in _non_orphan_pairs
-            #     or not _event_res.get(_arc["target_event"], frozenset()).issubset(
-            #         _src_covered.get(_arc["source_event"], set())
-            #     )
-            # ]
-
             if _new_arcs:
                 modified_eog_arcs = (
                     pl.DataFrame(_new_arcs)
@@ -440,37 +508,37 @@ class OCHANDOVER(nx.MultiDiGraph):
             _raw_handovers
             .group_by(["source", "target", "businessobject_type"])
             .agg([
-                pl.len().alias("weight"),
+                pl.len().alias("count"),
                 pl.col("time_delta").mean().alias("avg_time"),
                 pl.col("time_delta").min().alias("min_time"),
                 pl.col("time_delta").max().alias("max_time"),
             ])
-            .sort("weight", descending=True)
+            .sort("count", descending=True)
         )
 
         logger.debug("Handover edges\n%s", handover_edges)
 
-        # Compute normalised weight according to the chosen strategy and scope.
+        # Normalise each edge's count into its weight according to the chosen strategy and scope.
         # global: denominator is computed across all business object types together.
         # per_bo_type: denominator is computed separately for each business object type,
         #              so high-traffic types no longer dominate low-traffic ones visually.
         if normalization == "by_source":
             group_cols = ["source", "businessobject_type"] if normalization_scope == "per_bo_type" else ["source"]
-            source_totals = handover_edges.group_by(group_cols).agg(pl.col("weight").sum().alias("_source_total"))
+            source_totals = handover_edges.group_by(group_cols).agg(pl.col("count").sum().alias("_source_total"))
             handover_edges = (
                 handover_edges
                 .join(source_totals, on=group_cols, how="left")
-                .with_columns((pl.col("weight") / pl.col("_source_total")).alias("norm_weight"))
+                .with_columns((pl.col("count") / pl.col("_source_total")).alias("weight"))
                 .drop("_source_total")
             )
 
         elif normalization == "by_target":
             group_cols = ["target", "businessobject_type"] if normalization_scope == "per_bo_type" else ["target"]
-            target_totals = handover_edges.group_by(group_cols).agg(pl.col("weight").sum().alias("_target_total"))
+            target_totals = handover_edges.group_by(group_cols).agg(pl.col("count").sum().alias("_target_total"))
             handover_edges = (
                 handover_edges
                 .join(target_totals, on=group_cols, how="left")
-                .with_columns((pl.col("weight") / pl.col("_target_total")).alias("norm_weight"))
+                .with_columns((pl.col("count") / pl.col("_target_total")).alias("weight"))
                 .drop("_target_total")
             )
 
@@ -480,31 +548,31 @@ class OCHANDOVER(nx.MultiDiGraph):
                 handover_edges = (
                     handover_edges
                     .join(eog_arc_count_by_type, on="businessobject_type", how="left")
-                    .with_columns((pl.col("weight") / pl.col("_arc_count")).alias("norm_weight"))
+                    .with_columns((pl.col("count") / pl.col("_arc_count")).alias("weight"))
                     .drop("_arc_count")
                 )
             else:
                 handover_edges = handover_edges.with_columns(
-                    (pl.col("weight") / eog_arc_count).alias("norm_weight")
+                    (pl.col("count") / eog_arc_count).alias("weight")
                 )
 
         elif normalization == "by_total_weight":
             if normalization_scope == "per_bo_type":
-                bo_totals = handover_edges.group_by("businessobject_type").agg(pl.col("weight").sum().alias("_bo_total"))
+                bo_totals = handover_edges.group_by("businessobject_type").agg(pl.col("count").sum().alias("_bo_total"))
                 handover_edges = (
                     handover_edges
                     .join(bo_totals, on="businessobject_type", how="left")
-                    .with_columns((pl.col("weight") / pl.col("_bo_total")).alias("norm_weight"))
+                    .with_columns((pl.col("count") / pl.col("_bo_total")).alias("weight"))
                     .drop("_bo_total")
                 )
             else:
-                total = handover_edges.select(pl.col("weight").sum()).item()
+                total = handover_edges.select(pl.col("count").sum()).item()
                 handover_edges = handover_edges.with_columns(
-                    (pl.col("weight") / total).alias("norm_weight")
+                    (pl.col("count") / total).alias("weight")
                 )
 
         if logger.isEnabledFor(logging.DEBUG) and not handover_edges.is_empty():
-            logger.debug("norm_weight sum %s", handover_edges.select(pl.col("norm_weight").sum()).item())
+            logger.debug("weight sum %s", handover_edges.select(pl.col("weight").sum()).item())
 
 
         graph = cls()
@@ -530,8 +598,8 @@ class OCHANDOVER(nx.MultiDiGraph):
                 source,
                 target,
                 key=bo_type,
-                weight=row["norm_weight"],
-                raw_weight=row["weight"],
+                weight=row["weight"],
+                count=row["count"],
                 businessobject_type=bo_type,
                 avg_time=row.get("avg_time"),
                 min_time=row.get("min_time"),
@@ -982,160 +1050,6 @@ class OCHANDOVER(nx.MultiDiGraph):
         _bo_type_map, _raw = cls._bfs_bridges(eog_arcs, _resource_event_set, max_gap)
         _p1, _ = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
         return cls._collapse_p1(_p1, _bo_type_map, _event_ts_dict)
-
-
-    @classmethod
-    def from_ocel_flattened(cls, ocel: "OCEL", case_type: str, resource_type: str, max_gap: int | None = None) -> 'OCHANDOVER':
-        """Flattened (single case type) handover from a polars ``ObjectCentricEventLog``."""
-        source = EventObjectSource.from_ocel(ocel, [case_type, resource_type])
-        return cls._flattened_from_source(source, case_type, resource_type, max_gap=max_gap)
-
-    @classmethod
-    def from_ocel_db_flattened(cls, db: "OcelDuckDB", case_type: str, resource_type: str, max_gap: int | None = None) -> 'OCHANDOVER':
-        """Flattened (single case type) handover from an :class:`OcelDuckDB`."""
-        source = EventObjectSource.from_ocel_db(db, [case_type, resource_type])
-        return cls._flattened_from_source(source, case_type, resource_type, max_gap=max_gap)
-
-    @classmethod
-    def _flattened_from_source(cls, source: EventObjectSource, case_type: str, resource_type: str, max_gap: int | None = None) -> 'OCHANDOVER':
-
-        """
-            Huge uncertainty:
-            When grouping for the case ids, we get only the events, where an object of the resource type was involved.
-            This makes it seem like there was nothing in between.
-            The issue here is that if we only look at one object type in the flattened version, the way we do here, we do not detect those gaps.
-            The result is that if there is a resource o1 from our resource object type, and then some activities from other object types followed by an activity of o1,
-            which is another resource, this is counted as a handover from o1 to o2. However this would have to be seen as a handover from o1 to the objects in between and then to o2?
-
-            max_gap: if set, only handovers where the number of intervening case events
-            (events that belong to the case but have no resource) is <= max_gap are kept.
-            Gap 0 means the two resource events are directly adjacent in the case trace.
-        """
-
-        case_ids = source.object_ids_of_types([case_type])
-        resource_ids = source.object_ids_of_types([resource_type])
-
-        event_objects = source.event_objects
-
-        logger.debug("Events (Explode)\n%s", event_objects.head(10))
-
-        case_df = (
-            event_objects
-            .filter(pl.col("_objId").is_in(case_ids))
-            .select([
-                "_eventId",
-                pl.col("_objId").alias("case_id"),
-            ])
-        )
-
-        logger.debug("Cases\n%s", case_df.head(10))
-
-        resource_df = (
-            event_objects
-            .filter(pl.col("_objId").is_in(resource_ids))
-            .select([
-                "_eventId",
-                pl.col("_objId").alias("resource_id"),
-            ])
-        )
-
-        logger.debug("Resources\n%s", resource_df)
-
-        # All events that belong to a case (including those without a resource),
-        # assigned a sequential position within each case so we can measure
-        # how many non-resource events sit between two consecutive resource events.
-        all_case_events = (
-            event_objects
-            .select(["_eventId", "_timestampUnix"])
-            .unique("_eventId")
-            .join(case_df, on="_eventId", how="inner")
-            .sort(["case_id", "_timestampUnix", "_eventId"])
-            .with_row_index("global_idx")
-            .with_columns(
-                (pl.col("global_idx") - pl.col("global_idx").min().over("case_id")).alias("position")
-            )
-        )
-
-        logger.debug("All case events (with position)\n%s", all_case_events.head(20))
-
-        # Resource events with their within-case position
-        resource_case_events = (
-            all_case_events
-            .join(resource_df, on="_eventId", how="inner")
-        )
-
-        logger.debug("Resource case events\n%s", resource_case_events)
-
-        # Detect handover: consecutive resource events within each case.
-        # gap = number of intervening case events (position difference minus 1).
-        handovers_raw = (
-            resource_case_events
-            .sort(["case_id", "_timestampUnix", "_eventId"])
-            .with_columns([
-                pl.col("resource_id").shift(-1).over("case_id").alias("next_resource_id"),
-                pl.col("position").shift(-1).over("case_id").alias("next_position"),
-            ])
-            .filter(pl.col("next_resource_id").is_not_null())
-            .with_columns(
-                (pl.col("next_position") - pl.col("position") - 1).alias("gap")
-            )
-        )
-
-        logger.debug("Handovers raw (with gap)\n%s", handovers_raw)
-
-        # Apply gap filter when requested
-        if max_gap is not None:
-            handovers_raw = handovers_raw.filter(pl.col("gap") <= max_gap)
-
-        handover_edges = (
-            handovers_raw
-            .group_by(["resource_id", "next_resource_id"])
-            .len()
-            .rename({
-                "resource_id": "source",
-                "next_resource_id": "target",
-                "len": "weight",
-            })
-            .sort("weight", descending=True)
-        )
-
-        # total = handover_edges.select(pl.col("weight").sum()).item()
-        total = case_df.select(pl.col("case_id").n_unique()).item()
-
-        handover_edges = handover_edges.with_columns(
-            (pl.col("weight") / total).alias("norm_weight")
-        )
-
-
-        logger.debug("Handover edges\n%s", handover_edges)
-
-
-        graph = cls()
-        
-        for row in handover_edges.to_dicts():
-            source = row["source"]
-            target = row["target"]
-            weight = row["norm_weight"]
-
-            graph.add_node(
-                source,
-                object_type=resource_type,
-            )
-
-            graph.add_node(
-                target,
-                object_type=resource_type,
-            )
-
-            graph.add_edge(
-                source,
-                target,
-                weight=weight,
-                raw_weight=row["weight"],
-                businessobject_type=case_type,
-            )
-
-        return graph
 
     def plot(self):
         import matplotlib.pyplot as plt

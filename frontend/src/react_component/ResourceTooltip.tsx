@@ -174,10 +174,13 @@ export default function TooltipBox({
       : { marginTop: 8, paddingTop: 6, borderTop: "1px solid #f1f5f9" as const };
 
   const fittedH = Math.min(estH, tooltip.ch - 8);
-  const left = Math.min(tooltip.x + 14, tooltip.cw - estW - 4);
-  const top = positionMode === "top-anchor"
+  // Whole pixels: inside a dashboard card the mouse coordinates are usually
+  // fractional, and a box at a sub-pixel offset blurs its small colour dots
+  // into rounded squares.
+  const left = Math.round(Math.min(tooltip.x + 14, tooltip.cw - estW - 4));
+  const top = Math.round(positionMode === "top-anchor"
     ? Math.max(4, Math.min(tooltip.y - 40, tooltip.ch - 4))
-    : Math.max(4, Math.min(tooltip.y - fittedH / 2, tooltip.ch - fittedH - 4));
+    : Math.max(4, Math.min(tooltip.y - fittedH / 2, tooltip.ch - fittedH - 4)));
   const maxH = tooltip.ch - top - 4;
 
   return (
@@ -188,8 +191,12 @@ export default function TooltipBox({
         // Above the canvas's floating chrome (legend, metrics, control pill),
         // so a profile is never read half-hidden behind one of them.
         background: "white", borderRadius: 8, zIndex: 40,
-        border: tooltip.pinned ? "1.5px solid #6366f1" : "1px solid #e2e8f0",
-        boxShadow: tooltip.pinned ? "0 4px 16px rgba(99,102,241,0.18)" : "0 4px 12px rgba(0,0,0,0.12)",
+        // A whole-pixel border keeps the content on the pixel grid; the
+        // pinned emphasis comes from the extra 1px ring in the shadow.
+        border: tooltip.pinned ? "1px solid #6366f1" : "1px solid #e2e8f0",
+        boxShadow: tooltip.pinned
+          ? "0 0 0 1px #6366f1, 0 4px 16px rgba(99,102,241,0.18)"
+          : "0 4px 12px rgba(0,0,0,0.12)",
         padding: "10px 12px", minWidth: estW, maxWidth: estW,
         maxHeight: maxH, overflowY: "auto",
       }}
@@ -271,7 +278,7 @@ export default function TooltipBox({
                     style={{ display: "flex", alignItems: "center", gap: 6, cursor: expandable ? "pointer" : "default",
                       borderRadius: 4, padding: "1px 2px", userSelect: "none" }}
                   >
-                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
                     <span style={{ flex: 1, fontSize: 10, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{type}</span>
                     <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0 }}>{nLabel}/{total}</span>
                     {!tooltip.isCluster && showDropdown && (
@@ -353,7 +360,7 @@ export default function TooltipBox({
             const val = portfolioValues[i] ?? 0;
             return (
               <div key={type} style={{ display: "flex", alignItems: "center", gap: 5, lineHeight: "18px" }}>
-                <div style={{ width: 7, height: 7, borderRadius: "50%", background: typeColorMap[type] ?? "#94a3b8", flexShrink: 0 }} />
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: typeColorMap[type] ?? "#94a3b8", flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 10, color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{type}</span>
                 <span style={{ fontSize: 9, color: "#94a3b8", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{(val * 100).toFixed(1)}%</span>
               </div>

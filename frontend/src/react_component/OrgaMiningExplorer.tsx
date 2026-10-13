@@ -6,6 +6,7 @@ import { useCluster, type TypeNMap } from "@/contexts/ClusterContext";
 import { useFilterVersion } from "@/store/filterStore";
 import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
 import {
+  BUSINESS_OBJECT_FEATURE_GROUPS,
   DEFAULT_PROFILING_SETTINGS,
   type ProfilingClusterMethod,
   type ProfilingDistanceMetric,
@@ -101,6 +102,8 @@ const NODE_R = 8;
  * the same layout at a different zoom.
  */
 const MDS_CANVAS = { width: 1000, height: 1000 };
+// Screen pixels a press must move before it counts as a zoom drag, not a click.
+const DRAG_THRESHOLD_PX = 4;
 /** Padding around the point cloud in MDS canvas units. */
 const MDS_VIEW_PAD = NODE_R + 26;
 
@@ -240,7 +243,9 @@ export default function OrgaMiningExplorer({
     const tooltipOnly = [...tooltipFeatureGroups].filter(g => !featureGroups.has(g));
     if (tooltipOnly.length > 0) params.tooltip_feature_groups = tooltipOnly.join(",");
 
-    if (featureGroups.has("object_collaboration_fractions")) {
+    // Collaboration and portfolio fractions (also as tooltip-only groups) are
+    // computed over the business object types.
+    if ([...featureGroups, ...tooltipFeatureGroups].some(g => (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g))) {
       // Send only business object types that are not currently resource types.
       const activeBizTypes = [...businessObjectTypes].filter(t => !resourceTypes.has(t));
       if (activeBizTypes.length > 0)
@@ -540,8 +545,9 @@ export default function OrgaMiningExplorer({
               );
             })()}
 
-            {/* Business object type selector — only when object collaboration is active */}
-            {featureGroups.has("object_collaboration_fractions") && (() => {
+            {/* Business object type selector — only when a business-object feature group
+                (collaboration or portfolio, also as tooltip-only group) is active */}
+            {[...featureGroups, ...tooltipFeatureGroups].some(g => (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g)) && (() => {
               const nonResourceTypes = objectTypes.filter(t => !resourceTypes.has(t));
               if (nonResourceTypes.length === 0) return null;
               return (
@@ -978,6 +984,13 @@ function ResourceGraph({
     Object.fromEntries(data.resources.map((r, i) => [r, data.values[i]])),
   [data.resources, data.values]);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+  // Screen position where the press started; the press becomes a zoom drag
+  // (and takes pointer capture) once it moves more than DRAG_THRESHOLD_PX.
+  const dragStartClient = useRef<{ x: number; y: number } | null>(null);
+  const dragMoved = useRef(false);
+  // Swallow the click the browser fires after a zoom drag, so it does not
+  // pin a node, open a cluster tooltip or close a pinned one.
+  const suppressClick = useRef(false);
 
   const scheduleHide = () => {
     hideTimerRef.current = setTimeout(
@@ -1037,18 +1050,37 @@ function ResourceGraph({
     };
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const cancelDrag = () => {
+    dragStart.current = null;
+    dragStartClient.current = null;
+    rbRef.current?.setAttribute("display", "none");
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
     const { x, y } = toUser(e.clientX, e.clientY);
     dragStart.current = { x, y };
+    dragStartClient.current = { x: e.clientX, y: e.clientY };
+    dragMoved.current = false;
+    suppressClick.current = false;
     // Dismiss any unpinned tooltip the moment a drag begins
     setTooltip(t => (t?.pinned ? t : null));
     const el = rbRef.current;
     if (el) { el.setAttribute("x", String(x)); el.setAttribute("y", String(y)); el.setAttribute("width", "0"); el.setAttribute("height", "0"); el.setAttribute("display", "block"); }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (dragStart.current) {
+      // Once the press really moves it is a zoom drag: capture the pointer so
+      // every further move and the release reach the SVG, even over a node,
+      // a cluster hull, the pinned tooltip, the floating panels or outside
+      // the canvas. Capturing only now keeps a plain click on its target.
+      const start = dragStartClient.current;
+      if (!dragMoved.current && start
+          && Math.hypot(e.clientX - start.x, e.clientY - start.y) > DRAG_THRESHOLD_PX) {
+        dragMoved.current = true;
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+      }
       const { x, y } = toUser(e.clientX, e.clientY);
       const rx = Math.min(dragStart.current.x, x), ry = Math.min(dragStart.current.y, y);
       const rw = Math.abs(x - dragStart.current.x), rh = Math.abs(y - dragStart.current.y);
@@ -1083,12 +1115,12 @@ function ResourceGraph({
     }
   };
 
-  const handleMouseUp = (e: React.MouseEvent) => {
+  const handlePointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
     if (!dragStart.current) return;
     const { x, y } = toUser(e.clientX, e.clientY);
     const x0 = dragStart.current.x, y0 = dragStart.current.y;
-    dragStart.current = null;
-    rbRef.current?.setAttribute("display", "none");
+    suppressClick.current = dragMoved.current;
+    cancelDrag();
     let rw = Math.abs(x - x0), rh = Math.abs(y - y0);
     // Minimum selection of 10 screen pixels in each direction
     if (rw * effectiveScale < 10 || rh * effectiveScale < 10) return;
@@ -1284,10 +1316,25 @@ function ResourceGraph({
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
           style={{ cursor: "crosshair", userSelect: "none", display: "block" }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); setEdgeTooltip(null); }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          // A drag that is cancelled by the browser or loses its capture
+          // never zooms. After a normal release dragStart is already null.
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={() => { if (dragStart.current) cancelDrag(); }}
+          onPointerLeave={() => {
+            // A captured drag keeps running outside the canvas; a press that
+            // leaves before it became a drag is dropped.
+            if (dragStart.current && !dragMoved.current) cancelDrag();
+            setEdgeTooltip(null);
+          }}
+          onClickCapture={e => {
+            if (suppressClick.current) {
+              suppressClick.current = false;
+              e.stopPropagation();
+            }
+          }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
           {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip.

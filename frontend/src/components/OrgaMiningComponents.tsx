@@ -402,7 +402,8 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
 
   if (isEditMode) {
     const id = `profiling-${node.component_id}`;
-    const needsBusinessObjects = settings.featureGroups.some((g) =>
+    // Tooltip-only groups are computed too, so they need business objects as well.
+    const needsBusinessObjects = [...settings.featureGroups, ...settings.tooltipFeatureGroups].some((g) =>
       (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g),
     );
     const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
