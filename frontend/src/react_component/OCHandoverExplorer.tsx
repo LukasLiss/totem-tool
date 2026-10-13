@@ -389,6 +389,9 @@ export default function OCHandoverExplorer({
   const { clusterInfo } = useCluster();
   const [useClusters, setUseClusters] = useState(false);
   const [clusterByOt, setClusterByOt] = useState(initial.clusterByOt);
+  // Grouping into profiling clusters switches cluster-by-object-type off; this
+  // remembers its state so switching the clusters off again restores it.
+  const clusterByOtBeforeUnitsRef = useRef(false);
   // Effects that reset state when a setting changes must not fire for the
   // preselected values on mount; this ref is flipped by the last effect below.
   const isFirstRender = useRef(true);
@@ -1068,10 +1071,12 @@ export default function OCHandoverExplorer({
                         // stuck grouped when the profiling result changes.
                         if (useClusters) {
                           setUseClusters(false);
+                          setClusterByOt(clusterByOtBeforeUnitsRef.current);
                           handleCompute();
                           return;
                         }
                         if (groupingIssue) { toast.error(groupingIssue); return; }
+                        clusterByOtBeforeUnitsRef.current = clusterByOt;
                         setUseClusters(true);
                         setClusterByOt(false);
                         handleCompute();
@@ -1463,7 +1468,16 @@ export default function OCHandoverExplorer({
               <Switch
                 id="use-clusters"
                 checked={useClusters && !!clusterInfo}
-                onCheckedChange={v => { setUseClusters(v); if (v) { setClusterByOt(false); setSelectedMlpaLevel(null); } }}
+                onCheckedChange={v => {
+                  if (v) {
+                    clusterByOtBeforeUnitsRef.current = clusterByOt;
+                    setClusterByOt(false);
+                    setSelectedMlpaLevel(null);
+                  } else {
+                    setClusterByOt(clusterByOtBeforeUnitsRef.current);
+                  }
+                  setUseClusters(v);
+                }}
                 disabled={!clusterInfo}
               />
               <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
