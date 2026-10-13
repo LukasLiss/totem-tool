@@ -5571,14 +5571,13 @@ function TotemVisualizer({
       setDetailError((prev) => ({ ...prev, [areaId]: undefined }));
 
       try {
-        const objectTypes = encodeURIComponent(area.objectTypes.join(','));
         const detailFilterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
         if (detailFilterConfig._noResults) {
           setDetailCache((p) => ({ ...p, [areaId]: { nodes: [], links: [] } }));
           setDetailLoading((p) => ({ ...p, [areaId]: false }));
           return;
         }
-        const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: objectTypes });
+        const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: area.objectTypes.join(',') });
         if (detailFilterConfig.params) {
           Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
         }
