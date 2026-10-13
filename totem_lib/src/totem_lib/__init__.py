@@ -1,7 +1,6 @@
 from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
-    convert_ocel_polars_to_pm4py,
     filter_dead_objects,
     FilterRule,
     FilterStack,
@@ -106,7 +105,6 @@ __all__ = [
     "CCDFG",
     "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "conformance_of_totem",
-    "convert_ocel_polars_to_pm4py",
     "create_occn_engine",
     "create_ocpn_engine",
     "discover_occn",
