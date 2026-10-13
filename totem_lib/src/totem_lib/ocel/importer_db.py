@@ -63,6 +63,9 @@ def import_ocel_db(
         file_path:              Path to the OCEL 2.0 file (.sqlite, .json, .xml, .csv).
         db_path:                DuckDB target path. Defaults to ':memory:'. Pass a file
                                 path (e.g. 'my_log.duckdb') to persist the database.
+                                If the import fails, a database file this call
+                                created is removed again; a file that already
+                                existed at db_path is never deleted.
         streaming_threshold_mb: Files strictly below this size (MB) use the fast bulk
                                 path; files at or above use streaming. Pass 0 to always
                                 stream (lowest peak RAM, slowest speed).
@@ -115,14 +118,19 @@ def import_ocel_db(
         )
     size_mb = os.path.getsize(file_path) / 1024 / 1024
     dispatchers = stream if size_mb >= streaming_threshold_mb else bulk
+    # Only a database this call creates is ours to clean up. A file already
+    # at db_path belongs to someone else, and the failure may well be that it
+    # is in use — deleting it would destroy their data.
+    creates_db = db_path != ":memory:" and not os.path.exists(db_path)
     try:
         return dispatchers[fmt](file_path, db_path, graceful_import, strict_mode)
     except Exception:
-        if db_path != ":memory:" and os.path.exists(db_path):
-            try:
-                os.remove(db_path)
-            except OSError:
-                pass
+        if creates_db:
+            for path in (db_path, db_path + ".wal"):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         raise
 
 
@@ -234,8 +242,8 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
     _sqlite_bulk_objects(conn, obj_types, type_cols_map, obj_attr_cols, graceful)
     _sqlite_bulk_o2o(conn)
 
-    conn.execute("DETACH src")
-
+    # The duplicate-ID check below reads the per-activity tables from `src`,
+    # so the source database stays attached until strict validation is done.
     if strict_mode:
         errors = []
         union_all_parts = [f'SELECT ocel_id FROM src."event_{act}"' for act in activities]
@@ -254,6 +262,8 @@ def _import_sqlite_bulk(file_path: str, db_path: str, graceful: bool = True, str
         if errors:
             conn.close()
             raise OCELValidationException(errors)
+
+    conn.execute("DETACH src")
 
     if graceful:
         _graceful_cleanup(conn)
