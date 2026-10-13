@@ -2,8 +2,9 @@ from totem_lib import (
     import_ocel,
     totemDiscovery,
     mlpaDiscovery,
-    discover_oc_petri_net_polars,
+    discover_ocpn_db,
 )
+from totem_lib.ocel.importer_db import import_ocel_db
 import cProfile
 
 
@@ -40,5 +41,5 @@ print("\n\n\n-------------------- MLPA Discovery --------------------")
 view = mlpaDiscovery(totem)
 # cProfile.run('mlpaDiscovery(ocel)')
 
-ocpn = discover_oc_petri_net_polars(ocel)
+ocpn = discover_ocpn_db(import_ocel_db("example_data/ContainerLogistics.sqlite"))
 print("done")

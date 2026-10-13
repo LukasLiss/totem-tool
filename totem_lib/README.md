@@ -226,8 +226,8 @@ scale because the algorithms differ by five orders of magnitude.
 The two loading steps are drawn as grey baselines rather than coloured lines, because
 they are what the other algorithms build on rather than discovery algorithms themselves.
 `import_ocel` is dashed and reads the log into Polars; `import_ocel_db` is dotted and
-reads the same file into DuckDB. Which one applies depends on the algorithm: five of
-them need the Polars log, two need the DuckDB one.
+reads the same file into DuckDB. Which one applies depends on the algorithm: four of
+them need the Polars log, three need the DuckDB one.
 
 Use `--no-figures` for a quick partial run: a filtered run would otherwise overwrite the
 committed figures with incomplete data. To rebuild the figures from the saved results
@@ -255,6 +255,10 @@ python evaluation/run_benchmarks.py --repeats 3 \
 ```
 
 That takes about 30 minutes, almost all of it `discover_occn` on `order-management`.
+
+The committed run predates the removal of pm4py: its `discover_oc_petri_net_polars` rows
+measure the former pm4py-based OCPN miner, which the registry has since replaced with the
+native `discover_ocpn_db`.
 
 - [`evaluation/results/benchmark_results.md`](evaluation/results/benchmark_results.md) — the tables
 - [`evaluation/results/benchmark_results.csv`](evaluation/results/benchmark_results.csv) — the same rows, for tools

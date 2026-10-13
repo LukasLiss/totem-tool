@@ -24,6 +24,7 @@ from django.core.cache import cache
 from totem_lib.dfg import NewOCDFGDb
 from totem_lib import (
     discover_occn,
+    extract_occn_input,
     extract_occn_replay_units,
     occn_from_dict,
     occn_replay_fitness,
@@ -38,7 +39,6 @@ from totem_lib.totem import (
 )
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
-from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.ocel.event_columns import list_event_columns
 from totem_lib.ocpn import discover_ocpn_db
 from totem_lib.ocel.validation import OCELValidationException
@@ -1290,9 +1290,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     )
                     with _with_ocel_db(user_file) as db:
                         with _filter_shadow(db, fp_non_types):
-                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                            occn_input = extract_occn_input(db)
                     base_occn = discover_occn(
-                        ocel_pm4py,
+                        occn_input,
                         relativeOccuranceThreshold=0.0,
                         parameters=parameters,
                     )
