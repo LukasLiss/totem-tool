@@ -3224,7 +3224,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             ("w_temporal", "0.5"),
             ("w_cardinality", "0.5"),
             ("w_divergence", "0.5"),
-            ("alpha", "2"),
+            ("alpha", "4"),
             ("beta", "3"),
         ]:
             changed = _parse_process_area_params({query: value})
@@ -3552,7 +3552,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         self.assertEqual(component["w_temporal"], 1.0)
         self.assertEqual(component["w_cardinality"], 1.0)
         self.assertEqual(component["w_divergence"], 1.0)
-        self.assertEqual(component["alpha"], 1.0)
+        self.assertEqual(component["alpha"], 2.0)
         self.assertEqual(component["beta"], 1.0)
 
     def test_existing_rows_are_backfilled_by_the_migration_defaults(self):
@@ -3566,7 +3566,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         )
         component.refresh_from_db()
         self.assertEqual(component.algorithm, "advanced")
-        self.assertEqual(component.alpha, 1.0)
+        self.assertEqual(component.alpha, 2.0)
         self.assertEqual(component.beta, 1.0)
 
     def test_get_layout_exposes_the_new_fields(self):

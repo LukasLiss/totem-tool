@@ -265,7 +265,7 @@ class ProcessAreaComponent(DashboardComponent):
     w_temporal = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     w_cardinality = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
-    alpha = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    alpha = models.FloatField(default=2.0, validators=[MinValueValidator(0.0)])
     beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
 
 

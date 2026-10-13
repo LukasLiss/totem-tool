@@ -9,7 +9,7 @@ from totem_lib.process_areas import INDICATOR_NAMES
 # Defaults reproduce the thesis: uniform indicator weights, both objective
 # terms weighted equally, and the thesis margin of exactly 1 (`margin_scale`
 # is a reference-implementation extension and is not exposed over HTTP).
-PROCESS_AREA_DEFAULTS = {"alpha": 1.0, "beta": 1.0, "weight": 1.0}
+PROCESS_AREA_DEFAULTS = {"alpha": 2.0, "beta": 1.0, "weight": 1.0}
 
 
 def _positive_float(params, name: str, default: float) -> float:
