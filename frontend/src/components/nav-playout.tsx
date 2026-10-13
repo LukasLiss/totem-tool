@@ -8,6 +8,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "@/contexts/DashboardContext"
+import { TOUR_IDS } from "@/tour/tourIds"
 
 export function NavPlayout() {
   const { viewMode, setViewMode } = useContext(DashboardContext);
@@ -21,6 +22,7 @@ export function NavPlayout() {
             tooltip="Object-Centric Playout"
             onClick={() => setViewMode({ type: 'playout' })}
             data-active={viewMode.type === 'playout'}
+            data-tour-id={TOUR_IDS.NAV_PLAYOUT}
           >
             <Play />
             <span>Playout</span>
@@ -30,3 +32,4 @@ export function NavPlayout() {
     </SidebarGroup>
   )
 }
+

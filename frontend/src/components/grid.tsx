@@ -29,6 +29,7 @@ import {
   Save, Pencil, X
 } from "lucide-react"
 import { toast } from "sonner"
+import { TOUR_IDS } from "@/tour/tourIds"
 import FilterChipStack from "@/components/FilterChipStack";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
@@ -143,7 +144,18 @@ const GridContent: React.FC = () => {
     };
     
     loadSelectedDashboard();
-    // Only a different dashboard should tear the grid down and rebuild it.
+    const handleRefreshEvent = (e: Event) => {
+      const detail = (e as CustomEvent<{ dashboard_id?: number }>).detail;
+      if (!detail?.dashboard_id || detail.dashboard_id === selectedDashboard) {
+        console.log("totem:refresh-dashboard event received, refreshing grid...");
+        loadSelectedDashboard();
+      }
+    };
+
+    window.addEventListener("totem:refresh-dashboard", handleRefreshEvent);
+    return () => {
+      window.removeEventListener("totem:refresh-dashboard", handleRefreshEvent);
+    };
   }, [selectedDashboard]);
 
   const handleSave = async () => {
@@ -243,6 +255,7 @@ const GridContent: React.FC = () => {
           <Button
             variant="ghost"
             size="icon"
+            data-tour-id={TOUR_IDS.DASHBOARD_ADD_CARD}
             onClick={() => setIsEditMode(true)}
             title="Edit dashboard"
           >
@@ -252,7 +265,7 @@ const GridContent: React.FC = () => {
         )}
 
       </div>
-      <div className="flex flex-row flex-grow overflow-hidden">
+      <div className="flex flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
         
         <div className="flex-grow overflow-auto">
           <GridContainer>
