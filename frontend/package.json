@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism",
     "preview": "vite preview",
     "build-no-typecheck": "vite build",
     "typecheck": "tsc -b"

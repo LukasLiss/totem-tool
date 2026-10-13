@@ -46,7 +46,12 @@ from .lru_filecache import LRUFileBasedCache
 from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
 from .serializers import ProjectAssetSerializer
 from .views import _parse_process_area_params, _process_area_cache_params, EventLogViewSet
-from .views._ocel_db import _OCEL_DB_REGISTRY, _OCEL_DB_REGISTRY_LOCK
+from .views._ocel_db import (
+    _OCEL_DB_REGISTRY,
+    _OCEL_DB_REGISTRY_LOCK,
+    _close_ocel_db,
+    _with_ocel_db,
+)
 
 
 def valid_totem_content_json():
@@ -2972,6 +2977,106 @@ class EventLogConversionErrorTests(TestCase):
         self.assertEqual(EventLog.objects.count(), 0)
 
 
+EXAMPLE_LOGS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "totem_lib", "test_data", "small"
+)
+
+
+class EventLogDuplicateUploadTests(TestCase):
+    """Uploading a file whose converted name is already taken.
+
+    Django only de-duplicates the uploaded `.sqlite`/`.json` name, and that
+    file is gone once converted, so a second upload of the same file used to
+    convert into the first log's `.duckdb`, fail, and then delete it.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="dup-user")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+        media_override = self.settings(MEDIA_ROOT=self.media)
+        media_override.enable()
+        self.addCleanup(media_override.disable)
+
+    def _upload(self, name, content=None):
+        if content is None:
+            with open(os.path.join(EXAMPLE_LOGS, name), "rb") as handle:
+                content = handle.read()
+        response = self.client.post(
+            "/api/files/", {"file": SimpleUploadedFile(name, content)}, format="multipart"
+        )
+        if response.status_code == status.HTTP_201_CREATED:
+            # Registered on upload; it holds the file open until closed.
+            self.addCleanup(_close_ocel_db, int(response.data["id"]))
+        return response
+
+    def _assert_loads(self, event_log):
+        path = event_log.file.path
+        self.assertTrue(os.path.exists(path), path)
+        db = OcelDuckDB.load(path, read_only=True)
+        try:
+            return db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        finally:
+            db.close()
+
+    def test_uploading_the_same_file_twice_keeps_both_logs(self):
+        first = self._upload("container_logistics.sqlite")
+        second = self._upload("container_logistics.sqlite")
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED, first.data)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED, second.data)
+        first_log = EventLog.objects.get(pk=first.data["id"])
+        second_log = EventLog.objects.get(pk=second.data["id"])
+        self.assertEqual(first_log.file.name, "container_logistics.duckdb")
+        self.assertNotEqual(first_log.file.name, second_log.file.name)
+        self.assertTrue(second_log.file.name.endswith(".duckdb"))
+        events = self._assert_loads(first_log)
+        self.assertGreater(events, 0)
+        self.assertEqual(self._assert_loads(second_log), events)
+        # Each upload's registered connection serves its own log.
+        for event_log in (first_log, second_log):
+            with _with_ocel_db(event_log) as db:
+                count = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            self.assertEqual(count, events)
+        # Only the two converted logs are left behind: no uploaded originals
+        # and no conversion scratch space.
+        self.assertCountEqual(
+            os.listdir(self.media), [first_log.file.name, second_log.file.name]
+        )
+
+    def test_a_failed_upload_leaves_the_log_it_collides_with_alone(self):
+        first = self._upload("resource_aware_orders.json")
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED, first.data)
+        first_log = EventLog.objects.get(pk=first.data["id"])
+
+        broken = self._upload("resource_aware_orders.json", b"{not json")
+
+        self.assertEqual(broken.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(list(EventLog.objects.all()), [first_log])
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertGreater(self._assert_loads(first_log), 0)
+        self.assertEqual(os.listdir(self.media), [first_log.file.name])
+
+    def test_a_name_taken_after_it_was_checked_is_not_reused(self):
+        from django.core.files.storage import default_storage
+
+        from .views.event_log import _claim_storage_name
+
+        open(os.path.join(self.media, "log.duckdb"), "wb").close()
+        # As if another upload claimed the name between the check and ours.
+        answers = iter(["log.duckdb", "log_2.duckdb"])
+        with patch.object(
+            default_storage, "get_available_name", side_effect=lambda *a, **k: next(answers)
+        ):
+            name, path = _claim_storage_name(default_storage, "log.duckdb")
+
+        self.assertEqual(name, "log_2.duckdb")
+        self.assertEqual(path, os.path.join(self.media, "log_2.duckdb"))
+        self.assertTrue(os.path.exists(path))
+
+
 class ProcessAreaDiscoveryApiTests(TestCase):
     """
     `discover_process_areas` — the advanced (thesis section 4.1) layering
@@ -3119,7 +3224,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             ("w_temporal", "0.5"),
             ("w_cardinality", "0.5"),
             ("w_divergence", "0.5"),
-            ("alpha", "2"),
+            ("alpha", "4"),
             ("beta", "3"),
         ]:
             changed = _parse_process_area_params({query: value})
@@ -3447,7 +3552,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         self.assertEqual(component["w_temporal"], 1.0)
         self.assertEqual(component["w_cardinality"], 1.0)
         self.assertEqual(component["w_divergence"], 1.0)
-        self.assertEqual(component["alpha"], 1.0)
+        self.assertEqual(component["alpha"], 2.0)
         self.assertEqual(component["beta"], 1.0)
 
     def test_existing_rows_are_backfilled_by_the_migration_defaults(self):
@@ -3461,7 +3566,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         )
         component.refresh_from_db()
         self.assertEqual(component.algorithm, "advanced")
-        self.assertEqual(component.alpha, 1.0)
+        self.assertEqual(component.alpha, 2.0)
         self.assertEqual(component.beta, 1.0)
 
     def test_get_layout_exposes_the_new_fields(self):

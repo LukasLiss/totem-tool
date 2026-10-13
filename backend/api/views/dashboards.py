@@ -348,7 +348,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w_temporal=item.get("w_temporal", 1.0),
                     w_cardinality=item.get("w_cardinality", 1.0),
                     w_divergence=item.get("w_divergence", 1.0),
-                    alpha=item.get("alpha", 1.0),
+                    alpha=item.get("alpha", 2.0),
                     beta=item.get("beta", 1.0),
                 )
             elif component_name == "TotemMinerComponent":

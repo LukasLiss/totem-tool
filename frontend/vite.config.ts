@@ -26,8 +26,13 @@ export default defineConfig(({ command }) => ({
     port: 3000,
     open: true,
     proxy: {
-      // forward all /api/* to Django on :8000
+      // forward all /api/* and /token/* to Django on :8000
       "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        secure: false,
+      },
+      "/token": {
         target: "http://localhost:8000",
         changeOrigin: true,
         secure: false,

@@ -7,6 +7,8 @@ frontend can trigger against a stored event log is an ``@action`` here.
 import copy
 import json
 import os
+import shutil
+import tempfile
 from contextlib import contextmanager
 
 import duckdb
@@ -183,6 +185,73 @@ def _project_file_paths(project):
     return paths
 
 
+def _claim_storage_name(storage, name, max_length=None):
+    """Reserve a free name in ``storage`` by creating an empty file under it.
+
+    ``get_available_name`` only says a name was free when it looked, so two
+    uploads converting at once could be handed the same one. Creating the
+    file with O_EXCL settles who owns it, and the loser asks again — the same
+    dance ``FileSystemStorage._save`` does for the upload itself.
+    """
+    while True:
+        candidate = storage.get_available_name(name, max_length=max_length)
+        path = storage.path(candidate)
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            continue
+        return candidate, path
+
+
+def _convert_upload_to_duckdb(upload):
+    """Convert an uploaded OCEL file to DuckDB beside it; return the new name.
+
+    The target must not simply be the upload's name with a `.duckdb`
+    extension: Django de-duplicated the upload's name only against files
+    that exist, and the `.duckdb` an earlier upload of the same file was
+    converted to usually does. Converting into that failed, and the cleanup
+    then deleted the other project's log. So the conversion runs in a private
+    scratch directory and is moved into storage under a name claimed for it.
+    """
+    work_dir = tempfile.mkdtemp(prefix=".convert-", dir=os.path.dirname(upload.path))
+    try:
+        work_path = os.path.join(work_dir, "log.duckdb")
+        import_ocel_db(upload.path, db_path=work_path, strict_mode=False).close()
+        root, _ = os.path.splitext(upload.name)
+        name, path = _claim_storage_name(
+            upload.storage, root + ".duckdb", max_length=upload.field.max_length
+        )
+        try:
+            os.replace(work_path, path)
+        except OSError:
+            _remove_file(path)
+            raise
+        return name
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _discard_upload(event_log):
+    """Undo an upload that failed after its row was saved.
+
+    Deletes the row, its project and the file it points at. A row that is
+    already gone (``delete()`` clears ``pk``) was cleaned up where it failed;
+    its file name may since have been given to a newer upload, so it is left
+    alone.
+    """
+    if event_log is None or event_log.pk is None:
+        return
+    file_path = event_log.file.path if event_log.file else None
+    project = event_log.project
+    _close_ocel_db(int(event_log.pk))
+    for record in (event_log, project):
+        try:
+            record.delete()
+        except Exception:
+            pass
+    _remove_file(file_path)
+
+
 class EventLogViewSet(viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
@@ -276,66 +345,24 @@ class EventLogViewSet(viewsets.ModelViewSet):
             project.users.add(user)
             project.save()
         event_log = serializer.save(project=project)
-        
-        # Check if the file needs DuckDB conversion
-        file_path = event_log.file.path
-        if not file_path.lower().endswith('.duckdb'):
-            # Generate the new .duckdb path
-            base_name, _ = os.path.splitext(file_path)
-            new_path = base_name + ".duckdb"
-            
-            db = None
-            try:
-                try:
-                    # Import and convert the file into the new DuckDB database with strict validation
-                    db = import_ocel_db(file_path, db_path=new_path, strict_mode=True)
-                finally:
-                    if db is not None:
-                        try:
-                            db.close()
-                        except Exception:
-                            pass
-                
-                # Remove the original uploaded file from disk
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
-                
-                # Update the event_log to point to the new file
-                original_name, _ = os.path.splitext(event_log.file.name)
-                event_log.file.name = original_name + ".duckdb"
-                event_log.save(update_fields=['file'])
-            except Exception as e:
-                # Clean up half-written .duckdb file if it exists
-                if os.path.exists(new_path):
-                    try:
-                        os.remove(new_path)
-                    except OSError:
-                        pass
-                
-                # Clean up original uploaded file if it still exists
-                try:
-                    if event_log.file and os.path.exists(event_log.file.path):
-                        os.remove(event_log.file.path)
-                except OSError:
-                    pass
 
-                # Delete event_log and project records
-                try:
-                    event_log.delete()
-                except Exception:
-                    pass
-                try:
-                    project.delete()
-                except Exception:
-                    pass
-
-                if isinstance(e, OCELValidationException):
-                    raise
-                raise serializers.ValidationError(
-                    {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
-                )
+        # Anything that is not DuckDB already is converted, with graceful
+        # sanitization of dangling relations, and replaces the upload.
+        upload_path = event_log.file.path
+        if upload_path.lower().endswith(".duckdb"):
+            return
+        try:
+            converted_name = _convert_upload_to_duckdb(event_log.file)
+        except Exception as e:
+            _discard_upload(event_log)
+            if isinstance(e, OCELValidationException):
+                raise
+            raise serializers.ValidationError(
+                {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
+            )
+        _remove_file(upload_path)
+        event_log.file.name = converted_name
+        event_log.save(update_fields=["file"])
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -345,7 +372,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             self.perform_create(serializer)
             user_file = serializer.instance
             
-            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
+            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db
@@ -356,42 +383,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
-                    try:
-                        user_file.project.delete()
-                    except Exception:
-                        pass
-                if user_file.pk:
-                    try:
-                        user_file.delete()
-                    except Exception:
-                        pass
+            _discard_upload(serializer.instance)
             return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
-                    try:
-                        user_file.project.delete()
-                    except Exception:
-                        pass
-                if user_file.pk:
-                    try:
-                        user_file.delete()
-                    except Exception:
-                        pass
+            _discard_upload(serializer.instance)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         headers = self.get_success_headers(serializer.data)
@@ -475,7 +470,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def event_distribution(self, request, pk=None):
-        """Returns monthly event counts for the time range histogram."""
+        """Returns event counts bucketed at an auto-selected granularity.
+
+        The granularity is chosen from the log's actual time span so the
+        histogram always has a useful number of bars:
+          < 3 days   → hourly   (period: "YYYY-MM-DDTHH",  ≤ 72 bars)
+          < 90 days  → daily    (period: "YYYY-MM-DD",     ≤ 90 bars)
+          < 5 years  → monthly  (period: "YYYY-MM",        ≤ 60 bars)
+          ≥ 5 years  → yearly   (period: "YYYY",           one bar per year)
+
+        Response: {"distribution": [...], "granularity": "<level>"}
+        """
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
@@ -483,20 +488,50 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
         try:
             with _with_ocel_db(user_file) as db:
-                rows = db.conn.execute("""
-                    SELECT
-                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
-                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
-                        COUNT(*) AS count
+                span = db.conn.execute(
+                    "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
+                ).fetchone()
+
+                if span is None or span[0] is None:
+                    return Response(
+                        {"distribution": [], "granularity": "month"},
+                        status=status.HTTP_200_OK,
+                    )
+
+                ts_min, ts_max = span
+                span_s = max(ts_max - ts_min, 1)
+
+                if span_s < 3 * 86_400:
+                    granularity = "hour"
+                    fmt = "%Y-%m-%dT%H"
+                elif span_s < 90 * 86_400:
+                    granularity = "day"
+                    fmt = "%Y-%m-%d"
+                elif span_s < 5 * 365 * 86_400:
+                    granularity = "month"
+                    fmt = "%Y-%m"
+                else:
+                    granularity = "year"
+                    fmt = "%Y"
+
+                rows = db.conn.execute(
+                    f"""
+                    SELECT strftime(to_timestamp(timestamp_unix), '{fmt}') AS period,
+                           COUNT(*) AS count
                     FROM events
-                    GROUP BY yr, mo
-                    ORDER BY yr, mo
-                """).fetchall()
-            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+                    GROUP BY period
+                    ORDER BY period
+                    """
+                ).fetchall()
+
+            distribution = [{"period": r[0], "count": r[1]} for r in rows]
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response(distribution, status=status.HTTP_200_OK)
+        return Response(
+            {"distribution": distribution, "granularity": granularity},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"])
     def apply_filters(self, request, pk=None):
