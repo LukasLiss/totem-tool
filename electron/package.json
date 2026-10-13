@@ -1,6 +1,6 @@
 {
   "name": "totem-tool",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "description": "TOTeM Tool desktop application: object-centric process mining with a bundled local backend",
   "main": "main.js",
   "scripts": {
