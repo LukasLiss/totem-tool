@@ -2,6 +2,8 @@ from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
 from pulp import *
+
+from ..solver import solve
 import graphviz
 import os
 from pathlib import Path
@@ -767,17 +769,7 @@ def mlpaDiscovery(totem: Totem):
     )
     model += obj_func
 
-    # solve the model safely
-    try:
-        import shutil
-        sys_cbc = shutil.which("cbc")
-        solver = PULP_CBC_CMD(path=sys_cbc, msg=0) if sys_cbc else PULP_CBC_CMD(msg=0)
-        status = model.solve(solver)
-    except (OSError, Exception):
-        try:
-            status = model.solve()
-        except (OSError, Exception):
-            pass
+    solve(model)
 
     levels_dict = dict()
     for type in tempGraph["nodes"]:

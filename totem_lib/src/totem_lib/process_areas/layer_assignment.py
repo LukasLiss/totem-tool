@@ -26,18 +26,21 @@ has a solution and noisy relations trade off against each other instead of
 dictating the outcome.
 """
 
+import logging
 from typing import Dict, Mapping, Sequence, Tuple
 
 from pulp import (
-    PULP_CBC_CMD,
     LpInteger,
     LpMinimize,
     LpProblem,
-    LpStatus,
     LpVariable,
     lpSum,
     value,
 )
+
+from ..solver import solve
+
+logger = logging.getLogger(__name__)
 
 TypePair = Tuple[str, str]
 
@@ -57,8 +60,8 @@ def assign_layers(
     Solve the layer-assignment ILP.
 
     :param object_types: object types in a **stable, deterministic order**.
-        CBC may return any one of several equally optimal solutions, and which
-        one it returns depends on the order the variables were created in.
+        The solver may return any one of several equally optimal solutions, and
+        which one it returns depends on the order the variables were created in.
         Passing an unordered collection here makes discovery irreproducible and
         breaks result caching, so the order is treated as part of the input.
     :param resource_forces: ``phi`` per ordered type pair. Only positive values
@@ -121,8 +124,8 @@ def assign_layers(
 
     # Attractive force: |l_i - l_j|, one variable per unordered pair.
     # A term weighted zero cannot change the optimum, so a zero alpha or beta
-    # skips building that half of the model rather than handing CBC variables it
-    # will price at nothing.
+    # skips building that half of the model rather than handing the solver
+    # variables it will price at nothing.
     distance: Dict[TypePair, LpVariable] = {}
     if beta > 0:
         for position, type_i in enumerate(types):
@@ -158,39 +161,15 @@ def assign_layers(
         max(0.0, resource_forces[pair]) * var for pair, var in hinge.items()
     ) + beta * lpSum(attractive_forces[pair] * var for pair, var in distance.items())
 
-    def _solve_safely(p: LpProblem) -> bool:
-        import shutil
-        from pulp import HiGHS_CMD
-        try:
-            sys_cbc = shutil.which("cbc")
-            solver = PULP_CBC_CMD(path=sys_cbc, msg=0) if sys_cbc else PULP_CBC_CMD(msg=0)
-            st = p.solve(solver)
-            if LpStatus[st] == "Optimal":
-                return True
-        except (OSError, Exception):
-            pass
-
-        try:
-            if HiGHS_CMD().available():
-                st = p.solve(HiGHS_CMD(msg=0))
-                if LpStatus[st] == "Optimal":
-                    return True
-        except (OSError, Exception):
-            pass
-
-        try:
-            st = p.solve()
-            if LpStatus[st] == "Optimal":
-                return True
-        except (OSError, Exception):
-            pass
-        return False
-
-    is_optimal = _solve_safely(problem)
+    is_optimal = solve(problem) == "Optimal"
 
     if not is_optimal:
-        # Resilient fallback heuristic for environments without working external solver binaries
-        # (e.g. macOS ARM64 without Rosetta 2). Types with higher net resource force are layered above.
+        # Last-resort heuristic for when no solver works at all (e.g. a broken
+        # install). Types with higher net resource force are layered above.
+        logger.warning(
+            "Layer assignment fell back to the net-force heuristic; "
+            "process-area layers are approximate."
+        )
         net_forces = {t: 0.0 for t in types}
         for (ti, tj), f in resource_forces.items():
             if ti in net_forces and tj in net_forces and f > 0:
@@ -210,9 +189,9 @@ def assign_layers(
         return layers
 
     # An object type with no force at all appears in no constraint and no
-    # objective term. CBC drops such a variable from the model entirely and
-    # PuLP reports its value as None, so it is pinned to the bottom layer here
-    # rather than crashing the caller.
+    # objective term. It never reaches the solver, so PuLP reports its value as
+    # None, and it is pinned to the bottom layer here rather than crashing the
+    # caller.
     layers = {}
     for object_type in types:
         solved = value(layer[object_type])
