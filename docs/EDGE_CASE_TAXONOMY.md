@@ -39,7 +39,7 @@ Polars `find_variants`). "DuckDB path" = `import_ocel_db` + the `OcelDuckDB` min
 |---|---|---|
 | **self_loop** | Same activity repeated for one object (directly-follows self-loop) | All pipelines **OK**. |
 | **long_chain** | 50-step strictly-sequential chain of distinct activities on one object | All pipelines **OK** (checks there is no depth/recursion limit). |
-| **cyclic** | Cyclic control flow `A → B → A → B` on one object | All pipelines **OK**. `discover_occn` recovers the length-2 loop arcs: pm4py's plain dependency measure scores both arcs of such a loop below threshold, and its own loop-repair pass only visits nodes that already cleared that threshold — so on a purely cyclic log it never runs and pm4py emits isolated, arc-less nodes. `_repairLengthTwoLoops` re-runs that repair with pm4py's own loop measure when (and only when) that fallback was hit, so the cycle is discovered and every event replays (`occn_precision` → 4/4 replayable). |
+| **cyclic** | Cyclic control flow `A → B → A → B` on one object | All pipelines **OK**. `discover_occn` recovers the length-2 loop arcs: the plain dependency measure scores both arcs of such a loop below threshold, and length-2 loop detection normally only examines activities that already cleared that threshold — so on a purely cyclic log it would find nothing and leave isolated, arc-less activities. When the dependency graph has no arc at all, the Heuristics Miner (`occn/heuristics.py`) examines every activity for length-2 loops instead, so the cycle is discovered and every event replays (`occn_precision` → 4/4 replayable). |
 | **high_fanout** | One event related to 100+ objects (high/unbounded cardinality) | All pipelines **OK**. Stresses per-event object fan-out. |
 | **equal_timestamps** | Concurrent events sharing an identical timestamp | All pipelines **OK**. Ordering ties must not crash the directly-follows / temporal logic. |
 
@@ -60,7 +60,7 @@ were all fixed under Issue #296:
 | Fixture | Pipeline | Was | Fixed by |
 |---|---|---|---|
 | empty | Polars `import_ocel` (+ all Polars miners) | `polars.exceptions.SchemaError` | Explicit column schemas in the raw loaders (`ocel/importer.py`) |
-| cyclic | `discover_occn` / `occn_precision` | `TypeError` | `_repairLengthTwoLoops` restores the loop arcs pm4py skips (`occn/discover.py`) |
+| cyclic | `discover_occn` / `occn_precision` | `TypeError` | Length-2 loop detection over every activity when no arc clears the dependency threshold (`occn/heuristics.py`) |
 | duplicate_event_ids | `discover_occn` / `occn_precision` | `Exception` | Polars import dedups, matching DuckDB (`ocel/utils/filter.py`) |
 | duplicate_event_ids | `discover_oc_petri_net_polars` (since removed) | `KeyError` | same dedup |
 | unicode_names | DuckDB `find_variants` | `UnicodeEncodeError` | ASCII-escaped WL labels (`variants/iso_strategies.py`) |

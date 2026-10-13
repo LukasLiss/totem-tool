@@ -269,9 +269,9 @@ def test_cyclic_log_yields_replayable_occn():
     """
     A length-2 loop (A -> B -> A -> B) is discovered as an actual cycle.
 
-    pm4py's plain dependency measure rejects both arcs of such a loop, and its
-    own length-2-loop repair never runs, leaving a net with no arcs at all.
-    `discover_occn` restores those arcs, so every event replays.
+    The plain dependency measure rejects both arcs of such a loop, so the
+    Heuristics Miner falls back to length-2 loop detection over every activity
+    and restores those arcs, so every event replays.
     """
     ocel = import_ocel(str(EDGE_CASES_DIR / "cyclic.json"))
     occn = discover_occn(ocel, OCCN_THRESHOLD)

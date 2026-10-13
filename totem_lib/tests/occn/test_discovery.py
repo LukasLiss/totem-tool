@@ -46,8 +46,8 @@ def _resource_log_duckdb(tmp_path):
 
     Restricted to the `worker` type alone, the flattened case is a strict
     alternation `confirm ship confirm ship confirm ship`. Neither direction
-    clears the plain dependency threshold ((3-2)/(3+2+1) = 0.17), so pm4py
-    admits no arc at all — which used to leave both activities isolated and
+    clears the plain dependency threshold ((3-2)/(3+2+1) = 0.17), so the
+    Heuristics Miner admits no arc at all — which used to leave both activities isolated and
     produce a binding with zero obligations, handed to
     `OCCausalNet.MarkerGroup` and rejected as an empty marker list.
 
@@ -117,22 +117,21 @@ def test_discover_occn_with_alternating_resource(tmp_path):
     assert _related(occn.output_marker_groups["ship"]) == {"confirm", "END_worker"}
 
 
-def test_discover_occn_obligation_free_groups_are_dropped(tmp_path, monkeypatch):
+def test_discover_occn_obligation_free_groups_are_dropped(tmp_path):
     """A binding with no obligations is dropped, not turned into a MarkerGroup.
 
-    Exercises the guard on its own by disabling the length-2 loop repair, which
-    is what would otherwise connect this particular log. Without the repair the
+    Exercises the guard on its own by disabling length-2 loop detection, which
+    is what would otherwise connect this particular log: a loop value is
+    n / (n + 1), so a threshold of 1 is never reached. Without the loop the
     worker's activities stay isolated in the dependency graph, which is the
     shape that used to raise
     `TypeError: markers must be a non-empty list of OCCausalNet.Marker`.
     """
-    from totem_lib.occn import discover as _discover
-
-    monkeypatch.setattr(_discover, "_repairLengthTwoLoops", lambda net, _thr: net)
-
     ocel_db = _resource_log_duckdb(tmp_path)
     occn = discover_occn(
-        ocel_db, relativeOccuranceThreshold=0.0, parameters={"object_types": ["worker"]}
+        ocel_db,
+        relativeOccuranceThreshold=0.0,
+        parameters={"object_types": ["worker"], "loop_two_threshold": 1.0},
     )
 
     assert "confirm" in occn.activities
