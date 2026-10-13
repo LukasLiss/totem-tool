@@ -12,8 +12,7 @@ name: electron
 #   macOS:   CSC_LINK (base64 .p12), CSC_KEY_PASSWORD, APPLE_ID,
 #            APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
 #   Windows: WIN_CSC_LINK (base64 .pfx), WIN_CSC_KEY_PASSWORD
-#            (or WIN_CERT_SUBJECT_NAME for a certificate in the machine store,
-#            or electron-builder's azureSignOptions for Azure Trusted Signing)
+#            (or electron-builder's azureSignOptions for Azure Trusted Signing)
 
 on:
   workflow_dispatch:
@@ -95,12 +94,9 @@ jobs:
           # Windows Authenticode (PFX). Leave unset for an unsigned build.
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          WIN_CERT_SUBJECT_NAME: ${{ secrets.WIN_CERT_SUBJECT_NAME }}
           # Without a certificate electron-builder must not go looking for
           # one in the keychain (an unsigned build is the intended outcome).
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
-          # Never publish from the build step; the release job below does it.
-          EB_PUBLISH: never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

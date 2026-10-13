@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build-win": "electron-builder --win",
-    "build-mac": "electron-builder --mac --$(node -p process.arch)",
+    "build-win": "electron-builder --win --publish never",
+    "build-mac": "electron-builder --mac --$(node -p process.arch) --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -33,7 +33,6 @@
       ],
       "icon": "build/icon.ico",
       "signtoolOptions": {
-        "certificateSubjectName": "${env.WIN_CERT_SUBJECT_NAME}",
         "rfc3161TimeStampServer": "http://timestamp.digicert.com"
       }
     },
