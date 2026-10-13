@@ -4,7 +4,8 @@ name: electron
 # for Windows (x64), macOS Apple Silicon (arm64) and macOS Intel (x64).
 #
 # The PyInstaller backend is single-architecture, so each macOS flavour is
-# built on a runner of that architecture (macos-14 = arm64, macos-13 = x64).
+# built on a runner of that architecture (macos-14 = arm64, macos-15-intel = x64).
+# macos-13 was retired in Dec 2025; GitHub drops Intel macOS runners in fall 2027.
 #
 # Signing / notarization is optional: when the secrets below are not set the
 # build produces unsigned artifacts (fine for testing, not for distribution).
@@ -37,7 +38,7 @@ jobs:
           - os: macos-14
             name: macos-arm64
             build-script: build-all-mac
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-x64
             build-script: build-all-mac
 
