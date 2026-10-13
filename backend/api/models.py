@@ -412,3 +412,86 @@ class OCCNComponent(DashboardComponent):
     )
     # Comma-separated object type filter; empty = discover on all types.
     object_types = models.TextField(default="", blank=True)
+
+
+class OCHandoverComponent(DashboardComponent):
+    """Dashboard widget for the object-centric handover-of-work explorer.
+
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Object types are stored as JSON
+    lists of type names.
+
+    ``show_controls``, ``method``, ``case_type`` and ``flat_resource_type``
+    are retained so older saved layouts still load, but nothing reads or
+    writes them. The view mode has no settings panel, and the flattened
+    (single case type) method was removed — the explorer is object-centric
+    only. They are left exactly as they were, columns and choices included,
+    so that removing the feature needs no migration against existing
+    dashboards.
+    """
+    show_controls = models.BooleanField(default=True)
+    # Start the computation as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+    method = models.CharField(
+        max_length=16,
+        choices=[("oc", "Object-centric"), ("flattened", "Flattened")],
+        default="oc",
+    )
+    resource_types = models.JSONField(default=list, blank=True)
+    businessobject_types = models.JSONField(default=list, blank=True)
+    case_type = models.CharField(max_length=100, blank=True, default="")
+    flat_resource_type = models.CharField(max_length=100, blank=True, default="")
+    # Maximum number of non-resource events between two handover events; null = unlimited.
+    max_gap = models.PositiveIntegerField(null=True, blank=True)
+    normalization = models.CharField(max_length=32, default="by_arcs_in_eog")
+    normalization_scope = models.CharField(max_length=16, default="global")
+    parallel_filter_enabled = models.BooleanField(default=False)
+    parallel_threshold = models.FloatField(
+        default=0.5,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+    )
+    min_parallel_observations = models.PositiveIntegerField(default=1)
+    cluster_by_ot = models.BooleanField(default=False)
+    view_mode = models.CharField(
+        max_length=8,
+        choices=[("graph", "Graph"), ("table", "Table"), ("log", "Log")],
+        default="graph",
+    )
+
+
+class ResourceProfilingComponent(DashboardComponent):
+    """Dashboard widget for the resource profiling (organizational mining) explorer.
+
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Type and feature-group
+    selections are JSON lists.
+
+    ``show_controls`` is retained so older saved layouts still load, but
+    nothing reads it: the view mode has no settings panel to show.
+    """
+    show_controls = models.BooleanField(default=True)
+    automatic_loading = models.BooleanField(default=False)
+    resource_types = models.JSONField(default=list, blank=True)
+    business_object_types = models.JSONField(default=list, blank=True)
+    # Feature groups that enter distance/MDS/clustering; empty = activity fractions.
+    feature_groups = models.JSONField(default=list, blank=True)
+    # Feature groups computed for tooltips only.
+    tooltip_feature_groups = models.JSONField(default=list, blank=True)
+    compute_clusters = models.BooleanField(default=True)
+    cluster_method = models.CharField(
+        max_length=16,
+        choices=[("kmeans", "K-Means"), ("agglomerative", "Agglomerative"), ("hdbscan", "HDBSCAN")],
+        default="hdbscan",
+    )
+    n_clusters = models.PositiveIntegerField(default=3)
+    min_cluster_size = models.PositiveIntegerField(default=2)
+    distance_metric = models.CharField(
+        max_length=16,
+        choices=[("euclidean", "Euclidean"), ("hellinger", "Hellinger")],
+        default="euclidean",
+    )
+    view_mode = models.CharField(
+        max_length=8,
+        choices=[("graph", "Graph"), ("table", "Table")],
+        default="graph",
+    )

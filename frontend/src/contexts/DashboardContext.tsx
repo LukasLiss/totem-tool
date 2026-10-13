@@ -9,7 +9,8 @@ export type AnalysisComponent =
   | "occn"
   | "ocPetriNet"
   | "totemMiner"
-  | "sqlQuery";
+  | "sqlQuery"
+  | "orgaMining";
 export type ConformanceComponent = "totem" | "occn";
 
 export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";
