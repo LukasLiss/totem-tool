@@ -97,8 +97,6 @@ jobs:
           # Without a certificate electron-builder must not go looking for
           # one in the keychain (an unsigned build is the intended outcome).
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
-          # Never publish from the build step; the release job below does it.
-          EB_PUBLISH: never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
