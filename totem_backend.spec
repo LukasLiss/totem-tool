@@ -1,11 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 simplejwt_hidden_imports = collect_submodules('rest_framework_simplejwt')
 
 # PuLP ships its CBC solver as a platform binary under pulp/solverdir/; without
 # it mlpaDiscovery / process areas fail in the frozen app with "solver not found".
-pulp_solver_files = collect_data_files('pulp', includes=['solverdir/**'])
+# It ships CBC for every OS; keep only the current platform's. Foreign ELF / PE
+# executables inside the macOS bundle break code signing and notarization.
+_cbc_platform = {'darwin': 'osx', 'win32': 'win'}.get(sys.platform, 'linux')
+pulp_solver_files = [
+    (src, dest)
+    for src, dest in collect_data_files('pulp', includes=['solverdir/**'])
+    if '/cbc/' not in dest.replace('\\', '/') + '/'
+    or f'/cbc/{_cbc_platform}/' in dest.replace('\\', '/') + '/'
+]
 
 a = Analysis(
     ['backend/manage.py'],
