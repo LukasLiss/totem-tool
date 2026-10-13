@@ -44,7 +44,7 @@ def test_every_algorithm_named_by_the_issue_is_registered():
         "totemDiscovery",
         "totemDiscovery_db",
         "mlpaDiscovery",
-        "discover_oc_petri_net_polars",
+        "discover_ocpn_db",
         "discover_occn",
         "OCDFG.from_ocel",
         "CCDFG.from_ocel",

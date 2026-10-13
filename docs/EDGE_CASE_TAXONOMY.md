@@ -18,9 +18,9 @@ Each case is a small, deliberately-constructed OCEL 2.0 log built by
 - **n/a** — the case does not meaningfully exercise this pipeline.
 
 "Polars path" = `import_ocel` + the in-memory `ObjectCentricEventLog` miners
-(`totemDiscovery`, `OCDFG.from_ocel`, `discover_oc_petri_net_polars`, `discover_occn`,
+(`totemDiscovery`, `OCDFG.from_ocel`, `discover_occn`,
 Polars `find_variants`). "DuckDB path" = `import_ocel_db` + the `OcelDuckDB` miners
-(`totemDiscovery_db`, `OCDFGDb`/`NewOCDFGDb`, DuckDB `find_variants`).
+(`totemDiscovery_db`, `OCDFGDb`/`NewOCDFGDb`, `discover_ocpn_db`, DuckDB `find_variants`).
 
 ## Structural / size cases
 
@@ -50,7 +50,7 @@ Polars `find_variants`). "DuckDB path" = `import_ocel_db` + the `OcelDuckDB` min
 | **out_of_order_timestamps** | Events listed in the file in non-chronological order | All pipelines **OK** — miners sort by timestamp internally, result is order-independent. |
 | **null_attributes** | Missing / explicitly-null event and object attribute values | All pipelines **OK** — null attributes must not break import or mining. |
 | **unicode_names** | Unicode / special characters (en-dash, CJK, emoji) in activity & object-type names | All pipelines **OK**. networkx hashes Weisfeiler-Lehman labels as ASCII, so the `wl` / `wl+vf2` strategies used to raise `UnicodeEncodeError`; `iso_strategies._wl_hash` now escapes labels into an injective ASCII form first, which leaves grouping unchanged. |
-| **duplicate_event_ids** | Two events sharing the same id | All pipelines **OK**. **Both** importers now dedup, keeping the first occurrence → 1 event. DuckDB does it through its primary keys (`import_ocel_db(graceful_import=True)`); the Polars path does it in `schema_base_filtering`, which still emits `UserWarning: Duplicate event IDs detected`. Deduping is what unblocks `discover_occn`/`occn_precision` (previously `max()` over an empty marker-group list) and pm4py's `discover_oc_petri_net_polars` (previously a `KeyError` on the activity of the dropped event). *Note:* this is the one **invalid** log in the corpus (event ids must be unique). It is kept to pin the *agreement* between the two paths — the same file must yield the same log whichever importer reads it. Hard rejection of duplicate ids is owned by the OCEL-upload-validation epic (#166), not here. |
+| **duplicate_event_ids** | Two events sharing the same id | All pipelines **OK**. **Both** importers now dedup, keeping the first occurrence → 1 event. DuckDB does it through its primary keys (`import_ocel_db(graceful_import=True)`); the Polars path does it in `schema_base_filtering`, which still emits `UserWarning: Duplicate event IDs detected`. Deduping is what unblocks `discover_occn`/`occn_precision` (previously `max()` over an empty marker-group list) and the former pm4py-based `discover_oc_petri_net_polars`, since removed (previously a `KeyError` on the activity of the dropped event). *Note:* this is the one **invalid** log in the corpus (event ids must be unique). It is kept to pin the *agreement* between the two paths — the same file must yield the same log whichever importer reads it. Hard rejection of duplicate ids is owned by the OCEL-upload-validation epic (#166), not here. |
 
 ## Summary of documented crashes (XFAIL)
 
@@ -62,7 +62,7 @@ were all fixed under Issue #296:
 | empty | Polars `import_ocel` (+ all Polars miners) | `polars.exceptions.SchemaError` | Explicit column schemas in the raw loaders (`ocel/importer.py`) |
 | cyclic | `discover_occn` / `occn_precision` | `TypeError` | `_repairLengthTwoLoops` restores the loop arcs pm4py skips (`occn/discover.py`) |
 | duplicate_event_ids | `discover_occn` / `occn_precision` | `Exception` | Polars import dedups, matching DuckDB (`ocel/utils/filter.py`) |
-| duplicate_event_ids | `discover_oc_petri_net_polars` | `KeyError` | same dedup |
+| duplicate_event_ids | `discover_oc_petri_net_polars` (since removed) | `KeyError` | same dedup |
 | unicode_names | DuckDB `find_variants` | `UnicodeEncodeError` | ASCII-escaped WL labels (`variants/iso_strategies.py`) |
 
 As of the last verified run: **202 passed, 1 skipped, 0 xfailed, 0 failed**

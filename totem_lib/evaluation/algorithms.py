@@ -39,7 +39,7 @@ from totem_lib import (
     CCDFG,
     OCDFG,
     discover_occn,
-    discover_oc_petri_net_polars,
+    discover_ocpn_db,
     import_ocel,
     mlpaDiscovery,
     totemDiscovery,
@@ -194,10 +194,7 @@ ALGORITHMS: tuple[Algorithm, ...] = (
     Algorithm("totemDiscovery", lambda c: partial(totemDiscovery, c.ocel)),
     Algorithm("totemDiscovery_db", lambda c: partial(totemDiscovery_db, c.ocel_db)),
     Algorithm("mlpaDiscovery", lambda c: partial(mlpaDiscovery, c.totem)),
-    Algorithm(
-        "discover_oc_petri_net_polars",
-        lambda c: partial(discover_oc_petri_net_polars, c.ocel),
-    ),
+    Algorithm("discover_ocpn_db", lambda c: partial(discover_ocpn_db, c.ocel_db)),
     Algorithm("discover_occn", lambda c: partial(discover_occn, c.ocel, OCCN_THRESHOLD)),
     Algorithm("OCDFG.from_ocel", lambda c: partial(OCDFG.from_ocel, c.ocel)),
     Algorithm(

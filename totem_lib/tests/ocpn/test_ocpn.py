@@ -1,13 +1,6 @@
 import pytest
-from totem_lib import (
-    import_ocel,
-    discover_oc_petri_net_polars,
-    ocpns_are_similar,
-    convert_ocel_polars_to_pm4py,
-    filter_dead_objects
-)
-from totem_lib.ocel import schema_base_filtering, propagate_filtering
-import pm4py
+from totem_lib import discover_ocpn_db
+from totem_lib.ocel.importer_db import import_ocel_db
 import os
 
 # Resolve relative to this file so the suite also runs from the repo root.
@@ -24,11 +17,14 @@ def id_fn(filepath):
 
 
 @pytest.fixture(scope="module", params=OCEL_FILES, ids=id_fn)
-def loaded_ocel(request):
+def loaded_ocel_db(request):
     """Import OCEL once for all tests in this file."""
-    ocel = import_ocel(request.param)
-    return ocel
+    ocel_db = import_ocel_db(request.param)
+    yield ocel_db
+    ocel_db.close()
 
 
-def test_ocpn_discovery_no_error(loaded_ocel):
-    discover_oc_petri_net_polars(loaded_ocel)
+def test_ocpn_discovery_no_error(loaded_ocel_db):
+    model = discover_ocpn_db(loaded_ocel_db)
+    assert model["format"] == "ocpn"
+    assert model["transitions"]
