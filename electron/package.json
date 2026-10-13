@@ -33,7 +33,6 @@
       ],
       "icon": "build/icon.ico",
       "signtoolOptions": {
-        "certificateSubjectName": "${env.WIN_CERT_SUBJECT_NAME}",
         "rfc3161TimeStampServer": "http://timestamp.digicert.com"
       }
     },
