@@ -45,7 +45,6 @@ dependencies = [
     "polars>=1.32.2,<2.0.0",
     "PuLP>=3.3.0,<4.0.0",
     "highspy>=1.7",
-    "pm4py>=2.7.17.1",
     "pyarrow>=21.0.0",
     "matplotlib>=3.10.0",
     "tqdm>=4.60.0",
