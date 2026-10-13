@@ -1,7 +1,7 @@
 from .occn import OCCausalNet, OCCausalNetState
 from .semantics import OCCausalNetSemantics
 from .playout import occn_playout
-from .discover import discover_occn
+from .discover import OCCNDiscoveryInput, discover_occn, extract_occn_input
 from .serialization import occn_from_dict, occn_to_dict, validate_occn_dict
 from .serialize import serialize_occn
 from .precision import occn_precision, OCCNPrecisionResult, OCCNContextDetail
@@ -35,6 +35,7 @@ __all__ = [
     "build_stored_column_replay_units",
     "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "discover_occn",
+    "extract_occn_input",
     "extract_occn_replay_events",
     "extract_occn_replay_units",
     "LEADING_OBJECT_REPLAY_STRATEGY",
@@ -44,6 +45,7 @@ __all__ = [
     "OCCausalNetSemantics",
     "OCCausalNetState",
     "OCCNContextDetail",
+    "OCCNDiscoveryInput",
     "OCCNPrecisionResult",
     "OCCNReplayEvent",
     "OCCNReplayFitnessResult",

@@ -3962,9 +3962,9 @@ class OcelDbConcurrencyTests(TestCase):
         self.assertEqual(held_elsewhere, [False])
 
     def test_occn_view_reads_the_shared_connection_only_under_the_lock(self):
-        """The OCCN endpoint touches the shared DuckDB only for the pm4py
-        conversion, which must run under the per-file lock; the discovery
-        itself then works on the converted data, off the shared connection."""
+        """The OCCN endpoint touches the shared DuckDB only to extract the
+        discovery input, which must run under the per-file lock; the discovery
+        itself then works on the extracted tables, off the shared connection."""
         user = User.objects.create_user(username="occn-lock-user")
         project = Project.objects.create(name="OCCN Lock Project")
         project.users.add(user)
@@ -3998,7 +3998,7 @@ class OcelDbConcurrencyTests(TestCase):
 
         with (
             patch("api.views._ocel_db._get_or_load_ocel_db", return_value=fake_db),
-            patch("api.views.occn.convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
+            patch("api.views.occn.extract_occn_input", side_effect=fake_convert),
             patch("api.views.occn.discover_occn", side_effect=fake_discover),
             patch("api.views.occn.serialize_occn", return_value={"ok": True}),
         ):
@@ -4008,7 +4008,7 @@ class OcelDbConcurrencyTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(lock_was_held, [True])
-        # discovery ran on the converted data, not the shared connection
+        # discovery ran on the extracted tables, not the shared connection
         self.assertEqual(discover_inputs, [converted])
 
 

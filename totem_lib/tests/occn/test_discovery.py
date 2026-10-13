@@ -150,3 +150,58 @@ def test_discover_occn_unrestricted_still_binds_obligations(tmp_path):
     occn = discover_occn(ocel_db, relativeOccuranceThreshold=0.0)
     assert any(occn.output_marker_groups.get(act) for act in occn.activities)
     assert any(occn.input_marker_groups.get(act) for act in occn.activities)
+
+
+# ---------------------------------------------------------------------------
+# extract_occn_input
+# ---------------------------------------------------------------------------
+
+EDGE_CASES = Path(__file__).parent.parent.parent / "test_data" / "edge_cases"
+
+
+def _sorted(df):
+    return df.sort_values(list(df.columns), ignore_index=True)
+
+
+def test_extract_occn_input_duckdb_matches_polars():
+    """Both log backends yield the same tables (row order aside: DuckDB does
+    not guarantee one, the miner orders by timestamp itself)."""
+    import pandas as pd
+    from totem_lib import extract_occn_input
+
+    path = str(TEST_DATA / "resource_aware_orders.json")
+    from_polars = extract_occn_input(import_ocel(path))
+    ocel_db = import_ocel_db(path)
+    from_db = extract_occn_input(ocel_db)
+    ocel_db.close()
+
+    for name in ("event_log", "event_log_for_miner"):
+        pd.testing.assert_frame_equal(
+            _sorted(getattr(from_polars, name)), _sorted(getattr(from_db, name))
+        )
+    relations = from_db.event_log_for_miner
+    assert list(relations.columns) == [
+        "event_activity", "event_timestamp", "object", "object_type", "event_id",
+    ]
+    assert relations["event_timestamp"].is_monotonic_increasing
+
+
+def test_extract_occn_input_leaves_out_dead_objects_and_objectless_events():
+    from totem_lib import extract_occn_input
+
+    for load in (import_ocel, import_ocel_db):
+        dead = extract_occn_input(load(str(EDGE_CASES / "dead_object.json")))
+        assert set(dead.event_log_for_miner["object"]) == {"o1"}
+
+        objectless = extract_occn_input(load(str(EDGE_CASES / "event_no_objects.json")))
+        assert set(objectless.event_log_for_miner["event_id"]) == {"e1"}
+
+
+def test_discover_occn_accepts_extracted_input():
+    from totem_lib import extract_occn_input
+
+    ocel_db = import_ocel_db(str(TEST_DATA / "resource_aware_orders.json"))
+    occn_from_input = discover_occn(extract_occn_input(ocel_db), relativeOccuranceThreshold=0)
+    occn_from_db = discover_occn(ocel_db, relativeOccuranceThreshold=0)
+    ocel_db.close()
+    assert occn_from_input == occn_from_db

@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 from contextlib import nullcontext
+from dataclasses import dataclass
 import warnings
 import pandas as pd
+import polars as pl
 import networkx as nx
 import copy
 import itertools
@@ -10,13 +14,12 @@ from collections import Counter
 from tqdm.auto import tqdm
 from . import OCCausalNet
 from .heuristics import discover_heuristics_net
-from totem_lib import ObjectCentricEventLog, convert_ocel_polars_to_pm4py, filter_dead_objects
+from totem_lib import ObjectCentricEventLog, filter_dead_objects
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
-from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 
 
 def discover_occn(
-    ocel: ObjectCentricEventLog | OcelDuckDB,
+    ocel: ObjectCentricEventLog | OcelDuckDB | OCCNDiscoveryInput,
     relativeOccuranceThreshold: float,
     parameters: dict = None,
 ) -> OCCausalNet:
@@ -30,7 +33,8 @@ def discover_occn(
     Parameters
     -----------
     ocel
-        The object-centric event log.
+        The object-centric event log, or its tables as returned by
+        :func:`extract_occn_input`.
     relativeOccuranceThreshold
         The threshold for relative occurrence of markers (between 0 and 1).
         Markers with occurrence below this threshold will be filtered out.
@@ -165,89 +169,140 @@ def discover_occn(
     occn = occnet.to_OCCausalNet(relativeOccurenceThreshold=relativeOccuranceThreshold)
     return occn
 
+@dataclass
+class OCCNDiscoveryInput:
+    """
+    The two tables OCCN discovery works on, detached from the event log.
+
+    Build it with :func:`extract_occn_input`. Extraction is the only step of
+    :func:`discover_occn` that reads the log, so a caller sharing an
+    ``OcelDuckDB`` connection can hold the connection's lock for the
+    extraction alone and run the (much longer) discovery without it.
+    """
+
+    #: One row per event: ``event_id``, ``event_activity``, ``event_timestamp``.
+    event_log: pd.DataFrame
+    #: One row per event-object relation: ``event_activity``,
+    #: ``event_timestamp``, ``object``, ``object_type``, ``event_id``, sorted by
+    #: timestamp. Relations to unknown objects are left out, and so are events
+    #: without objects and objects that no event refers to.
+    event_log_for_miner: pd.DataFrame
+
+
+def extract_occn_input(
+    ocel: ObjectCentricEventLog | OcelDuckDB,
+) -> OCCNDiscoveryInput:
+    """
+    Read the tables OCCN discovery needs from an event log.
+
+    For an ``OcelDuckDB`` the queries run under the instance's reentrant lock.
+    Callers that already hold ``ocel_db.lock`` (e.g. a backend view
+    serialising all work on the log) simply re-enter it.
+    """
+    if isinstance(ocel, OcelDuckDB):
+        lock = getattr(ocel, "lock", None)
+        if lock is None:
+            lock = nullcontext()
+        with lock:
+            event_log, relations = _read_duckdb_tables(ocel)
+    else:
+        event_log, relations = _read_polars_tables(filter_dead_objects(ocel))
+
+    relations = relations.dropna()
+    relations = relations.sort_values("event_timestamp", ignore_index=True)
+    return OCCNDiscoveryInput(event_log=event_log, event_log_for_miner=relations)
+
+
 def _prepare_ocel_for_discovery(ocel):
     """
-    Prepares the OCEL and returns two DataFrames:
+    Returns the two DataFrames discovery works on:
     1. event_log: A log of unique events.
     2. event_log_for_miner: A flattened log of event-to-object relationships.
 
-    Accepts an ObjectCentricEventLog (Polars-backed), an OcelDuckDB, or a pm4py OCEL.
+    Accepts an ObjectCentricEventLog (Polars-backed), an OcelDuckDB, or an
+    already extracted OCCNDiscoveryInput.
     """
-    if isinstance(ocel, OcelDuckDB):
-        return _prepare_ocel_duckdb_for_discovery(ocel)
-    if hasattr(ocel, "events") and hasattr(ocel, "relations"):
-        return _extract_dataframes_from_pm4py(ocel)
-    return _prepare_ocel_polars_for_discovery(ocel)
+    if not isinstance(ocel, OCCNDiscoveryInput):
+        ocel = extract_occn_input(ocel)
+    return ocel.event_log, ocel.event_log_for_miner
 
 
-def _prepare_ocel_polars_for_discovery(ocel: ObjectCentricEventLog):
-    """Polars path: filters dead objects, converts to pm4py, then extracts the two DataFrames."""
-    ocel = filter_dead_objects(ocel)
-    ocel_pm4py = convert_ocel_polars_to_pm4py(ocel)
-    return _extract_dataframes_from_pm4py(ocel_pm4py)
+def _unix_seconds_to_datetime(seconds: pd.Series) -> pd.Series:
+    return pd.to_datetime(seconds, unit="s").astype("datetime64[ns]")
 
 
-def _prepare_ocel_duckdb_for_discovery(ocel_db: OcelDuckDB):
-    """DuckDB path: converts OcelDuckDB to pm4py OCEL then extracts the two DataFrames.
+def _read_duckdb_tables(ocel_db: OcelDuckDB):
+    """Events and event-object relations of a DuckDB-backed log.
 
-    The conversion queries the shared connection, so it runs under the
-    instance's reentrant lock. Callers that already hold ``ocel_db.lock``
-    (e.g. a backend view serialising all work on the log) simply re-enter it.
+    The joins drop relations to unknown objects, so objects that no event
+    refers to never show up, matching ``filter_dead_objects``.
     """
-    lock = getattr(ocel_db, "lock", None)
-    if lock is None:
-        lock = nullcontext()
-    with lock:
-        ocel_pm4py = convert_ocel_duckdb_to_pm4py(ocel_db)
+    conn = ocel_db.conn
+    events = conn.execute(
+        "SELECT event_id, activity, timestamp_unix FROM events"
+    ).df()
+    relations = conn.execute("""
+        SELECT
+            e.event_id,
+            e.activity,
+            e.timestamp_unix,
+            eo.obj_id,
+            o.obj_type
+        FROM events e
+        JOIN event_object eo ON e.event_id = eo.event_id
+        JOIN objects o       ON eo.obj_id  = o.obj_id
+    """).df()
 
-    return _extract_dataframes_from_pm4py(ocel_pm4py)
+    event_log = pd.DataFrame({
+        "event_id": events["event_id"],
+        "event_activity": events["activity"],
+        "event_timestamp": _unix_seconds_to_datetime(events["timestamp_unix"]),
+    })
+    relations = pd.DataFrame({
+        "event_activity": relations["activity"],
+        "event_timestamp": _unix_seconds_to_datetime(relations["timestamp_unix"]),
+        "object": relations["obj_id"],
+        "object_type": relations["obj_type"],
+        "event_id": relations["event_id"],
+    })
+    return event_log, relations
 
 
-def _extract_dataframes_from_pm4py(ocel_pm4py):
-    """Shared logic: extracts event_log and event_log_for_miner from a pm4py OCEL."""
-    # Create the unique event log
-    event_log = ocel_pm4py.events.rename(
-        columns={
-            ocel_pm4py.event_id_column: "event_id",
-            ocel_pm4py.event_activity: "event_activity",
-            ocel_pm4py.event_timestamp: "event_timestamp",
-        }
+def _read_polars_tables(ocel: ObjectCentricEventLog):
+    """Events and event-object relations of a Polars-backed log.
+
+    Events without objects and relations to unknown objects come out with a
+    null object (type) and are dropped by the caller.
+    """
+    timestamp = (
+        pl.from_epoch(pl.col("_timestampUnix"), time_unit="s")
+        .cast(pl.Datetime("ns"))
+        .alias("event_timestamp")
     )
-    event_log = event_log[["event_id", "event_activity", "event_timestamp"]]
+    event_log = ocel.events.select(
+        pl.col("_eventId").alias("event_id"),
+        pl.col("_activity").alias("event_activity"),
+        timestamp,
+    ).to_pandas()
 
-    # Create the event log for the miner
-
-    # Get relations
-    event_log_for_miner = ocel_pm4py.relations.copy()
-
-    # Rename cols to expected format
-    event_log_for_miner = event_log_for_miner.rename(
-        columns={
-            ocel_pm4py.event_activity: "event_activity",
-            ocel_pm4py.event_timestamp: "event_timestamp",
-            ocel_pm4py.object_id_column: "object",
-            ocel_pm4py.object_type_column: "object_type",
-            ocel_pm4py.event_id_column: "event_id",
-        }
+    object_types = ocel.objects.select(
+        pl.col("_objId").alias("object"),
+        pl.col("_objType").alias("object_type"),
     )
-
-    # Select only necessary columns
-    required_columns = [
-        "event_activity",
-        "event_timestamp",
-        "object",
-        "object_type",
-        "event_id",
-    ]
-    event_log_for_miner = event_log_for_miner[required_columns]
-
-    # Drop rows with missing values and sort by timestamp
-    event_log_for_miner = event_log_for_miner.dropna()
-    event_log_for_miner = event_log_for_miner.sort_values(
-        "event_timestamp", ignore_index=True
+    relations = (
+        ocel.events.select(
+            pl.col("_activity").alias("event_activity"),
+            timestamp,
+            pl.col("_objects").alias("object"),
+            pl.col("_eventId").alias("event_id"),
+        )
+        .explode("object")
+        .join(object_types, on="object", how="left", maintain_order="left")
+        .select("event_activity", "event_timestamp", "object", "object_type", "event_id")
+        .to_pandas()
     )
+    return event_log, relations
 
-    return event_log, event_log_for_miner
 
 def _generateEventLogDict(eventLogForMiner: pd.DataFrame) -> dict:
     """
