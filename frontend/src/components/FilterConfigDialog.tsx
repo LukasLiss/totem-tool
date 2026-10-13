@@ -384,7 +384,9 @@ function EventChart({
                 fill: inRange ? "var(--primary)" : "var(--border)",
                 transition: dragStart === null ? "fill 0.08s" : "none",
               }}
-            />
+            >
+              <title>{`${periodLabel(d.period)}: ${d.count.toLocaleString()} events`}</title>
+            </rect>
           );
         })}
         <text x={0} y={SVG_H} fontSize={9} style={{ fill: "var(--muted-foreground)" }}>
@@ -1050,7 +1052,7 @@ export function FilterConfigDialog({
                 color: "var(--primary-foreground)",
               }}
             >
-              Apply
+              Done
             </Button>
           </div>
         </DialogFooter>

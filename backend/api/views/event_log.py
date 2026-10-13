@@ -216,7 +216,7 @@ def _convert_upload_to_duckdb(upload):
     work_dir = tempfile.mkdtemp(prefix=".convert-", dir=os.path.dirname(upload.path))
     try:
         work_path = os.path.join(work_dir, "log.duckdb")
-        import_ocel_db(upload.path, db_path=work_path, strict_mode=True).close()
+        import_ocel_db(upload.path, db_path=work_path, strict_mode=False).close()
         root, _ = os.path.splitext(upload.name)
         name, path = _claim_storage_name(
             upload.storage, root + ".duckdb", max_length=upload.field.max_length
@@ -346,8 +346,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             project.save()
         event_log = serializer.save(project=project)
 
-        # Anything that is not DuckDB already is converted, with strict
-        # validation, and replaces the upload.
+        # Anything that is not DuckDB already is converted, with graceful
+        # sanitization of dangling relations, and replaces the upload.
         upload_path = event_log.file.path
         if upload_path.lower().endswith(".duckdb"):
             return
@@ -372,7 +372,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
             self.perform_create(serializer)
             user_file = serializer.instance
             
-            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
+            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
             with _OCEL_DB_REGISTRY_LOCK:
                 pk = int(user_file.pk)
                 _OCEL_DB_REGISTRY[pk] = db

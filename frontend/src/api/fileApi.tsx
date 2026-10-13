@@ -1,9 +1,15 @@
-import axios from "axios";
+import axios, { type AxiosProgressEvent } from "axios";
 
-export async function uploadFile(file: File) {
+export async function uploadFile(
+  file: File,
+  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void
+) {
   const formData = new FormData();
   formData.append("file", file);
-  const { data } = await axios.post("/api/files/", formData, { _skipGlobalFilter: true });
+  const { data } = await axios.post("/api/files/", formData, {
+    _skipGlobalFilter: true,
+    onUploadProgress,
+  });
   return data;
 }
 
