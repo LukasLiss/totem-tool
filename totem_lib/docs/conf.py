@@ -27,6 +27,11 @@ extensions = [
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "jupyter_execute", "**.ipynb_checkpoints"]
 
+# -- Markdown pages --------------------------------------------------------------
+
+# Show $...$ and $$...$$ as math. The OCCN precision guide needs this.
+myst_enable_extensions = ["dollarmath"]
+
 # -- API reference -------------------------------------------------------------
 
 # Write one page per function or class listed in docs/api/*.rst.

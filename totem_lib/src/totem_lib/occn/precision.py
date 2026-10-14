@@ -12,7 +12,7 @@ with the activities the OCCN enables in any state that is reachable by
 replaying the context. The share of model behavior that is also log
 behavior, averaged over all replayable events, is the precision.
 
-See `docs/OCCN_PRECISION.md` for the formal definitions and the algorithm.
+See `docs/guide/occn_precision.md` for the formal definitions and the algorithm.
 """
 
 import json

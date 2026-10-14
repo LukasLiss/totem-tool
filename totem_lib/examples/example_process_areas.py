@@ -2,7 +2,7 @@
 End-to-end process area example: DuckDB import -> discovery -> hierarchy.
 
 This is the pipeline the TOTeM web application runs behind its
-/api/files/<pk>/discover_process_areas/ endpoint. See examples/PROCESS_AREAS.md
+/api/files/<pk>/discover_process_areas/ endpoint. See docs/guide/process_areas.md
 for the full documentation, the indicator definitions, and the list of
 deviations from the thesis text.
 

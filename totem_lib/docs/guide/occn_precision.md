@@ -392,6 +392,10 @@ event-object graph.
 
 ## 8 Usage
 
+The example runs from the `totem_lib/` folder of a clone of the
+[repository](https://github.com/LukasLiss/totem-tool); the example log is not
+part of the installed package.
+
 ```python
 from totem_lib import import_ocel, discover_occn, occn_precision
 
@@ -410,9 +414,8 @@ for detail in result.context_details:
         print(detail.event_ids, "->", sorted(detail.escaping))
 ```
 
-The OCCN can be passed as an `OCCausalNet`, as the JSON saved by the visual
-OCCN editor (introduced in PR #243; its `markerGroups` field uses the
-`OCCausalNet.from_dict` format), as a plain marker-groups dict, as a JSON
+The OCCN can be passed as an `OCCausalNet`, as a dict whose `markerGroups`
+field uses the `OCCausalNet.from_dict` format, as a plain marker-groups dict, as a JSON
 string, or as a path to a JSON file.
 
 Note on runtime: with a very permissive model (e.g., an OCCN discovered from

@@ -4,6 +4,10 @@ Causal nets
 Object-centric causal nets (OCCN): discovery, saving and loading, playout, and
 conformance checking.
 
+The user guide explains them with examples: :doc:`causal nets <../guide/occn>`,
+:doc:`replay fitness <../guide/occn_replay_fitness>` and
+:doc:`precision <../guide/occn_precision>`.
+
 .. currentmodule:: totem_lib
 
 The model

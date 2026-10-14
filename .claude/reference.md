@@ -281,7 +281,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 - `docs/MODEL_EDITORS.md` — the three visual editors (TOTeM, OCCN, OCPN) and their **editor-side** JSON formats (`format: "totem-model" | "occn" | "ocpn"`) — these are what `/api/playout/` receives in `model`, distinct from the canonical asset-store format.
 - `docs/RESOURCE_AWARE_VARIANTS.md` — resource-aware extraction, stored process-execution columns, OCCN conformance on stored columns, process-area filter action.
 - `docs/PLAYOUT.md` — playout semantics (canonical ordering, exact vs. lower/upper-bound counts, silent-transition budgets), backend request/response contract, and where the engine lives in `totem_lib/playout/`.
-- `docs/OCCN_PRECISION.md` — math behind the OCCN context-based precision metric.
+- `totem_lib/docs/guide/occn_precision.md` — math behind the OCCN context-based precision metric.
 - `docs/OC_DOTTED_CHART.md` — dotted-chart sampling contract.
 - `docs/examples/model-assets/` — uploadable `totem-v1.json` / `occn-v1.json` fixtures.
 
