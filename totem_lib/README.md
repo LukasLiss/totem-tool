@@ -42,6 +42,50 @@ totem = totemDiscovery(ocel, tau=0.9)
 process_view = mlpaDiscovery(totem)
 ```
 
+## Visualizing models in Python & Jupyter
+
+All core discovery algorithms produce models that can be visualized directly in Jupyter notebooks or Python scripts via `.plot()` / `.to_graphviz()` / `.view()`, or using the universal `plot()` helper:
+
+```python
+from totem_lib import (
+    import_ocel,
+    import_ocel_db,
+    discover_ocpn_db,
+    discover_occn,
+    totemDiscovery,
+    mlpaDiscovery,
+    OCDFG,
+    plot,
+)
+
+db = import_ocel_db("example_data/ContainerLogistics.sqlite")
+
+# 1. Object-Centric Petri Net (OCPN)
+ocpn = discover_ocpn_db(db)
+ocpn.plot()                          # Returns a graphviz.Digraph (renders inline in Jupyter)
+ocpn.view()                          # Opens in default system viewer
+ocpn.plot().render("ocpn", format="png")  # Saves ocpn.png
+
+# 2. Object-Centric Causal Net (OCCN)
+occn = discover_occn(db, relativeOccuranceThreshold=0.5)
+occn.plot()
+
+# 3. Temporal Model (TOTeM) & Process Areas
+ocel = import_ocel("example_data/ContainerLogistics.sqlite")
+totem = totemDiscovery(ocel, tau=0.9)
+totem.plot()
+
+areas = mlpaDiscovery(totem)
+areas.plot()
+
+# 4. Object-Centric Directly-Follows Graph (OC-DFG)
+dfg = OCDFG.from_ocel(ocel)
+dfg.plot()
+
+# Universal plot helper works across all models:
+plot(ocpn)
+```
+
 ## TOTeM conformance checking
 
 TOTeM conformance compares an independently loaded model with a current event

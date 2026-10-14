@@ -31,10 +31,23 @@ from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..visualization import VisualizableMixin, ocpn_to_graphviz
 from .inductive_miner import discover_petri_net
 
 #: Default threshold for the variable-arc score, taken from the paper.
 DEFAULT_VARIABLE_ARC_THRESHOLD = 0.98
+
+
+class OCPN(dict, VisualizableMixin):
+    """Object-Centric Petri Net model dictionary with Graphviz visualization.
+
+    Inherits from dict for 100% backward compatibility with serialization,
+    indexing and existing tests, while providing .plot(), .view(), and .to_graphviz().
+    """
+
+    def to_graphviz(self, **kwargs):
+        return ocpn_to_graphviz(self, **kwargs)
+
 
 
 # ---------------------------------------------------------------------------
@@ -298,12 +311,14 @@ def _merge_nets_to_model(
                 arc["variable"] = True
             arcs.append(arc)
 
-    return {
-        "format": "ocpn",
-        "version": 1,
-        "name": name,
-        "objectTypes": [{"name": obj_type} for obj_type, _ in per_type_nets],
-        "places": places,
-        "transitions": transitions,
-        "arcs": arcs,
-    }
+    return OCPN(
+        {
+            "format": "ocpn",
+            "version": 1,
+            "name": name,
+            "objectTypes": [{"name": obj_type} for obj_type, _ in per_type_nets],
+            "places": places,
+            "transitions": transitions,
+            "arcs": arcs,
+        }
+    )
