@@ -75,7 +75,7 @@ class LogAggregates:
     The complete indicator input for one event log.
 
     :param object_types: all object types, **sorted**. The order is part of the
-        contract: the ILP iterates it, and CBC can return a different optimum
+        contract: the ILP iterates it, and the solver can return a different optimum
         for a different variable order, so an unordered collection here would
         make discovery non-reproducible.
     :param object_counts: number of objects per type that occur in at least one

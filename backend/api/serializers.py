@@ -19,7 +19,7 @@ from .asset_formats import (
 )
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent, OCHandoverComponent, ResourceProfilingComponent
 from django.db.models import Max
 
 
@@ -523,6 +523,18 @@ class OCCNComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = OCCNComponent
         fields = "__all__"
+
+
+class OCHandoverComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = OCHandoverComponent
+        fields = "__all__"
+
+
+class ResourceProfilingComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = ResourceProfilingComponent
+        fields = "__all__"
 #Fill in new Component Serializers here and then edit the mapping below
 
 class PieChartComponentSerializer(DashboardComponentSerializer):
@@ -581,4 +593,6 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         KpiComponent: KpiComponentSerializer,
         BarChartComponent: BarChartComponentSerializer,
         ScatterPlotComponent: ScatterPlotComponentSerializer,
+        OCHandoverComponent: OCHandoverComponentSerializer,
+        ResourceProfilingComponent: ResourceProfilingComponentSerializer,
     }

@@ -27,6 +27,8 @@ Discovery
    :toctree: generated
 
    discover_occn
+   extract_occn_input
+   OCCNDiscoveryInput
 
 Saving and loading
 ------------------

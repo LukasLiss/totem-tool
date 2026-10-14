@@ -34,6 +34,8 @@ export function FileUploadValidator() {
     const hiddenInputRef = useRef<HTMLInputElement | null>(null);
     const [showConversionModal, setShowConversionModal] = useState(false);
     const [isConverting, setIsConverting] = useState(false);
+    const [uploadPercent, setUploadPercent] = useState<number | null>(null);
+    const [uploadStage, setUploadStage] = useState<string>("");
 
 
     const {getRootProps, getInputProps} = useDropzone({
@@ -89,7 +91,19 @@ export function FileUploadValidator() {
         return;
       }
       setValidationStatus('loading');
-      const response = await uploadFile(file);
+      setUploadPercent(0);
+      setUploadStage("Uploading file...");
+      const response = await uploadFile(file, (progressEvent) => {
+        if (progressEvent.total) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadPercent(percent);
+          if (percent >= 100) {
+            setUploadStage("Converting to DuckDB & indexing records...");
+          } else {
+            setUploadStage(`Uploading file... ${percent}%`);
+          }
+        }
+      });
       setSelectedFile(response);
       setValidationStatus('success');
       toast.success("Upload successful", {
@@ -98,10 +112,14 @@ export function FileUploadValidator() {
       setFile(null);
       setShowConversionModal(false);
       setIsConverting(false);
+      setUploadPercent(null);
+      setUploadStage("");
       navigate("/overview");
       setTimeout(() => setValidationStatus('idle'), 3000);
     } catch (err: unknown) {
       setIsConverting(false);
+      setUploadPercent(null);
+      setUploadStage("");
       setValidationStatus('error');
       setTimeout(() => setValidationStatus('idle'), 3000);
 
@@ -181,7 +199,11 @@ export function FileUploadValidator() {
                 {(isConverting || validationStatus === 'loading') && <Loader2 className="h-4 w-4 animate-spin" />}
                 {validationStatus === 'success' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 {validationStatus === 'error' && <XCircle className="h-4 w-4 text-red-500" />}
-                {isConverting ? 'Converting & Validating...' : validationStatus === 'loading' ? 'Validating...' : 'Validate & Upload'}
+                {isConverting
+                  ? uploadStage || 'Converting & Validating...'
+                  : validationStatus === 'loading'
+                  ? uploadStage || 'Validating...'
+                  : 'Validate & Upload'}
               </Button>
           </div>
         </CardFooter>
@@ -214,6 +236,31 @@ export function FileUploadValidator() {
           This process may take a few moments depending on the file size.
         </DialogDescription>
       </DialogHeader>
+      {isConverting && (
+        <div className="space-y-2 py-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{uploadStage || "Processing..."}</span>
+            {uploadPercent !== null && uploadPercent < 100 && (
+              <span>{uploadPercent}%</span>
+            )}
+          </div>
+          <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+            {uploadPercent !== null && uploadPercent < 100 ? (
+              <div
+                className="bg-primary h-2 rounded-full transition-all duration-200"
+                style={{ width: `${uploadPercent}%` }}
+              />
+            ) : (
+              <div className="bg-primary h-2 rounded-full animate-pulse w-full" />
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground italic">
+            {uploadPercent !== null && uploadPercent >= 100
+              ? "Building DuckDB tables, parsing timestamps, and verifying event relations. Large datasets may take up to a minute."
+              : "Transferring file to server..."}
+          </p>
+        </div>
+      )}
       <DialogFooter>
         <Button
           variant="outline"
@@ -226,7 +273,7 @@ export function FileUploadValidator() {
           setIsConverting(true);
           handleFileUpload();
         }} disabled={isConverting}>
-          {isConverting ? "Converting & Uploading..." : "Convert and Upload"}
+          {isConverting ? uploadStage || "Converting & Uploading..." : "Convert and Upload"}
         </Button>
       </DialogFooter>
     </DialogContent>

@@ -11,7 +11,6 @@ import {
 import { GridStackNode } from 'gridstack';
 import type { SelectedFile } from '@/contexts/SelectedFileContext';
 import { processFile } from '@/api/fileApi';
-import { useFilterVersion } from '@/store/filterStore';
 import { Input } from '@/components/ui/input';
 import { API_BASE_URL } from '@/config/api';
 import {
@@ -76,15 +75,24 @@ import SqlQueryEditor, {
   type LinkedQuery,
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
+import { useFilterVersion } from '@/store/filterStore';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 
-function WidgetFilterHeader({ title, filterEnabled, onToggle }: {
-  title: string; filterEnabled: boolean; onToggle: () => void;
+function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange }: {
+  title: string;
+  filterEnabled: boolean;
+  onToggle: () => void;
+  fileId?: number | null;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid #e2e8f0', background: '#fff', flexShrink: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{title}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)', background: 'var(--card)', flexShrink: 0 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--card-foreground)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
       <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
+      {onLocalFilterChange && (
+        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} />
+      )}
     </div>
   );
 }
@@ -144,6 +152,24 @@ export interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // OCHandoverComponent / ResourceProfilingComponent properties
+    resource_types?: string[];
+    businessobject_types?: string[];
+    max_gap?: number | null;
+    normalization?: 'by_source' | 'by_target' | 'by_arcs_in_eog' | 'by_total_weight';
+    normalization_scope?: 'global' | 'per_bo_type';
+    parallel_filter_enabled?: boolean;
+    parallel_threshold?: number;
+    min_parallel_observations?: number;
+    cluster_by_ot?: boolean;
+    view_mode?: 'graph' | 'table' | 'log';
+    feature_groups?: string[];
+    tooltip_feature_groups?: string[];
+    compute_clusters?: boolean;
+    cluster_method?: 'kmeans' | 'agglomerative' | 'hdbscan';
+    n_clusters?: number;
+    min_cluster_size?: number;
+    distance_metric?: 'euclidean' | 'hellinger';
     // SqlQueryComponent properties
     name?: string;
     query?: string;
@@ -213,10 +239,9 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
   const [, setError] = useState(null);
 
 
+
   useEffect(() => {
     const handleProcessFile = async () => {
-
-
       if (!selectedFile?.id) {
         setProcessedResult(null);
         return;
@@ -228,7 +253,8 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
       try {
         const result = await processFile(selectedFile.id);
         setProcessedResult(result);
-      } catch {
+      } catch (err) {
+        console.error("Failed to process file in NumberOfEventsComponent:", err);
         setError("Failed to load data");
       } finally {
         setIsLoading(false);
@@ -236,15 +262,13 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
     };
 
     handleProcessFile();
-  }, [selectedFile, filterVersion]); // Re-run when the file or global filter changes
+  }, [selectedFile, filterVersion]);
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
       <Card className="w-full h-full rounded-none">
         <CardHeader>
-          <CardDescription>
-            Number of Events
-          </CardDescription>
+          <CardDescription>Number of Events</CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
@@ -1193,6 +1217,7 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
 };
 
 
+
 const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   xAxis: { type: "time" },
   yAxis: { type: "activity" },
@@ -1210,6 +1235,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   selectedFile,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
@@ -1249,7 +1275,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <DottedChart
           fileId={effectiveFileId}
@@ -1262,6 +1288,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           showControls={false}
           showMinimap={true}
           filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
           className="h-full"
         />
       </div>
@@ -1305,6 +1332,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   selectedFile
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1382,7 +1410,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Render NewOCDFGVisualizer
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
         <ReactFlowProvider>
           <NewOCDFGVisualizer
@@ -1392,6 +1420,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             initialInteractionLocked={initialInteractionLocked}
             layoutDirection={layoutDirection}
             filterEnabled={filterEnabled}
+            localFilterParams={localFilterParams}
           />
         </ReactFlowProvider>
       </div>
@@ -1508,6 +1537,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   selectedFile
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
   const [objectTypes, setObjectTypes] = useState(node.object_types ?? '');
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
@@ -1631,20 +1661,24 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render OCCNVisualizer
   return (
-    <div className="w-full h-full">
-      <ReactFlowProvider>
-        <OCCNVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          initialLayoutDirection={layoutDirection}
-          initialThreshold={threshold}
-          objectTypes={objectTypes.split(',').map((t) => t.trim()).filter(Boolean)}
-          filterEnabled={filterEnabled}
-          onToggleFilter={() => setFilterEnabled(p => !p)}
-        />
-      </ReactFlowProvider>
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="OC Causal Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ReactFlowProvider>
+          <OCCNVisualizer
+            height="100%"
+            fileId={selectedFile?.id}
+            localFilterParams={localFilterParams}
+            showControls={showControls}
+            showTitle={false}
+            initialInteractionLocked={initialInteractionLocked}
+            initialLayoutDirection={layoutDirection}
+            initialThreshold={threshold}
+            objectTypes={objectTypes.split(',').map((t) => t.trim()).filter(Boolean)}
+            filterEnabled={filterEnabled}
+          />
+        </ReactFlowProvider>
+      </div>
     </div>
   );
 };
@@ -1661,6 +1695,8 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
 }) => {
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   useEffect(() => {
@@ -1730,18 +1766,23 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Render the OCPN visualizer with stored settings
   return (
-    <div className="w-full h-full bg-white">
-      <OCPNVisualizer
-        height="100%"
-        fileId={selectedFile?.id}
-        autoStart={automaticLoading}
-        defaultTimeoutS={timeoutS}
-        showControls={true}
-        onTimeoutSChange={(t) => {
-          setTimeoutS(t);
-          onUpdate?.({ timeout_s: t });
-        }}
-      />
+    <div className="w-full h-full flex flex-col bg-white">
+      <WidgetFilterHeader title="OC Petri Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <OCPNVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          autoStart={automaticLoading}
+          defaultTimeoutS={timeoutS}
+          showControls={true}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+          onTimeoutSChange={(t) => {
+            setTimeoutS(t);
+            onUpdate?.({ timeout_s: t } as Partial<typeof node>);
+          }}
+        />
+      </div>
     </div>
   );
 };

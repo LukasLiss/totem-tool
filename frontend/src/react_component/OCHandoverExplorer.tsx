@@ -1,0 +1,4843 @@
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
+import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
+import { useFilterVersion } from "@/store/filterStore";
+import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import {
+  DEFAULT_HANDOVER_SETTINGS,
+  NORMALIZATION_LABELS,
+  type HandoverNormalization,
+  type HandoverSettings,
+  type HandoverViewMode,
+} from "@/react_component/orgamining/settings";
+import TooltipBox from "@/react_component/ResourceTooltip";
+import { toast } from "sonner";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
+import {
+  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
+  type SimulationNodeDatum, type SimulationLinkDatum,
+} from "d3-force";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { mapTypesToColors } from "@/utils/objectColors";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  CanvasMessage,
+  CanvasSelect,
+  CanvasShell,
+  ControlPill,
+  FloatingPanel,
+} from "@/react_component/orgamining/canvas";
+import { GLASS_SURFACE } from "@/react_component/orgamining/canvasSurface";
+import {
+  fitBoxToAspect,
+  pointsBounds,
+  type Size,
+} from "@/react_component/orgamining/canvasGeometry";
+
+
+/* ── Types ─────────────────────────────────────────────────── */
+export type HandoverNode = { id: string; object_type: string; event_count: number };
+export type HandoverEdge = {
+  source: string;
+  target: string;
+  businessobject_type: string;
+  weight: number;
+  raw_weight: number;
+  avg_time: number | null;
+  min_time: number | null;
+  max_time: number | null;
+};
+export type HandoverData = { nodes: HandoverNode[]; edges: HandoverEdge[] };
+
+type FlowEvent = {
+  source: string;
+  target: string;
+  bo_type: string;
+  bo_ids: string[];
+  start_time: number;  // Unix seconds
+  duration: number;    // seconds (>= 1)
+};
+type FlowsData = {
+  flows: FlowEvent[];
+  timeline: { start: number; end: number };
+};
+type BindingArc = {
+  other_resource: string;
+  bo_type: string;
+  mark: "dot" | "square";
+  is_gapped: boolean;
+};
+type BindingPattern = {
+  type: "output" | "input";
+  resource: string;
+  arcs: BindingArc[];
+  line_type: "solid" | "dotted" | null;
+  count: number;
+};
+
+type OCHandoverExplorerProps = {
+  fileId?: number;
+  onDataLoad?: (data: HandoverData) => void;
+  /**
+   * Render as a dashboard widget: one full-bleed canvas with floating chrome
+   * and no settings panel — the settings are preselected in the dashboard's
+   * edit mode. The analysis page uses the default, full form.
+   */
+  embedded?: boolean;
+  fileName?: string;
+  /** Preselected settings; dashboard widgets persist these. Read once on mount. */
+  initialSettings?: Partial<HandoverSettings>;
+  /** Start the computation as soon as the object types are known. */
+  autoStart?: boolean;
+  /** Send the global filter with every request (default true). */
+  filterEnabled?: boolean;
+};
+
+type ViewMode = HandoverViewMode;
+
+type EventLogData = {
+  object_types: string[];
+  events: {
+    event_id: string;
+    activity: string;
+    timestamp: number | string;
+    objects: Record<string, string[]>;
+  }[];
+};
+type Normalization = HandoverNormalization;
+type SortCol =
+  | "source" | "target" | "bo_type" | "count" | "weight"
+  | "avg_time" | "min_time" | "max_time";
+const SORT_LABELS: Record<SortCol, string> = {
+  source: "Source",
+  target: "Target",
+  bo_type: "Business object type",
+  count: "Count",
+  weight: "Weight",
+  avg_time: "Avg time",
+  min_time: "Min time",
+  max_time: "Max time",
+};
+/** Duration columns — sorted numerically and right aligned. */
+const TIME_COLS: SortCol[] = ["avg_time", "min_time", "max_time"];
+
+/**
+ * Resource search with keyboard navigation.
+ *
+ * Owns its own query and highlight state so the dashboard widget and the
+ * analysis page can each drop it into their own layout — `inline` picks
+ * between a list in the flow (inside a floating panel, which clips a
+ * popover) and one that floats over the page.
+ */
+function NodeSearch({
+  nodes, typeColorMap, onSelect, inline = false, className, width,
+}: {
+  nodes: HandoverNode[];
+  typeColorMap: Record<string, string>;
+  onSelect: (id: string) => void;
+  inline?: boolean;
+  className?: string;
+  width?: number;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  /**
+   * The row Enter will pick. Only the arrow keys move it.
+   *
+   * Hover is deliberately not the same thing: it is a lighter CSS-only tint
+   * on whatever the cursor is over. Letting hover move this made the
+   * highlight jump back to the keyboard's row when the mouse left, and left
+   * Enter pointing at whatever was hovered last.
+   */
+  const [active, setActive] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return nodes.filter(n => n.id.toLowerCase().includes(q) || n.object_type.toLowerCase().includes(q));
+  }, [query, nodes]);
+
+  // A new query invalidates the old highlight position.
+  useEffect(() => { setActive(0); }, [query]);
+
+  // Follow the keyboard when arrowing past the visible part of the list.
+  useEffect(() => {
+    (listRef.current?.children[active] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const choose = (id: string) => {
+    onSelect(id);
+    setQuery("");
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { setOpen(false); return; }
+    if (matches.length === 0) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive(i => (i + step + matches.length) % matches.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(matches[active].id);
+    }
+  };
+
+  const showList = open && query.trim() !== "";
+  const listClass = inline
+    ? "mt-1.5 rounded-md border overflow-y-auto"
+    : "absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto";
+
+  return (
+    <div ref={rootRef} className={inline ? className : `relative ${className ?? ""}`} style={width ? { width } : undefined}>
+      {!inline && (
+        <Search
+          className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none z-10"
+          style={{ width: 14, height: 14 }}
+        />
+      )}
+      <Input
+        className={inline ? "h-8 text-xs" : "h-8 pl-7 pr-3 text-xs w-72"}
+        placeholder="Find resource…"
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+      />
+      {showList && matches.length === 0 && (
+        <p className="mt-1.5 px-1 text-xs text-muted-foreground">No matching resource.</p>
+      )}
+      {showList && matches.length > 0 && (
+        <div ref={listRef} className={listClass} style={{ maxHeight: inline ? 200 : 260 }}>
+          {matches.map((n, i) => (
+            <button
+              key={n.id}
+              // Two weights, two meanings: the solid one is what Enter picks,
+              // the tint is only where the cursor happens to be.
+              className={`w-full text-left px-2 py-1.5 text-xs flex items-center gap-2 truncate ${
+                i === active ? "bg-accent" : "hover:bg-muted"
+              }`}
+              onMouseDown={e => { e.preventDefault(); choose(n.id); }}
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
+              <span className="truncate">{n.id}</span>
+              <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+type SortDir = "asc" | "desc";
+
+/* ── API helpers ─────────────────────────────────────────────── */
+type HandoverParams = Record<string, string>;
+
+/** GET without clusters, POST (JSON body) when a cluster map is applied. The
+ *  axios interceptors add the auth header and, unless skipped, the global
+ *  filter parameters. */
+async function requestHandover<T>(
+  params: HandoverParams,
+  clusterMap: Record<string, string> | null,
+  filterEnabled: boolean,
+): Promise<T> {
+  const config = { _skipGlobalFilter: !filterEnabled };
+  const { data } = clusterMap
+    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap }, config)
+    : await axios.get<T>("/api/handover/", { params, ...config });
+  return data;
+}
+
+function apiErrorMessage(e: unknown, fallback: string): string {
+  if (axios.isAxiosError(e)) {
+    const body = e.response?.data as { error?: string } | undefined;
+    return body?.error || e.message || fallback;
+  }
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
+/* ── Graph constants ────────────────────────────────────────── */
+const NODE_R = 26;
+
+/**
+ * The space the force layout runs in.
+ *
+ * It used to be the rendered size, which tied the arrangement to the
+ * container's pixel dimensions: a dashboard tile that changed shape would
+ * have had to re-run the simulation and scramble the graph. Pinning it here
+ * makes the layout stable and turns a resize into a viewBox re-fit.
+ */
+const HANDOVER_CANVAS = { width: 1100, height: 760 };
+/** Padding around the node cloud when fitting the view, in canvas units. */
+const HANDOVER_VIEW_PAD = NODE_R + 20;
+/** One press of the pill's zoom buttons. */
+const ZOOM_STEP = 1.25;
+
+/* ── View box maths, shared by the pill's controls and the opening view ──
+   The graph opens on exactly what the fit button followed by one zoom-out
+   gives, so these are the single definition of both. */
+
+/** What the fit button shows: the node cloud framed at the canvas's ratio. */
+function fittedToNodes(positions: Record<string, { x: number; y: number }>, ratio: number) {
+  const bounds = pointsBounds(Object.values(positions)) ?? {
+    minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height,
+  };
+  // The minimum keeps self-loops (which arch ~NODE_R*2.4 above the node) visible.
+  return fitBoxToAspect(bounds, ratio, HANDOVER_VIEW_PAD, NODE_R * 10);
+}
+
+/** One press of the zoom-out button: a wider box shows the graph smaller. */
+function zoomedOut(vb: { x: number; y: number; w: number; h: number }) {
+  const w = vb.w * ZOOM_STEP, h = vb.h * ZOOM_STEP;
+  return { x: vb.x - (w - vb.w) / 2, y: vb.y - (h - vb.h) / 2, w, h };
+}
+
+/** One press of the zoom-in button. */
+function zoomedIn(vb: { x: number; y: number; w: number; h: number }) {
+  const w = vb.w / ZOOM_STEP, h = vb.h / ZOOM_STEP;
+  return { x: vb.x + (vb.w - w) / 2, y: vb.y + (vb.h - h) / 2, w, h };
+}
+
+// Interpolate between grey (#CBD5E1) and a hex color; t=0 → grey, t=1 → color
+function mixHex(hex: string, t: number): string {
+  const gr = [203, 213, 225]; // #CBD5E1
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${mix(gr[0], r)},${mix(gr[1], g)},${mix(gr[2], b)})`;
+}
+const ARROW_LEN = 14;  // arrow length along path direction (base → tip), user space
+const ARROW_H   = 18;  // arrow height perpendicular to path, user space
+const BASE_CURVE = 38;
+
+const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+function fmtSpeed(s: number): string {
+  if (s === 1) return "1×";
+  const exp = Math.log10(s);
+  if (Number.isInteger(exp)) return `10${_SUPS[exp]}×`;
+  const e = Math.floor(exp);
+  return `${s / Math.pow(10, e)}·10${_SUPS[e]}×`;
+}
+
+const _SPEED_OPTIONS = [1, 10, 100, 1000, 5000, 10000, 50000, 100000, 1000000, 10000000, 100000000];
+function snapSpeed(target: number): number {
+  return _SPEED_OPTIONS.reduce((best, s) =>
+    Math.abs(Math.log(s) - Math.log(target)) < Math.abs(Math.log(best) - Math.log(target)) ? s : best
+  );
+}
+
+/* ── Main component ─────────────────────────────────────────── */
+export default function OCHandoverExplorer({
+  fileId,
+  onDataLoad,
+  embedded = false,
+  fileName,
+  initialSettings,
+  autoStart = false,
+  filterEnabled = true,
+}: OCHandoverExplorerProps) {
+  // Settings are read once; a host that changes them re-mounts the explorer.
+  const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
+  const [objectTypes, setObjectTypes] = useState<string[]>([]);
+  const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
+  const [boTypes, setBoTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
+  const [data, setData] = useState<HandoverData | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "empty" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [hasStartedLoading, setHasStartedLoading] = useState(false);
+  const hasStartedLoadingRef = useRef(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(initial.viewMode);
+  const [maxGap, setMaxGap] = useState<number | null>(initial.maxGap);
+  const [normalization, setNormalization] = useState<Normalization>(initial.normalization);
+  const [normalizationScope, setNormalizationScope] = useState<"global" | "per_bo_type">(initial.normalizationScope);
+  const [sortCol, setSortCol] = useState<SortCol>("weight");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [parallelFilterEnabled, setParallelFilterEnabled] = useState(initial.parallelFilterEnabled);
+  const [parallelThreshold, setParallelThreshold] = useState(initial.parallelThreshold);
+  const [minParallelObs, setMinParallelObs] = useState(initial.minParallelObservations);
+  const [minParallelObsStr, setMinParallelObsStr] = useState(String(initial.minParallelObservations));
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [lockedHeight, setLockedHeight] = useState<number | null>(null);
+  const [visibleGraphNodes, setVisibleGraphNodes] = useState<HandoverNode[]>([]);
+  const graphPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const graphViewBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const { clusterInfo } = useCluster();
+  const [useClusters, setUseClusters] = useState(false);
+  const [clusterByOt, setClusterByOt] = useState(initial.clusterByOt);
+  // Effects that reset state when a setting changes must not fire for the
+  // preselected values on mount; this ref is flipped by the last effect below.
+  const isFirstRender = useRef(true);
+  const filterEnabledRef = useRef(filterEnabled);
+  useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const filterVersion = useFilterVersion();
+  const [logData, setLogData] = useState<EventLogData | null>(null);
+  const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [logError, setLogError] = useState("");
+  const [flowsData, setFlowsData] = useState<FlowsData | null>(null);
+  const [flowsStatus, setFlowsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [bindingsData, setBindingsData] = useState<BindingPattern[] | null>(null);
+  const [bindingsStatus, setBindingsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [animIsPlaying, setAnimIsPlaying] = useState(false);
+  const [animSliderTime, setAnimSliderTime] = useState(0);
+  const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
+  const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
+  const animPlayRef = useRef<(() => void) | null>(null);
+  const animPauseRef = useRef<(() => void) | null>(null);
+  const animScrubRef = useRef<((t: number) => void) | null>(null);
+  useEffect(() => {
+    setAnimIsPlaying(false);
+    if (flowsData) {
+      const duration = flowsData.timeline.end - flowsData.timeline.start;
+      setAnimPlaySpeed(snapSpeed(Math.max(1, duration / 30)));
+      setAnimSliderTime(flowsData.timeline.start);
+    } else {
+      setAnimPlaySpeed(100);
+      setAnimSliderTime(0);
+    }
+  }, [flowsData]);
+  useEffect(() => {
+    if (selectedNode) animPauseRef.current?.();
+  }, [selectedNode]);
+
+  type MlpaLayer = { level: number; areas: { objectTypes: string[] }[] };
+  const [mlpaLayers, setMlpaLayers] = useState<MlpaLayer[] | null>(null);
+  const [mlpaStatus, setMlpaStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [selectedMlpaLevel, setSelectedMlpaLevel] = useState<number | null>(null);
+  const useClustersRef = useRef(useClusters);
+  useEffect(() => { useClustersRef.current = useClusters; }, [useClusters]);
+  const clusterInfoRef = useRef(clusterInfo);
+  useEffect(() => { clusterInfoRef.current = clusterInfo; }, [clusterInfo]);
+  // Increments only when clusterInfo changes while useClusters is on, so the
+  // data-fetching effect does not re-run (and reset zoom) on every OrgaMining
+  // recomputation when the handover explorer is not using clusters.
+  // useClusters intentionally NOT in deps: toggling it should not auto-recompute.
+  const [clusterTrigger, setClusterTrigger] = useState(0);
+  useEffect(() => { if (useClustersRef.current) setClusterTrigger(t => t + 1); }, [clusterInfo]);
+
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const viewModeRef = useRef(viewMode);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+
+  const fileIdRef = useRef<number | undefined>(fileId);
+  useEffect(() => { fileIdRef.current = fileId; }, [fileId]);
+
+  // Phase 1: load object types when fileId changes
+  useEffect(() => {
+    setObjectTypes([]);
+    setResourceTypes(new Set(initial.resourceTypes));
+    setBoTypes(new Set(initial.businessObjectTypes));
+    setData(null);
+    setStatus("idle");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    if (!fileId) return;
+
+    const currentFileId = fileId;
+    let cancelled = false;
+
+    (async () => {
+      if (fileIdRef.current !== currentFileId) return;
+      try {
+        const types = await fetchObjectTypes(currentFileId);
+        if (fileIdRef.current !== currentFileId || cancelled) return;
+        setObjectTypes(types);
+        // Preselected types that no longer exist in this log are dropped.
+        const known = new Set(types);
+        setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
+        setBoTypes(prev => new Set([...prev].filter(t => known.has(t))));
+      } catch (e: unknown) {
+        if (fileIdRef.current !== currentFileId || cancelled) return;
+        setStatus("error");
+        setErrorMsg(apiErrorMessage(e, "Failed to load object types"));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fileId, initial]);
+
+  // Reset results when normalization, scope, or parallel filter changes
+  useEffect(() => {
+    setData(null);
+    setStatus("idle");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    setErrorMsg("");
+  }, [normalization, normalizationScope, parallelFilterEnabled, parallelThreshold, minParallelObs, clusterByOt]);
+
+  // Reset selected node and locked height when data changes
+  useEffect(() => { setSelectedNode(null); setLockedHeight(null); setViewMode(initial.viewMode); graphPositionsRef.current = {}; graphViewBoxRef.current = null; }, [data, initial.viewMode]);
+
+  // Reset log data when fileId changes
+  useEffect(() => {
+    setLogData(null);
+    setLogStatus("idle");
+    setLogError("");
+  }, [fileId]);
+
+  // Reset and fetch MLPA layers when fileId changes
+  useEffect(() => {
+    setMlpaLayers(null);
+    setMlpaStatus("idle");
+    setSelectedMlpaLevel(null);
+
+    if (!fileId) return;
+
+    let cancelled = false;
+    setMlpaStatus("loading");
+    (async () => {
+      try {
+        const { data: json } = await axios.get(`/api/files/${fileId}/discover_mlpa/`, { _skipGlobalFilter: true });
+        if (cancelled) return;
+        setMlpaLayers(json.layers ?? null);
+        setMlpaStatus("ready");
+      } catch {
+        if (!cancelled) setMlpaStatus("error");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [fileId]);
+
+  // Fetch event log lazily when the Log view is opened
+  useEffect(() => {
+    if (viewMode !== "log" || !fileId || logStatus !== "idle") return;
+    let cancelled = false;
+    setLogStatus("loading");
+    (async () => {
+      try {
+        const { data: result } = await axios.get<EventLogData>("/api/event-log/", {
+          params: { file_id: fileId },
+          _skipGlobalFilter: !filterEnabledRef.current,
+        });
+        if (cancelled) return;
+        setLogData(result);
+        setLogStatus("ready");
+      } catch (e: unknown) {
+        if (cancelled) return;
+        setLogStatus("error");
+        setLogError(apiErrorMessage(e, "Failed to load event log"));
+      }
+    })();
+    return () => { cancelled = true; };
+  // logStatus intentionally omitted: the guard inside prevents re-entry,
+  // and including it would cancel the in-flight fetch on every status change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, fileId]);
+
+  // Measure and lock the results area height 50ms after data loads.
+  // viewMode is intentionally NOT in the deps — the timer must not be cancelled
+  // if the user switches to table view before it fires.
+  // The viewModeRef check inside guards against accidentally locking the table height.
+  useEffect(() => {
+    if (status !== "ready" || lockedHeight !== null) return;
+    const id = setTimeout(() => {
+      if (viewModeRef.current !== "graph") return;
+      const h = resultsRef.current?.offsetHeight;
+      if (h && h > 0) setLockedHeight(h);
+    }, 50);
+    return () => clearTimeout(id);
+  }, [status, lockedHeight]);
+
+  // Phase 2: compute handover when triggered
+  useEffect(() => {
+    if (!fileId || !hasStartedLoadingRef.current) return;
+    if (resourceTypes.size === 0 || boTypes.size === 0) return;
+
+    const currentFileId = fileId;
+    const params: Record<string, string> = { file_id: String(currentFileId), method: "oc" };
+    params.resource_types = [...resourceTypes].join(",");
+    params.businessobject_types = [...boTypes].join(",");
+    if (maxGap !== null) params.max_gap = String(maxGap);
+    params.normalization = normalization;
+    params.normalization_scope = normalizationScope;
+    if (parallelFilterEnabled) {
+      params.parallel_threshold = String(parallelThreshold);
+      params.min_parallel_observations = String(minParallelObs);
+    }
+    if (clusterByOt) params.cluster_by_ot = "true";
+    let cancelled = false;
+
+    (async () => {
+      if (fileIdRef.current !== currentFileId) return;
+      setStatus("loading");
+      setErrorMsg("");
+
+      try {
+        const activeClusterMap = useClustersRef.current && clusterInfoRef.current ? clusterInfoRef.current.clusterMap : null;
+        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current);
+        if (fileIdRef.current !== currentFileId || cancelled) return;
+        setData(result);
+        setStatus(result.edges.length > 0 ? "ready" : "empty");
+        onDataLoad?.(result);
+      } catch (e: unknown) {
+        if (fileIdRef.current !== currentFileId || cancelled) return;
+        setStatus("error");
+        setErrorMsg(apiErrorMessage(e, "Handover computation failed"));
+      }
+    })();
+
+    return () => { cancelled = true; };
+  // useClusters intentionally omitted (read via ref): toggling it should not auto-recompute.
+  // clusterTrigger (not clusterInfo directly) propagates OrgaMining recomputes only when
+  // useClusters is on, preventing spurious zoom resets when working in OrgaMining.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, hasStartedLoading, onDataLoad, clusterTrigger]);
+
+  const handleCompute = () => {
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
+  };
+
+  const canCompute = resourceTypes.size > 0 && boTypes.size > 0;
+
+  /**
+   * Why grouping into organizational units is unavailable, or null when it is.
+   *
+   * Grouping replays the handover with a resource profiling widget's clusters,
+   * so both must be describing the same resources. The check is deliberately
+   * strict: a mismatch would produce a graph that is not the analysis this
+   * widget is configured for. On a dashboard the preselection is the widget's
+   * saved definition, so this refuses and says what is wrong rather than
+   * quietly rewriting it — which is what the analysis page can afford to do,
+   * because the type selectors are right there to show the change.
+   */
+  const groupingIssue = useMemo<string | null>(() => {
+    if (!clusterInfo) {
+      return "No resource profiling result available. Add a Resource Profiling widget and compute it.";
+    }
+    if (!clusterInfo.nClusters) {
+      return "No resource clusters available.";
+    }
+    const profileTypes = new Set(Object.values(clusterInfo.resourceObjectTypes));
+    if ([...profileTypes].some(t => boTypes.has(t))) {
+      return "Conflicts with resource profiling: a type cannot be both a resource type and a business object type.";
+    }
+    const matches = profileTypes.size === resourceTypes.size
+      && [...profileTypes].every(t => resourceTypes.has(t));
+    if (!matches) {
+      return "Resource types do not match the resource profiling result.";
+    }
+    return null;
+  }, [clusterInfo, boTypes, resourceTypes]);
+
+  // Auto start: once per file, as soon as the object types are known and the
+  // preselected settings allow a computation.
+  const autoStartedForRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!autoStart || !fileId || objectTypes.length === 0 || !canCompute) return;
+    if (autoStartedForRef.current === fileId) return;
+    autoStartedForRef.current = fileId;
+    hasStartedLoadingRef.current = true;
+    setHasStartedLoading(true);
+  }, [autoStart, fileId, objectTypes, canCompute]);
+
+  // A changed global filter (or toggling it for this explorer) invalidates the
+  // result; an auto-starting host recomputes, everyone else gets the button back.
+  useEffect(() => {
+    if (isFirstRender.current) return;
+    setData(null);
+    setStatus("idle");
+    setErrorMsg("");
+    setLogData(null);
+    setLogStatus("idle");
+    hasStartedLoadingRef.current = false;
+    setHasStartedLoading(false);
+    if (autoStart && canCompute) {
+      setTimeout(() => { hasStartedLoadingRef.current = true; setHasStartedLoading(true); }, 0);
+    }
+  // Only the filter is a trigger here; the other values are read when it fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterVersion, filterEnabled]);
+
+  // Must stay the last effect: everything above checks isFirstRender.
+  useEffect(() => { isFirstRender.current = false; }, []);
+
+  // Clear flows + bindings when handover data is recomputed
+  useEffect(() => {
+    setFlowsData(null);
+    setFlowsStatus("idle");
+    setBindingsData(null);
+    setBindingsStatus("idle");
+  }, [data]);
+
+  const fetchFlows = async () => {
+    if (!fileId || flowsStatus === "loading") return;
+    setFlowsStatus("loading");
+    setFlowsData(null);
+
+    const params: Record<string, string> = {
+      file_id: String(fileId),
+      method: "oc",
+      include_flows: "true",
+    };
+    {
+      params.resource_types = [...resourceTypes].join(",");
+      params.businessobject_types = [...boTypes].join(",");
+      if (maxGap !== null) params.max_gap = String(maxGap);
+      params.normalization = normalization;
+      params.normalization_scope = normalizationScope;
+      if (parallelFilterEnabled) {
+        params.parallel_threshold = String(parallelThreshold);
+        params.min_parallel_observations = String(minParallelObs);
+      }
+      if (clusterByOt) params.cluster_by_ot = "true";
+    }
+
+    try {
+      const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+      const result = await requestHandover<{ flows?: FlowEvent[]; timeline?: FlowsData["timeline"] }>(
+        params, activeClusterMap, filterEnabledRef.current,
+      );
+      if (result.flows && result.timeline) {
+        setFlowsData({ flows: result.flows, timeline: result.timeline });
+        setFlowsStatus("ready");
+      } else {
+        setFlowsStatus("error");
+      }
+    } catch {
+      setFlowsStatus("error");
+    }
+  };
+
+  const fetchBindings = async () => {
+    if (!fileId || bindingsStatus === "loading") return;
+    setBindingsStatus("loading");
+    setBindingsData(null);
+    const params: Record<string, string> = {
+      file_id: String(fileId),
+      method: "oc",
+      include_bindings: "true",
+    };
+    {
+      params.resource_types = [...resourceTypes].join(",");
+      params.businessobject_types = [...boTypes].join(",");
+      if (maxGap !== null) params.max_gap = String(maxGap);
+      params.normalization = normalization;
+      params.normalization_scope = normalizationScope;
+      if (parallelFilterEnabled) {
+        params.parallel_threshold = String(parallelThreshold);
+        params.min_parallel_observations = String(minParallelObs);
+      }
+      if (clusterByOt) params.cluster_by_ot = "true";
+    }
+    try {
+      const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
+      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current);
+      if (Array.isArray(result.bindings)) {
+        setBindingsData(result.bindings);
+        setBindingsStatus("ready");
+      } else {
+        setBindingsStatus("error");
+      }
+    } catch {
+      setBindingsStatus("error");
+    }
+  };
+
+  // When cluster mode is enabled, auto-select the resource types present in the cluster data.
+  useEffect(() => {
+    if (useClusters && clusterInfo) {
+      const types = new Set(Object.values(clusterInfo.resourceObjectTypes));
+      setResourceTypes(types);
+      setBoTypes(prev => {
+        const hasOverlap = [...types].some(t => prev.has(t));
+        if (!hasOverlap) return prev;
+        const n = new Set(prev);
+        types.forEach(t => n.delete(t));
+        return n;
+      });
+    }
+  }, [useClusters, clusterInfo]);
+
+  const toggleResourceType = (t: string) => {
+    setResourceTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+    setBoTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
+  /**
+   * Resource object types the organizational units are built from; empty
+   * unless grouping is on. While it is, these are dictated by the profiling
+   * result and cannot be claimed as business object types — the resource
+   * selector is already locked, and this closes the other side of the door.
+   */
+  const clusterResourceTypes = useMemo(
+    () => (useClusters && clusterInfo
+      ? new Set(Object.values(clusterInfo.resourceObjectTypes))
+      : new Set<string>()),
+    [useClusters, clusterInfo],
+  );
+
+  const toggleBoType = (t: string) => {
+    // Adding one here would drop it from the resource types below, breaking
+    // the match the grouping depends on.
+    if (clusterResourceTypes.has(t)) return;
+    setBoTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+    setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
+  const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
+
+  const handleSort = (col: SortCol) => {
+    if (sortCol === col) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortCol(col);
+      setSortDir("desc");
+    }
+  };
+
+  const sortedEdges = useMemo(() => {
+    if (!data) return [];
+    // An edge with no timing measured sorts last whichever way the column
+    // runs, rather than pretending to be the fastest.
+    const timed = (v: number | null | undefined) => (v == null ? null : v);
+    return [...data.edges].sort((a, b) => {
+      let cmp = 0;
+      if (sortCol === "source") cmp = a.source.localeCompare(b.source);
+      else if (sortCol === "target") cmp = a.target.localeCompare(b.target);
+      else if (sortCol === "bo_type") cmp = a.businessobject_type.localeCompare(b.businessobject_type);
+      else if (sortCol === "count") cmp = a.raw_weight - b.raw_weight;
+      else if (sortCol === "avg_time" || sortCol === "min_time" || sortCol === "max_time") {
+        const av = timed(a[sortCol]);
+        const bv = timed(b[sortCol]);
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        cmp = av - bv;
+      }
+      else cmp = a.weight - b.weight;
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [data, sortCol, sortDir]);
+
+  const weightDenominators = useMemo(() => {
+    if (normalizationScope === "per_bo_type") {
+      const totals: Record<string, number> = {};
+      for (const e of sortedEdges) totals[e.businessobject_type] = (totals[e.businessobject_type] ?? 0) + e.weight;
+      return totals;
+    }
+    const total = sortedEdges.reduce((s, e) => s + e.weight, 0);
+    return { _global: total };
+  }, [sortedEdges, normalizationScope]);
+
+  // The edge table without its scroll container, so the page and the widget
+  // can each wrap it in the box their layout needs.
+  const edgeTableEl = (
+    <table className="w-full text-sm">
+      <thead className="sticky top-0 z-10">
+        <tr className="border-b bg-muted">
+          {(["source", "target", "bo_type", "count", "weight", "avg_time", "min_time", "max_time"] as SortCol[]).map((col) => {
+            const active = sortCol === col;
+            const Icon = active ? (sortDir === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
+            // Durations read as quantities, so they hang off the right edge
+            // where their length tracks their magnitude.
+            const alignRight = TIME_COLS.includes(col);
+            return (
+              <th
+                key={col}
+                onClick={() => handleSort(col)}
+                className={`px-3 py-2 font-medium cursor-pointer select-none hover:bg-muted/80${alignRight ? " text-right" : " text-left"}${col === "weight" ? " w-40" : ""}`}
+              >
+                {/* Headers wrap: keeping them on one line costs the weight
+                    bar the width it needs and collapses it to a dot. */}
+                <div className={`flex items-center gap-1${alignRight ? " justify-end" : ""}`}>
+                  {SORT_LABELS[col]}
+                  <Icon className={`h-3 w-3 flex-shrink-0${active ? "" : " opacity-30"}`} />
+                </div>
+              </th>
+            );
+          })}
+        </tr>
+      </thead>
+      <tbody>
+        {sortedEdges.map((edge, i) => {
+          const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
+          const denom = normalizationScope === "per_bo_type"
+            ? (weightDenominators[edge.businessobject_type] ?? 1)
+            : (weightDenominators._global ?? 1);
+          const barPct = denom > 0 ? (edge.weight / denom) * 100 : 0;
+          return (
+            <tr key={i} className="border-b hover:bg-muted/30">
+              <td className="px-3 py-2 font-mono">{edge.source}</td>
+              <td className="px-3 py-2 font-mono">{edge.target}</td>
+              <td className="px-3 py-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-white text-xs" style={{ background: color }}>
+                  {edge.businessobject_type}
+                </span>
+              </td>
+              <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                  {/* The minimum stops a narrow column shrinking the track to
+                      a dot, where it reads as a bullet rather than a bar. */}
+                  <div className="flex-1 min-w-[40px] h-2 bg-muted rounded overflow-hidden">
+                    <div className="h-full rounded" style={{ width: `${barPct}%`, background: color }} />
+                  </div>
+                  <span className="tabular-nums text-xs w-12 text-right">{edge.weight.toFixed(4)}</span>
+                </div>
+              </td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.avg_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.min_time)}</td>
+              <td className="px-3 py-2 tabular-nums text-xs text-right whitespace-nowrap">{fmtDuration(edge.max_time)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+
+  // Dashboard widget: one full-bleed canvas, every control floating over it.
+  // Compute settings are not reachable here — they are preselected in the
+  // dashboard's edit mode, the same contract the OCCN widget follows.
+  if (embedded) {
+    return (
+      <CanvasShell>
+        {(size) => {
+          // The tile has not been laid out yet; drawing against a zero box
+          // would flash a collapsed graph before the first real measurement.
+          if (size.width === 0 || size.height === 0) return null;
+          if (!fileId) {
+            return <CanvasMessage>Select an event log to see who hands work over.</CanvasMessage>;
+          }
+          if (status === "error") {
+            return <CanvasMessage tone="error">{errorMsg}</CanvasMessage>;
+          }
+          if (status === "empty") {
+            return <CanvasMessage>No handover edges found for this selection.</CanvasMessage>;
+          }
+          if (status !== "ready" || !data) {
+            return (
+              <CanvasMessage>
+                {!canCompute && objectTypes.length > 0 ? (
+                  <span>No object types preselected — configure this widget in the dashboard's edit mode.</span>
+                ) : (
+                  <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+                    {status === "loading" ? "Computing…" : "Compute Handover"}
+                  </Button>
+                )}
+                {status === "loading" && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                    Computing handover graph…
+                  </div>
+                )}
+              </CanvasMessage>
+            );
+          }
+
+          const viewSelect = (
+            <CanvasSelect<ViewMode>
+              label="View"
+              value={viewMode}
+              options={[
+                { value: "graph", label: "Graph" },
+                { value: "table", label: "Table" },
+                { value: "log", label: "Log" },
+              ]}
+              onChange={setViewMode}
+            />
+          );
+
+          if (viewMode !== "graph") {
+            return (
+              <>
+                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
+                  {viewMode === "table" ? (
+                    <div className="overflow-auto rounded-md border flex-1 min-h-0">{edgeTableEl}</div>
+                  ) : (
+                    <EventLogTable
+                      logData={logData}
+                      logStatus={logStatus}
+                      logError={logError}
+                      typeColorMap={typeColorMap}
+                      lockedHeight={null}
+                      fill
+                    />
+                  )}
+                </div>
+                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}>{viewSelect}</div>
+              </>
+            );
+          }
+
+          if (selectedNode) {
+            // Same insets as the table and log views, so switching between
+            // them does not shift the content around inside the tile.
+            return (
+              <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
+                <NodeDetailView
+                  embedded
+                  selectedNode={selectedNode}
+                  data={data}
+                  typeColorMap={typeColorMap}
+                  onBack={() => setSelectedNode(null)}
+                  clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                />
+              </div>
+            );
+          }
+
+          return (
+            <>
+              <HandoverGraph
+                nodes={data.nodes}
+                edges={data.edges}
+                typeColorMap={typeColorMap}
+                onNodeClick={setSelectedNode}
+                clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                positionsRef={graphPositionsRef}
+                savedViewBoxRef={graphViewBoxRef}
+                onVisibleNodesChange={setVisibleGraphNodes}
+                clustered={(useClusters && !!clusterInfo) || clusterByOt}
+                parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
+                normalization={normalization}
+                normalizationScope={normalizationScope}
+                maxGap={maxGap}
+                fileName={fileName}
+                flowsData={flowsData}
+                playSpeed={animPlaySpeed}
+                connectorMode={connectorMode}
+                onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
+                playRef={animPlayRef}
+                pauseRef={animPauseRef}
+                scrubRef={animScrubRef}
+                bindingsData={bindingsData}
+                embedded
+                renderedSize={size}
+                pillLeading={
+                  <>
+                    {(
+                      <Button
+                        type="button"
+                        variant={bindingsData ? "secondary" : "outline"}
+                        size="icon"
+                        className="rounded-full h-9 w-9"
+                        title={bindingsData ? "Hide bindings" : "Show bindings"}
+                        disabled={bindingsStatus === "loading"}
+                        onClick={bindingsData
+                          ? () => { setBindingsData(null); setBindingsStatus("idle"); }
+                          : fetchBindings}
+                      >
+                        {bindingsStatus === "loading"
+                          ? <Loader2 className="h-4 w-4 animate-spin" />
+                          : <Waypoints className="h-4 w-4" />}
+                      </Button>
+                    )}
+                    {/* Organizational units come from a resource profiling
+                        widget at runtime, so this cannot be preselected. It
+                        changes the request, hence the immediate recompute.
+                        Always shown, so its absence never reads as a bug; it
+                        explains itself instead of disappearing. */}
+                    <Button
+                      type="button"
+                      variant={useClusters ? "secondary" : "outline"}
+                      size="icon"
+                      className={`rounded-full h-9 w-9${!useClusters && groupingIssue ? " opacity-50" : ""}`}
+                      title={useClusters
+                        ? "Use individual resources"
+                        : groupingIssue ?? "Group into organizational units"}
+                      onClick={() => {
+                        // Ungrouping is never blocked, so a widget cannot get
+                        // stuck grouped when the profiling result changes.
+                        if (useClusters) {
+                          setUseClusters(false);
+                          handleCompute();
+                          return;
+                        }
+                        if (groupingIssue) { toast.error(groupingIssue); return; }
+                        setUseClusters(true);
+                        setClusterByOt(false);
+                        handleCompute();
+                      }}
+                    >
+                      <Users className="h-4 w-4" />
+                    </Button>
+                  </>
+                }
+              />
+              {/* Top-right cluster: the view dropdown sits to the right of the
+                  search chip, and the row is right-anchored so expanding the
+                  search panel grows it leftwards instead of off the tile. */}
+              <div style={{
+                position: "absolute", top: 12, right: 12, zIndex: 14,
+                display: "flex", alignItems: "flex-start", gap: 8,
+              }}>
+                <FloatingPanel
+                  title="Find"
+                  icon={<Search style={{ width: 13, height: 13, color: "#64748b" }} />}
+                  narrow
+                >
+                {/* The matches sit in the panel's own flow rather than in an
+                    absolutely positioned popover: the panel scrolls its
+                    overflow, so a popover would be clipped by it. */}
+                <NodeSearch
+                  inline
+                  width={220}
+                  nodes={visibleGraphNodes}
+                  typeColorMap={typeColorMap}
+                  onSelect={setSelectedNode}
+                />
+                </FloatingPanel>
+                {viewSelect}
+              </div>
+              {(
+                <FloatingPanel
+                  title="Animation"
+                  icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
+                  narrow
+                  style={{ position: "absolute", top: 54, right: 12, zIndex: 13 }}
+                >
+                  <div className="flex flex-col gap-2" style={{ width: 220 }}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={flowsData ? "secondary" : "outline"}
+                      disabled={flowsStatus === "loading"}
+                      onClick={flowsData
+                        ? () => { setFlowsData(null); setFlowsStatus("idle"); }
+                        : fetchFlows}
+                    >
+                      {flowsStatus === "loading"
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : flowsData
+                          ? <><Square className="h-3.5 w-3.5" /> Stop</>
+                          : <><Play className="h-3.5 w-3.5" /> Animate</>}
+                    </Button>
+                    {flowsData && (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8 shrink-0"
+                            onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                            title={animIsPlaying ? "Pause" : "Play"}
+                          >
+                            {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0 tabular-nums">
+                                <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
+                                <ChevronDown className="h-3 w-3 shrink-0" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                              <DropdownMenuRadioGroup value={String(animPlaySpeed)} onValueChange={v => setAnimPlaySpeed(Number(v))}>
+                                {_SPEED_OPTIONS.map(s => (
+                                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0">
+                                <span className="flex-1 text-center capitalize">{connectorMode}</span>
+                                <ChevronDown className="h-3 w-3 shrink-0" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                              <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                                <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                        <Slider
+                          min={flowsData.timeline.start}
+                          max={flowsData.timeline.end}
+                          step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
+                          value={[animSliderTime]}
+                          onValueChange={([v]) => animScrubRef.current?.(v)}
+                        />
+                        <div className="text-[11px] text-muted-foreground tabular-nums">
+                          {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                          {" "}
+                          {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {" · "}
+                          {flowsData.flows.length.toLocaleString()} flows
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </FloatingPanel>
+              )}
+            </>
+          );
+        }}
+      </CanvasShell>
+    );
+  }
+
+  const Wrapper = embedded ? "div" : Card;
+
+  return (
+    <Wrapper className="w-full">
+      {!embedded && (
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">Object-Centric Handover of Work</CardTitle>
+        </CardHeader>
+      )}
+
+      <CardContent className="space-y-4">
+        {!fileId && (
+          <p className="text-sm text-muted-foreground">Select a file to start.</p>
+        )}
+
+        {fileId && objectTypes.length > 0 && (
+          <div className="flex items-center gap-6 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                  <span className="text-lg font-semibold cursor-default">Max Gap:</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[220px] text-xs">
+                  Maximum number of events allowed between two consecutive events of the same object. Leave empty for no limit.
+                </TooltipContent>
+              </Tooltip>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 flex-shrink-0"
+                  disabled={maxGap === null}
+                  onClick={() => setMaxGap(prev => prev === 0 ? null : (prev ?? 0) - 1)}
+                >
+                  <MinusIcon className="h-4 w-4" />
+                </Button>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="∞"
+                  value={maxGap ?? ""}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v === "") { setMaxGap(null); return; }
+                    const n = parseInt(v, 10);
+                    if (!isNaN(n) && n >= 0) setMaxGap(n);
+                  }}
+                  className="h-9 w-16 text-sm text-center"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 flex-shrink-0"
+                  onClick={() => setMaxGap(prev => prev === null ? 0 : prev + 1)}
+                >
+                  <PlusIcon className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            {(
+              <div className="flex items-center gap-2">
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <span className="text-lg font-semibold cursor-default">Normalization:</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    Controls how edge weights are scaled. 'None' uses raw counts. 'Relative' divides by total handovers per resource. 'Max' divides by the maximum weight.
+                  </TooltipContent>
+                </Tooltip>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="min-w-[170px] justify-between">
+                      {NORMALIZATION_LABELS[normalization]}
+                      <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[200px]">
+                    <DropdownMenuRadioGroup value={normalization} onValueChange={v => setNormalization(v as Normalization)}>
+                      {(Object.keys(NORMALIZATION_LABELS) as Normalization[]).map(key => (
+                        <DropdownMenuRadioItem key={key} value={key}>
+                          {NORMALIZATION_LABELS[key]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+            {(
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="norm-scope"
+                  checked={normalizationScope === "per_bo_type"}
+                  onCheckedChange={v => setNormalizationScope(v ? "per_bo_type" : "global")}
+                />
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="norm-scope" className="text-lg font-semibold cursor-pointer">
+                      Per Object Type
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    When enabled, normalization is applied separately for each object type instead of across the whole graph.
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+            {(
+              <div className="flex items-center gap-2 flex-wrap">
+                <Switch
+                  id="parallel-filter"
+                  checked={parallelFilterEnabled}
+                  onCheckedChange={setParallelFilterEnabled}
+                />
+                <Tooltip delayDuration={600}>
+                  <TooltipTrigger asChild>
+                    <Label htmlFor="parallel-filter" className="text-lg font-semibold cursor-pointer">
+                      Parallel Filter
+                    </Label>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[220px] text-xs">
+                    Removes direct handovers between resources working in parallel. The threshold controls how often two activities must co-occur to be considered parallel.
+                  </TooltipContent>
+                </Tooltip>
+                {parallelFilterEnabled && (
+                  <div className="flex items-center gap-4 ml-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Tooltip delayDuration={600}>
+                        <TooltipTrigger asChild>
+                          <span className="text-sm text-muted-foreground cursor-default">Dependency threshold:</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[220px] text-xs">
+                          Maximum allowed absolute dependency value. Lower values require more balanced co-occurrence in both directions to be considered parallel.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={[parallelThreshold]}
+                        onValueChange={([v]) => setParallelThreshold(v)}
+                        className="w-36"
+                      />
+                      <span className="text-sm font-mono w-10">{parallelThreshold.toFixed(2)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Tooltip delayDuration={600}>
+                        <TooltipTrigger asChild>
+                          <span className="text-sm text-muted-foreground cursor-default">Min observations:</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-[220px] text-xs">
+                          Minimum total number of transitions (in both directions combined) required before a pair is considered parallel. Filters out coincidental reversals in sparse data.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8 flex-shrink-0"
+                        disabled={minParallelObs <= 1}
+                        onClick={() => {
+                          const v = Math.max(1, minParallelObs - 1);
+                          setMinParallelObs(v);
+                          setMinParallelObsStr(String(v));
+                        }}>
+                        <MinusIcon className="h-3 w-3" />
+                      </Button>
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={minParallelObsStr}
+                        onChange={e => {
+                          const raw = e.target.value;
+                          setMinParallelObsStr(raw);
+                          const n = parseInt(raw, 10);
+                          if (!isNaN(n) && n >= 1) setMinParallelObs(n);
+                        }}
+                        onBlur={() => setMinParallelObsStr(String(minParallelObs))}
+                        className="h-8 w-14 text-sm text-center"
+                      />
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8 flex-shrink-0"
+                        onClick={() => {
+                          const v = minParallelObs + 1;
+                          setMinParallelObs(v);
+                          setMinParallelObsStr(String(v));
+                        }}>
+                        <PlusIcon className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && mlpaStatus === "ready" && mlpaLayers && mlpaLayers.length > 1 && (
+          <div className="border rounded-md p-3 self-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Pre-select from MLPA level</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild disabled={useClusters && !!clusterInfo}>
+                  <Button variant="outline" size="sm" className="min-w-[110px] justify-between" disabled={useClusters && !!clusterInfo}>
+                    {selectedMlpaLevel !== null ? `Level ${selectedMlpaLevel}` : "Select level"}
+                    <ChevronDown className="ml-2 h-3 w-3 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuRadioGroup
+                    value={selectedMlpaLevel !== null ? String(selectedMlpaLevel) : ""}
+                    onValueChange={v => {
+                      const level = Number(v);
+                      setSelectedMlpaLevel(level);
+                      const boSet = new Set(
+                        mlpaLayers.filter(l => l.level === level).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                      );
+                      const resSet = new Set(
+                        mlpaLayers.filter(l => l.level > level).flatMap(l => l.areas.flatMap(a => a.objectTypes))
+                      );
+                      setBoTypes(boSet);
+                      setResourceTypes(resSet);
+                    }}
+                  >
+                    {mlpaLayers.map(l => (
+                      <DropdownMenuRadioItem key={l.level} value={String(l.level)}>
+                        Level {l.level} — {l.areas.flatMap(a => a.objectTypes).join(", ")}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1.5">
+              {useClusters && !!clusterInfo
+                ? "OrgaMining clusters are enabled"
+                : selectedMlpaLevel !== null
+                  ? `Business objects: level ${selectedMlpaLevel} · Resources: levels above`
+                  : "Select a level to pre-select object types"}
+            </p>
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && (
+          <div className="flex gap-4 flex-wrap justify-center">
+            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
+            <TypeSelector
+              title="Business object types"
+              types={objectTypes}
+              selected={boTypes}
+              onToggle={toggleBoType}
+              lockedTypes={clusterResourceTypes}
+              lockedHint="Used as a resource type by the organizational units"
+            />
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && (
+          <div className="border rounded-md p-3 min-w-[180px] self-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Clusters</p>
+            <div className={`flex items-center gap-2 ${!clusterInfo ? "opacity-40 pointer-events-none" : ""}`}>
+              <Switch
+                id="use-clusters"
+                checked={useClusters && !!clusterInfo}
+                onCheckedChange={v => { setUseClusters(v); if (v) { setClusterByOt(false); setSelectedMlpaLevel(null); } }}
+                disabled={!clusterInfo}
+              />
+              <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
+                Use Organizational Units
+              </Label>
+            </div>
+            {clusterInfo && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {clusterInfo.nClusters} cluster{clusterInfo.nClusters !== 1 ? "s" : ""}
+                {clusterInfo.hasOutliers ? " + outliers" : ""}
+              </p>
+            )}
+            {!clusterInfo && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Compute clusters in Resource-Activity Matrix first.
+              </p>
+            )}
+            <div className="flex items-center gap-2 mt-2">
+              <Switch
+                id="cluster-by-ot"
+                checked={clusterByOt}
+                onCheckedChange={v => { setClusterByOt(v); if (v) setUseClusters(false); }}
+              />
+              <Label htmlFor="cluster-by-ot" className="text-sm cursor-pointer">
+                Cluster by Object Type
+              </Label>
+            </div>
+          </div>
+        )}
+
+        {fileId && objectTypes.length > 0 && (
+          <div className="flex flex-col gap-3 items-center py-4">
+            <div className="text-sm text-muted-foreground text-center">
+              Click below when ready to start the computation.
+            </div>
+            <Button onClick={handleCompute} disabled={status === "loading" || !canCompute} className="min-w-[200px]">
+              {status === "loading" ? "Computing…" : "Compute Handover"}
+            </Button>
+            {status === "loading" && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                Computing handover graph…
+              </div>
+            )}
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="text-sm text-destructive">Error: {errorMsg}</div>
+        )}
+
+        {status === "empty" && (
+          <p className="text-sm text-muted-foreground">No handover edges found for this selection.</p>
+        )}
+
+        {status === "ready" && data && (
+          <>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
+              <Button size="sm" variant={viewMode === "graph" ? "default" : "outline"} onClick={() => setViewMode("graph")}>
+                Graph
+              </Button>
+              <Button size="sm" variant={viewMode === "table" ? "default" : "outline"} onClick={() => setViewMode("table")}>
+                Table
+              </Button>
+              <Button size="sm" variant={viewMode === "log" ? "default" : "outline"} onClick={() => setViewMode("log")}>
+                Log
+              </Button>
+              </div>
+              {viewMode === "graph" && !selectedNode && (
+                <div className="w-px h-5 bg-border self-center shrink-0" />
+              )}
+              {viewMode === "graph" && !selectedNode && (
+                <div className={`flex items-center border rounded-md overflow-hidden transition-all${flowsData && !selectedNode ? " flex-1 min-w-0" : ""}`}>
+                  {/* Animate / Stop button */}
+                  <button
+                    className="flex items-center gap-1.5 h-8 px-3 text-sm font-medium hover:bg-accent transition-colors shrink-0 disabled:opacity-50"
+                    onClick={flowsData
+                      ? () => { setFlowsData(null); setFlowsStatus("idle"); }
+                      : fetchFlows}
+                    disabled={flowsStatus === "loading"}
+                  >
+                    {flowsStatus === "loading"
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : flowsData
+                        ? <Square className="h-3.5 w-3.5" />
+                        : <><Play className="h-3.5 w-3.5" /><span>Animate</span></>}
+                  </button>
+                  {/* Expanded playback controls */}
+                  {flowsData && !selectedNode && (
+                    <>
+                      <div className="w-px h-5 bg-border self-center shrink-0" />
+                      <button
+                        className="flex items-center justify-center h-8 w-8 hover:bg-accent transition-colors shrink-0"
+                        onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                        title={animIsPlaying ? "Pause" : "Play"}
+                      >
+                        {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center text-xs border-l border-r w-20 pl-2 pr-1.5 h-8 hover:bg-accent transition-colors shrink-0 tabular-nums">
+                            <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuRadioGroup
+                            value={String(animPlaySpeed)}
+                            onValueChange={v => setAnimPlaySpeed(Number(v))}
+                          >
+                            {_SPEED_OPTIONS.map(s => (
+                              <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center text-xs border-l border-r w-24 pl-2 pr-1.5 h-8 hover:bg-accent transition-colors shrink-0">
+                            <span className="flex-1 text-center capitalize">{connectorMode}</span>
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                            <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                      <div className="flex-1 min-w-0 px-2 flex items-center">
+                        <Slider
+                          min={flowsData.timeline.start}
+                          max={flowsData.timeline.end}
+                          step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
+                          value={[animSliderTime]}
+                          onValueChange={([v]) => animScrubRef.current?.(v)}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums shrink-0 whitespace-nowrap pr-2 inline-block w-32">
+                        {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                        {" "}
+                        {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0 pr-3">
+                        ({flowsData.flows.length.toLocaleString()} flows)
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+              {viewMode === "graph" && !selectedNode && (
+                <button
+                  className={`flex items-center gap-1.5 h-8 px-3 text-sm font-medium border rounded-md hover:bg-accent transition-colors shrink-0 disabled:opacity-50${bindingsData ? " bg-accent" : ""}`}
+                  onClick={bindingsData
+                    ? () => { setBindingsData(null); setBindingsStatus("idle"); }
+                    : fetchBindings}
+                  disabled={bindingsStatus === "loading"}
+                  title="Show C-net bindings"
+                >
+                  {bindingsStatus === "loading"
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <><Waypoints className="h-3.5 w-3.5" />{!bindingsData && <span>Bindings</span>}</>}
+                </button>
+              )}
+              {viewMode === "graph" && (
+                <NodeSearch
+                  className="shrink-0 ml-auto"
+                  nodes={visibleGraphNodes}
+                  typeColorMap={typeColorMap}
+                  onSelect={setSelectedNode}
+                />
+              )}
+            </div>
+
+            <div ref={resultsRef} style={lockedHeight ? { height: lockedHeight, overflow: "hidden" } : undefined}>
+            {viewMode === "graph" && (
+              <>
+                <div style={selectedNode ? { display: "none" } : undefined}>
+                  <HandoverGraph
+                    nodes={data.nodes}
+                    edges={data.edges}
+                    typeColorMap={typeColorMap}
+                    onNodeClick={setSelectedNode}
+                    clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                    positionsRef={graphPositionsRef}
+                    savedViewBoxRef={graphViewBoxRef}
+                    onVisibleNodesChange={setVisibleGraphNodes}
+                    clustered={(useClusters && !!clusterInfo) || clusterByOt}
+                    parallelFilter={{ enabled: parallelFilterEnabled, threshold: parallelThreshold, minObs: minParallelObs }}
+                    normalization={normalization}
+                    normalizationScope={normalizationScope}
+                    maxGap={maxGap}
+                    fileName={fileName}
+                    flowsData={flowsData}
+                    playSpeed={animPlaySpeed}
+                    connectorMode={connectorMode}
+                    onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
+                    playRef={animPlayRef}
+                    pauseRef={animPauseRef}
+                    scrubRef={animScrubRef}
+                    bindingsData={bindingsData}
+                  />
+                </div>
+                {selectedNode && (
+                  <NodeDetailView
+                    selectedNode={selectedNode}
+                    data={data}
+                    typeColorMap={typeColorMap}
+                    onBack={() => setSelectedNode(null)}
+                    clusterInfo={useClusters ? clusterInfo ?? undefined : undefined}
+                  />
+                )}
+              </>
+            )}
+
+            {viewMode === "log" && (
+              <EventLogTable logData={logData} logStatus={logStatus} logError={logError} typeColorMap={typeColorMap} lockedHeight={lockedHeight} />
+            )}
+
+            {viewMode === "table" && (
+              <div className="overflow-auto rounded-md border" style={lockedHeight ? { maxHeight: lockedHeight } : undefined}>
+                {edgeTableEl}
+              </div>
+            )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Wrapper>
+  );
+}
+
+/* ── Duration formatter ─────────────────────────────────────── */
+function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  const s = Math.round(Math.abs(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/* ── TypeSelector ───────────────────────────────────────────── */
+function TypeSelector({
+  title, types, selected, onToggle, disabled = false, lockedTypes, lockedHint,
+}: {
+  title: string;
+  types: string[];
+  selected: Set<string>;
+  onToggle: (t: string) => void;
+  disabled?: boolean;
+  /** Individual types that cannot be toggled while the rest stay editable. */
+  lockedTypes?: Set<string>;
+  /** Why those types are locked, shown on hover. */
+  lockedHint?: string;
+}) {
+  return (
+    <div className={`border rounded-md p-3 min-w-[180px] ${disabled ? "opacity-60" : ""}`}>
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
+      <div className="space-y-1.5">
+        {types.map(t => {
+          const locked = disabled || (lockedTypes?.has(t) ?? false);
+          return (
+            <div key={t} className="flex items-center gap-2" title={!disabled && lockedTypes?.has(t) ? lockedHint : undefined}>
+              <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={locked} />
+              <Label
+                htmlFor={`${title}-${t}`}
+                className={`text-sm ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
+              >
+                {t}
+              </Label>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── EventLogTable ──────────────────────────────────────────── */
+function EventLogTable({
+  logData, logStatus, logError, typeColorMap, lockedHeight, fill = false,
+}: {
+  logData: EventLogData | null;
+  logStatus: "idle" | "loading" | "ready" | "error";
+  logError: string;
+  typeColorMap: Record<string, string>;
+  lockedHeight: number | null;
+  /**
+   * Fill the parent instead of capping at `lockedHeight`. The scroll box has
+   * to be the element with the bounded height, or the sticky header pins to a
+   * container that never scrolls.
+   */
+  fill?: boolean;
+}) {
+  if (logStatus === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 px-4">
+        <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+        Loading event log…
+      </div>
+    );
+  }
+  if (logStatus === "error") {
+    return <div className="text-sm text-destructive px-4 py-6">Error: {logError}</div>;
+  }
+  if (!logData) return null;
+
+  const MAX_ROWS = 500;
+  const truncated = logData.events.length > MAX_ROWS;
+  const visibleEvents = truncated ? logData.events.slice(0, MAX_ROWS) : logData.events;
+
+  const fmt = (ts: number | string) => {
+    const d = new Date(typeof ts === "number" ? ts : ts);
+    return isNaN(d.getTime()) ? String(ts) : d.toISOString().replace("T", " ").slice(0, 19);
+  };
+
+  return (
+    <div className={fill ? "flex flex-col gap-2 h-full min-h-0" : "space-y-2"}>
+      {truncated && (
+        <div className="text-xs text-muted-foreground px-1">
+          Showing first {MAX_ROWS} of {logData.events.length} events — export the file to see the full log.
+        </div>
+      )}
+      <div
+        className={`overflow-auto rounded-md border${fill ? " flex-1 min-h-0" : ""}`}
+        style={!fill && lockedHeight ? { maxHeight: lockedHeight } : undefined}
+      >
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="border-b bg-muted">
+              <th className="px-3 py-2 text-left font-medium sticky top-0 left-0 bg-muted z-30 border-r whitespace-nowrap">Event</th>
+              <th className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">Activity</th>
+              <th className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">Timestamp</th>
+              {logData.object_types.map(t => (
+                <th key={t} className="px-3 py-2 text-left font-medium sticky top-0 bg-muted z-20 whitespace-nowrap">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                    {t}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleEvents.map((ev, i) => (
+              <tr key={i} className="border-b hover:bg-muted/30">
+                <td className="px-3 py-2 font-mono font-medium sticky left-0 bg-background border-r whitespace-nowrap z-10">{ev.event_id}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{ev.activity}</td>
+                <td className="px-3 py-2 font-mono text-xs tabular-nums whitespace-nowrap text-muted-foreground">{fmt(ev.timestamp)}</td>
+                {logData.object_types.map(t => {
+                  const objs = ev.objects[t] ?? [];
+                  return (
+                    <td key={t} className="px-3 py-2 whitespace-nowrap">
+                      {objs.length === 0 ? (
+                        <span className="text-muted-foreground/40">—</span>
+                      ) : (
+                        <span className="font-mono text-xs">{objs.join(", ")}</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── HandoverGraph ──────────────────────────────────────────── */
+type SimNode = SimulationNodeDatum & { id: string; object_type: string };
+type SimLink = SimulationLinkDatum<SimNode>;
+
+const CLUSTER_COLORS = ["#f43f5e","#f97316","#eab308","#22c55e","#06b6d4","#8b5cf6","#ec4899","#14b8a6"];
+
+/** One frame of the flow animation, in node coordinates. */
+type DotFrame = {
+  dots: { px: number; py: number; t: number; color: string }[];
+  connectors: { points: { x: number; y: number }[]; color: string; opacity: number }[];
+};
+
+/**
+ * Where every flow dot sits at `currentTime`, and the connector polylines
+ * joining dots that share a business object.
+ *
+ * Split out of the SVG renderer so the video recorder can paint the same
+ * frames onto a canvas without duplicating the component-merging and
+ * angular-sorting logic. It reads live path geometry, so the graph must be
+ * rendered when it is called.
+ */
+function computeDotFrame(
+  pathMap: Map<string, SVGPathElement>,
+  flows: FlowEvent[],
+  currentTime: number,
+  colorMap: Record<string, string>,
+  connectorMode: "fade" | "persist" | "none",
+): DotFrame {
+  type DotEntry = { px: number; py: number; t: number; color: string };
+  const dots: DotEntry[] = [];
+  // Inverted index: bo_id → dot indices that carry it
+  const boIndex = connectorMode !== "none" ? new Map<string, number[]>() : null;
+
+  for (const flow of flows) {
+    if (flow.start_time > currentTime || currentTime >= flow.start_time + flow.duration) continue;
+    const pathEl = pathMap.get(`${flow.source}|${flow.target}|${flow.bo_type}`);
+    if (!pathEl || !pathEl.isConnected) continue;
+    const t = Math.min(1, (currentTime - flow.start_time) / flow.duration);
+    const pt = pathEl.getPointAtLength(t * pathEl.getTotalLength());
+    const idx = dots.length;
+    dots.push({ px: pt.x, py: pt.y, t, color: colorMap[flow.bo_type] ?? "#94a3b8" });
+    if (boIndex) {
+      for (const bid of flow.bo_ids) {
+        if (!boIndex.has(bid)) boIndex.set(bid, []);
+        boIndex.get(bid)!.push(idx);
+      }
+    }
+  }
+
+  // Connected components: dots sharing any bo_id belong to the same group
+  const componentOf = boIndex ? new Int32Array(dots.length).fill(-1) : null;
+  if (boIndex && componentOf) {
+    let nextId = 0;
+    const merge = (a: number, b: number) => {
+      const ca = componentOf[a], cb = componentOf[b];
+      if (ca === -1 && cb === -1) { componentOf[a] = componentOf[b] = nextId++; }
+      else if (ca === -1) { componentOf[a] = cb; }
+      else if (cb === -1) { componentOf[b] = ca; }
+      else if (ca !== cb) { for (let k = 0; k < componentOf.length; k++) if (componentOf[k] === cb) componentOf[k] = ca; }
+    };
+    for (const indices of boIndex.values()) {
+      for (let i = 1; i < indices.length; i++) merge(indices[0], indices[i]);
+    }
+    for (let k = 0; k < componentOf.length; k++) if (componentOf[k] === -1) componentOf[k] = nextId++;
+  }
+
+  // A polyline per connected component (dots sharing any bo_id).
+  // Angular sort around the centroid gives a non-crossing open line.
+  const connectors: DotFrame["connectors"] = [];
+  if (componentOf) {
+    const FADE_T = 0.35;
+    const groups = new Map<number, number[]>();
+    for (let k = 0; k < dots.length; k++) {
+      const c = componentOf[k];
+      if (!groups.has(c)) groups.set(c, []);
+      groups.get(c)!.push(k);
+    }
+    for (const indices of groups.values()) {
+      if (indices.length < 2) continue;
+      const avgT = indices.reduce((s: number, i: number) => s + dots[i].t, 0) / indices.length;
+      let opacity: number;
+      if (connectorMode === "fade") {
+        opacity = Math.max(0, 1 - avgT / FADE_T);
+        if (opacity <= 0) continue;
+      } else {
+        opacity = 0.6;
+      }
+      const cx = indices.reduce((s: number, i: number) => s + dots[i].px, 0) / indices.length;
+      const cy = indices.reduce((s: number, i: number) => s + dots[i].py, 0) / indices.length;
+      const byAngle = [...indices]
+        .map(i => ({ i, a: Math.atan2(dots[i].py - cy, dots[i].px - cx) }))
+        .sort((x, y) => x.a - y.a);
+      let maxGap = -1, startIdx = 0;
+      for (let k = 0; k < byAngle.length; k++) {
+        const gap = ((byAngle[(k + 1) % byAngle.length].a - byAngle[k].a) + 2 * Math.PI) % (2 * Math.PI);
+        if (gap > maxGap) { maxGap = gap; startIdx = (k + 1) % byAngle.length; }
+      }
+      const ordered = [...byAngle.slice(startIdx), ...byAngle.slice(0, startIdx)];
+      connectors.push({
+        points: ordered.map(({ i }) => ({ x: dots[i].px, y: dots[i].py })),
+        color: dots[indices[0]].color,
+        opacity,
+      });
+    }
+  }
+
+  return { dots, connectors };
+}
+
+/** Radius of a flow dot, in node coordinates. */
+const DOT_R = 6;
+
+/** Paint a frame into the live SVG's dot layer. */
+function updateDotLayer(
+  layer: SVGGElement,
+  pathMap: Map<string, SVGPathElement>,
+  flows: FlowEvent[],
+  currentTime: number,
+  colorMap: Record<string, string>,
+  connectorMode: "fade" | "persist" | "none",
+): void {
+  while (layer.firstChild) layer.removeChild(layer.firstChild);
+  const { dots, connectors } = computeDotFrame(pathMap, flows, currentTime, colorMap, connectorMode);
+
+  for (const { points, color, opacity } of connectors) {
+    const d = points.map((p, k) => `${k === 0 ? "M" : "L"}${p.x} ${p.y}`).join(" ");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    path.setAttribute("stroke", color);
+    path.setAttribute("stroke-width", "1.5");
+    path.setAttribute("fill", "none");
+    path.setAttribute("opacity", String(opacity));
+    path.setAttribute("pointer-events", "none");
+    layer.appendChild(path);
+  }
+
+  // Dots on top of connectors
+  for (const { px, py, color } of dots) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", String(px));
+    c.setAttribute("cy", String(py));
+    c.setAttribute("r", String(DOT_R));
+    c.setAttribute("fill", color);
+    c.setAttribute("stroke", "white");
+    c.setAttribute("stroke-width", "1.5");
+    c.setAttribute("pointer-events", "none");
+    layer.appendChild(c);
+  }
+}
+
+/** Paint a frame onto a canvas, mapping node coordinates into `rect`. */
+function drawDotFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: DotFrame,
+  vb: { x: number; y: number; w: number; h: number },
+  rect: { x: number; y: number; width: number; height: number },
+) {
+  const scale = rect.width / vb.w;
+  const toX = (x: number) => rect.x + (x - vb.x) * scale;
+  const toY = (y: number) => rect.y + (y - vb.y) * scale;
+
+  ctx.save();
+  ctx.lineWidth = 1.5 * scale;
+  for (const { points, color, opacity } of frame.connectors) {
+    ctx.globalAlpha = opacity;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    points.forEach((p, k) => (k === 0 ? ctx.moveTo(toX(p.x), toY(p.y)) : ctx.lineTo(toX(p.x), toY(p.y))));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "white";
+  for (const { px, py, color } of frame.dots) {
+    ctx.beginPath();
+    ctx.arc(toX(px), toY(py), DOT_R * scale, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** How much explanatory chrome an export carries alongside the graph. */
+type ExportDetail = "graph" | "legend" | "full";
+const EXPORT_DETAIL_OPTIONS: { value: ExportDetail; label: string }[] = [
+  { value: "graph", label: "Graph only" },
+  { value: "legend", label: "Legend" },
+  { value: "full", label: "Legend & settings" },
+];
+
+/**
+ * Stacking order for hover cards.
+ *
+ * Above every piece of floating chrome — the legend and tool panels sit at
+ * 12–14, the pill's popovers and the widget title at 20 — so a tooltip is
+ * never read half-hidden behind a heading or a button.
+ */
+const TOOLTIP_Z = 40;
+
+/** Frame rates offered for the recording. Higher is smoother but slower to record. */
+const EXPORT_FPS_OPTIONS = [15, 24, 30, 60];
+function formatSeconds(total: number) {
+  const s = Math.round(total);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 === 0 ? `${m} min` : `${m} min ${s % 60} s`;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * The best container this browser will record, with its file extension.
+ *
+ * Safari records MP4/H.264 where Chrome and Firefox record WebM, so the
+ * format is negotiated rather than fixed. That keeps the export free of any
+ * encoder dependency and still hands every browser a file it can play.
+ */
+function pickRecordingFormat(): { mimeType: string; ext: string } | null {
+  if (typeof MediaRecorder === "undefined") return null;
+  const candidates = [
+    { mimeType: "video/mp4;codecs=avc1", ext: "mp4" },
+    { mimeType: "video/mp4", ext: "mp4" },
+    { mimeType: "video/webm;codecs=vp9", ext: "webm" },
+    { mimeType: "video/webm;codecs=vp8", ext: "webm" },
+    { mimeType: "video/webm", ext: "webm" },
+  ];
+  return candidates.find(c => MediaRecorder.isTypeSupported(c.mimeType)) ?? null;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HandoverGraph({
+  nodes,
+  edges,
+  typeColorMap,
+  onNodeClick,
+  clusterInfo,
+  positionsRef,
+  savedViewBoxRef,
+  onVisibleNodesChange,
+  clustered,
+  parallelFilter,
+  normalization,
+  normalizationScope,
+  maxGap,
+  fileName,
+  flowsData,
+  playSpeed: playSpeedProp = 100,
+  connectorMode: connectorModeProp = "fade" as const,
+  onAnimStateChange,
+  playRef,
+  pauseRef,
+  scrubRef,
+  bindingsData,
+  embedded = false,
+  pillLeading,
+  renderedSize,
+}: {
+  nodes: HandoverNode[];
+  edges: HandoverEdge[];
+  typeColorMap: Record<string, string>;
+  onNodeClick?: (id: string) => void;
+  clusterInfo?: ClusterInfo;
+  positionsRef?: { current: Record<string, { x: number; y: number }> };
+  savedViewBoxRef?: { current: { x: number; y: number; w: number; h: number } | null };
+  onVisibleNodesChange?: (nodes: HandoverNode[]) => void;
+  clustered?: boolean;
+  parallelFilter?: { enabled: boolean; threshold: number; minObs: number };
+  normalization?: Normalization;
+  normalizationScope?: "global" | "per_bo_type";
+  maxGap?: number | null;
+  fileName?: string;
+  flowsData?: FlowsData | null;
+  playSpeed?: number;
+  connectorMode?: "fade" | "persist" | "none";
+  onAnimStateChange?: (s: { isPlaying: boolean; sliderTime: number }) => void;
+  playRef?: React.RefObject<(() => void) | null>;
+  pauseRef?: React.RefObject<(() => void) | null>;
+  scrubRef?: React.RefObject<((t: number) => void) | null>;
+  bindingsData?: BindingPattern[] | null;
+  /** Fill the parent and float every control over the canvas (dashboard tile). */
+  embedded?: boolean;
+  /** Rendered at the start of the control pill (the explorer's view switcher). */
+  pillLeading?: React.ReactNode;
+  /** Size to render at; when omitted the graph measures its own container. */
+  renderedSize?: Size;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [measured, setMeasured] = useState({ width: 700, height: 450 });
+  const size = renderedSize ?? measured;
+  /**
+   * Whether the view is the user's rather than the one the graph opened with.
+   *
+   * Until they zoom, fit, pan or drag a node, the opening view is re-derived
+   * on every size change. A tile is not its final size when it mounts —
+   * GridStack animates it, and the analysis page starts from a placeholder —
+   * so framing once against the first size seen left the graph fitted to a
+   * box that no longer existed.
+   */
+  const userAdjustedRef = useRef(false);
+  // Tile size the current viewBox was built for, so a resize can follow it.
+  const prevSizeRef = useRef({ width: 0, height: 0 });
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: HANDOVER_CANVAS.width, h: HANDOVER_CANVAS.height });
+  const [minWeightStr, setMinWeightStr] = useState("0.00");
+  const minWeightVal = useMemo(() => Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0), [minWeightStr]);
+  const viewBoxRef = useRef(viewBox);
+  useEffect(() => { viewBoxRef.current = viewBox; }, [viewBox]);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const dragOffset = useRef({ x: 0, y: 0 });
+  // Background pan: the grabbed point in node coordinates, held under the
+  // cursor for the length of the drag. `panMoved` tells a pan from a click,
+  // so releasing after a pan does not also clear the tooltip or highlight.
+  const panAnchor = useRef<{ x: number; y: number } | null>(null);
+  const panMoved = useRef(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [exportDetail, setExportDetail] = useState<ExportDetail>("legend");
+  const [exportFps, setExportFps] = useState(30);
+  const [isRecording, setIsRecording] = useState(false);
+  /**
+   * How long the recording runs.
+   *
+   * Entirely the animation's playback speed: it is log-units per wall second,
+   * so the timeline takes span / speed, exactly as long as playing it on
+   * screen. The export panel only chooses quality. Deliberately unclamped —
+   * capping it would keep the whole timeline in a shorter video, which means
+   * silently recording at a speed the user did not pick.
+   */
+  const recordingSeconds = useMemo(() => {
+    if (!flowsData) return 0;
+    const span = flowsData.timeline.end - flowsData.timeline.start;
+    return Math.max(1, span / (playSpeedProp || 1));
+  }, [flowsData, playSpeedProp]);
+  const dragHasMoved = useRef(false);
+  const mouseDownPos = useRef({ x: 0, y: 0 });
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
+  const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
+
+  // ── Animation state & refs ────────────────────────────────────
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [sliderTime, setSliderTime] = useState(0);
+  const playSpeedRef = useRef(100);
+  useEffect(() => { playSpeedRef.current = playSpeedProp; }, [playSpeedProp]);
+  const connectorModeRef = useRef<"fade" | "persist" | "none">(connectorModeProp);
+  useEffect(() => { connectorModeRef.current = connectorModeProp; }, [connectorModeProp]);
+  const playheadTimeRef = useRef(0);
+  const lastWallClockRef = useRef<number | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const dotsLayerRef = useRef<SVGGElement>(null);
+  const bindingsLayerRef = useRef<SVGGElement>(null);
+  const pathMapRef = useRef<Map<string, SVGPathElement>>(new Map());
+  const frameCountRef = useRef(0);
+
+  // Sync local animation state to parent toolbar
+  useEffect(() => { onAnimStateChange?.({ isPlaying, sliderTime }); }, [isPlaying, sliderTime]);
+
+  // Cancel animation on unmount
+  useEffect(() => () => { if (animFrameRef.current !== null) cancelAnimationFrame(animFrameRef.current); }, []);
+
+  // Reset animation state when flowsData changes
+  useEffect(() => {
+    if (animFrameRef.current !== null) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+    setIsPlaying(false);
+    lastWallClockRef.current = null;
+    const start = flowsData?.timeline.start ?? 0;
+    playheadTimeRef.current = start;
+    setSliderTime(start);
+    const layer = dotsLayerRef.current;
+    if (layer) while (layer.firstChild) layer.removeChild(layer.firstChild);
+  }, [flowsData]);
+
+  // Rebuild path lookup map after edges are re-rendered in the DOM (must run before binding layer)
+  useLayoutEffect(() => {
+    if (!svgRef.current) return;
+    const map = new Map<string, SVGPathElement>();
+    svgRef.current.querySelectorAll<SVGPathElement>("[data-flow-edge]").forEach(el => {
+      const key = el.getAttribute("data-flow-edge")!;
+      map.set(key, el);
+    });
+    pathMapRef.current = map;
+  });
+
+  // Bindings that contain both a self-loop arc and regular arcs — the connection between
+  // the self-loop mark and the regular-arc marks cannot be drawn visually.
+  const suppressedBindingCount = useMemo(() => {
+    if (!bindingsData) return 0;
+    return bindingsData.filter(b =>
+      b.arcs.some(a => a.other_resource === b.resource) &&
+      b.arcs.some(a => a.other_resource !== b.resource)
+    ).length;
+  }, [bindingsData]);
+
+  // Render C-net binding overlay imperatively so we can use getPointAtLength on live SVG paths
+  useLayoutEffect(() => {
+    const layer = bindingsLayerRef.current;
+    if (!layer) return;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+    if (!bindingsData || bindingsData.length === 0) return;
+
+    const NS = "http://www.w3.org/2000/svg";
+    const pathMap = pathMapRef.current;
+    const BASE = 18;      // px from node boundary along edge path to first slot
+    const SLOT_STEP = 11; // px between slots for multiple bindings on same arc
+    const DOT_R = 2.5;    // circle mark radius
+    const SQ_SZ = 3;      // half-size of square mark
+    const HALO = 2;       // white halo size around marks
+    const SELF_STEP = 16; // px between successive marks along a self-loop path
+
+    // Per (side, resource, bo_type) counter so each bo_type's marks step independently.
+    // A small per-bo_type stagger (SELF_STAGGER per new bo_type seen on a node) offsets
+    // the starting positions so different object types don't land at the exact same spot.
+    const SELF_STAGGER = 6; // px offset added per additional bo_type on the same self-loop
+    const selfLoopMarkIdx  = new Map<string, number>(); // key: side:resource:bo_type
+    const selfLoopBtOrder  = new Map<string, number>(); // key: side:resource:bo_type → bt index
+    const selfLoopBtNext   = new Map<string, number>(); // key: side:resource → next bt index
+
+    for (const side of ["output", "input"] as const) {
+      // Process solos (arcs.length === 1) first so they occupy the inner slots
+      const bindings = [...bindingsData.filter(b => b.type === side)]
+        .sort((a, b) => a.arcs.length - b.arcs.length);
+
+      // Per-node slot counter: each binding at a node gets a unique slot → unique radius.
+      // This prevents solo dots from landing at the same radius as a multi-arc ring.
+      const nodeNextSlot = new Map<string, number>();
+
+      for (const binding of bindings) {
+        const isOutput = side === "output";
+
+        const pathKeys = binding.arcs.map(arc =>
+          isOutput
+            ? `${binding.resource}|${arc.other_resource}|${arc.bo_type}`
+            : `${arc.other_resource}|${binding.resource}|${arc.bo_type}`
+        );
+
+        const slot = nodeNextSlot.get(binding.resource) ?? 0;
+        nodeNextSlot.set(binding.resource, slot + 1);
+
+        // totalR = nodeRadius + BASE + slot*SLOT_STEP, measured from node center.
+        // Computed from the first non-self-loop path (self-loop paths can't reliably
+        // give node radius since they start and end at the same node).
+        const slotOffset = BASE + slot * SLOT_STEP;
+        const nodePos = positions[binding.resource];
+        let totalR = slotOffset;
+        if (nodePos) {
+          const { x: cx0, y: cy0 } = nodePos;
+          for (let i = 0; i < pathKeys.length; i++) {
+            if (binding.arcs[i].other_resource === binding.resource) continue; // skip self-loops
+            const p = pathMap.get(pathKeys[i]);
+            if (!p) continue;
+            const plen = p.getTotalLength();
+            const ptB = p.getPointAtLength(isOutput ? 0 : plen);
+            totalR = Math.sqrt((ptB.x - cx0) ** 2 + (ptB.y - cy0) ** 2) + slotOffset;
+            break;
+          }
+        }
+
+        // Dot positions.
+        // Regular edges: project at fixed totalR from node center along the edge direction,
+        //   so every dot is exactly on the arc.
+        // Self-loops: follow the path at slotOffset from the endpoint — the path curves
+        //   back to the same node so there is no meaningful radial direction to project along.
+        const dots: { x: number; y: number; angle: number; color: string; is_gapped: boolean; mark: "dot" | "square"; isSelfLoop: boolean }[] = [];
+        for (let i = 0; i < pathKeys.length; i++) {
+          const path = pathMap.get(pathKeys[i]);
+          if (!path) continue;
+          const len = path.getTotalLength();
+          const isSelfLoop = binding.arcs[i].other_resource === binding.resource;
+
+          let px: number, py: number, angle: number;
+          if (nodePos && !isSelfLoop) {
+            const { x: cx, y: cy } = nodePos;
+            const ptBoundary = path.getPointAtLength(isOutput ? 0 : len);
+            angle = Math.atan2(ptBoundary.y - cy, ptBoundary.x - cx);
+            px = cx + totalR * Math.cos(angle);
+            py = cy + totalR * Math.sin(angle);
+          } else if (isSelfLoop) {
+            // Per-bo_type counter so each type steps independently.
+            // A small stagger (SELF_STAGGER × bt_order) shifts each type's start slightly
+            // so different object types don't land at the exact same position.
+            const selfKey  = `${side}:${binding.resource}:${binding.arcs[i].bo_type}`;
+            const nodeKey  = `${side}:${binding.resource}`;
+            if (!selfLoopBtOrder.has(selfKey)) {
+              selfLoopBtOrder.set(selfKey, selfLoopBtNext.get(nodeKey) ?? 0);
+              selfLoopBtNext.set(nodeKey, (selfLoopBtNext.get(nodeKey) ?? 0) + 1);
+            }
+            const btStagger = (selfLoopBtOrder.get(selfKey) ?? 0) * SELF_STAGGER;
+            const idx = selfLoopMarkIdx.get(selfKey) ?? 0;
+            selfLoopMarkIdx.set(selfKey, idx + 1);
+            const selfOffset = Math.min(btStagger + (idx + 1) * SELF_STEP, len * 0.45);
+            const pt = path.getPointAtLength(isOutput ? selfOffset : len - selfOffset);
+            px = pt.x; py = pt.y;
+            angle = nodePos ? Math.atan2(pt.y - nodePos.y, pt.x - nodePos.x) : 0;
+          } else {
+            // No node position fallback: place on path using slotOffset.
+            const offset = Math.min(slotOffset, len * 0.45);
+            const pt = path.getPointAtLength(isOutput ? offset : len - offset);
+            px = pt.x; py = pt.y;
+            angle = 0;
+          }
+          dots.push({ x: px, y: py, angle, color: typeColorMap[binding.arcs[i].bo_type] ?? "#555", is_gapped: binding.arcs[i].is_gapped, mark: binding.arcs[i].mark, isSelfLoop });
+        }
+        if (dots.length === 0) continue;
+
+        // Connector: circular arc centred at node at exactly totalR.
+        // Self-loop dots are excluded: their path position can't be projected onto the
+        // totalR circle, so they just show their mark without a connecting arc.
+        // Largest-gap sort so we sweep the short arc.
+        const connectorDots = dots.filter(d => !d.isSelfLoop);
+        if (connectorDots.length >= 2 && nodePos) {
+          const { x: cx, y: cy } = nodePos;
+          const sorted = [...connectorDots].sort((a, b) => a.angle - b.angle);
+          const n = sorted.length;
+          let maxGap = -1, gapIdx = 0;
+          for (let i = 0; i < n; i++) {
+            const gap = ((sorted[(i + 1) % n].angle - sorted[i].angle) + 2 * Math.PI) % (2 * Math.PI);
+            if (gap > maxGap) { maxGap = gap; gapIdx = i; }
+          }
+          const startIdx = (gapIdx + 1) % n;
+          const ordered = [...sorted.slice(startIdx), ...sorted.slice(0, startIdx)];
+          const first = ordered[0], last = ordered[ordered.length - 1];
+          const sx = cx + totalR * Math.cos(first.angle), sy = cy + totalR * Math.sin(first.angle);
+          const ex = cx + totalR * Math.cos(last.angle),  ey = cy + totalR * Math.sin(last.angle);
+          const arcSpan = ((last.angle - first.angle) + 2 * Math.PI) % (2 * Math.PI);
+          const largeArc = arcSpan > Math.PI ? 1 : 0;
+          const color = typeColorMap[binding.arcs[0].bo_type] ?? "#888";
+          const arc = document.createElementNS(NS, "path");
+          arc.setAttribute("d", `M${sx.toFixed(1)} ${sy.toFixed(1)} A${totalR.toFixed(1)} ${totalR.toFixed(1)} 0 ${largeArc} 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`);
+          arc.setAttribute("fill", "none");
+          arc.setAttribute("stroke", color);
+          arc.setAttribute("stroke-width", "1.5");
+          arc.setAttribute("stroke-linecap", "round");
+          arc.setAttribute("stroke-dasharray", binding.line_type === "dotted" ? "4 3" : "none");
+          arc.setAttribute("opacity", "0.9");
+          layer.appendChild(arc);
+        }
+
+        // Marks: filled = direct, hollow ring = gapped; circle = dot, square = square
+        // Each mark is rendered as a white halo first, then the colored shape on top.
+        for (const dot of dots) {
+          if (dot.mark === "square") {
+            const halo = document.createElementNS(NS, "rect");
+            halo.setAttribute("x", (dot.x - SQ_SZ - HALO).toFixed(1));
+            halo.setAttribute("y", (dot.y - SQ_SZ - HALO).toFixed(1));
+            halo.setAttribute("width", ((SQ_SZ + HALO) * 2).toFixed(1));
+            halo.setAttribute("height", ((SQ_SZ + HALO) * 2).toFixed(1));
+            halo.setAttribute("fill", "white");
+            halo.setAttribute("opacity", "0.85");
+            layer.appendChild(halo);
+            const rect = document.createElementNS(NS, "rect");
+            rect.setAttribute("x", (dot.x - SQ_SZ).toFixed(1));
+            rect.setAttribute("y", (dot.y - SQ_SZ).toFixed(1));
+            rect.setAttribute("width", (SQ_SZ * 2).toFixed(1));
+            rect.setAttribute("height", (SQ_SZ * 2).toFixed(1));
+            rect.setAttribute("fill", dot.is_gapped ? "white" : dot.color);
+            rect.setAttribute("stroke", dot.color);
+            rect.setAttribute("stroke-width", dot.is_gapped ? "1.5" : "1");
+            rect.setAttribute("opacity", "0.95");
+            layer.appendChild(rect);
+          } else {
+            const halo = document.createElementNS(NS, "circle");
+            halo.setAttribute("cx", dot.x.toFixed(1));
+            halo.setAttribute("cy", dot.y.toFixed(1));
+            halo.setAttribute("r", String(DOT_R + HALO));
+            halo.setAttribute("fill", "white");
+            halo.setAttribute("opacity", "0.85");
+            layer.appendChild(halo);
+            const circle = document.createElementNS(NS, "circle");
+            circle.setAttribute("cx", dot.x.toFixed(1));
+            circle.setAttribute("cy", dot.y.toFixed(1));
+            circle.setAttribute("r", String(DOT_R));
+            circle.setAttribute("fill", dot.is_gapped ? "white" : dot.color);
+            circle.setAttribute("stroke", dot.color);
+            circle.setAttribute("stroke-width", dot.is_gapped ? "1.5" : "1");
+            circle.setAttribute("opacity", "0.95");
+            layer.appendChild(circle);
+          }
+        }
+      }
+    }
+
+  });
+
+  const playAnimation = () => {
+    if (!flowsData || isPlaying) return;
+    if (playheadTimeRef.current >= flowsData.timeline.end) {
+      playheadTimeRef.current = flowsData.timeline.start;
+      setSliderTime(flowsData.timeline.start);
+    }
+    setIsPlaying(true);
+    lastWallClockRef.current = null;
+    const fd = flowsData;
+    const tcm = typeColorMap;
+    const tick = (wallNow: number) => {
+      if (lastWallClockRef.current === null) lastWallClockRef.current = wallNow;
+      const wallDelta = (wallNow - lastWallClockRef.current) / 1000;
+      lastWallClockRef.current = wallNow;
+      const newTime = Math.min(playheadTimeRef.current + wallDelta * playSpeedRef.current, fd.timeline.end);
+      playheadTimeRef.current = newTime;
+      const layer = dotsLayerRef.current;
+      if (layer) updateDotLayer(layer, pathMapRef.current, fd.flows, newTime, tcm, connectorModeRef.current);
+      frameCountRef.current = (frameCountRef.current + 1) % 4;
+      if (frameCountRef.current === 0) setSliderTime(newTime);
+      if (newTime < fd.timeline.end) {
+        animFrameRef.current = requestAnimationFrame(tick);
+      } else {
+        setIsPlaying(false);
+        setSliderTime(newTime);
+      }
+    };
+    animFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const pauseAnimation = () => {
+    if (animFrameRef.current !== null) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
+    setIsPlaying(false);
+    lastWallClockRef.current = null;
+  };
+
+  const scrubTo = (time: number) => {
+    playheadTimeRef.current = time;
+    setSliderTime(time);
+    const layer = dotsLayerRef.current;
+    if (layer && flowsData) updateDotLayer(layer, pathMapRef.current, flowsData.flows, time, typeColorMap, connectorModeRef.current);
+  };
+
+  // Expose animation functions to parent toolbar via refs
+  if (playRef) playRef.current = playAnimation;
+  if (pauseRef) pauseRef.current = pauseAnimation;
+  if (scrubRef) scrubRef.current = scrubTo;
+  // ─────────────────────────────────────────────────────────────
+
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [centralityOpen, setCentralityOpen] = useState(false);
+  const [selectedCentrality, setSelectedCentrality] = useState<"in-degree" | "out-degree" | "both-degree" | "closeness" | "betweenness" | null>(null);
+  const [timeMetricOpen, setTimeMetricOpen] = useState(false);
+  const [selectedTimeMetric, setSelectedTimeMetric] = useState<"max" | "min" | "avg" | "range" | null>(null);
+  const [highlightedObjectType, setHighlightedObjectType] = useState<string | null>(null);
+  const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
+  const [nodeSearch, setNodeSearch] = useState("");
+  const [checkedNodes, setCheckedNodes] = useState<Set<string>>(() => new Set(nodes.map(n => n.id)));
+  const [selectedTypeFilters, setSelectedTypeFilters] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setCheckedNodes(new Set(nodes.map(n => n.id)));
+    setTypePercentages({});
+    setSelectedTypeFilters(new Set());
+  }, [nodes]);
+
+  const percentagePassingIds = useMemo(() => {
+    const byType: Record<string, HandoverNode[]> = {};
+    for (const node of nodes) {
+      if (!byType[node.object_type]) byType[node.object_type] = [];
+      byType[node.object_type].push(node);
+    }
+    const passing = new Set<string>();
+    for (const [ot, typeNodes] of Object.entries(byType)) {
+      const pct = typePercentages[ot] ?? 100;
+      if (pct >= 100) { typeNodes.forEach(n => passing.add(n.id)); continue; }
+      const k = Math.max(0, Math.ceil(pct / 100 * typeNodes.length));
+      if (k === 0) continue;
+      const sorted = [...typeNodes].sort((a, b) => b.event_count - a.event_count);
+      const threshold = sorted[k - 1].event_count;
+      typeNodes.forEach(n => { if (n.event_count >= threshold) passing.add(n.id); });
+    }
+    return passing;
+  }, [nodes, typePercentages]);
+
+  const filteredNodeIds = useMemo(
+    () => new Set([...percentagePassingIds].filter(id => checkedNodes.has(id))),
+    [percentagePassingIds, checkedNodes],
+  );
+
+  const hiddenCount = nodes.length - filteredNodeIds.size;
+  // The panel now holds an arc filter too, so the button has to light up for
+  // a min-weight cutoff as well; the badge keeps counting hidden nodes only.
+  const filterActive = hiddenCount > 0 || minWeightVal > 0;
+
+  useEffect(() => {
+    if (onVisibleNodesChange) onVisibleNodesChange(nodes.filter(n => filteredNodeIds.has(n.id)));
+  }, [filteredNodeIds, nodes, onVisibleNodesChange]);
+
+  const searchedNodes = useMemo(
+    () => nodes.filter(n =>
+      percentagePassingIds.has(n.id) &&
+      (selectedTypeFilters.size === 0 || selectedTypeFilters.has(n.object_type)) &&
+      (!nodeSearch.trim() || n.id.toLowerCase().includes(nodeSearch.toLowerCase()))
+    ),
+    [nodes, nodeSearch, percentagePassingIds, selectedTypeFilters],
+  );
+
+
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setNodeTooltip(null); setFilterOpen(false); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
+  }, []);
+
+  // Measure the container. A host that dictates the size (a dashboard tile)
+  // passes `renderedSize` and this stays idle. Unlike before, the measurement
+  // is live: the graph used to read its width once and keep a 0.62 aspect
+  // ratio forever, so resizing a widget did nothing at all.
+  useEffect(() => {
+    if (renderedSize) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = Math.round(el.getBoundingClientRect().width) || 700;
+      const next = { width: w, height: Math.max(400, Math.round(w * 0.62)) };
+      setMeasured(prev => (prev.width === next.width && prev.height === next.height ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [renderedSize]);
+
+  // Sync dragged positions back to the ref so they survive unmount
+  useEffect(() => {
+    if (positionsRef && Object.keys(positions).length > 0) positionsRef.current = positions;
+  }, [positions, positionsRef]);
+
+  // Force simulation — re-run when nodes/edges/size change
+  useEffect(() => {
+    if (nodes.length === 0) return;
+
+    // Restore saved positions if they cover all current nodes (e.g. returning from ego view)
+    const saved = positionsRef?.current ?? {};
+    if (nodes.every(n => saved[n.id])) {
+      setPositions({ ...saved });
+      // Restore the viewBox the user had before unmounting (preserves zoom/pan)
+      if (savedViewBoxRef?.current) {
+        setViewBox(savedViewBoxRef.current);
+        // Theirs, not a fresh opening view — do not re-frame it.
+        userAdjustedRef.current = true;
+      }
+      return;
+    }
+
+    const { width, height } = HANDOVER_CANVAS;
+    const cx = width / 2, cy = height / 2;
+
+    // Weighted degree: sum of edge weights incident to each node
+    const degree: Record<string, number> = {};
+    nodes.forEach(n => { degree[n.id] = 0; });
+    edges.forEach(e => {
+      degree[e.source] = (degree[e.source] ?? 0) + e.raw_weight;
+      degree[e.target] = (degree[e.target] ?? 0) + e.raw_weight;
+    });
+    const maxDeg = Math.max(...Object.values(degree), 1);
+
+    // Initialise high-degree nodes near centre, low-degree near perimeter
+    const maxR = Math.min(width, height) * 0.54;
+    const simNodes: SimNode[] = nodes.map(n => {
+      const norm = degree[n.id] / maxDeg;         // 0 = leaf, 1 = hub
+      const r = (1 - norm) * maxR;
+      const angle = Math.random() * 2 * Math.PI;
+      return {
+        id: n.id,
+        object_type: n.object_type,
+        x: cx + r * Math.cos(angle),
+        y: cy + r * Math.sin(angle),
+      };
+    });
+
+    const nodeById: Record<string, SimNode> = {};
+    simNodes.forEach(n => { nodeById[n.id] = n; });
+
+    const simLinks: SimLink[] = edges
+      .filter(e => nodeById[e.source] && nodeById[e.target])
+      .map(e => ({ source: nodeById[e.source], target: nodeById[e.target] }));
+
+    const sim = forceSimulation<SimNode>(simNodes)
+      .force("link", forceLink<SimNode, SimLink>(simLinks).distance(190).strength(0.4))
+      .force("charge", forceManyBody<SimNode>().strength(-900))
+      .force("center", forceCenter(cx, cy))
+      .force("collide", forceCollide<SimNode>(NODE_R + 18))
+      // Pull each node toward a radius proportional to (1 - normDegree):
+      // hubs → r≈0 (centre), leaves → r≈maxR (perimeter)
+      .force("radial", forceRadial<SimNode>(
+        n => (1 - degree[n.id] / maxDeg) * maxR,
+        cx, cy,
+      ).strength(0.25));
+
+    for (let i = 0; i < 500; i++) sim.tick();
+    sim.stop();
+
+    const pos: Record<string, { x: number; y: number }> = {};
+    simNodes.forEach(n => {
+      pos[n.id] = {
+        x: Math.max(NODE_R + 4, Math.min(width - NODE_R - 4, n.x ?? width / 2)),
+        y: Math.max(NODE_R + 4, Math.min(height - NODE_R - 4, n.y ?? height / 2)),
+      };
+    });
+    if (positionsRef) positionsRef.current = pos;
+    setPositions(pos);
+    // A new layout gets a fresh opening view; the effect below applies it
+    // once the tile's real size is known.
+    userAdjustedRef.current = false;
+    // `size` is deliberately absent: the layout lives in HANDOVER_CANVAS, so a
+    // resize only moves the view (see the effects below) instead of
+    // rearranging every node under the user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges]);
+
+  /**
+   * The view the graph opens with: exactly what the fit button plus one
+   * zoom-out gives, for the size the tile actually has.
+   *
+   * Re-derived on every size change until the user adjusts the view, so it
+   * settles on the tile's final size rather than whatever it measured first.
+   */
+  useEffect(() => {
+    if (userAdjustedRef.current) return;
+    if (size.width === 0 || size.height === 0) return;
+    if (Object.keys(positions).length === 0) return;
+    const next = zoomedOut(fittedToNodes(positions, size.width / size.height));
+    setViewBox(next);
+    if (savedViewBoxRef) savedViewBoxRef.current = next;
+    prevSizeRef.current = { width: size.width, height: size.height };
+  }, [positions, size.width, size.height, savedViewBoxRef]);
+
+  /**
+   * Follow a resize of a view the user has set up themselves.
+   *
+   * Both axes are scaled by how much the tile grew, which keeps pixels per
+   * node-unit constant — their graph stays the size it was, and the viewBox
+   * ratio keeps matching the element's, which every screen→user coordinate
+   * mapping (drag, tooltips, rubber band) depends on.
+   */
+  useEffect(() => {
+    if (size.width === 0 || size.height === 0) return;
+    const prevSize = prevSizeRef.current;
+    prevSizeRef.current = { width: size.width, height: size.height };
+    if (!userAdjustedRef.current) return;   // the opening view owns the box
+    if (prevSize.width === 0 || prevSize.height === 0) return;
+    if (prevSize.width === size.width && prevSize.height === size.height) return;
+    const prev = viewBoxRef.current;
+    const w = prev.w * (size.width / prevSize.width);
+    const h = prev.h * (size.height / prevSize.height);
+    const next = { x: prev.x + (prev.w - w) / 2, y: prev.y + (prev.h - h) / 2, w, h };
+    setViewBox(next);
+    if (savedViewBoxRef) savedViewBoxRef.current = next;
+  }, [size.width, size.height, savedViewBoxRef]);
+
+  const visibleEdges = useMemo(() => {
+    let result = minWeightVal <= 0 ? edges : edges.filter(e => Math.round(e.weight * 10000) / 10000 >= minWeightVal);
+    if (filteredNodeIds.size < nodes.length) result = result.filter(e => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target));
+    return result;
+  }, [edges, minWeightVal, filteredNodeIds, nodes.length]);
+
+  // Centrality scores — only computed when the user selects a measure
+  const centralityScores = useMemo<Map<string, number> | null>(() => {
+    if (!selectedCentrality) return null;
+    const nodeIds = Array.from(filteredNodeIds);
+    const n = nodeIds.length;
+    if (n < 2) return null;
+
+    const adj = new Map<string, Set<string>>();   // out-edges
+    const inAdj = new Map<string, Set<string>>(); // in-edges
+    nodeIds.forEach(id => { adj.set(id, new Set()); inAdj.set(id, new Set()); });
+    const seen = new Set<string>();
+    visibleEdges.forEach(e => {
+      if (e.source === e.target) return;
+      const key = `${e.source}\x00${e.target}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      adj.get(e.source)?.add(e.target);
+      inAdj.get(e.target)?.add(e.source);
+    });
+
+    const scores = new Map<string, number>();
+
+    if (selectedCentrality === "in-degree") {
+      nodeIds.forEach(id => scores.set(id, (inAdj.get(id)?.size ?? 0) / (n - 1)));
+    } else if (selectedCentrality === "out-degree") {
+      nodeIds.forEach(id => scores.set(id, (adj.get(id)?.size ?? 0) / (n - 1)));
+    } else if (selectedCentrality === "both-degree") {
+      nodeIds.forEach(id => {
+        const both = new Set([...inAdj.get(id)!, ...adj.get(id)!]);
+        scores.set(id, both.size / (n - 1));
+      });
+
+    } else if (selectedCentrality === "closeness") {
+      nodeIds.forEach(src => {
+        const dist = new Map<string, number>([[src, 0]]);
+        const queue = [src]; let i = 0;
+        while (i < queue.length) {
+          const u = queue[i++];
+          adj.get(u)!.forEach(v => { if (!dist.has(v)) { dist.set(v, dist.get(u)! + 1); queue.push(v); } });
+        }
+        const reachable = dist.size - 1;
+        if (reachable === 0) { scores.set(src, 0); return; }
+        const sumDist = Array.from(dist.values()).reduce((a, b) => a + b, 0);
+        scores.set(src, (reachable / (n - 1)) * (reachable / sumDist));
+      });
+
+    } else {
+      // Brandes betweenness (undirected)
+      nodeIds.forEach(id => scores.set(id, 0));
+      nodeIds.forEach(src => {
+        const stack: string[] = [];
+        const pred = new Map<string, string[]>(); nodeIds.forEach(id => pred.set(id, []));
+        const sigma = new Map<string, number>([[src, 1]]);
+        const dist = new Map<string, number>([[src, 0]]);
+        const queue = [src]; let i = 0;
+        while (i < queue.length) {
+          const v = queue[i++]; stack.push(v);
+          adj.get(v)!.forEach(w => {
+            if (!dist.has(w)) { dist.set(w, dist.get(v)! + 1); queue.push(w); }
+            if (dist.get(w) === dist.get(v)! + 1) {
+              sigma.set(w, (sigma.get(w) ?? 0) + (sigma.get(v) ?? 0));
+              pred.get(w)!.push(v);
+            }
+          });
+        }
+        const delta = new Map<string, number>();
+        while (stack.length) {
+          const w = stack.pop()!;
+          pred.get(w)!.forEach(v => {
+            delta.set(v, (delta.get(v) ?? 0) + ((sigma.get(v) ?? 0) / (sigma.get(w) ?? 1)) * (1 + (delta.get(w) ?? 0)));
+          });
+          if (w !== src) scores.set(w, scores.get(w)! + (delta.get(w) ?? 0));
+        }
+      });
+      const norm = n > 2 ? 1 / ((n - 1) * (n - 2)) : 1;
+      nodeIds.forEach(id => scores.set(id, scores.get(id)! * norm));
+    }
+
+    const maxVal = Math.max(...Array.from(scores.values()));
+    if (maxVal > 0) nodeIds.forEach(id => scores.set(id, scores.get(id)! / maxVal));
+    return scores;
+  }, [selectedCentrality, filteredNodeIds, visibleEdges]);
+
+  // Edge time scores — only computed when the user selects a time metric
+  const edgeTimeScores = useMemo<Map<string, number> | null>(() => {
+    if (!selectedTimeMetric) return null;
+    const getRaw = (e: HandoverEdge): number | null => {
+      if (selectedTimeMetric === "max") return e.max_time;
+      if (selectedTimeMetric === "min") return e.min_time;
+      if (selectedTimeMetric === "avg") return e.avg_time;
+      if (e.max_time != null && e.min_time != null) return e.max_time - e.min_time;
+      return null;
+    };
+    const raw = new Map<string, number>();
+    visibleEdges.forEach(e => {
+      const key = `${e.source}\x00${e.target}\x00${e.businessobject_type}`;
+      const v = getRaw(e);
+      if (v != null) raw.set(key, v);
+    });
+    const maxVal = Math.max(0, ...Array.from(raw.values()));
+    const scores = new Map<string, number>();
+    visibleEdges.forEach(e => {
+      const key = `${e.source}\x00${e.target}\x00${e.businessobject_type}`;
+      scores.set(key, maxVal > 0 ? (raw.get(key) ?? 0) / maxVal : 0);
+    });
+    return scores;
+  }, [selectedTimeMetric, visibleEdges]);
+
+  // Detect which pairs have a reverse edge
+  const reverseSet = useMemo(() => {
+    const s = new Set(visibleEdges.map(e => `${e.source}\x00${e.target}`));
+    return (u: string, v: string) => s.has(`${v}\x00${u}`);
+  }, [visibleEdges]);
+
+  // Group edges by directed pair
+  const edgeGroups = useMemo(() => {
+    const g = new Map<string, HandoverEdge[]>();
+    visibleEdges.forEach(e => {
+      const key = `${e.source}\x00${e.target}`;
+      if (!g.has(key)) g.set(key, []);
+      g.get(key)!.push(e);
+    });
+    return g;
+  }, [visibleEdges]);
+
+  const maxWeight = useMemo(() => Math.max(...edges.map(e => e.weight), 0.0001), [edges]);
+
+  const maxWeightPerType = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const e of edges) m[e.businessobject_type] = Math.max(m[e.businessobject_type] ?? 0.0001, e.weight);
+    return m;
+  }, [edges]);
+
+  const boTypes = useMemo(() => [...new Set(edges.map(e => e.businessobject_type))], [edges]);
+  // Legend entries: the types that actually carry a colour on screen — node
+  // object types plus the business object types the arcs are coloured by.
+  // Only the latter can be highlighted, since highlighting filters arcs.
+  const boTypeSet = useMemo(() => new Set(boTypes), [boTypes]);
+  const legendTypes = useMemo(
+    () => [...new Set([...nodes.map(n => n.object_type), ...boTypes])].sort(),
+    [nodes, boTypes],
+  );
+  const nodeTypes = useMemo(() => [...new Set(nodes.map(n => n.object_type))], [nodes]);
+  /**
+   * Height of the node checklist's scroll box.
+   *
+   * Deliberately independent of how many nodes are in it. The panel is
+   * anchored to its bottom edge and grows upward, so a list that resized with
+   * its contents moved everything above it — the percentage slider slid out
+   * from under the cursor mid-drag, and the type chips got squashed as rows
+   * were added. It tracks the canvas instead, which only changes on resize.
+   */
+  const nodeListHeight = Math.max(120, Math.min(220, size.height - 360));
+
+  // Pre-compute all edge paths
+  const edgePaths = useMemo(() => {
+    if (Object.keys(positions).length === 0) return [];
+
+    const result: Array<{
+      key: string;
+      d: string;
+      color: string;
+      strokeWidth: number;
+      markerId: string;
+      count: number;
+      weight: number;
+      avg_time: number | null;
+      min_time: number | null;
+      max_time: number | null;
+      businessobject_type: string;
+      source: string;
+      target: string;
+    }> = [];
+
+    const strokeFor = (w: number, boType?: string) => {
+      const denom = normalizationScope === "per_bo_type" && boType
+        ? (maxWeightPerType[boType] ?? maxWeight)
+        : maxWeight;
+      return Math.max(0.3, (w / denom) * 6);
+    };
+
+    edgeGroups.forEach((groupEdges, pairKey) => {
+      const [srcId, tgtId] = pairKey.split("\x00");
+      const src = positions[srcId];
+      const tgt = positions[tgtId];
+      if (!src || !tgt) return;
+
+      // ── Self-loop ──────────────────────────────────────────
+      if (srcId === tgtId) {
+        groupEdges.forEach((edge, idx) => {
+          const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
+          const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
+          const strokeWidth = strokeFor(edge.weight, edge.businessobject_type);
+
+          // Draw a cubic-bezier loop above the node; spread multiple loops by offset
+          const spread = idx * NODE_R * 0.9;
+          const loopH = NODE_R * 2.4 + spread;
+          const loopW = NODE_R * 1.6 + spread;
+
+          // Start / end on the node circle (upper-left / upper-right)
+          const startA = -Math.PI * 0.72;
+          const startX = src.x + NODE_R * Math.cos(startA);
+          const startY = src.y + NODE_R * Math.sin(startA);
+
+          // Control points arch above
+          const cp1x = src.x - loopW;
+          const cp1y = src.y - loopH;
+          const cp2x = src.x + loopW;
+          const cp2y = src.y - loopH;
+
+          // End: approach the node from upper-right; pull back by ARROW_LEN so
+          // the stroke ends exactly where the arrow base begins.
+          const endA = -Math.PI * 0.28;
+          const endTX = src.x + NODE_R * Math.cos(endA);
+          const endTY = src.y + NODE_R * Math.sin(endA);
+          const edx = endTX - cp2x, edy = endTY - cp2y;
+          const eLen = Math.hypot(edx, edy) || 1;
+          const endX = endTX - (edx / eLen) * ARROW_LEN;
+          const endY = endTY - (edy / eLen) * ARROW_LEN;
+
+          result.push({
+            key: `${pairKey}-${edge.businessobject_type}-${idx}`,
+            d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
+            color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
+            avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time,
+            businessobject_type: edge.businessobject_type, source: srcId, target: tgtId,
+          });
+        });
+        return;
+      }
+
+      // ── Normal edge ────────────────────────────────────────
+      const hasRev = reverseSet(srcId, tgtId);
+      const dx = tgt.x - src.x;
+      const dy = tgt.y - src.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return;
+
+      const ux = dx / len;
+      const uy = dy / len;
+      const px = -uy; // perpendicular (left of src→tgt)
+      const py = ux;
+
+      groupEdges.forEach((edge, idx) => {
+        const color = typeColorMap[edge.businessobject_type] ?? "#94a3b8";
+        const markerId = `arrow-${edge.businessobject_type.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const strokeWidth = strokeFor(edge.weight, edge.businessobject_type);
+
+        const n = groupEdges.length;
+        let offset: number;
+        if (n === 1 && !hasRev) {
+          offset = 0;
+        } else if (n === 1) {
+          offset = BASE_CURVE;
+        } else {
+          const base = hasRev ? BASE_CURVE : 0;
+          offset = base + BASE_CURVE * 0.7 * (idx - (n - 1) / 2);
+        }
+
+        let d: string;
+
+        if (offset === 0) {
+          const sx = src.x + ux * NODE_R;
+          const sy = src.y + uy * NODE_R;
+          const ex = tgt.x - ux * (NODE_R + ARROW_LEN);
+          const ey = tgt.y - uy * (NODE_R + ARROW_LEN);
+          d = `M ${sx} ${sy} L ${ex} ${ey}`;
+        } else {
+          const cx = (src.x + tgt.x) / 2 + px * offset;
+          const cy = (src.y + tgt.y) / 2 + py * offset;
+
+          // Start: node boundary toward control point
+          const dsx = cx - src.x, dsy = cy - src.y;
+          const dsLen = Math.hypot(dsx, dsy) || 1;
+          const sx = src.x + (dsx / dsLen) * NODE_R;
+          const sy = src.y + (dsy / dsLen) * NODE_R;
+
+          // End: node boundary from control point, pulled back by ARROW_LEN
+          const dtx = tgt.x - cx, dty = tgt.y - cy;
+          const dtLen = Math.hypot(dtx, dty) || 1;
+          const ex = tgt.x - (dtx / dtLen) * (NODE_R + ARROW_LEN);
+          const ey = tgt.y - (dty / dtLen) * (NODE_R + ARROW_LEN);
+
+          d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
+        }
+
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
+      });
+    });
+
+    return result;
+  }, [positions, edgeGroups, reverseSet, typeColorMap, maxWeight, maxWeightPerType, normalizationScope]);
+
+  // Each of these is the user taking over the view; from here it is theirs to
+  // keep, and a resize follows it instead of re-framing.
+  const applyUserViewBox = (newVb: { x: number; y: number; w: number; h: number }) => {
+    userAdjustedRef.current = true;
+    setViewBox(newVb);
+    if (savedViewBoxRef) savedViewBoxRef.current = newVb;
+  };
+
+  const zoomIn = () => applyUserViewBox(zoomedIn(viewBoxRef.current));
+
+  const zoomOut = () => applyUserViewBox(zoomedOut(viewBoxRef.current));
+
+  const fitToView = () => applyUserViewBox(fittedToNodes(positions, size.width / (size.height || 1)));
+
+  /**
+   * Drag the background to pan the graph.
+   *
+   * The anchor is kept in node coordinates: converting the cursor afresh each
+   * move and holding that point still under it means the graph tracks the
+   * pointer exactly, at any zoom level.
+   */
+  const handleBackgroundMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    panAnchor.current = {
+      x: (e.clientX - rect.left) * (vb.w / rect.width) + vb.x,
+      y: (e.clientY - rect.top) * (vb.h / rect.height) + vb.y,
+    };
+    panMoved.current = false;
+    setIsPanning(true);
+  };
+
+  const handlePanMove = (e: React.MouseEvent) => {
+    const anchor = panAnchor.current;
+    if (!anchor) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    const cursorX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const cursorY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
+    const dx = cursorX - anchor.x;
+    const dy = cursorY - anchor.y;
+    if (!panMoved.current && Math.hypot(dx, dy) * (rect.width / vb.w) > 3) panMoved.current = true;
+    if (dx === 0 && dy === 0) return;
+    applyUserViewBox({ ...vb, x: vb.x - dx, y: vb.y - dy });
+  };
+
+  const endPan = () => {
+    panAnchor.current = null;
+    setIsPanning(false);
+  };
+
+  // Node drag handlers
+  const handleNodeMouseDown = (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    // Without this the background would start panning under the node drag.
+    e.stopPropagation();
+    setNodeTooltip(null);
+    const pos = positions[id];
+    if (!pos) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    const userX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const userY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
+    dragOffset.current = { x: userX - pos.x, y: userY - pos.y };
+    mouseDownPos.current = { x: e.clientX, y: e.clientY };
+    dragHasMoved.current = false;
+    // Moving a node makes the arrangement theirs; re-framing it on the next
+    // resize would undo the placement they just chose.
+    userAdjustedRef.current = true;
+    setDragId(id);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (panAnchor.current) { handlePanMove(e); return; }
+    if (!dragId) return;
+    if (Math.hypot(e.clientX - mouseDownPos.current.x, e.clientY - mouseDownPos.current.y) > 4)
+      dragHasMoved.current = true;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vb = viewBoxRef.current;
+    const userX = (e.clientX - rect.left) * (vb.w / rect.width) + vb.x;
+    const userY = (e.clientY - rect.top) * (vb.h / rect.height) + vb.y;
+    setPositions(prev => ({
+      ...prev,
+      [dragId]: {
+        x: Math.max(vb.x + NODE_R, Math.min(vb.x + vb.w - NODE_R, userX - dragOffset.current.x)),
+        y: Math.max(vb.y + NODE_R, Math.min(vb.y + vb.h - NODE_R, userY - dragOffset.current.y)),
+      },
+    }));
+  };
+
+  const handleMouseUp = () => { endPan(); setDragId(null); };
+
+  /**
+   * Render the graph at `detail` onto a canvas.
+   *
+   * Shared by the PNG export and the video recorder: the recorder paints the
+   * moving dots over the canvas this returns, so both show the same chrome.
+   */
+  const renderExportCanvas = async (detail: ExportDetail) => {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const EXPORT_W = 1600;
+    const DPR = 2;
+    const vb = viewBoxRef.current;
+    const GRAPH_H = Math.round(EXPORT_W * (vb.h / vb.w));
+
+    const PAD = 28;
+    const ROW_H = 20;
+    const HEADER_H = 32;
+
+    // Three-column boundaries
+    const LEG_END = Math.round(EXPORT_W * 0.37);
+    const SET_X   = LEG_END + 24;
+    const SET_END  = Math.round(EXPORT_W * 0.60);
+    const FILT_X   = SET_END + 24;
+
+    // Dynamic panel height
+    const scaleRows = normalizationScope === "per_bo_type" ? boTypes.length : 1;
+    const LEGEND_ROWS = 1 + nodeTypes.length + 0.5 + 1 + boTypes.length + 0.5 + 1 + scaleRows;
+    const SETTINGS_ROWS = 5;
+    const FILTER_ROWS   = 9;
+    const CONTENT_ROWS  = Math.ceil(Math.max(LEGEND_ROWS, SETTINGS_ROWS, FILTER_ROWS));
+    const PANEL_H = HEADER_H + PAD + CONTENT_ROWS * ROW_H + PAD;
+    const TOTAL_H = GRAPH_H + PANEL_H;
+
+    // Render SVG to image (shared by both canvases)
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(EXPORT_W));
+    clone.setAttribute("height", String(GRAPH_H));
+    const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bg.setAttribute("x", String(vb.x)); bg.setAttribute("y", String(vb.y));
+    bg.setAttribute("width", String(vb.w)); bg.setAttribute("height", String(vb.h));
+    bg.setAttribute("fill", "white");
+    clone.insertBefore(bg, clone.firstChild);
+    const svgUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" }));
+    const img = new Image();
+    await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = svgUrl; });
+    URL.revokeObjectURL(svgUrl);
+
+    // The graph area is the same in every detail level; only what sits under
+    // it differs, so the recorder can always paint dots into this rectangle.
+    const graphRect = { x: 0, y: 0, width: EXPORT_W, height: GRAPH_H };
+
+    if (detail === "graph") {
+      const bare = document.createElement("canvas");
+      bare.width = EXPORT_W * DPR; bare.height = GRAPH_H * DPR;
+      const bctx = bare.getContext("2d")!;
+      bctx.scale(DPR, DPR);
+      bctx.fillStyle = "white"; bctx.fillRect(0, 0, EXPORT_W, GRAPH_H);
+      bctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+      return { canvas: bare, ctx: bctx, graphRect, vb, dpr: DPR };
+    }
+
+    // ── Graph-only canvas (graph + compact color legend, three columns) ──
+    const FONT = "-apple-system, BlinkMacSystemFont, sans-serif";
+    const COLOR_ROWS = 1 + Math.max(nodeTypes.length, boTypes.length, scaleRows);
+    const COLOR_PANEL_H = PAD + Math.ceil(COLOR_ROWS) * ROW_H + PAD;
+    const GRAPH_ONLY_H = GRAPH_H + COLOR_PANEL_H;
+    const graphCanvas = document.createElement("canvas");
+    graphCanvas.width = EXPORT_W * DPR; graphCanvas.height = GRAPH_ONLY_H * DPR;
+    const gCtx = graphCanvas.getContext("2d")!;
+    gCtx.scale(DPR, DPR);
+    gCtx.fillStyle = "white"; gCtx.fillRect(0, 0, EXPORT_W, GRAPH_ONLY_H);
+    gCtx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+
+    // Color legend panel
+    gCtx.fillStyle = "#F8FAFC";
+    gCtx.fillRect(0, GRAPH_H, EXPORT_W, COLOR_PANEL_H);
+    gCtx.strokeStyle = "#E2E8F0"; gCtx.lineWidth = 1;
+    gCtx.beginPath(); gCtx.moveTo(0, GRAPH_H); gCtx.lineTo(EXPORT_W, GRAPH_H); gCtx.stroke();
+
+    const colW = EXPORT_W / 3;
+    const gTop = GRAPH_H + PAD;
+
+    // Left column: Resources
+    let gly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("RESOURCES", PAD, gly + 9); gly += ROW_H;
+    nodeTypes.forEach(ot => {
+      const cy = gly + ROW_H / 2 - 2;
+      gCtx.beginPath(); gCtx.arc(PAD + 6, cy, 6, 0, Math.PI * 2);
+      gCtx.fillStyle = typeColorMap[ot] ?? "#94a3b8"; gCtx.fill();
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(ot, PAD + 18, cy + 4);
+      gly += ROW_H;
+    });
+
+    // Middle column: Handover Object Types
+    const RX = colW + PAD;
+    let bly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("HANDOVER OBJECT TYPE", RX, bly + 9); bly += ROW_H;
+    boTypes.forEach(bt => {
+      const cy = bly + ROW_H / 2 - 2;
+      gCtx.fillStyle = typeColorMap[bt] ?? "#94a3b8";
+      gCtx.fillRect(RX, cy - 4, 16, 8);
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(bt, RX + 22, cy + 4);
+      bly += ROW_H;
+    });
+
+    // Right column: Scale
+    const SX = colW * 2 + PAD;
+    let sly = gTop;
+    gCtx.font = `bold 10px ${FONT}`; gCtx.fillStyle = "#94a3b8";
+    gCtx.fillText("SCALE (WEIGHT OF THICKEST ARC)", SX, sly + 9); sly += ROW_H;
+    if (normalizationScope === "per_bo_type") {
+      boTypes.forEach(bt => {
+        const cy = sly + ROW_H / 2 - 2;
+        gCtx.save();
+        gCtx.strokeStyle = typeColorMap[bt] ?? "#94a3b8"; gCtx.lineWidth = 6; gCtx.lineCap = "round";
+        gCtx.beginPath(); gCtx.moveTo(SX, cy); gCtx.lineTo(SX + 30, cy); gCtx.stroke();
+        gCtx.restore();
+        gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+        gCtx.fillText(`${bt}  = ${(maxWeightPerType[bt] ?? 0).toFixed(4)}`, SX + 38, cy + 4);
+        sly += ROW_H;
+      });
+    } else {
+      const cy = sly + ROW_H / 2 - 2;
+      gCtx.save();
+      gCtx.strokeStyle = "#374151"; gCtx.lineWidth = 6; gCtx.lineCap = "round";
+      gCtx.beginPath(); gCtx.moveTo(SX, cy); gCtx.lineTo(SX + 30, cy); gCtx.stroke();
+      gCtx.restore();
+      gCtx.font = `13px ${FONT}`; gCtx.fillStyle = "#0F172A";
+      gCtx.fillText(`= ${maxWeight.toFixed(4)}`, SX + 38, cy + 4);
+    }
+
+    if (detail === "legend") {
+      return { canvas: graphCanvas, ctx: gCtx, graphRect, vb, dpr: DPR };
+    }
+
+    // ── Full canvas (graph + legend panel) ──
+    const canvas = document.createElement("canvas");
+    canvas.width = EXPORT_W * DPR; canvas.height = TOTAL_H * DPR;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(DPR, DPR);
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, EXPORT_W, TOTAL_H);
+    ctx.drawImage(img, 0, 0, EXPORT_W, GRAPH_H);
+
+      // ── Header strip ──
+      ctx.fillStyle = "#F1F5F9";
+      ctx.fillRect(0, GRAPH_H, EXPORT_W, HEADER_H);
+      ctx.strokeStyle = "#E2E8F0"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, GRAPH_H); ctx.lineTo(EXPORT_W, GRAPH_H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, GRAPH_H + HEADER_H); ctx.lineTo(EXPORT_W, GRAPH_H + HEADER_H); ctx.stroke();
+
+      const hMid = GRAPH_H + HEADER_H / 2 + 4;
+      if (fileName) {
+        ctx.font = `bold 13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(fileName, PAD, hMid);
+      }
+      ctx.font = `12px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      const dateStr = `Exported: ${new Date().toLocaleDateString()}`;
+      ctx.fillText(dateStr, EXPORT_W - PAD - ctx.measureText(dateStr).width, hMid);
+
+      // ── Content panel ──
+      ctx.fillStyle = "#F8FAFC";
+      ctx.fillRect(0, GRAPH_H + HEADER_H, EXPORT_W, PANEL_H - HEADER_H);
+
+      // Vertical dividers
+      const divTop = GRAPH_H + HEADER_H + 8;
+      const divBot = GRAPH_H + PANEL_H - 8;
+      ctx.strokeStyle = "#E2E8F0"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(LEG_END + 12, divTop); ctx.lineTo(LEG_END + 12, divBot); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(SET_END + 12, divTop); ctx.lineTo(SET_END + 12, divBot); ctx.stroke();
+
+      const pTop = GRAPH_H + HEADER_H + PAD;
+
+      // ── LEGEND ──
+      let ly = pTop;
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("RESOURCES", PAD, ly + 9); ly += ROW_H;
+      nodeTypes.forEach(ot => {
+        const cy = ly + ROW_H / 2 - 2;
+        ctx.beginPath(); ctx.arc(PAD + 6, cy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = typeColorMap[ot] ?? "#94a3b8"; ctx.fill();
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(ot, PAD + 18, cy + 4);
+        ly += ROW_H;
+      });
+      ly += ROW_H * 0.5;
+
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("HANDOVER OBJECT TYPE", PAD, ly + 9); ly += ROW_H;
+      boTypes.forEach(bt => {
+        const cy = ly + ROW_H / 2 - 2;
+        ctx.fillStyle = typeColorMap[bt] ?? "#94a3b8";
+        ctx.fillRect(PAD, cy - 4, 16, 8);
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(bt, PAD + 22, cy + 4);
+        ly += ROW_H;
+      });
+      ly += ROW_H * 0.5;
+
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("SCALE (WEIGHT OF THICKEST ARC)", PAD, ly + 9); ly += ROW_H;
+      if (normalizationScope === "per_bo_type") {
+        boTypes.forEach(bt => {
+          const scaleCy = ly + ROW_H / 2 - 2;
+          ctx.save();
+          ctx.strokeStyle = typeColorMap[bt] ?? "#94a3b8"; ctx.lineWidth = 6; ctx.lineCap = "round";
+          ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
+          ctx.restore();
+          ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+          ctx.fillText(`${bt}  = ${(maxWeightPerType[bt] ?? 0).toFixed(4)}`, PAD + 38, scaleCy + 4);
+          ly += ROW_H;
+        });
+      } else {
+        const scaleCy = ly + ROW_H / 2 - 2;
+        ctx.save();
+        ctx.strokeStyle = "#374151"; ctx.lineWidth = 6; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(PAD, scaleCy); ctx.lineTo(PAD + 30, scaleCy); ctx.stroke();
+        ctx.restore();
+        ctx.font = `13px ${FONT}`; ctx.fillStyle = "#0F172A";
+        ctx.fillText(`= ${maxWeight.toFixed(4)}`, PAD + 38, scaleCy + 4);
+        ly += ROW_H;
+      }
+
+      // ── GRAPH SETTINGS ──
+      const normLabel = normalization ? (NORMALIZATION_LABELS[normalization] ?? normalization) : "—";
+      const settingsItems: Array<{ label: string; value: string }> = [
+        { label: "Norm method",     value: normLabel },
+        { label: "Per object type", value: normalizationScope === "per_bo_type" ? "Yes" : "No" },
+        { label: "Max gap",         value: maxGap != null ? String(maxGap) : "None" },
+      ];
+
+      let sy = pTop;
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("GRAPH SETTINGS", SET_X, sy + 9); sy += ROW_H;
+      settingsItems.forEach(({ label, value }) => {
+        const cy = sy + ROW_H / 2 - 2;
+        ctx.font = `bold 12px ${FONT}`; ctx.fillStyle = "#64748b";
+        ctx.fillText(`${label}:`, SET_X, cy + 4);
+        const lw = ctx.measureText(`${label}:  `).width;
+        const isNone = value === "None" || value === "—";
+        ctx.font = `12px ${FONT}`; ctx.fillStyle = isNone ? "#94a3b8" : "#0F172A";
+        ctx.fillText(value, SET_X + lw, cy + 4);
+        sy += ROW_H;
+      });
+
+      // ── FILTERS ──
+      const centralityLabels: Record<string, string> = { "in-degree": "In-Degree", "out-degree": "Out-Degree", "both-degree": "Degree", closeness: "Closeness", betweenness: "Betweenness" };
+      const timeLabels: Record<string, string> = { max: "Max Time", min: "Min Time", avg: "Avg Time", range: "Range" };
+      const activePerc = Object.entries(typePercentages).filter(([, v]) => v < 100);
+      const minW = parseFloat(minWeightStr.replace(",", "."));
+
+      const filterItems: Array<{ label: string; value: string | null }> = [
+        { label: "Hidden nodes",    value: hiddenCount > 0 ? `${hiddenCount} of ${nodes.length} hidden` : null },
+        { label: "Type percentage", value: activePerc.length > 0 ? activePerc.map(([ot, v]) => `${ot}: top ${v}%`).join(", ") : null },
+        { label: "Min edge weight", value: minW > 0 ? minWeightStr : null },
+        { label: "Parallel filter", value: parallelFilter?.enabled ? `threshold ${parallelFilter.threshold.toFixed(2)}, min obs ${parallelFilter.minObs}` : null },
+        { label: "Centrality",      value: selectedCentrality ? (centralityLabels[selectedCentrality] ?? selectedCentrality) : null },
+        { label: "Time metric",     value: selectedTimeMetric ? (timeLabels[selectedTimeMetric] ?? selectedTimeMetric) : null },
+        { label: "Highlighted type",value: highlightedObjectType ?? null },
+        { label: "Clustering",      value: clustered ? "Active" : null },
+      ];
+
+      let fy = pTop;
+      ctx.font = `bold 10px ${FONT}`; ctx.fillStyle = "#94a3b8";
+      ctx.fillText("FILTERS", FILT_X, fy + 9); fy += ROW_H;
+      filterItems.forEach(({ label, value }) => {
+        const cy = fy + ROW_H / 2 - 2;
+        ctx.font = `bold 12px ${FONT}`; ctx.fillStyle = "#64748b";
+        ctx.fillText(`${label}:`, FILT_X, cy + 4);
+        const lw = ctx.measureText(`${label}:  `).width;
+        ctx.font = `12px ${FONT}`; ctx.fillStyle = value ? "#0F172A" : "#94a3b8";
+        ctx.fillText(value ?? "None", FILT_X + lw, cy + 4);
+        fy += ROW_H;
+      });
+
+    return { canvas, ctx, graphRect, vb, dpr: DPR };
+  };
+
+  const exportFileName = (ext: string) =>
+    `handover-graph-${new Date().toISOString().slice(0, 10)}.${ext}`;
+
+  const downloadImage = async (detail: ExportDetail) => {
+    const rendered = await renderExportCanvas(detail);
+    if (!rendered) return;
+    rendered.canvas.toBlob(blob => {
+      if (!blob) { toast.error("Export failed"); return; }
+      downloadBlob(blob, exportFileName("png"));
+    }, "image/png");
+  };
+
+  /**
+   * Record the flow animation as a video.
+   *
+   * The static graph is rendered once and re-blitted each frame, with only
+   * the dots repainted on top — serialising the SVG per frame would cost an
+   * encode and a decode for every one of them. Frames are stepped through
+   * the timeline explicitly rather than played, because `computeDotFrame`
+   * renders any timestamp on demand.
+   */
+  const downloadAnimation = async (detail: ExportDetail) => {
+    if (!flowsData || flowsData.flows.length === 0) return;
+    const format = pickRecordingFormat();
+    if (!format) { toast.error("This browser cannot record video"); return; }
+
+    const rendered = await renderExportCanvas(detail);
+    if (!rendered) return;
+    const { canvas, ctx, graphRect, vb } = rendered;
+
+    // The static graph, kept so each frame can start from a clean copy.
+    const base = document.createElement("canvas");
+    base.width = canvas.width; base.height = canvas.height;
+    base.getContext("2d")!.drawImage(canvas, 0, 0);
+
+    const FPS = exportFps;
+    const totalFrames = Math.round(FPS * recordingSeconds);
+    const { start, end } = flowsData.timeline;
+    const step = (end - start) / totalFrames;
+
+    const stream = canvas.captureStream(FPS);
+    const recorder = new MediaRecorder(stream, { mimeType: format.mimeType });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    const finished = new Promise<void>(resolve => { recorder.onstop = () => resolve(); });
+
+    setIsRecording(true);
+    recorder.start();
+    try {
+      for (let i = 0; i <= totalFrames; i++) {
+        const frame = computeDotFrame(
+          pathMapRef.current,
+          flowsData.flows,
+          start + i * step,
+          typeColorMap,
+          connectorModeRef.current,
+        );
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(base, 0, 0);
+        ctx.restore();
+        drawDotFrame(ctx, frame, vb, graphRect);
+        // Yield so the stream samples this frame before the next is drawn.
+        await new Promise(r => setTimeout(r, 1000 / FPS));
+      }
+    } finally {
+      recorder.stop();
+      await finished;
+      stream.getTracks().forEach(t => t.stop());
+      setIsRecording(false);
+    }
+    downloadBlob(new Blob(chunks, { type: format.mimeType }), exportFileName(format.ext));
+  };
+
+  return (
+    <div className={embedded ? "absolute inset-0" : "space-y-3"}>
+      <div className={embedded ? "w-full h-full relative" : "relative"}>
+      <div
+        ref={containerRef}
+        className={
+          embedded
+            ? "w-full h-full overflow-hidden bg-background"
+            : "w-full border rounded-md overflow-hidden bg-background"
+        }
+      >
+        <svg
+          ref={svgRef}
+          width={size.width}
+          height={size.height}
+          viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
+          onMouseDown={handleBackgroundMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onClick={() => {
+            // A pan ends in a click; treat it as the drag it was.
+            if (panMoved.current) { panMoved.current = false; return; }
+            setNodeTooltip(t => t?.pinned ? null : t);
+            setHighlightedObjectType(null);
+          }}
+          style={{ cursor: dragId || isPanning ? "grabbing" : "grab", display: "block" }}
+        >
+          <defs>
+            {boTypes.map(bt => {
+              const color = typeColorMap[bt] ?? "#94a3b8";
+              const id = `arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
+              // markerUnits="userSpaceOnUse" keeps the arrowhead a fixed pixel size
+              // regardless of stroke width, so thick and thin edges all get the same arrow.
+              return (
+                <marker key={id} id={id}
+                  markerWidth={ARROW_LEN} markerHeight={ARROW_H}
+                  refX={0} refY={ARROW_H / 2}
+                  orient="auto" markerUnits="userSpaceOnUse">
+                  <polygon
+                    points={`0 0, ${ARROW_LEN} ${ARROW_H / 2}, 0 ${ARROW_H}`}
+                    fill={color}
+                  />
+                </marker>
+              );
+            })}
+            <clipPath id="node-label-clip">
+              <circle r={NODE_R - 1} />
+            </clipPath>
+          </defs>
+
+          {/* Edges */}
+          {edgePaths.map(ep => (
+            <g key={ep.key}>
+              <path
+                data-flow-edge={`${ep.source}|${ep.target}|${ep.businessobject_type}`}
+                d={ep.d}
+                fill="none"
+                markerEnd={`url(#${ep.markerId})`}
+                style={{
+                  stroke: ep.color,
+                  strokeWidth: ep.strokeWidth,
+                  opacity: (() => {
+                    const isHighlighted = !highlightedObjectType || ep.businessobject_type === highlightedObjectType;
+                    const timeScore = edgeTimeScores ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0)) : null;
+                    let base: number;
+                    if (highlightedObjectType) {
+                      base = !isHighlighted ? 0.12 : (timeScore ?? 0.85);
+                    } else if (timeScore !== null) {
+                      base = timeScore;
+                    } else if (centralityScores) {
+                      base = 0.2;
+                    } else {
+                      base = 0.85;
+                    }
+                    const hasMetric = edgeTimeScores !== null || centralityScores !== null;
+                    return (flowsData && !hasMetric) ? base * 0.25 : base;
+                  })(),
+                  pointerEvents: "none",
+                }}
+              />
+              <path
+                d={ep.d}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={12}
+                style={{ cursor: "pointer" }}
+                onClick={e => {
+                  e.stopPropagation();
+                  setHighlightedObjectType(t => t === ep.businessobject_type ? null : ep.businessobject_type);
+                }}
+                onMouseEnter={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect || dragId) return;
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: ep.count, weight: ep.weight, avg_time: ep.avg_time, min_time: ep.min_time, max_time: ep.max_time });
+                }}
+                onMouseMove={e => {
+                  if (dragId) return;
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                }}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            </g>
+          ))}
+
+          {/* Nodes */}
+          {(() => {
+            const highlightedNodeIds = highlightedObjectType
+              ? new Set(edgePaths.filter(ep => ep.businessobject_type === highlightedObjectType).flatMap(ep => [ep.source, ep.target]))
+              : null;
+            return nodes.filter(n => filteredNodeIds.has(n.id)).map(node => {
+            const pos = positions[node.id];
+            if (!pos) return null;
+            const baseColor = typeColorMap[node.object_type] ?? "#94a3b8";
+            const color = centralityScores
+              ? mixHex(baseColor, centralityScores.get(node.id) ?? 0)
+              : baseColor;
+            const nodeOpacity = highlightedNodeIds
+              ? (highlightedNodeIds.has(node.id) ? 1 : 0.15)
+              : 1;
+            const label = node.id.length > 9 ? node.id.slice(0, 8) + "…" : node.id;
+            return (
+              <g
+                key={node.id}
+                transform={`translate(${pos.x},${pos.y})`}
+                style={{ cursor: onNodeClick ? "pointer" : "grab", opacity: nodeOpacity }}
+                onMouseDown={e => handleNodeMouseDown(node.id, e)}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (dragHasMoved.current) return;
+                  if (nodeTooltip?.nodeId === node.id) {
+                    setNodeTooltip(t => t ? { ...t, pinned: !t.pinned } : null);
+                  } else {
+                    onNodeClick?.(node.id);
+                  }
+                }}
+                onMouseEnter={e => {
+                  if (dragId) return;
+                  cancelHide();
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  setNodeTooltip(prev => prev?.pinned ? prev : {
+                    x: e.clientX - rect.left, y: e.clientY - rect.top,
+                    nodeId: node.id, pinned: false,
+                    cw: el.offsetWidth, ch: el.offsetHeight,
+                  });
+                }}
+                onMouseMove={e => {
+                  if (dragId) return;
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setNodeTooltip(t => t && !t.pinned ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : t);
+                }}
+                onMouseLeave={() => scheduleHide()}
+              >
+                <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                <text
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={9}
+                  fill="white"
+                  fontWeight="600"
+                  clipPath="url(#node-label-clip)"
+                  style={{ pointerEvents: "none", userSelect: "none" }}
+                >
+                  {label}
+                </text>
+              </g>
+            );
+          });
+          })()}
+
+          {/* C-net binding overlay — populated imperatively */}
+          <g ref={bindingsLayerRef} />
+          {/* Animation dots layer — populated imperatively by updateDotLayer */}
+          <g ref={dotsLayerRef} />
+        </svg>
+
+        {suppressedBindingCount > 0 && bindingsData && (
+          <div style={{
+            position: "absolute", bottom: 10, left: 10, zIndex: 10,
+            fontSize: 11, color: "#64748b", background: "rgba(255,255,255,0.85)",
+            border: "1px solid #e2e8f0", borderRadius: 6, padding: "3px 8px",
+            pointerEvents: "none",
+          }}>
+            {suppressedBindingCount} self-loop binding{suppressedBindingCount > 1 ? "s" : ""} not fully visualized
+          </div>
+        )}
+
+        {highlightedObjectType && (
+          <div style={{
+            // Below the widget title, which the dashboard floats at top: 12.
+            position: "absolute", top: embedded ? 40 : 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
+            display: "flex", alignItems: "center", gap: 7,
+            background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 9999,
+            padding: "5px 12px 5px 10px",
+            boxShadow: "0 2px 6px rgba(15,23,42,0.10)",
+            fontSize: 12, fontWeight: 600, color: "#92400E",
+            pointerEvents: "none",
+          }}>
+            <AlertTriangle style={{ width: 13, height: 13, color: "#D97706", flexShrink: 0 }} />
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: typeColorMap[highlightedObjectType] ?? "#94a3b8", flexShrink: 0 }} />
+            <span>{highlightedObjectType} <span style={{ fontWeight: 400, opacity: 0.7 }}>is highlighted</span></span>
+            <button
+              type="button"
+              onClick={() => setHighlightedObjectType(null)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", color: "#D97706", marginLeft: 2, pointerEvents: "auto" }}
+            >
+              <X style={{ width: 12, height: 12 }} />
+            </button>
+          </div>
+        )}
+
+        {(filterOpen || centralityOpen || timeMetricOpen || downloadOpen) && (
+          <div
+            style={{ position: "absolute", inset: 0, zIndex: 19 }}
+            onClick={() => {
+              setFilterOpen(false); setCentralityOpen(false);
+              setTimeMetricOpen(false);
+              // A recording in progress owns this panel until it finishes.
+              if (!isRecording) setDownloadOpen(false);
+            }}
+          />
+        )}
+
+        {/* Button bar */}
+        <ControlPill>
+          {pillLeading}
+          <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9" title="Zoom in">
+            <PlusIcon className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={zoomOut} className="rounded-full h-9 w-9" title="Zoom out">
+            <MinusIcon className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9" title="Fit graph to view">
+            <ScanIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant={downloadOpen ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => { setDownloadOpen(o => !o); setFilterOpen(false); setCentralityOpen(false); setTimeMetricOpen(false); }}
+            className="rounded-full h-9 w-9"
+            title="Download"
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
+              variant={selectedCentrality ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => { setCentralityOpen(o => !o); setFilterOpen(false); setTimeMetricOpen(false); setDownloadOpen(false); }}
+              className="rounded-full h-9 w-9"
+              title="Centrality measure"
+            >
+              <Network className="h-4 w-4" />
+            </Button>
+            {selectedCentrality && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#2563eb", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }} />
+            )}
+          </div>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
+              variant={selectedTimeMetric ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => { setTimeMetricOpen(o => !o); setCentralityOpen(false); setFilterOpen(false); setDownloadOpen(false); }}
+              className="rounded-full h-9 w-9"
+              title="Time metric"
+            >
+              <Timer className="h-4 w-4" />
+            </Button>
+            {selectedTimeMetric && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#d97706", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }} />
+            )}
+          </div>
+          <div style={{ position: "relative" }}>
+            <Button
+              type="button"
+              variant={filterActive ? "secondary" : "outline"}
+              size="icon"
+              onClick={() => { setFilterOpen(o => !o); setCentralityOpen(false); setTimeMetricOpen(false); setDownloadOpen(false); }}
+              className="rounded-full h-9 w-9"
+              title="Filter"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+            </Button>
+            {filterActive && hiddenCount > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -4,
+                background: "#ef4444", color: "white",
+                borderRadius: 9999, fontSize: 9, fontWeight: 700,
+                minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 3px", lineHeight: 1, pointerEvents: "none",
+              }}>
+                {hiddenCount}
+              </span>
+            )}
+          </div>
+        </ControlPill>
+
+        {embedded && legendTypes.length > 0 && (
+          <FloatingPanel
+            title="Object types"
+            // Always starts collapsed: the chip already carries the count, and
+            // expanded it covers a corner of the graph.
+            narrow
+            collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
+            style={{ position: "absolute", top: 12, left: 12, zIndex: 12 }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
+              {legendTypes.map(t => {
+                const highlightable = boTypeSet.has(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={!highlightable}
+                    title={highlightable ? `Highlight ${t} arcs` : t}
+                    onClick={() => setHighlightedObjectType(prev => (prev === t ? null : t))}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 7,
+                      background: "none", border: "none", padding: 0,
+                      cursor: highlightable ? "pointer" : "default",
+                      font: "inherit", color: "inherit", textAlign: "left",
+                      opacity: highlightedObjectType && highlightedObjectType !== t ? 0.4 : 1,
+                    }}
+                  >
+                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: typeColorMap[t] ?? "#94a3b8", flexShrink: 0 }} />
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </FloatingPanel>
+        )}
+
+        {/* Download panel */}
+        {downloadOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Download</span>
+              <button
+                type="button"
+                onClick={() => setDownloadOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Detail</span>
+              <div style={{ marginTop: 8 }}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between font-normal h-8 text-xs">
+                      {EXPORT_DETAIL_OPTIONS.find(o => o.value === exportDetail)?.label}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[244px]">
+                    <DropdownMenuRadioGroup value={exportDetail} onValueChange={v => setExportDetail(v as ExportDetail)}>
+                      {EXPORT_DETAIL_OPTIONS.map(o => (
+                        <DropdownMenuRadioItem key={o.value} value={o.value}>{o.label}</DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+
+            <div style={{ padding: "4px 14px 10px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
+                <span style={{ fontSize: 12, color: "#0F172A" }}>Image</span>
+                <Button
+                  type="button" variant="outline" size="icon" className="h-8 w-8"
+                  title="Download PNG"
+                  disabled={isRecording}
+                  onClick={() => { void downloadImage(exportDetail); }}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid #F1F5F9" }}>
+                <span style={{ fontSize: 12, color: flowsData ? "#0F172A" : "#94a3b8", flex: 1 }}>Animation</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild disabled={!flowsData || isRecording}>
+                    <Button
+                      variant="outline"
+                      className="h-8 px-2 text-xs font-normal tabular-nums"
+                      disabled={!flowsData || isRecording}
+                      title="Frames per second"
+                    >
+                      {exportFps} fps
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuRadioGroup value={String(exportFps)} onValueChange={v => setExportFps(Number(v))}>
+                      {EXPORT_FPS_OPTIONS.map(f => (
+                        <DropdownMenuRadioItem key={f} value={String(f)}>{f} fps</DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  type="button" variant="outline" size="icon" className="h-8 w-8"
+                  title={flowsData ? "Record the flow animation" : "Load the animation first"}
+                  disabled={!flowsData || isRecording}
+                  onClick={() => { void downloadAnimation(exportDetail); }}
+                >
+                  {isRecording
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Download className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+              <p style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                {isRecording
+                  ? "Recording — keep this tab in the foreground."
+                  : flowsData
+                    ? `${formatSeconds(recordingSeconds)} at the current playback speed, recorded in real time. Change the speed to change the length.`
+                    : "Press Animate to load the object flows first."}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Filter panel */}
+        {filterOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+              display: "flex", flexDirection: "column",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Filters</span>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+
+            {/* Arcs */}
+            <div style={{ padding: "10px 14px", borderBottom: "1px solid #F1F5F9", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Arcs</span>
+                {minWeightVal > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMinWeightStr("0.00")}
+                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "#334155", flex: 1 }}>Min weight</span>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  height: 30, padding: "0 6px",
+                  border: "1px solid #E2E8F0", borderRadius: 6, background: "#F8FAFC",
+                }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={minWeightStr}
+                    onChange={e => setMinWeightStr(e.target.value)}
+                    onBlur={e => {
+                      const n = Math.max(0, parseFloat(e.target.value.replace(",", ".")) || 0);
+                      let s = n.toFixed(4);
+                      while (s.endsWith("0") && s.split(".")[1].length > 2) s = s.slice(0, -1);
+                      setMinWeightStr(s);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                        e.preventDefault();
+                        const cur = Math.max(0, parseFloat(minWeightStr.replace(",", ".")) || 0);
+                        const next = Math.max(0, Math.round((cur + (e.key === "ArrowUp" ? 0.01 : -0.01)) * 100) / 100);
+                        setMinWeightStr(next.toFixed(2));
+                      }
+                    }}
+                    style={{ width: 48, border: "none", fontSize: 12, textAlign: "center", outline: "none", background: "transparent" }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    <button type="button" tabIndex={-1}
+                      onClick={() => setMinWeightStr(s => (Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) + 0.01) * 100) / 100).toFixed(2))}
+                      style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+                    >▲</button>
+                    <button type="button" tabIndex={-1}
+                      onClick={() => setMinWeightStr(s => (Math.max(0, Math.round((Math.max(0, parseFloat(s.replace(",", ".")) || 0) - 0.01) * 100) / 100)).toFixed(2))}
+                      style={{ background: "none", border: "none", padding: "1px 0", cursor: "pointer", color: "#64748b", lineHeight: 1, fontSize: 8 }}
+                    >▼</button>
+                  </div>
+                </div>
+              </div>
+              <p style={{ fontSize: 10, color: "#94a3b8", marginTop: 6 }}>
+                Hides arcs weighing less than this.
+              </p>
+            </div>
+
+            {/* Nodes. Everything here is flexShrink: 0 — the rows above the
+                list used to get squashed as entries were added to it. */}
+            <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8, flexShrink: 0 }}>
+                Nodes
+              </span>
+
+              {!clustered && (
+                <div style={{ flexShrink: 0, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: "#475569" }}>Top %</span>
+                    {Object.values(typePercentages).some(v => v < 100) && (
+                      <button
+                        type="button"
+                        onClick={() => setTypePercentages({})}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                      >
+                        Reset all
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {nodeTypes.map(ot => {
+                      const pct = typePercentages[ot] ?? 100;
+                      const color = typeColorMap[ot] ?? "#94a3b8";
+                      return (
+                        <div key={ot} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                          <span style={{ fontSize: 11, color: "#334155", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ot}</span>
+                          <Slider
+                            min={0} max={100} step={1}
+                            value={[pct]}
+                            onValueChange={([v]) => setTypePercentages(prev => ({ ...prev, [ot]: v }))}
+                            className="w-20"
+                          />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "#334155", width: 30, textAlign: "right", flexShrink: 0 }}>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <span style={{ fontSize: 11, fontWeight: 500, color: "#475569", marginBottom: 6, flexShrink: 0 }}>Selection</span>
+              <div style={{ position: "relative", marginBottom: 8, flexShrink: 0 }}>
+                <Search style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: 12, height: 12, color: "#94a3b8", pointerEvents: "none" }} />
+                <input
+                  type="text"
+                  placeholder="Search resources…"
+                  value={nodeSearch}
+                  onChange={e => setNodeSearch(e.target.value)}
+                  style={{
+                    width: "100%", boxSizing: "border-box", paddingLeft: 26, paddingRight: 8,
+                    height: 30, border: "1px solid #E2E8F0", borderRadius: 6,
+                    fontSize: 12, outline: "none", background: "#F8FAFC",
+                  }}
+                />
+              </div>
+              {/* Object type chips */}
+              <div style={{ display: "flex", gap: 4, overflowX: "auto", marginBottom: 8, paddingBottom: 2, flexShrink: 0, scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}>
+                {nodeTypes
+                  .filter(ot => nodes.some(n => n.object_type === ot && percentagePassingIds.has(n.id)))
+                  .map(ot => {
+                    const color = typeColorMap[ot] ?? "#94a3b8";
+                    const active = selectedTypeFilters.has(ot);
+                    return (
+                      <div
+                        key={ot}
+                        onClick={() => setSelectedTypeFilters(prev => { const next = new Set(prev); if (active) next.delete(ot); else next.add(ot); return next; })}
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 3,
+                          padding: active ? "2px 4px 2px 8px" : "2px 8px",
+                          borderRadius: 9999, flexShrink: 0, cursor: "pointer", userSelect: "none",
+                          border: `1.5px solid ${color}`,
+                          background: active ? color : "white",
+                          color: active ? "white" : "#64748b",
+                          fontSize: 11, fontWeight: active ? 600 : 400,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {ot}
+                        {active && (
+                          <span
+                            onClick={e => { e.stopPropagation(); setSelectedTypeFilters(prev => { const next = new Set(prev); next.delete(ot); return next; }); }}
+                            style={{ display: "flex", alignItems: "center", opacity: 0.8, cursor: "pointer" }}
+                          >
+                            <X style={{ width: 10, height: 10 }} />
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 6, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setCheckedNodes(prev => { const next = new Set(prev); searchedNodes.forEach(n => next.add(n.id)); return next; })}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCheckedNodes(prev => { const next = new Set(prev); searchedNodes.forEach(n => next.delete(n.id)); return next; })}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#64748b", textDecoration: "underline", padding: 0 }}
+                >
+                  None
+                </button>
+              </div>
+              <div style={{ height: nodeListHeight, flexShrink: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                {searchedNodes.map(n => {
+                  const checked = checkedNodes.has(n.id);
+                  const color = typeColorMap[n.object_type] ?? "#94a3b8";
+                  return (
+                    <label key={n.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "2px 4px", borderRadius: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setCheckedNodes(prev => {
+                          const next = new Set(prev);
+                          if (checked) next.delete(n.id); else next.add(n.id);
+                          return next;
+                        })}
+                        style={{ width: 13, height: 13, accentColor: color, flexShrink: 0 }}
+                      />
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.id}</span>
+                    </label>
+                  );
+                })}
+                {searchedNodes.length === 0 && (
+                  <span style={{ fontSize: 11, color: "#94a3b8", padding: "4px 0" }}>No nodes match.</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Time metric panel */}
+        {timeMetricOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Time Metric</span>
+              <button type="button" onClick={() => setTimeMetricOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}>
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            {([
+              { key: "max",   label: "Max Time",   desc: "Longest handover time observed for each arc" },
+              { key: "min",   label: "Min Time",   desc: "Shortest handover time observed for each arc" },
+              { key: "avg",   label: "Avg Time",   desc: "Average handover time for each arc" },
+              { key: "range", label: "Range",      desc: "Spread between longest and shortest handover (max − min)" },
+            ] as const).map(({ key, label, desc }) => {
+              const active = selectedTimeMetric === key;
+              return (
+                <div
+                  key={key}
+                  onClick={() => {
+                    const next = active ? null : key;
+                    setSelectedTimeMetric(next);
+                  }}
+                  style={{
+                    padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F1F5F9",
+                    background: active ? "#FFF7ED" : "white",
+                    display: "flex", alignItems: "flex-start", gap: 10,
+                  }}
+                >
+                  <div style={{
+                    marginTop: 2, width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                    border: active ? "4px solid #D97706" : "1.5px solid #CBD5E1",
+                    boxSizing: "border-box",
+                  }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: active ? "#92400E" : "#0F172A" }}>{label}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ padding: "8px 14px", background: "#FFFBEB", borderTop: "1px solid #FDE68A", display: "flex", alignItems: "flex-start", gap: 6 }}>
+              <Info style={{ width: 11, height: 11, color: "#92400E", flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontSize: 10, color: "#92400E", lineHeight: 1.4 }}>
+                Brighter arcs always indicate a higher value. For Min Time, a bright arc means even the shortest observed handover was long.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Centrality panel */}
+        {centralityOpen && (
+          <div
+            style={{
+              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>Centrality Measure</span>
+              <button
+                type="button"
+                onClick={() => setCentralityOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+              >
+                <X style={{ width: 14, height: 14 }} />
+              </button>
+            </div>
+            {([
+              { key: "in-degree",   label: "In-Degree Centrality",   desc: "Number of unique resources that hand work to this one" },
+              { key: "out-degree",  label: "Out-Degree Centrality",  desc: "Number of unique resources this one hands work to" },
+              { key: "both-degree", label: "Degree Centrality",      desc: "Total unique partners (in and out combined)" },
+              { key: "closeness",   label: "Closeness Centrality",   desc: "How quickly this resource can reach all others via directed handovers" },
+              { key: "betweenness", label: "Betweenness Centrality", desc: "Fraction of directed shortest paths between any two resources passing through this one" },
+            ] as const).map(({ key, label, desc }) => {
+              const active = selectedCentrality === key;
+              return (
+                <div
+                  key={key}
+                  onClick={() => { setSelectedCentrality(active ? null : key); }}
+                  style={{
+                    padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F1F5F9",
+                    background: active ? "#EFF6FF" : "white",
+                    display: "flex", alignItems: "flex-start", gap: 10,
+                  }}
+                >
+                  <div style={{
+                    marginTop: 2, width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                    border: active ? "4px solid #2563EB" : "1.5px solid #CBD5E1",
+                    boxSizing: "border-box",
+                  }} />
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: active ? "#1D4ED8" : "#0F172A" }}>{label}</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 2, lineHeight: 1.4 }}>{desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tooltip && (
+          <div style={{
+            position: "absolute",
+            left: tooltip.x + 14,
+            top: tooltip.y - 10,
+            background: "white",
+            border: "1px solid #E2E8F0",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+            pointerEvents: "none",
+            zIndex: TOOLTIP_Z,
+            whiteSpace: "nowrap",
+          }}>
+            <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
+            <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+            {tooltip.avg_time != null && (
+              <>
+                <div style={{ borderTop: "1px solid #E2E8F0", margin: "5px 0" }} />
+                <div><span style={{ fontWeight: 600 }}>Avg time:</span> {fmtDuration(tooltip.avg_time)}</div>
+                <div style={{ color: "#64748b" }}>Range: {fmtDuration(tooltip.min_time)} – {fmtDuration(tooltip.max_time)}</div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {nodeTooltip && (() => {
+          const nId = nodeTooltip.nodeId;
+          const cw = nodeTooltip.cw;
+          const ch = nodeTooltip.ch;
+          if (clusterInfo) {
+            const isCluster = nId.startsWith("Cluster ");
+            const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
+            const members = isCluster
+              ? clusterInfo.resources.filter(r => clusterInfo.clusterMap[r] === nId)
+              : [nId];
+            const resourceColorMap = Object.fromEntries(
+              clusterInfo.resources.map(r => [r, typeColorMap[clusterInfo.resourceObjectTypes[r] ?? ""] ?? "#94a3b8"])
+            );
+            const activityColorMap = mapTypesToColors(clusterInfo.activities);
+            return (
+              <TooltipBox
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: nodeTooltip.pinned, cw, ch }}
+                activities={clusterInfo.activities}
+                cooccurringResources={clusterInfo.cooccurringResources}
+                collaboratingResources={clusterInfo.collaboratingResources}
+                timeBins={clusterInfo.timeBins}
+                weekdayBins={clusterInfo.weekdayBins}
+                portfolioObjectTypes={clusterInfo.portfolioObjectTypes}
+                resourceObjectTypes={clusterInfo.resourceObjectTypes}
+                typeTotals={clusterInfo.typeTotals}
+                coocTypeN={clusterInfo.coocTypeN}
+                collabTypeN={clusterInfo.collabTypeN}
+                activityColorMap={activityColorMap}
+                resourceColorMap={resourceColorMap}
+                typeColorMap={typeColorMap}
+                clusterColors={CLUSTER_COLORS}
+                allProfiles={{}}
+                tooltipProfiles={clusterInfo.tooltipProfiles}
+                showDropdown={false}
+                highlightedActivity={null}
+                onPin={() => setNodeTooltip(t => t ? { ...t, pinned: true } : null)}
+                onClose={() => setNodeTooltip(null)}
+                onTooltipMouseEnter={cancelHide}
+                onTooltipMouseLeave={scheduleHide}
+              />
+            );
+          }
+          const node = nodes.find(n => n.id === nId);
+          const TW = 180, TH = 52;
+          const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
+          const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
+          return (
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "6px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: TOOLTIP_Z, whiteSpace: "nowrap", maxWidth: TW }}>
+              <div style={{ fontWeight: 600 }}>{nId}</div>
+              {node != null && <div style={{ color: "#64748b", marginTop: 2 }}>Events: {node.event_count}</div>}
+            </div>
+          );
+        })()}
+      </div>
+
+
+      {/* Legends */}
+      <div className="flex gap-8 text-xs flex-wrap">
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Resources
+          </p>
+          <div className="space-y-1">
+            {nodeTypes.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Handover object type
+          </p>
+          <div className="space-y-1">
+            {boTypes.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                <span>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>
+            Scale (weight of thickest arc)
+          </p>
+          {normalizationScope === "per_bo_type" ? (
+            <div className="flex flex-col gap-1">
+              {boTypes.map(bt => (
+                <div key={bt} className="flex items-center gap-2">
+                  <svg width="32" height="10" className="flex-shrink-0">
+                    <line x1="3" y1="5" x2="29" y2="5" stroke={typeColorMap[bt] ?? "#94a3b8"} strokeWidth={6} strokeLinecap="round" />
+                  </svg>
+                  <Tooltip delayDuration={600}>
+                    <TooltipTrigger asChild>
+                      <span className="tabular-nums text-muted-foreground cursor-default text-xs">{(maxWeightPerType[bt] ?? 0).toFixed(4)}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[200px] text-xs">
+                      Maximum normalized weight for "{bt}" arcs. Arc thicknesses within this type are relative to this value.
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <svg width="32" height="10" className="flex-shrink-0">
+                <line x1="3" y1="5" x2="29" y2="5" stroke="#374151" strokeWidth={6} strokeLinecap="round" />
+              </svg>
+              <Tooltip delayDuration={600}>
+                <TooltipTrigger asChild>
+                  <span className="tabular-nums text-muted-foreground cursor-default">{maxWeight.toFixed(4)}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[200px] text-xs">
+                  Maximum normalized handover weight in this graph. The thickest arc corresponds to this value.
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── NodeDetailView ─────────────────────────────────────────── */
+function NodeDetailView({
+  selectedNode,
+  data,
+  typeColorMap,
+  onBack,
+  clusterInfo,
+  embedded = false,
+}: {
+  selectedNode: string;
+  data: HandoverData;
+  typeColorMap: Record<string, string>;
+  onBack: () => void;
+  clusterInfo?: ClusterInfo;
+  /** In a dashboard tile: fill the host box and drop the legend, which the
+   *  canvas already carries in its floating object-types panel. */
+  embedded?: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(700);
+  const [detailH, setDetailH] = useState(400);
+  const [egoNorm, setEgoNorm] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null } | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<{ x: number; y: number; nodeId: string; pinned: boolean; cw: number; ch: number } | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHide = () => { if (hideTimerRef.current) { clearTimeout(hideTimerRef.current); hideTimerRef.current = null; } };
+  const scheduleHide = () => { hideTimerRef.current = setTimeout(() => setNodeTooltip(t => t?.pinned ? t : null), 150); };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNodeTooltip(null); };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); cancelHide(); };
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    // clientWidth/clientHeight, not getBoundingClientRect: the latter is the
+    // border box, so on this bordered container it reported 2px more than the
+    // drawable area. Both SVGs were then sized 2px too large — the scroll
+    // content always overflowed by 2px, and the absolutely positioned overlay
+    // painted its last 2px on top of the border, which is the arrowhead
+    // crossing the rounded edge.
+    const update = () => {
+      setWidth(el.clientWidth || 700);
+      setDetailH(el.clientHeight || 400);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset scroll to top when the selected node changes
+  useEffect(() => {
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [selectedNode]);
+
+  const outEdges = data.edges.filter(e => e.source === selectedNode && e.target !== selectedNode);
+  const inEdges = data.edges.filter(e => e.target === selectedNode && e.source !== selectedNode);
+  const selfEdges = data.edges.filter(e => e.source === selectedNode && e.target === selectedNode);
+
+  const counterpartIds = [...new Set([
+    ...outEdges.map(e => e.target),
+    ...inEdges.map(e => e.source),
+  ])];
+
+  const nodeById: Record<string, HandoverNode> = {};
+  data.nodes.forEach(n => { nodeById[n.id] = n; });
+
+  const selectedColor = typeColorMap[nodeById[selectedNode]?.object_type ?? ""] ?? "#94a3b8";
+
+  const LEFT_X = 90;
+  const RIGHT_X = width - 90;
+  const MID_X = width / 2;
+  const ROW_H = 72;
+  const PADDING_V = 80;
+  const OFFSET_STEP = 11;
+
+  const nc = counterpartIds.length;
+  // Full SVG is tall enough for all counterparts; container clips to detailH and scrolls
+  const svgHeight = Math.max(detailH, (nc === 0 ? 0 : nc - 1) * ROW_H + PADDING_V * 2);
+  const egoY = svgHeight / 2;
+
+  const midYOf = (i: number) => {
+    if (nc === 0) return egoY;
+    return egoY + (i - (nc - 1) / 2) * ROW_H;
+  };
+
+  const allBoTypes = [...new Set([
+    ...outEdges.map(e => e.businessobject_type),
+    ...inEdges.map(e => e.businessobject_type),
+    ...selfEdges.map(e => e.businessobject_type),
+  ])];
+
+  const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.raw_weight, 0);
+
+  const getW = (edge: HandoverEdge) => {
+    if (!egoNorm) return edge.weight;
+    return allEdgesTotal > 0 ? edge.raw_weight / allEdgesTotal : 0;
+  };
+
+  const displayWeights = egoNorm
+    ? [...outEdges, ...inEdges, ...selfEdges].map(e => getW(e))
+    : data.edges.map(e => e.weight);
+
+  const maxW = Math.max(0.0001, ...displayWeights);
+  const strokeFor = (w: number) => Math.max(0.3, (w / maxW) * 6);
+
+  // Ego is fixed at the vertical center of the visible container (overlay coordinate space)
+  const OEY = detailH / 2;
+
+  const paths: Array<{ key: string; d: string; color: string; strokeWidth: number; markerId: string; count: number; weight: number; avg_time: number | null; min_time: number | null; max_time: number | null }> = [];
+
+  const pushEdge = (key: string, srcX: number, srcY: number, tgtX: number, tgtY: number,
+    edge: HandoverEdge, lat: number) => {
+    const dx = tgtX - srcX, dy = tgtY - srcY;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const perpX = -uy, perpY = ux;
+    const sx = srcX + ux * NODE_R + perpX * lat;
+    const sy = srcY + uy * NODE_R + perpY * lat;
+    const ex = tgtX - ux * (NODE_R + ARROW_LEN) + perpX * lat;
+    const ey = tgtY - uy * (NODE_R + ARROW_LEN) + perpY * lat;
+    paths.push({
+      key,
+      d: `M ${sx} ${sy} L ${ex} ${ey}`,
+      color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
+      strokeWidth: strokeFor(getW(edge)),
+      markerId: arrowId(edge.businessobject_type),
+      count: edge.raw_weight,
+      weight: getW(edge),
+      avg_time: edge.avg_time,
+      min_time: edge.min_time,
+      max_time: edge.max_time,
+    });
+  };
+
+  // Arc endpoints use OEY (fixed overlay center) for ego, and midYOf(i)-scrollTop for counterparts
+  counterpartIds.forEach((cpId, i) => {
+    const cy = midYOf(i) - scrollTop;
+    outEdges.filter(e => e.target === cpId).forEach((edge, j, arr) => {
+      pushEdge(`out-${cpId}-${j}`, MID_X, OEY, RIGHT_X, cy, edge,
+        (j - (arr.length - 1) / 2) * OFFSET_STEP);
+    });
+    inEdges.filter(e => e.source === cpId).forEach((edge, j, arr) => {
+      pushEdge(`in-${cpId}-${j}`, LEFT_X, cy, MID_X, OEY, edge,
+        (j - (arr.length - 1) / 2) * OFFSET_STEP);
+    });
+  });
+
+  // Self-loop on ego node, arcing above the fixed overlay ego position
+  selfEdges.forEach((edge, j) => {
+    const spread = j * NODE_R * 0.9;
+    const loopH = NODE_R * 2.4 + spread;
+    const loopW = NODE_R * 1.6 + spread;
+    const startA = -Math.PI * 0.72;
+    const startX = MID_X + NODE_R * Math.cos(startA);
+    const startY = OEY + NODE_R * Math.sin(startA);
+    const cp1x = MID_X - loopW, cp1y = OEY - loopH;
+    const cp2x = MID_X + loopW, cp2y = OEY - loopH;
+    const endA = -Math.PI * 0.28;
+    const endTX = MID_X + NODE_R * Math.cos(endA);
+    const endTY = OEY + NODE_R * Math.sin(endA);
+    const edx = endTX - cp2x, edy = endTY - cp2y;
+    const eLen = Math.hypot(edx, edy) || 1;
+    const endX = endTX - (edx / eLen) * ARROW_LEN;
+    const endY = endTY - (edy / eLen) * ARROW_LEN;
+    paths.push({
+      key: `self-${j}`,
+      d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
+      color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
+      strokeWidth: strokeFor(getW(edge)),
+      markerId: arrowId(edge.businessobject_type),
+      count: edge.raw_weight,
+      weight: getW(edge),
+      avg_time: edge.avg_time,
+      min_time: edge.min_time,
+      max_time: edge.max_time,
+    });
+  });
+
+  // Same truncation the main graph uses; the clip paths below are the other
+  // half of it, catching anything still too wide for the circle.
+  const lbl = (id: string) => id.length > 9 ? id.slice(0, 8) + "…" : id;
+
+  const nodeHandlers = (nodeId: string) => ({
+    onMouseEnter: (e: React.MouseEvent<SVGGElement>) => {
+      cancelHide();
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setNodeTooltip(prev => prev?.pinned ? prev : {
+        x: e.clientX - rect.left, y: e.clientY - rect.top,
+        nodeId, pinned: false, cw: el.offsetWidth, ch: el.offsetHeight,
+      });
+    },
+    onMouseMove: (e: React.MouseEvent<SVGGElement>) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setNodeTooltip(t => t && !t.pinned ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : t);
+    },
+    onMouseLeave: () => scheduleHide(),
+    onClick: (e: React.MouseEvent<SVGGElement>) => {
+      e.stopPropagation();
+      setNodeTooltip(t => t?.nodeId === nodeId ? { ...t, pinned: !t.pinned } : t);
+    },
+  });
+
+  const nodeTypesPresent = [...new Set([
+    nodeById[selectedNode]?.object_type,
+    ...counterpartIds.map(id => nodeById[id]?.object_type),
+  ].filter(Boolean) as string[])];
+
+  return (
+    <div className={`flex flex-col gap-3 ${embedded ? "flex-1 min-h-0" : "h-full"}`}>
+      <div className="flex items-center justify-between gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onBack}>← Back</Button>
+          <span className="text-sm text-muted-foreground">
+            Handover detail for{" "}
+            <span className="font-mono font-semibold text-foreground">{selectedNode}</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch id="ego-norm" checked={egoNorm} onCheckedChange={setEgoNorm} />
+            <Label htmlFor="ego-norm" className="text-sm cursor-pointer">Normalize</Label>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative flex-1 min-h-0">
+      <div ref={containerRef} className="w-full border rounded-md bg-background h-full"
+           style={{ position: "relative" }}>
+
+        {/* Scrollable layer — counterpart nodes only, no arcs, no ego */}
+        <div
+          ref={scrollContainerRef}
+          style={{ overflowY: "auto", overflowX: "hidden", height: "100%" }}
+          onScroll={e => setScrollTop(e.currentTarget.scrollTop)}
+        >
+          <svg width={width} height={svgHeight} style={{ display: "block" }}>
+            <defs>
+              {/* Its own id: the main graph is still mounted (just hidden)
+                  while the ego view is open, so a shared one would clash. */}
+              <clipPath id="ego-list-label-clip">
+                <circle r={NODE_R - 1} />
+              </clipPath>
+            </defs>
+            {counterpartIds.map((cpId, i) => {
+              const cy = midYOf(i);
+              const color = typeColorMap[nodeById[cpId]?.object_type ?? ""] ?? "#94a3b8";
+              return (
+                <g key={`cp-${cpId}`}>
+                  <g transform={`translate(${LEFT_X},${cy})`} {...nodeHandlers(cpId)}>
+                    <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                    <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                      clipPath="url(#ego-list-label-clip)"
+                      style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+                  </g>
+                  <g transform={`translate(${RIGHT_X},${cy})`} {...nodeHandlers(cpId)}>
+                    <circle r={NODE_R} fill={color} stroke="white" strokeWidth={2} />
+                    <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+                      clipPath="url(#ego-list-label-clip)"
+                      style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(cpId)}</text>
+                  </g>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        {/* Fixed overlay — ego node + arcs + column labels; positioned absolute so it never scrolls */}
+        <svg
+          width={width} height={detailH}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "hidden" }}
+          onClick={() => setNodeTooltip(t => t?.pinned ? null : t)}
+        >
+          <defs>
+            {allBoTypes.map(bt => {
+              const color = typeColorMap[bt] ?? "#94a3b8";
+              const id = arrowId(bt);
+              return (
+                <marker key={id} id={id}
+                  markerWidth={ARROW_LEN} markerHeight={ARROW_H}
+                  refX={0} refY={ARROW_H / 2}
+                  orient="auto" markerUnits="userSpaceOnUse">
+                  <polygon points={`0 0, ${ARROW_LEN} ${ARROW_H / 2}, 0 ${ARROW_H}`} fill={color} />
+                </marker>
+              );
+            })}
+          </defs>
+
+          {/* Column labels — always visible at top */}
+          <text x={LEFT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Sender</text>
+          <text x={MID_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Ego</text>
+          <text x={RIGHT_X} y={22} textAnchor="middle" fontSize={10} fill="gray" opacity={0.7} fontWeight="600">Receiver</text>
+
+          {/* Arcs */}
+          {paths.map(p => (
+            <g key={p.key}>
+              <path d={p.d} fill="none"
+                markerEnd={`url(#${p.markerId})`}
+                style={{ stroke: p.color, strokeWidth: p.strokeWidth, opacity: 0.85, pointerEvents: "none" }} />
+              <path d={p.d} fill="none" stroke="transparent" strokeWidth={12}
+                style={{ pointerEvents: "auto" }}
+                onMouseEnter={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip({ x: e.clientX - rect.left, y: e.clientY - rect.top, count: p.count, weight: p.weight, avg_time: p.avg_time, min_time: p.min_time, max_time: p.max_time });
+                }}
+                onMouseMove={e => {
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  setTooltip(t => t ? { ...t, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+                }}
+                onMouseLeave={() => setTooltip(null)}
+              />
+            </g>
+          ))}
+
+          {/* Ego node — fixed at vertical center of the overlay */}
+          <defs>
+            <clipPath id="ego-node-label-clip">
+              <circle r={NODE_R - 1} />
+            </clipPath>
+          </defs>
+          <g transform={`translate(${MID_X},${OEY})`} style={{ pointerEvents: "auto" }} {...nodeHandlers(selectedNode)}>
+            <circle r={NODE_R} fill={selectedColor} stroke="white" strokeWidth={2} />
+            <text textAnchor="middle" dominantBaseline="central" fontSize={9} fill="white" fontWeight="600"
+              clipPath="url(#ego-node-label-clip)"
+              style={{ pointerEvents: "none", userSelect: "none" }}>{lbl(selectedNode)}</text>
+          </g>
+        </svg>
+
+        {tooltip && (
+          <div style={{
+            position: "absolute",
+            left: tooltip.x + 14,
+            top: tooltip.y - 10,
+            background: "white",
+            border: "1px solid #E2E8F0",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            boxShadow: "0 4px 12px rgba(15,23,42,0.12)",
+            pointerEvents: "none",
+            zIndex: TOOLTIP_Z,
+            whiteSpace: "nowrap",
+          }}>
+            <div><span style={{ fontWeight: 600 }}>Count:</span> {tooltip.count}</div>
+            <div><span style={{ fontWeight: 600 }}>Weight:</span> {tooltip.weight.toFixed(4)}</div>
+            {tooltip.avg_time != null && (
+              <>
+                <div style={{ borderTop: "1px solid #E2E8F0", margin: "5px 0" }} />
+                <div><span style={{ fontWeight: 600 }}>Avg time:</span> {fmtDuration(tooltip.avg_time)}</div>
+                <div style={{ color: "#64748b" }}>Range: {fmtDuration(tooltip.min_time)} – {fmtDuration(tooltip.max_time)}</div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {nodeTooltip && (() => {
+          const nId = nodeTooltip.nodeId;
+          const cw = nodeTooltip.cw;
+          const ch = nodeTooltip.ch;
+          if (clusterInfo) {
+            const isCluster = nId.startsWith("Cluster ");
+            const clusterLabel = isCluster ? parseInt(nId.split(" ")[1]) - 1 : 0;
+            const members = isCluster
+              ? clusterInfo.resources.filter(r => clusterInfo.clusterMap[r] === nId)
+              : [nId];
+            const resourceColorMap = Object.fromEntries(
+              clusterInfo.resources.map(r => [r, typeColorMap[clusterInfo.resourceObjectTypes[r] ?? ""] ?? "#94a3b8"])
+            );
+            const activityColorMap = mapTypesToColors(clusterInfo.activities);
+            return (
+              <TooltipBox
+                tooltip={{ x: nodeTooltip.x, y: nodeTooltip.y, resources: members, profile: [], isCluster, clusterLabel, pinned: nodeTooltip.pinned, cw, ch }}
+                activities={clusterInfo.activities}
+                cooccurringResources={clusterInfo.cooccurringResources}
+                collaboratingResources={clusterInfo.collaboratingResources}
+                timeBins={clusterInfo.timeBins}
+                weekdayBins={clusterInfo.weekdayBins}
+                portfolioObjectTypes={clusterInfo.portfolioObjectTypes}
+                resourceObjectTypes={clusterInfo.resourceObjectTypes}
+                typeTotals={clusterInfo.typeTotals}
+                coocTypeN={clusterInfo.coocTypeN}
+                collabTypeN={clusterInfo.collabTypeN}
+                activityColorMap={activityColorMap}
+                resourceColorMap={resourceColorMap}
+                typeColorMap={typeColorMap}
+                clusterColors={CLUSTER_COLORS}
+                allProfiles={{}}
+                tooltipProfiles={clusterInfo.tooltipProfiles}
+                showDropdown={false}
+                highlightedActivity={null}
+                onPin={() => setNodeTooltip(t => t ? { ...t, pinned: true } : null)}
+                onClose={() => setNodeTooltip(null)}
+                onTooltipMouseEnter={cancelHide}
+                onTooltipMouseLeave={scheduleHide}
+              />
+            );
+          }
+          const TW = 180, TH = 32;
+          const left = Math.min(nodeTooltip.x + 14, cw - TW - 4);
+          const top = Math.max(4, Math.min(nodeTooltip.y - TH - 8, ch - TH - 4));
+          return (
+            <div style={{ position: "absolute", left, top, background: "white", border: "1px solid #E2E8F0", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, boxShadow: "0 4px 12px rgba(15,23,42,0.12)", pointerEvents: "none", zIndex: TOOLTIP_Z, whiteSpace: "nowrap", maxWidth: TW }}>
+              {nId}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Legend — omitted in a tile, where the canvas's own object-types
+          panel already covers it and the height is better spent on the graph. */}
+      {!embedded && (
+        <div className="flex gap-8 text-xs flex-wrap flex-shrink-0">
+          <div>
+            <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Resources</p>
+            <div className="space-y-1">
+              {nodeTypesPresent.map(t => (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                  <span>{t}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="font-semibold mb-1.5 text-muted-foreground uppercase tracking-wide" style={{ fontSize: 10 }}>Handover object type</p>
+            <div className="space-y-1">
+              {allBoTypes.map(t => (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="w-4 h-2 rounded-sm flex-shrink-0" style={{ background: typeColorMap[t] ?? "#94a3b8" }} />
+                  <span>{t}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

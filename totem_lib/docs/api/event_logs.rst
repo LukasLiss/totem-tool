@@ -39,11 +39,3 @@ Event columns
    write_event_column
    write_event_columns_to_file
    EventColumnError
-
-Convert
--------
-
-.. autosummary::
-   :toctree: generated
-
-   convert_ocel_polars_to_pm4py
