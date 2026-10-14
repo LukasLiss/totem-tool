@@ -115,8 +115,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
-      // Re-render all components with updated isEditMode
-      const items = document.querySelectorAll('.grid-stack-item');
+      // Re-render all components with updated isEditMode.
+      // Ask the grid for its own items rather than sweeping the document:
+      // the side panel's drag-in tiles also carry .grid-stack-item (they
+      // need it for setupDragIn) and it mounts exactly when edit mode turns
+      // on, so a document-wide query handed grid.update() an element the
+      // engine can never place — "Infinite collide check", and a blank
+      // dashboard. Harmless until the min-size update() below moved inside
+      // this loop.
+      const items = grid.getGridItems();
       items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as GridWidgetElement)._reactRoot;
