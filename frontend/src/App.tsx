@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
 import { Title } from "./Title";
 import UploadView from "./UploadView";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { SelectedFileContext, type SelectedFile } from "./contexts/SelectedFileContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
@@ -148,7 +148,27 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
 }
 
 function App() {
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFile, setSelectedFileState] = useState<SelectedFile | null>(() => {
+    try {
+      const saved = localStorage.getItem("totem_selected_file");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setSelectedFile = useCallback((file: SelectedFile | null) => {
+    setSelectedFileState(file);
+    try {
+      if (file) {
+        localStorage.setItem("totem_selected_file", JSON.stringify(file));
+      } else {
+        localStorage.removeItem("totem_selected_file");
+      }
+    } catch {
+      /* ignore storage quota errors */
+    }
+  }, []);
 
   return (
     <AppRoutes selectedFile={selectedFile} setSelectedFile={setSelectedFile} />

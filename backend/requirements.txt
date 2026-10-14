@@ -3,6 +3,7 @@ djangorestframework==3.16.0
 django-cors-headers==4.7.0
 djangorestframework-simplejwt==5.5.1
 pulp==3.3.0
+highspy==1.15.1
 drf-polymorphic==2.1.1
 django-rest-polymorphic==0.1.10
 duckdb

@@ -8,8 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from totem_lib import discover_occn, serialize_occn
-from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
+from totem_lib import discover_occn, extract_occn_input, serialize_occn
 
 from ..models import EventLog
 from ._ocel_db import _filter_shadow, _with_ocel_db
@@ -65,9 +64,9 @@ def _get_or_discover_base_occn(user_file, object_type_filter):
         if is_primary:
             try:
                 with _with_ocel_db(user_file) as db:
-                    ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    occn_input = extract_occn_input(db)
                 base_occn = discover_occn(
-                    ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters
+                    occn_input, relativeOccuranceThreshold=0.0, parameters=parameters
                 )
                 with _occn_cache_lock:
                     _occn_base_cache[cache_key] = base_occn
@@ -146,9 +145,9 @@ def OCCNViewSet(request):
             )
             with _with_ocel_db(user_file) as db:
                 with _filter_shadow(db, fp_no_types):
-                    ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                    occn_input = extract_occn_input(db)
             base_occn = discover_occn(
-                ocel_pm4py, relativeOccuranceThreshold=0.0, parameters=parameters
+                occn_input, relativeOccuranceThreshold=0.0, parameters=parameters
             )
         else:
             base_occn = _get_or_discover_base_occn(user_file, object_type_filter)

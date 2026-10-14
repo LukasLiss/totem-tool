@@ -1,7 +1,6 @@
 from .ocel import (
     ObjectCentricEventLog,
     import_ocel,
-    convert_ocel_polars_to_pm4py,
     filter_dead_objects,
     FilterRule,
     FilterStack,
@@ -18,7 +17,7 @@ from .totem import (
     validate_totem_dict,
 )
 from .process_areas import discover_process_areas, discover_process_areas_db
-from .ocpn import ocpns_are_similar, discover_oc_petri_net_polars, discover_ocpn_db
+from .ocpn import ocpns_are_similar, discover_ocpn_db
 from .occn import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     LEADING_OBJECT_REPLAY_STRATEGY,
@@ -38,6 +37,8 @@ from .occn import (
     build_leading_object_replay_units,
     build_stored_column_replay_units,
     discover_occn,
+    extract_occn_input,
+    OCCNDiscoveryInput,
     extract_occn_replay_events,
     extract_occn_replay_units,
     occn_from_dict,
@@ -111,13 +112,12 @@ __all__ = [
     "CCDFG",
     "CONNECTED_COMPONENTS_REPLAY_STRATEGY",
     "conformance_of_totem",
-    "convert_ocel_polars_to_pm4py",
     "create_occn_engine",
     "create_ocpn_engine",
     "discover_handover",
     "discover_occn",
+    "extract_occn_input",
     "discover_ocpn_db",
-    "discover_oc_petri_net_polars",
     "discover_process_areas",
     "discover_process_areas_db",
     "discover_resource_profiles",
@@ -142,6 +142,7 @@ __all__ = [
     "OCCausalNetSemantics",
     "OCCausalNetState",
     "OCCNContextDetail",
+    "OCCNDiscoveryInput",
     "OCCNPrecisionResult",
     "OCCNReplayEvent",
     "OCCNReplayFitnessResult",

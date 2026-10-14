@@ -128,6 +128,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       // GridStack.setupDragIn has run, a gridstackNode too — passing one of
       // them to grid.update() ends in "Infinite collide check".
       const items = grid.getGridItems();
+      const column = grid.getColumn();
+      // Batch the min-size fixes so GridStack resolves collisions once instead of
+      // per widget — growing several widgets one by one with float enabled can
+      // send its collision resolver into "Infinite collide check".
+      grid.batchUpdate();
       items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as GridWidgetElement)._reactRoot;
@@ -135,9 +140,25 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const component_name = node?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         // Self-heal widgets whose node predates the min-size feature (e.g. loaded
         // from an older saved layout) — grows them up to the minimum if needed.
-        if (node) {
-          const { minW, minH } = getMinSize(component_name);
-          gridRef.current?.update(item as HTMLElement, { minW, minH });
+        // Only touch widgets that actually need it, and never ask for a minimum
+        // wider than the grid has columns.
+        const gsNode = (item as GridWidgetElement).gridstackNode;
+        if (node && gsNode) {
+          const min = getMinSize(component_name);
+          const minW = Math.min(min.minW, column);
+          const minH = min.minH;
+          const needsUpdate =
+            gsNode.minW !== minW ||
+            gsNode.minH !== minH ||
+            (gsNode.w ?? 1) < minW ||
+            (gsNode.h ?? 1) < minH;
+          if (needsUpdate) {
+            try {
+              grid.update(item as HTMLElement, { minW, minH });
+            } catch (err) {
+              console.warn(`Could not apply min size to ${component_name}`, err);
+            }
+          }
         }
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -155,6 +176,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           );
         }
       });
+      try {
+        grid.batchUpdate(false);
+      } catch (err) {
+        console.warn("GridStack failed to settle min-size updates", err);
+      }
     }
   }, [isEditMode, grid, selectedFile, dashboardId]);
 
