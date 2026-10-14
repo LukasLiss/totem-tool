@@ -191,7 +191,6 @@ export function TextBoxToolbar({
     <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
       <input
         type="number"
-        list={sizeListId}
         min={FONT_SIZE_MIN}
         max={FONT_SIZE_MAX}
         value={fontSize}
