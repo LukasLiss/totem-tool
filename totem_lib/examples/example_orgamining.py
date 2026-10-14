@@ -35,10 +35,6 @@ def main():
         max_gap=None,
     )
 
-    print(handovers.nodes(data=True))
-
-
-
     print("Handovers (source -> target [business object type]: count, weight)")
     for source, target, edge in handovers.edges(data=True):
         print(f"  {source} -> {target} [{edge['businessobject_type']}]: "
@@ -60,8 +56,6 @@ def main():
         # Business objects for collaboration and portfolio; None = all non-resource types
         business_object_types=["item", "package"],
     )
-
-    print(profiles.profiles)
 
     print("\nActivity profiles")
     for profile in profiles.profiles:
@@ -88,6 +82,17 @@ def main():
     print("\nClusters")
     for resource, label in zip(profiles.resources, labels):
         print(f"  {resource}: cluster {label}")
+
+    # Draw the handover graph with matplotlib (opens a window and blocks
+    # until it is closed). Node colour = resource type, node size = number
+    # of events, edge colour = business object type, edge width = weight.
+    # Returns the axes; pass ax=... to draw into your own figure instead.
+    handovers.plot(
+        # "count" (default), "weight", "avg_time" or None
+        edge_label="weight",
+        # "spring" (default), "circular" or "shell" (one ring per resource type)
+        layout="circular",
+    )
 
 
 if __name__ == "__main__":

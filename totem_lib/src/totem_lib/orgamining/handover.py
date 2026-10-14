@@ -19,6 +19,8 @@ from ._source import EventObjectSource
 from ..ocel.ocel_duckdb import OcelDuckDB
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from matplotlib.axes import Axes
+
     from ..ocel.ocel import ObjectCentricEventLog as OCEL
 
 logger = logging.getLogger(__name__)
@@ -1051,187 +1053,241 @@ class HandoverGraph(nx.MultiDiGraph):
         _p1, _ = cls._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
         return cls._collapse_p1(_p1, _bo_type_map, _event_ts_dict)
 
-    def plot(self):
+    def plot(
+        self,
+        ax: "Axes | None" = None,
+        *,
+        edge_label: Literal["count", "weight", "avg_time"] | None = "count",
+        min_weight: float = 0.0,
+        bo_types: List[str] | None = None,
+        layout: Literal["spring", "circular", "shell"] = "spring",
+        pos: dict | None = None,
+        node_size_by: Literal["event_count"] | None = "event_count",
+        colors: dict[str, str] | None = None,
+        title: str | None = None,
+        show: bool | None = None,
+    ) -> "Axes":
+        """
+        Draw the handover graph with matplotlib.
+
+        Nodes are resources, coloured by resource object type. Each edge is
+        one (source, target, business object type) handover, coloured by
+        business object type and drawn wider the higher its ``weight``.
+        Handovers of several business object types between the same two
+        resources get separate curves.
+
+        Parameters
+        ----------
+        ax
+            Axes to draw on. If ``None``, a new figure is created.
+        edge_label
+            Edge attribute written on every edge: ``"count"``, ``"weight"``,
+            ``"avg_time"`` (formatted as a duration) or ``None`` for no labels.
+        min_weight
+            Edges with a lower ``weight`` are left out, and so are resources
+            left without edges.
+        bo_types
+            Business object types whose handovers are drawn; ``None`` for all.
+        layout
+            ``"spring"`` (force-directed), ``"circular"`` or ``"shell"`` (one
+            ring per resource object type). Ignored when ``pos`` is given.
+        pos
+            ``{node: (x, y)}``, e.g. to keep the same layout across plots.
+        node_size_by
+            ``"event_count"`` sizes nodes by the resource's number of events;
+            ``None`` draws all nodes the same size.
+        colors
+            ``{object type: matplotlib colour}`` for resource and business
+            object types; unlisted types get a default colour.
+        title
+            Axes title.
+        show
+            Call ``plt.show()`` at the end. Defaults to ``True`` when the
+            method creates the figure and ``False`` when ``ax`` is given.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes the graph was drawn on.
+        """
         import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
 
-        def separate_overlapping_nodes(pos, min_distance=0.08):
-            import math
+        if edge_label not in ("count", "weight", "avg_time", None):
+            raise ValueError(
+                f"edge_label must be 'count', 'weight', 'avg_time' or None, got {edge_label!r}"
+            )
+        if layout not in ("spring", "circular", "shell"):
+            raise ValueError(f"layout must be 'spring', 'circular' or 'shell', got {layout!r}")
+        if node_size_by not in ("event_count", None):
+            raise ValueError(f"node_size_by must be 'event_count' or None, got {node_size_by!r}")
 
-            nodes = list(pos.keys())
+        if ax is None:
+            _, ax = plt.subplots(figsize=(10, 8))
+            if show is None:
+                show = True
+        ax.set_axis_off()
+        if title:
+            ax.set_title(title)
 
-            for i, node_a in enumerate(nodes):
-                for node_b in nodes[i + 1:]:
-                    xa, ya = pos[node_a]
-                    xb, yb = pos[node_b]
+        def scale(value, lo, hi, out_lo, out_hi):
+            if hi == lo:
+                return (out_lo + out_hi) / 2
+            return out_lo + (value - lo) / (hi - lo) * (out_hi - out_lo)
 
-                    dx = xb - xa
-                    dy = yb - ya
-                    distance = math.sqrt(dx * dx + dy * dy)
+        # The edges that pass the filters and the resources they touch. The
+        # sort fixes the order of parallel edges, which decides their curve.
+        graph = nx.MultiDiGraph()
+        for u, v, key, data in sorted(
+            self.edges(keys=True, data=True), key=lambda e: (str(e[0]), str(e[1]), str(e[2]))
+        ):
+            if data.get("weight", 0) < min_weight:
+                continue
+            if bo_types is not None and data.get("businessobject_type") not in bo_types:
+                continue
+            graph.add_node(u, **self.nodes[u])
+            graph.add_node(v, **self.nodes[v])
+            graph.add_edge(u, v, key=key, **data)
 
-                    if distance < min_distance:
-                        if distance == 0:
-                            dx, dy = 0.01, 0.01
-                            distance = math.sqrt(dx * dx + dy * dy)
+        if graph.number_of_edges() == 0:
+            ax.text(0.5, 0.5, "No handovers to show", ha="center", va="center",
+                    transform=ax.transAxes)
+            if show:
+                plt.show()
+            return ax
 
-                        push = (min_distance - distance) / 2
-                        ux = dx / distance
-                        uy = dy / distance
+        # -------------------------
+        # Layout
+        # -------------------------
+        if pos is not None:
+            missing = [n for n in graph.nodes if n not in pos]
+            if missing:
+                raise ValueError(f"pos has no position for {missing}")
+        elif layout == "circular":
+            pos = nx.circular_layout(graph)
+        elif layout == "shell":
+            shells: dict[str, list] = {}
+            for node, obj_type in graph.nodes(data="object_type", default="unknown"):
+                shells.setdefault(obj_type, []).append(node)
+            pos = nx.shell_layout(graph, nlist=[shells[t] for t in sorted(shells)])
+        else:
+            pos = nx.spring_layout(graph, k=1.5, iterations=200, seed=42)
 
-                        pos[node_a][0] -= ux * push
-                        pos[node_a][1] -= uy * push
-                        pos[node_b][0] += ux * push
-                        pos[node_b][1] += uy * push
+        # -------------------------
+        # Colours by resource type (nodes) and business object type (edges)
+        # -------------------------
+        colors = colors or {}
 
-            return pos
+        def color_map(types, cmap_name):
+            cmap = plt.get_cmap(cmap_name)
+            return {t: colors.get(t, cmap(i % cmap.N)) for i, t in enumerate(types)}
 
-        pos = nx.spring_layout(
-            self,
-            k=1.5,
-            iterations=200,
-            seed=42,
+        node_types = sorted({t for _, t in graph.nodes(data="object_type", default="unknown")})
+        edge_types = sorted(
+            {t for *_, t in graph.edges(data="businessobject_type", default="unknown")}
         )
-
-
-        edge_data = list(self.edges(data=True))
-        node_data = list(self.nodes(data=True))
+        node_type_to_color = color_map(node_types, "Set2")
+        edge_type_to_color = color_map(edge_types, "tab10")
 
         # -------------------------
-        # Edge weights
+        # Nodes
         # -------------------------
-        weights = [
-            d.get("weight", 0)
-            for _, _, d in edge_data
-        ]
-
-        min_weight = min(weights) if weights else 0
-        max_weight = max(weights) if weights else 1
-
-        def scale_width(weight, min_width=1.0, max_width=6.0):
-            if max_weight == min_weight:
-                return (min_width + max_width) / 2
-
-            return min_width + (
-                (weight - min_weight) / (max_weight - min_weight)
-            ) * (max_width - min_width)
-
-        edge_widths = [
-            scale_width(d.get("weight", 0))
-            for _, _, d in edge_data
-        ]
-
-        # -------------------------
-        # Edge colors by business-object type
-        # -------------------------
-        edge_bo_types = [
-            d.get("businessobject_type", "unknown")
-            for _, _, d in edge_data
-        ]
-
-        unique_edge_types = sorted(set(edge_bo_types))
-
-        edge_cmap = plt.get_cmap("tab10")
-
-        edge_type_to_color = {
-            bo_type: edge_cmap(i % edge_cmap.N)
-            for i, bo_type in enumerate(unique_edge_types)
-        }
-
-        edge_colors = [
-            edge_type_to_color[d.get("businessobject_type", "unknown")]
-            for _, _, d in edge_data
-        ]
-
-        # -------------------------
-        # Node colors by resource object type
-        # -------------------------
-        node_object_types = [
-            d.get("object_type", "unknown")
-            for _, d in node_data
-        ]
-
-        unique_node_types = sorted(set(node_object_types))
-
-        node_cmap = plt.get_cmap("Set2")
-
-        node_type_to_color = {
-            obj_type: node_cmap(i % node_cmap.N)
-            for i, obj_type in enumerate(unique_node_types)
-        }
-
-        node_colors = [
-            node_type_to_color[d.get("object_type", "unknown")]
-            for _, d in node_data
-        ]
-
-        plt.figure(figsize=(10, 8))
+        nodelist = list(graph.nodes)
+        if node_size_by == "event_count":
+            event_counts = [graph.nodes[n].get("event_count", 0) for n in nodelist]
+            lo, hi = min(event_counts), max(event_counts)
+            node_sizes = [scale(c, lo, hi, 600, 2400) for c in event_counts]
+        else:
+            node_sizes = [1500] * len(nodelist)
 
         nx.draw_networkx_nodes(
-            self,
+            graph,
             pos,
-            nodelist=[n for n, _ in node_data],
-            node_size=1500,
-            node_color=node_colors,
+            nodelist=nodelist,
+            node_size=node_sizes,
+            node_color=[
+                node_type_to_color[graph.nodes[n].get("object_type", "unknown")]
+                for n in nodelist
+            ],
             edgecolors="black",
+            ax=ax,
         )
+        nx.draw_networkx_labels(graph, pos, font_size=9, ax=ax)
 
-        nx.draw_networkx_labels(
-            self,
-            pos,
-            font_size=10,
-        )
+        # -------------------------
+        # Edges
+        # -------------------------
+        edgelist = list(graph.edges(keys=True))
+        edge_data = [graph.edges[e] for e in edgelist]
+        weights = [d.get("weight", 0) for d in edge_data]
+        lo, hi = min(weights), max(weights)
 
-        
+        # networkx numbers the edges between the same (source, target) pair
+        # 0, 1, 2, ... and gives edge i the i-th connection style, so every
+        # business object type gets its own curve. Opposite directions bend
+        # to opposite sides.
+        parallel = max(graph.number_of_edges(u, v) for u, v, _ in edgelist)
+        connectionstyle = [f"arc3,rad={0.15 + 0.15 * i:.2f}" for i in range(parallel)]
+
         nx.draw_networkx_edges(
-            self,
+            graph,
             pos,
-            edgelist=[(u, v) for u, v, _ in edge_data],
-            edge_color=edge_colors,
+            edgelist=edgelist,
+            edge_color=[
+                edge_type_to_color[d.get("businessobject_type", "unknown")] for d in edge_data
+            ],
+            width=[scale(w, lo, hi, 1.0, 6.0) for w in weights],
             arrows=True,
-            arrowsize=20,
-            width=edge_widths,
-            connectionstyle="arc3,rad=0.2",
-            min_source_margin=20,
-            min_target_margin=20,
+            arrowsize=15,
+            connectionstyle=connectionstyle,
+            nodelist=nodelist,
+            node_size=node_sizes,
+            ax=ax,
         )
+
+        if edge_label is not None:
+            def format_label(value):
+                if value is None:
+                    return "–"
+                if edge_label == "count":
+                    return str(int(value))
+                if edge_label == "weight":
+                    return f"{value:.3f}"
+                # avg_time is in seconds
+                for unit, seconds in (("d", 86400), ("h", 3600), ("min", 60)):
+                    if abs(value) >= seconds:
+                        return f"{value / seconds:.1f} {unit}"
+                return f"{value:.0f} s"
+
+            nx.draw_networkx_edge_labels(
+                graph,
+                pos,
+                edge_labels={
+                    e: format_label(d.get(edge_label)) for e, d in zip(edgelist, edge_data)
+                },
+                connectionstyle=connectionstyle,
+                font_size=8,
+                ax=ax,
+            )
 
         # -------------------------
         # Legends
         # -------------------------
-        node_legend_handles = [
-            mpatches.Patch(
-                color=node_type_to_color[obj_type],
-                label=obj_type,
-            )
-            for obj_type in unique_node_types
-        ]
-
-        edge_legend_handles = [
-            mpatches.Patch(
-                color=edge_type_to_color[bo_type],
-                label=bo_type,
-            )
-            for bo_type in unique_edge_types
-        ]
-
-        node_legend = plt.legend(
-            handles=node_legend_handles,
-            title="Resource",
+        resource_legend = ax.legend(
+            handles=[mpatches.Patch(color=node_type_to_color[t], label=t) for t in node_types],
+            title="Resource type",
             loc="upper left",
         )
-
-        plt.gca().add_artist(node_legend)
-
-        plt.legend(
-            handles=edge_legend_handles,
+        ax.add_artist(resource_legend)
+        ax.legend(
+            handles=[mpatches.Patch(color=edge_type_to_color[t], label=t) for t in edge_types],
             title="Handover object type",
             loc="upper right",
         )
 
-        plt.axis("off")
-        plt.tight_layout()
-        plt.show()
-
+        if show:
+            plt.show()
+        return ax
 
     @classmethod
     def compute_footprint(
