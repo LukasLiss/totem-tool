@@ -41,6 +41,26 @@ const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 const getMinSize = (componentName?: string) =>
   (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
 
+const COMPONENT_TITLES: Record<string, string> = {
+  NumberofEventsComponent: "Number of Events",
+  TextBoxComponent: "Text Box",
+  ImageComponent: "Image Component",
+  VariantsComponent: "Variants Explorer",
+  ProcessAreaComponent: "Process Area",
+  TotemMinerComponent: "TOTeM Miner",
+  LogStatisticsComponent: "Log Statistics",
+  OCDottedChartComponent: "OC Dotted Chart",
+  NewOCDFGComponent: "Object-Centric DFG (Arc Weight)",
+  NewOCDFGVariantsComponent: "Object-Centric DFG (Variants)",
+  OCPNComponent: "OC Petri Net",
+  OCCNComponent: "Object-Centric Causal Net (OCCN)",
+  SqlQueryComponent: "SQL Editor",
+  PieChartComponent: "Pie Chart",
+  KpiComponent: "KPI (by SQL)",
+  BarChartComponent: "Bar Chart (by SQL)",
+  ScatterPlotComponent: "Scatter Plot (by SQL)",
+};
+
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
@@ -92,8 +112,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       const Component = componentMap[component_name];
 
       if (Component) {
-        el.innerHTML = '';
-        const root = ReactDOM.createRoot(el);
+        let root = (el as GridWidgetElement)._reactRoot;
+        if (!root) {
+          el.innerHTML = '';
+          root = ReactDOM.createRoot(el);
+          (el as GridWidgetElement)._reactRoot = root;
+        }
         root.render(
           <Component
             node={w as ComponentProps['node']}
@@ -106,7 +130,6 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             }}
           />
         );
-        (el as GridWidgetElement)._reactRoot = root;
         (el as GridWidgetElement).gridstackNode = w; // Store node for re-rendering
       } else {
         el.innerHTML = w.content || '';
@@ -388,211 +411,31 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     
     if (layout.length > 0) {
       layout.forEach((item) => {
-        let content = "";
-        if (item.component_name === "NumberofEventsComponent") {
-          content = "Number of Events";
-        } else if (item.component_name === "TextBoxComponent") {
-          content = "Text Box";
-        } else if (item.component_name === "ImageComponent") {
-          content = "Image Component";
-        } else if (item.component_name === "VariantsComponent") {
-          content = "Variants Explorer";
-        } else if (item.component_name === "ProcessAreaComponent") {
-          content = "Process Area";
-        } else if (item.component_name === "TotemMinerComponent") {
-          content = "TOTeM Miner";
-        } else if (item.component_name === "LogStatisticsComponent") {
-          content = "Log Statistics";
-        } else if (item.component_name === "OCDottedChartComponent") {
-          content = "OC Dotted Chart";
-        } else if (item.component_name === "NewOCDFGComponent") {
-          content = "Object-Centric DFG (Arc Weight)";
-        } else if (item.component_name === "NewOCDFGVariantsComponent") {
-          content = "Object-Centric DFG (Variants)";
-        } else if (item.component_name === "OCPNComponent") {
-          content = "OC Petri Net";
-        } else if (item.component_name === "OCCNComponent") {
-          content = "Object-Centric Causal Net (OCCN)";
-        } else if (item.component_name === "SqlQueryComponent") {
-          content = "SQL Editor";
-        } else if (item.component_name === "PieChartComponent") {
-          content = "Pie Chart";
-        } else if (item.component_name === "KpiComponent") {
-          content = "KPI (by SQL)";
-        } else if (item.component_name === "BarChartComponent") {
-          content = "Bar Chart (by SQL)";
-        } else if (item.component_name === "ScatterPlotComponent") {
-          content = "Scatter Plot (by SQL)";
-        } else {
-          content = "Unknown";
-        }
-        
+        const content = (item.component_name && COMPONENT_TITLES[item.component_name]) || "Unknown";
+
         // Ensure component_id is set (generate if missing from layout)
         const component_id = item.id || item.component_id || generateComponentId();
         const { minW, minH } = getMinSize(item.component_name);
+        const restItem = { ...item };
+        delete restItem.id;
 
         try {
           const widgetEl = gridRef.current?.addWidget({
-            x: item.x,
-            y: item.y,
-            w: Math.max(item.w, minW),
-            h: Math.max(item.h, minH),
+            ...restItem,
+            id: item.id !== undefined ? String(item.id) : undefined,
+            w: Math.max(item.w ?? 0, minW),
+            h: Math.max(item.h ?? 0, minH),
             minW,
             minH,
             content,  // Keep for GridStack compatibility
-            text: item.text,
-            component_name: item.component_name,
             component_id,  // Now always set
-            color: item.color,
-            font_size: item.font_size,
-            image: item.image,
-            // ImageComponent (asset-store based) properties
-            image_asset: item.image_asset,
-            image_asset_url: item.image_asset_url,
-            image_fit: item.image_fit,
-            image_alignment: item.image_alignment,
-            automatic_loading: item.automatic_loading,
-            leading_object_type: item.leading_object_type,
-            // VariantsComponent — persisted advanced settings
-            extraction: item.extraction,
-            iso: item.iso,
-            timeout_s: item.timeout_s,
-            business_object_types: item.business_object_types,
-            business_activities: item.business_activities,
-            // LogStatisticsComponent properties
-            show_num_events: item.show_num_events,
-            show_num_activities: item.show_num_activities,
-            show_num_objects: item.show_num_objects,
-            show_num_object_types: item.show_num_object_types,
-            show_earliest_timestamp: item.show_earliest_timestamp,
-            show_newest_timestamp: item.show_newest_timestamp,
-            show_duration: item.show_duration,
-            // NewOCDFGComponent properties
-            show_controls: item.show_controls,
-            initial_interaction_locked: item.initial_interaction_locked,
-            // OCDottedChartComponent properties
-            x_axis: item.x_axis,
-            y_axis: item.y_axis,
-            color_by: item.color_by,
-            shape_by: item.shape_by,
-            row_order: item.row_order,
-            max_points: item.max_points,
-            layout_direction: item.layout_direction,
-            // PieChartComponent properties
-            query: item.query,
-            ring_text: item.ring_text,
-            chart_type: item.chart_type,
-            title: item.title,
-            label_column: item.label_column,
-            value_column: item.value_column,
-            show_legend: item.show_legend,
-            show_tooltip: item.show_tooltip,
-            // OCCNComponent properties
-            relative_occurrence_threshold: item.relative_occurrence_threshold,
-            object_types: item.object_types,
-            // ProcessAreaComponent properties
-            algorithm: item.algorithm,
-            w_temporal: item.w_temporal,
-            w_cardinality: item.w_cardinality,
-            w_divergence: item.w_divergence,
-            alpha: item.alpha,
-            beta: item.beta,
-            // SqlQueryComponent properties (`query` is already set above,
-            // shared with PieChartComponent)
-            name: item.name,
-            query_asset: item.query_asset,
-            row_limit: item.row_limit,
-            // KpiComponent / BarChartComponent / ScatterPlotComponent
-            prefix: item.prefix,
-            suffix: item.suffix,
-            decimals: item.decimals,
-            horizontal: item.horizontal,
-            show_values: item.show_values,
-            x_column: item.x_column,
-            y_column: item.y_column,
-            series_column: item.series_column,
-            x_label: item.x_label,
-            y_label: item.y_label,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
             const node = grid.getGridItems().find(gridItem => gridItem === widgetEl)?.gridstackNode;
             if (node) {
-              node.component_name = item.component_name;
-              node.component_id = component_id;  // Ensure it's set
-              node.text = item.text;
-              node.color = item.color; // For NumberOfEventsComponent
-              node.font_size = item.font_size;
-              node.image = item.image; // For ImageComponent (legacy upload)
-              node.image_asset = item.image_asset; // For ImageComponent
-              node.image_asset_url = item.image_asset_url; // For ImageComponent
-              node.image_fit = item.image_fit; // For ImageComponent
-              node.image_alignment = item.image_alignment; // For ImageComponent
-              node.automatic_loading = item.automatic_loading; // For VariantsComponent
-              node.leading_object_type = item.leading_object_type; // For VariantsComponent
-              node.extraction = item.extraction;   // For VariantsComponent advanced settings
-              node.iso = item.iso;                 // For VariantsComponent advanced settings
-              node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
-              node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
-              node.business_activities = item.business_activities;     // VariantsComponent resource-aware
-              // LogStatisticsComponent properties
-              node.show_num_events = item.show_num_events;
-              node.show_num_activities = item.show_num_activities;
-              node.show_num_objects = item.show_num_objects;
-              node.show_num_object_types = item.show_num_object_types;
-              node.show_earliest_timestamp = item.show_earliest_timestamp;
-              node.show_newest_timestamp = item.show_newest_timestamp;
-              node.show_duration = item.show_duration;
-              // PieChartComponent properties
-              node.query = item.query;
-              node.ring_text = item.ring_text;
-              node.chart_type = item.chart_type;
-              node.title = item.title;
-              node.label_column = item.label_column;
-              node.value_column = item.value_column;
-              node.show_legend = item.show_legend;
-              node.show_tooltip = item.show_tooltip;
-              // NewOCDFGComponent properties
-              node.show_controls = item.show_controls;
-              node.initial_interaction_locked = item.initial_interaction_locked;
-              // OCDottedChartComponent properties
-              node.x_axis = item.x_axis;
-              node.y_axis = item.y_axis;
-              node.color_by = item.color_by;
-              node.shape_by = item.shape_by;
-              node.row_order = item.row_order;
-              node.max_points = item.max_points;
-              node.layout_direction = item.layout_direction;
-              // OCCNComponent properties
-              node.relative_occurrence_threshold = item.relative_occurrence_threshold;
-              node.object_types = item.object_types;
-              // ProcessAreaComponent properties
-              node.algorithm = item.algorithm;
-              node.w_temporal = item.w_temporal;
-              node.w_cardinality = item.w_cardinality;
-              node.w_divergence = item.w_divergence;
-              node.alpha = item.alpha;
-              node.beta = item.beta;
-              // SqlQueryComponent properties
-              node.name = item.name;
-              node.query = item.query;
-              node.query_asset = item.query_asset;
-              node.row_limit = item.row_limit;
-              // KpiComponent / BarChartComponent / ScatterPlotComponent
-              node.prefix = item.prefix;
-              node.suffix = item.suffix;
-              node.decimals = item.decimals;
-              node.horizontal = item.horizontal;
-              node.show_values = item.show_values;
-              node.x_column = item.x_column;
-              node.y_column = item.y_column;
-              node.series_column = item.series_column;
-              node.x_label = item.x_label;
-              node.y_label = item.y_label;
+              Object.assign(node, item, { component_id });
             }
-          }
-          // Set data attribute for persistence
-          if (widgetEl) {
             widgetEl.dataset.componentName = item.component_name;
           }
         } catch {

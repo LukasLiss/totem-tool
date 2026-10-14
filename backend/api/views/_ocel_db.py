@@ -342,10 +342,12 @@ def _filter_shadow(db, fp):
 
 def _object_types(db: OcelDuckDB) -> list[str]:
     """Distinct object types in the log (sorted, frontend-friendly)."""
-    return sorted(
+    return [
         r[0]
-        for r in db.conn.execute("SELECT DISTINCT obj_type FROM objects").fetchall()
-    )
+        for r in db.conn.execute(
+            "SELECT DISTINCT obj_type FROM objects ORDER BY obj_type"
+        ).fetchall()
+    ]
 
 
 def _object_types_with_counts(db: OcelDuckDB) -> list[dict]:
