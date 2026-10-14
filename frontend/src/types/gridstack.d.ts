@@ -1,4 +1,11 @@
 import 'gridstack';
+import type {
+  TextAlign,
+  TextFontFamily,
+  TextFontWeight,
+  TextVerticalAlign,
+} from '@/components/text-box/textBoxFormat';
+import type { RichTextDoc } from '@/components/text-box/richText';
 
 declare module 'gridstack' {
   interface GridStackWidget {
@@ -6,7 +13,19 @@ declare module 'gridstack' {
     component_name?: string;
     order?: number;
     text?: string;
+    // TextBoxComponent block-level formatting (see #373). `sans`/`serif`/`mono`
+    // and the align keywords are choice keys mirrored from the Django model.
     font_size?: number;
+    font_family?: TextFontFamily;
+    font_weight?: TextFontWeight;
+    italic?: boolean;
+    underline?: boolean;
+    text_align?: TextAlign;
+    vertical_align?: TextVerticalAlign;
+    text_color?: string;
+    background_color?: string;
+    line_height?: number;
+    rich_text?: RichTextDoc | null;
     color?: string;
     image?: string;
     automatic_loading?: boolean;

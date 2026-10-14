@@ -11,6 +11,7 @@ import type { ComponentProps } from "../../components/componentMap";
 import type { SelectedFile } from "../../contexts/SelectedFileContext";
 import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext";
 import { toast } from "sonner";
+import { textBoxFormatProps } from "../../components/text-box/textBoxFormat";
 
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
@@ -232,7 +233,15 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       if (component_name === "NumberofEventsComponent") {
         props = { color: "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: node.text || "Enter text here", font_size: 14 };  
+        // Formatting comes off the node via one helper, so the save and
+        // load lists below cannot drift apart as options are added.
+        props = {
+          text: node.text ?? "",
+          ...textBoxFormatProps(node),
+          // The rich-text document, when the box has one. Null is meaningful:
+          // it means "plain text box", and the backend stores it as such.
+          rich_text: node.rich_text ?? null,
+        };
       } else if (component_name === "ImageComponent") {
         props = {
           image: node.image,
@@ -349,7 +358,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_tooltip: node.show_tooltip ?? true,
         };
       } else {
-        props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
+        props = {
+          text: node.el ? node.el.innerHTML.trim() : "",
+          ...textBoxFormatProps(node),
+        };
       }
       
       return {
@@ -451,7 +463,18 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             component_name: item.component_name,
             component_id,  // Now always set
             color: item.color,
+            // TextBoxComponent formatting (#373)
             font_size: item.font_size,
+            font_family: item.font_family,
+            font_weight: item.font_weight,
+            italic: item.italic,
+            underline: item.underline,
+            text_align: item.text_align,
+            vertical_align: item.vertical_align,
+            text_color: item.text_color,
+            background_color: item.background_color,
+            line_height: item.line_height,
+            rich_text: item.rich_text,
             image: item.image,
             // ImageComponent (asset-store based) properties
             image_asset: item.image_asset,
@@ -529,7 +552,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.component_id = component_id;  // Ensure it's set
               node.text = item.text;
               node.color = item.color; // For NumberOfEventsComponent
+              // TextBoxComponent formatting (#373) — must be set here too,
+              // not only in the addWidget literal above, or the values
+              // round-trip to the DB but never reach the component.
               node.font_size = item.font_size;
+              node.font_family = item.font_family;
+              node.font_weight = item.font_weight;
+              node.italic = item.italic;
+              node.underline = item.underline;
+              node.text_align = item.text_align;
+              node.vertical_align = item.vertical_align;
+              node.text_color = item.text_color;
+              node.background_color = item.background_color;
+              node.line_height = item.line_height;
+              node.rich_text = item.rich_text;
               node.image = item.image; // For ImageComponent (legacy upload)
               node.image_asset = item.image_asset; // For ImageComponent
               node.image_asset_url = item.image_asset_url; // For ImageComponent
