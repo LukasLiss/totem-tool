@@ -37,7 +37,7 @@ An OCCN with `relativeOccuranceThreshold=0` is guaranteed to be able to replay t
 
 ### Discovering from DuckDB
 
-`discover_occn` also accepts an `OcelDuckDB`, the DuckDB-backed OCEL representation used throughout the TOTeM tool. This is the path the web application uses.
+`discover_occn` also accepts an `OcelDuckDB`, the DuckDB-backed OCEL representation.
 
 ```python
 from totem_lib import discover_occn
@@ -53,7 +53,7 @@ See [`examples/example_occn_duckdb.py`](https://github.com/LukasLiss/totem-tool/
 
 ## Serializing to JSON
 
-`serialize_occn` converts an `OCCausalNet` into a JSON-serializable `dict`. This is the payload the TOTeM frontend consumes (served by the backend's `/api/occn/` endpoint and rendered by the OCCN dashboard component).
+`serialize_occn` converts an `OCCausalNet` into a JSON-serializable `dict`.
 
 ```python
 import json
@@ -190,7 +190,7 @@ for detail in result.context_details:
         print(detail.event_ids, "->", sorted(detail.escaping))
 ```
 
-The OCCN parameter also accepts the JSON format saved by the visual OCCN editor (introduced in PR #243), a plain marker-groups dict (`OCCausalNet.from_dict` format), a JSON string, or a file path. With `granularity="profile"`, over-permissive cardinalities and object distributions (key groups) reduce the precision as well. The `max_states` parameter (default 1000) bounds the per-context state space search; capped replays contribute no model behavior and are reported in `num_state_capped_replays` — results with a non-zero count are approximations (`max_states=None` computes the exact value).
+The OCCN parameter also accepts a dict whose `markerGroups` field uses the `OCCausalNet.from_dict` format, a plain marker-groups dict (`OCCausalNet.from_dict` format), a JSON string, or a file path. With `granularity="profile"`, over-permissive cardinalities and object distributions (key groups) reduce the precision as well. The `max_states` parameter (default 1000) bounds the per-context state space search; capped replays contribute no model behavior and are reported in `num_state_capped_replays` — results with a non-zero count are approximations (`max_states=None` computes the exact value).
 
 
 

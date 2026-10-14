@@ -7,25 +7,12 @@ unit represents and therefore also defines the population over which fitness is
 reported.
 
 This page is the implementation-level contract for replay-unit extraction
-and replay fitness. Related concerns are documented separately:
+and replay fitness. [OCCN precision](occn_precision.md) covers the
+complementary question: how much behavior the model permits that the log never
+exhibits.
 
-- [OCCN precision](occn_precision.md) covers the complementary question: how
-  much behavior the model permits that the log never exhibits.
-- [OCCN Replay Fitness in the TOTeM Tool](https://github.com/LukasLiss/totem-tool/blob/main/docs/OCCN_REPLAY_FITNESS.md)
-  describes the backend endpoints and the conformance view built on this API.
-- [Model Assets](https://github.com/LukasLiss/totem-tool/blob/main/docs/MODEL_ASSETS.md) defines the canonical OCCN JSON format,
-  validation, project scoping, and asset storage.
-- [The canonical OCCN example](https://github.com/LukasLiss/totem-tool/blob/main/docs/examples/model-assets/occn-v1.json) is a
-  complete model payload accepted by the asset store and OCCN deserializer.
-- [The compatibility analysis](https://github.com/LukasLiss/totem-tool/blob/main/docs/OCCN_REPLAY_FITNESS_COMPATIBILITY.md) records
-  how the reference algorithm was mapped to the current library. It is design
-  history; this page defines the implemented behavior.
-- The library README contains a concise API entry point; this page is the
-  source of truth for conformance semantics and limitations.
-
-The library API is storage-independent after extraction. It does not access
-Django projects, model assets, or HTTP state. The backend is responsible for
-loading the selected event log and model asset before invoking the library.
+The replay API is storage-independent after extraction: once the replay units
+are built, replay no longer reads the event log.
 
 ## Replay-Unit Extraction
 
@@ -82,9 +69,8 @@ not be compared as if they described the same replay-unit population.
 ### Stored process executions (`stored_column`)
 
 This strategy requires `execution_column`, the name of a column of the
-`events` table that holds precomputed process execution ids -- typically
-written by the Variants Explorer (see
-[`RESOURCE_AWARE_VARIANTS.md`](https://github.com/LukasLiss/totem-tool/blob/main/docs/RESOURCE_AWARE_VARIANTS.md)). Every
+`events` table that holds precomputed process execution ids -- for example
+ids stored with `write_event_column`. Every
 distinct value becomes one replay unit with the id `stored_column:<value>`;
 events without a value belong to no unit. Because a stored column assigns
 at most one id per event, the units partition the events that carry an id.
@@ -97,9 +83,8 @@ shared worker does not merge executions.
 
 `extract_occn_replay_units(..., object_types=[...])` drops every object whose
 type is not listed from the events before units are built; events left
-without objects are dropped entirely. The backend exposes this as
-`restrict_to_model_object_types`, which uses the object types of the selected
-OCCN. It exists because replay matches bindings against *exactly* the
+without objects are dropped entirely. To project onto the model, pass its
+object types, `object_types=occn.object_types`. The projection exists because replay matches bindings against *exactly* the
 observed objects of an event: a model that deliberately leaves out a shared
 worker resource would otherwise report every event touching the worker as
 non-fitting at `START_worker`.
@@ -143,11 +128,9 @@ state limit.
 
 ## Canonical Example
 
-The repository's [OCCN v1 example](https://github.com/LukasLiss/totem-tool/blob/main/docs/examples/model-assets/occn-v1.json) models
-one visible activity, `a`, synchronizing the `order` and `item` object types.
-Its marker groups require exactly one order and at least one item. The file is a
-model payload and can be uploaded directly through Model Assets; it is not an
-asset API envelope and does not contain a project or asset name.
+Take a minimal OCCN with one visible activity, `a`, synchronizing the `order`
+and `item` object types. Its marker groups require exactly one order and at
+least one item.
 
 With the default state limit, the following single-event replay units exercise
 both central outcomes:
@@ -238,8 +221,7 @@ fields have the following meanings:
 
 Fields without applicable diagnostic information are `null` or an empty list.
 Full event and object details are deliberately omitted from the fitness result;
-they can be requested through the TOTeM Tool's
-[replay-unit detail endpoint](https://github.com/LukasLiss/totem-tool/blob/main/docs/OCCN_REPLAY_FITNESS.md#inspect-a-replay-unit).
+the replay units passed to `occn_replay_fitness` already contain them.
 
 Inconclusive units are not treated as deviations. Aggregate values are:
 
@@ -303,13 +285,14 @@ pairs admitted for each unit. The default limit is `1000`.
 The limit bounds admitted search states, but the semantics layer may still need
 to enumerate many bindings while producing the successors of one state. The
 limit is therefore a deterministic correctness safeguard, not a strict runtime
-or memory guarantee. Backend request cancellation or timeouts remain separate
-concerns.
+or memory guarantee. Callers that need a time limit must enforce it
+themselves.
 
 ## Scope Boundaries
 
 - Replay-unit extraction and partitioning are handled outside this metric.
-- Model-asset deserialization and validation belong to the backend integration.
+- Loading and validating the model are up to the caller (see `occn_from_dict`
+  and `validate_occn_dict`).
 - The metric reports replayability and a bounded failure position, not a
   cost-optimal alignment or a complete causal diagnosis.
 - The current default state limit is an initial safeguard and has not been

@@ -3,8 +3,7 @@
 Object-centric process mining in Python.
 
 `totem-lib` reads OCEL 2.0 event logs and discovers and checks object-centric
-process models. It is the analysis core of the
-[TOTeM Tool](https://github.com/LukasLiss/totem-tool) and can be used on its own.
+process models.
 
 - **TOTeM**: discover Temporal Object Type Models and check them against a log
 - **Process areas**: from TOTeM relations or from resource indicators

@@ -47,8 +47,8 @@ See [`example_process_areas.py`](https://github.com/LukasLiss/totem-tool/blob/ma
 
 ### Discovering from DuckDB
 
-`discover_process_areas_db` takes an `OcelDuckDB` instead. **This is the path the
-web application uses**, and the one to prefer for anything large: every counter
+`discover_process_areas_db` takes an `OcelDuckDB` instead. It is the one to
+prefer for anything large: every counter
 is aggregated inside DuckDB, so only `O(|OT|^2)` rows ever reach Python and
 DuckDB spills its own intermediates to disk. A log bigger than RAM goes through.
 
@@ -150,7 +150,7 @@ Note the asymmetry: the thesis allows a weight of zero (Def. 4.1.11 takes
 why — `alpha = 0` leaves nothing to separate the object types and collapses the
 whole log onto one layer, `beta = 0` leaves nothing holding peers together.
 `assign_layers` still accepts `0` for either, because it is well defined and
-useful for isolating one force while testing; the UI sliders start at `0.1`.
+useful for isolating one force while testing.
 Both zero at once is rejected outright: the objective would be identically zero
 and the "hierarchy" whatever the solver happened to pick.
 
@@ -168,7 +168,7 @@ output against the thesis without this table will look like a bug.
 | D3  | **The temporal attractive force counts disjoint lifespans as handovers.** Thesis Def. 4.1.4 sets `psi_temp = \|partial overlaps\| / \|O2O\|`, where partial overlap requires the two lifespans to actually intersect. The reference uses TOTeM's _initiating_ relation instead, which also counts pairs whose lifespans are completely disjoint. On `container_logistics` that is 650 of the 5032 pairs in the numerator (13%); on `order-management`, 5 of 12660 (0.04%). The `phi_temp` side matches the thesis exactly — TOTeM's _dependent_ relation is precisely the lifespan containment of Def. 4.1.3. |
 | D4  | `margin_scale` is a reference-implementation extension, not in the thesis: the hinge margin becomes `1 + margin_scale * phi`. Defaults to `0`, which is the thesis's margin of exactly 1.                                                                                                                                                                                                                                                                                         |
 | D5  | **Objects that never appear in an event are excluded** from every population count, where the thesis's `O↓ot` is all objects of the type. Such an object has no lifespan, no activity and no O2O relation, so no indicator can score it; including it would only dilute the denominators.                                                                                                                                                                                         |
-| D6  | **Ours.** The thesis puts exactly one process area per layer (Def. 4.3.2). We split each layer into connected components over the co-occurring type pairs, which is what TOTeM-Tool has always rendered.                                                                                                                                                                                                                                                                          |
+| D6  | **Ours.** The thesis puts exactly one process area per layer (Def. 4.3.2). We split each layer into connected components over the co-occurring type pairs.                                                                                                                                                                                                                                                                          |
 
 Two things that look like deviations but are not:
 
