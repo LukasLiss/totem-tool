@@ -25,6 +25,7 @@ import PieChartComponent from "./PieChartComponent";
 import KpiComponent from "./sql-widgets/KpiComponent";
 import BarChartComponent from "./sql-widgets/BarChartComponent";
 import ScatterPlotComponent from "./sql-widgets/ScatterPlotComponent";
+import { OCHandoverComponent, ResourceProfilingComponent } from "./OrgaMiningComponents";
 
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -44,4 +45,6 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   KpiComponent: KpiComponent as unknown as React.FC<ComponentProps>,
   BarChartComponent: BarChartComponent as unknown as React.FC<ComponentProps>,
   ScatterPlotComponent: ScatterPlotComponent as unknown as React.FC<ComponentProps>,
+  OCHandoverComponent,
+  ResourceProfilingComponent,
 };

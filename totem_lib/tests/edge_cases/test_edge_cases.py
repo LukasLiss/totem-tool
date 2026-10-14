@@ -33,7 +33,7 @@ from totem_lib.totem.totem import totemDiscovery
 from totem_lib.totem.totem_db import totemDiscovery_db
 from totem_lib.dfg.ocdfg import OCDFG
 from totem_lib.dfg.ocdfg_db import OCDFGDb, NewOCDFGDb
-from totem_lib.ocpn.ocpn import discover_oc_petri_net_polars
+from totem_lib.ocpn.ocpn_db import discover_ocpn_db
 from totem_lib.occn.discover import discover_occn
 from totem_lib.occn.precision import occn_precision
 from totem_lib.variants.ocvariants_db import find_variants as find_variants_db
@@ -84,7 +84,7 @@ XFAIL_IMPORT_POLARS: dict = {}
 XFAIL_TOTEM_POLARS: dict = {}
 XFAIL_OCDFG_POLARS: dict = {}
 XFAIL_VARIANTS_POLARS: dict = {}
-XFAIL_OCPN_POLARS: dict = {}
+XFAIL_OCPN_DB: dict = {}
 XFAIL_OCCN: dict = {}
 # occn_precision is computed from the discovered OCCN, so it normally inherits
 # any discovery crash — but keep it a separate dict so precision can be pinned
@@ -166,13 +166,14 @@ def test_new_ocdfg_db(json_path):
 
 
 # ---------------------------------------------------------------------------
-# OCPN (Polars only; delegates to pm4py)
+# OCPN (DuckDB only)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("json_path", _params())
-def test_ocpn_polars(json_path, request):
-    _apply_xfail(request, json_path.stem, XFAIL_OCPN_POLARS)
-    discover_oc_petri_net_polars(import_ocel(str(json_path)))
+def test_ocpn_db(json_path, request):
+    _apply_xfail(request, json_path.stem, XFAIL_OCPN_DB)
+    with _load_db(json_path) as db:
+        discover_ocpn_db(db)
 
 
 # ---------------------------------------------------------------------------
@@ -246,8 +247,8 @@ def test_duplicate_event_ids_deduped_by_polars_import():
     The Polars importer drops the duplicate too, so both paths agree.
 
     Before #296 it kept both rows and only warned, which crashed OCCN discovery
-    and pm4py's OCPN miner and made the same file mean two different things
-    depending on which importer read it.
+    and the (since removed) Polars OCPN miner and made the same file mean two
+    different things depending on which importer read it.
     """
     with pytest.warns(UserWarning, match="Duplicate event IDs"):
         ocel = import_ocel(str(EDGE_CASES_DIR / "duplicate_event_ids.json"))
@@ -268,9 +269,9 @@ def test_cyclic_log_yields_replayable_occn():
     """
     A length-2 loop (A -> B -> A -> B) is discovered as an actual cycle.
 
-    pm4py's plain dependency measure rejects both arcs of such a loop, and its
-    own length-2-loop repair never runs, leaving a net with no arcs at all.
-    `discover_occn` restores those arcs, so every event replays.
+    The plain dependency measure rejects both arcs of such a loop, so the
+    Heuristics Miner falls back to length-2 loop detection over every activity
+    and restores those arcs, so every event replays.
     """
     ocel = import_ocel(str(EDGE_CASES_DIR / "cyclic.json"))
     occn = discover_occn(ocel, OCCN_THRESHOLD)

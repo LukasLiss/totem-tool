@@ -359,7 +359,7 @@ def test_export_ocel2_sqlite(editor, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM event").fetchone()[0] == 3
     assert conn.execute("SELECT COUNT(*) FROM object").fetchone()[0] == 3
     assert conn.execute("SELECT COUNT(*) FROM object_object").fetchone()[0] == 1
-    # Attribute columns survived the pm4py conversion.
+    # Attribute columns survived the export.
     color = conn.execute(
         'SELECT "color" FROM object_radio WHERE ocel_id = ?', ["r1"]
     ).fetchone()

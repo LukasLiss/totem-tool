@@ -2,6 +2,8 @@ from typing import Dict, Set, List
 import networkx as nx
 from datetime import datetime
 from pulp import *
+
+from ..solver import solve
 import graphviz
 import os
 from pathlib import Path
@@ -767,12 +769,7 @@ def mlpaDiscovery(totem: Totem):
     )
     model += obj_func
 
-    # solve the model
-    status = model.solve()
-
-    # print
-    for var in level.values():
-        print(f"{var.name}: {var.value()}")
+    solve(model)
 
     levels_dict = dict()
     for type in tempGraph["nodes"]:
