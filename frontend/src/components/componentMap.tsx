@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Textarea } from '@/components/ui/textarea'; // ShadCN Textarea
 import { Button } from '@/components/ui/button'; // ShadCN Button
 import {
   Card,
@@ -78,6 +77,26 @@ import SqlQueryEditor, {
 import { useFilterVersion } from '@/store/filterStore';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import TextBoxEditor from '@/components/text-box/TextBoxEditor';
+import RichTextRenderer from '@/components/text-box/RichTextRenderer';
+import {
+  conversionPatch,
+  docForWidget,
+  isRichTextDoc,
+  plainTextFromDoc,
+  type RichTextDoc,
+} from '@/components/text-box/richText';
+import {
+  TEXT_BOX_FORMAT_DEFAULTS,
+  resolveTextBoxFormat,
+  textBoxContainerStyle,
+  textBoxTextStyle,
+  type TextAlign,
+  type TextBoxFormat,
+  type TextFontFamily,
+  type TextFontWeight,
+  type TextVerticalAlign,
+} from '@/components/text-box/textBoxFormat';
 
 function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange }: {
   title: string;
@@ -104,7 +123,19 @@ export interface ComponentProps {
     component_id: number;
     component_name?: string;
     text?: string;
+    // TextBoxComponent block-level formatting (#373)
     font_size?: number;
+    font_family?: TextFontFamily;
+    font_weight?: TextFontWeight;
+    italic?: boolean;
+    underline?: boolean;
+    text_align?: TextAlign;
+    vertical_align?: TextVerticalAlign;
+    text_color?: string;
+    background_color?: string;
+    line_height?: number;
+    // The TipTap document, when the box has per-selection formatting.
+    rich_text?: RichTextDoc | null;
     color?: string;
     image?: string;
     // ImageComponent properties (asset-store based)
@@ -184,42 +215,115 @@ export interface ComponentProps {
 }
 
 
-// TextBoxComponent: Editable text with ShadCN UI
+// TextBoxComponent: free text plus block-level formatting (#373). Edit mode
+// shows a formatting toolbar above the textarea, the way ImageComponent
+// shows its settings; view mode renders the same styles on a paragraph.
+// The text is a React text node throughout, never HTML, so there is no
+// markup to sanitise.
 export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
-  const [text, setText] = React.useState(node.text || 'Enter text here');
+  // No literal placeholder text: the editor shows a real placeholder, so an
+  // empty box stays empty instead of carrying words the user must delete.
+  const [text, setText] = React.useState(node.text ?? '');
   // Sync local state with node.text when it changes (e.g., from loading or updates)
   React.useEffect(() => {
-    setText(node.text || 'Enter text here');
+    setText(node.text ?? '');
   }, [node.text]);
 
-  const handleTextChange = (value: string) => {
-    setText(value);
-    onUpdate?.({ text: value });
+  // Formatting has to live in React state, not be derived from the node on
+  // each render: `onUpdate` reaches the node through `Object.assign`, which
+  // mutates it without scheduling a render. Deriving it meant a click on
+  // Bold changed nothing on screen until a save-and-reload rebuilt the
+  // widget. Same shape as ImageComponent's fit/alignment state.
+  const [format, setFormat] = React.useState(() => resolveTextBoxFormat(node));
+
+  // Re-sync when the node itself changes — a layout load, or an update from
+  // somewhere other than this toolbar.
+  React.useEffect(() => {
+    setFormat(resolveTextBoxFormat(node));
+    // Each field is listed so a load actually re-syncs; `node` is mutated in
+    // place, so depending on the object identity would never fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    node.font_size,
+    node.font_family,
+    node.font_weight,
+    node.italic,
+    node.underline,
+    node.text_align,
+    node.vertical_align,
+    node.text_color,
+    node.background_color,
+    node.line_height,
+  ]);
+
+  const containerStyle = textBoxContainerStyle(format);
+  const textStyle = textBoxTextStyle(format);
+
+  // Update the preview immediately, and push the patch onto the GridStack
+  // node so getLayout() picks it up at save time.
+  const handleFormatChange = (patch: Partial<TextBoxFormat>) => {
+    setFormat((current) => resolveTextBoxFormat({ ...current, ...patch }));
+    onUpdate?.(patch);
+  };
+
+  // The document to edit: the stored one, or one built from this box's plain
+  // text and block formatting so a box saved before rich text existed opens
+  // looking exactly as it already does.
+  const doc = React.useMemo(
+    () => docForWidget(node.rich_text, text, format),
+    [node.rich_text, text, format],
+  );
+  const hasRichText = isRichTextDoc(node.rich_text);
+
+  // On the first real edit the box moves onto its document: the text-level
+  // block fields are reset, because the document now owns them (see
+  // `conversionPatch`). Idempotent, so later edits just update the document.
+  const handleDocChange = (next: RichTextDoc) => {
+    const plain = plainTextFromDoc(next);
+    setText(plain);
+    if (!hasRichText) {
+      setFormat((current) =>
+        resolveTextBoxFormat({
+          ...current,
+          ...(conversionPatch(next) as Partial<TextBoxFormat>),
+        }),
+      );
+    }
+    onUpdate?.({ ...conversionPatch(next), text: plain } as Partial<GridStackNode>);
   };
 
   return (
-    <div style={{ height: '100%', width: '100%',fontSize: node.font_size || 14 }}>
+    <div style={{ height: '100%', width: '100%' }}>
       {isEditMode ? (
-        // Edit mode: Editable
-        <Card className="w-full h-full min-h-80 rounded-none">
-
-          <CardContent>
-            <Textarea
-            value={text}
-            onChange={(e) => handleTextChange(e.target.value)}
-            placeholder="Type here..."
-            className="w-full h-full resize-none"
+        <Card className="w-full h-full rounded-none flex flex-col gap-0 py-0 overflow-hidden">
+          <TextBoxEditor
+            doc={doc}
+            format={format}
+            onDocChange={handleDocChange}
+            onFormatChange={handleFormatChange}
+            idPrefix={`text-box-${node.component_id}`}
           />
-          </CardContent>
         </Card>
-
       ) : (
-        // Normal mode: Read-only
-        <Card className="w-full h-full min-h-80 rounded-none">
-          <CardContent>
-            <div>
-              <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
-            </div>
+        // min-h is deliberately absent: the card fills whatever the grid tile
+        // is, rather than forcing 320px into a 2-row widget.
+        <Card className="w-full h-full rounded-none py-0 overflow-hidden">
+          <CardContent className="h-full p-3" style={containerStyle}>
+            {hasRichText ? (
+              // The document carries its own styling; the container only
+              // supplies the plain defaults for anything a run leaves unset.
+              <div
+                style={{
+                  fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
+                  color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
+                  lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+                }}
+              >
+                <RichTextRenderer doc={doc} />
+              </div>
+            ) : (
+              <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -43,7 +43,14 @@ from totem_lib.process_areas import (
 
 from .cache_utils import RESULTS_CACHE, get_cached_result, make_cache_key
 from .lru_filecache import LRUFileBasedCache
-from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
+from .models import (
+    Dashboard,
+    EventLog,
+    ProcessAreaComponent,
+    Project,
+    ProjectAsset,
+    TextBoxComponent,
+)
 from .serializers import ProjectAssetSerializer
 from .views import _parse_process_area_params, _process_area_cache_params, EventLogViewSet
 from .views._ocel_db import (
@@ -3352,6 +3359,468 @@ class DashboardAuthorizationAndLayoutTests(TestCase):
         self.assertEqual(layout.status_code, 200)
         self.assertEqual(layout.data[0]["component_name"], "FilterStackComponent")
         self.assertEqual(layout.data[0]["filter_stack_json"], rules)
+
+
+class TextBoxComponentFormattingTests(TestCase):
+    """Block-level formatting on the Text Box widget (#373): it must survive a
+    save/load round-trip, and every value must be validated down to something
+    renderable rather than trusted or rejected."""
+
+    FORMAT = {
+        "font_size": 32,
+        "font_family": "serif",
+        "font_weight": "bold",
+        "italic": True,
+        "underline": True,
+        "text_align": "center",
+        "vertical_align": "middle",
+        "text_color": "#ffffff",
+        "background_color": "#1e293b",
+        "line_height": 2.0,
+    }
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="text-box-owner")
+        self.project = Project.objects.create(name="TextBoxes")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, **props):
+        item = {
+            "x": 0,
+            "y": 0,
+            "w": 2,
+            "h": 2,
+            "component_name": "TextBoxComponent",
+            "text": "Quarterly notes",
+        }
+        item.update(props)
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [item]},
+            format="json",
+        )
+
+    def _layout(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(response.status_code, 200)
+        return response.data[0]
+
+    def test_every_formatting_option_round_trips(self):
+        self.assertEqual(self._save(**self.FORMAT).status_code, 200)
+        item = self._layout()
+        for key, expected in self.FORMAT.items():
+            self.assertEqual(item[key], expected, key)
+
+    def test_get_layout_exposes_the_new_fields(self):
+        self.assertEqual(self._save().status_code, 200)
+        item = self._layout()
+        for key in self.FORMAT:
+            self.assertIn(key, item)
+
+    def test_defaults_reproduce_the_unformatted_look(self):
+        """A payload from a client that knows nothing about formatting — i.e.
+        every dashboard saved before #373 — must come back unstyled."""
+        self.assertEqual(self._save().status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 14)
+        self.assertEqual(item["font_family"], "sans")
+        self.assertEqual(item["font_weight"], "normal")
+        self.assertFalse(item["italic"])
+        self.assertFalse(item["underline"])
+        self.assertEqual(item["text_align"], "left")
+        self.assertEqual(item["vertical_align"], "top")
+        self.assertEqual(item["text_color"], "#1e293b")
+        self.assertEqual(item["background_color"], "#ffffff")
+        self.assertEqual(item["line_height"], 1.5)
+
+    def test_a_component_created_before_the_migration_still_loads(self):
+        """The model defaults are what backfill existing rows, so a component
+        created without any formatting must render and serialize."""
+        TextBoxComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0,
+            y=0,
+            w=2,
+            h=2,
+            component_name="TextBoxComponent",
+            text="legacy",
+        )
+        item = self._layout()
+        self.assertEqual(item["text"], "legacy")
+        self.assertEqual(item["font_size"], 14)
+        self.assertEqual(item["text_color"], "#1e293b")
+
+    def test_unknown_choices_fall_back_to_the_default(self):
+        response = self._save(
+            font_family="Comic Sans",
+            font_weight="900",
+            text_align="middle",
+            vertical_align="centre",
+        )
+        self.assertEqual(response.status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_family"], "sans")
+        self.assertEqual(item["font_weight"], "normal")
+        self.assertEqual(item["text_align"], "left")
+        self.assertEqual(item["vertical_align"], "top")
+
+    def test_a_colour_that_is_not_a_hex_literal_is_replaced(self):
+        """These land in an inline style on every dashboard that shows the
+        component, so nothing but #rgb / #rrggbb is stored."""
+        for bad in [
+            "red",
+            "rgb(0,0,0)",
+            "#12345",
+            "red; background: url(https://example.com/x)",
+            "javascript:alert(1)",
+            "",
+            None,
+            42,
+            {"hex": "#fff"},
+        ]:
+            response = self._save(text_color=bad, background_color=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertEqual(item["text_color"], "#1e293b", bad)
+            self.assertEqual(item["background_color"], "#ffffff", bad)
+
+    def test_a_short_hex_colour_is_accepted(self):
+        self.assertEqual(self._save(text_color="#fff").status_code, 200)
+        self.assertEqual(self._layout()["text_color"], "#fff")
+
+    def test_out_of_range_numbers_are_clamped_not_rejected(self):
+        self.assertEqual(self._save(font_size=0, line_height=0).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 8)
+        self.assertEqual(item["line_height"], 0.5)
+
+        self.assertEqual(self._save(font_size=10000, line_height=99).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 200)
+        self.assertEqual(item["line_height"], 5.0)
+
+    def test_non_numeric_sizes_fall_back_to_the_default(self):
+        # NaN / Infinity are absent on purpose: DRF's STRICT_JSON parser
+        # rejects them with a 400 before any of this runs. They are covered
+        # directly in TextBoxValidationHelperTests below.
+        for bad in ["abc", None, True, [], {}]:
+            response = self._save(font_size=bad, line_height=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertEqual(item["font_size"], 14, bad)
+            self.assertEqual(item["line_height"], 1.5, bad)
+
+    def test_a_numeric_string_is_accepted(self):
+        """The frontend sends numbers, but a number input can round-trip a
+        string through a hand-written payload."""
+        self.assertEqual(self._save(font_size="20", line_height="2").status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 20)
+        self.assertEqual(item["line_height"], 2.0)
+
+    def test_rich_text_round_trips_through_save_and_load(self):
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "attrs": {"textAlign": "center"},
+             "content": [{"type": "text", "text": "bold bit",
+                          "marks": [{"type": "bold"}]}]},
+            {"type": "paragraph",
+             "content": [{"type": "text", "text": "red italic bit",
+                          "marks": [{"type": "italic"},
+                                    {"type": "textStyle",
+                                     "attrs": {"color": "#f43f5e"}}]}]},
+        ]}
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["rich_text"], doc)
+
+    def test_plain_text_is_derived_from_the_rich_document(self):
+        """`text` must keep describing what the box shows, for anything that
+        still reads the plain column."""
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "line one"}]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "line two"}]},
+        ]}
+        self.assertEqual(self._save(text="ignored", rich_text=doc).status_code, 200)
+        self.assertEqual(self._layout()["text"], "line one\nline two")
+
+    def test_a_box_without_rich_text_stores_null_and_keeps_its_plain_text(self):
+        self.assertEqual(self._save(text="just words").status_code, 200)
+        item = self._layout()
+        self.assertIsNone(item["rich_text"])
+        self.assertEqual(item["text"], "just words")
+
+    def test_a_hostile_document_is_rebuilt_rather_than_stored(self):
+        doc = {"type": "doc", "content": [
+            {"type": "script", "content": [{"type": "text", "text": "boom"}]},
+            {"type": "paragraph", "attrs": {"textAlign": "middle"},
+             "content": [{"type": "text", "text": "kept", "marks": [
+                 {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
+                 {"type": "textStyle", "attrs": {"color": "red; background:url(x)"}},
+             ]}]},
+        ]}
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        stored = self._layout()["rich_text"]
+        self.assertEqual(len(stored["content"]), 1)
+        run = stored["content"][0]["content"][0]
+        self.assertEqual(run["text"], "kept")
+        self.assertNotIn("marks", run)
+        self.assertNotIn("attrs", stored["content"][0])
+
+    def test_junk_in_rich_text_does_not_500(self):
+        for bad in ("not a doc", [], 42, {"type": "paragraph"}, None):
+            response = self._save(text="fallback", rich_text=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertIsNone(item["rich_text"], bad)
+            self.assertEqual(item["text"], "fallback", bad)
+
+    def test_italic_and_underline_accept_only_booleans_out(self):
+        self.assertEqual(self._save(italic=1, underline=0).status_code, 200)
+        item = self._layout()
+        self.assertIs(item["italic"], True)
+        self.assertIs(item["underline"], False)
+
+
+class TextBoxValidationHelperTests(SimpleTestCase):
+    """The value validators behind the Text Box formatting branch (#373).
+
+    These need no database, and they cover the cases the API cannot reach:
+    DRF's STRICT_JSON parser rejects NaN / Infinity outright, so the
+    non-finite guard only ever fires for a direct Python caller.
+    """
+
+    def test_validated_int_rejects_non_finite_values(self):
+        from .views.dashboards import _validated_int
+
+        # int(float("inf")) raises OverflowError, so finiteness has to be
+        # checked before the cast, not after it.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            self.assertEqual(_validated_int(bad, 14, 8, 200), 14, bad)
+
+    def test_validated_int_clamps_and_falls_back(self):
+        from .views.dashboards import _validated_int
+
+        self.assertEqual(_validated_int(0, 14, 8, 200), 8)
+        self.assertEqual(_validated_int(9999, 14, 8, 200), 200)
+        self.assertEqual(_validated_int("20", 14, 8, 200), 20)
+        self.assertEqual(_validated_int("abc", 14, 8, 200), 14)
+        self.assertEqual(_validated_int(None, 14, 8, 200), 14)
+        # A bool is an int in Python; treating True as 1 would silently
+        # become font-size 8 after clamping.
+        self.assertEqual(_validated_int(True, 14, 8, 200), 14)
+
+    def test_validated_int_rounds_rather_than_truncates(self):
+        from .views.dashboards import _validated_int
+
+        # Must agree with Math.round in resolveTextBoxFormat; int() alone
+        # would give 17 here and disagree with the frontend.
+        self.assertEqual(_validated_int(17.6, 14, 8, 200), 18)
+        self.assertEqual(_validated_int("17.4", 14, 8, 200), 17)
+
+    def test_validated_number_clamps_floats(self):
+        from .views.dashboards import _validated_number
+
+        self.assertEqual(_validated_number(0, 1.5, 0.5, 5.0), 0.5)
+        self.assertEqual(_validated_number(99, 1.5, 0.5, 5.0), 5.0)
+        self.assertEqual(_validated_number("2", 1.5, 0.5, 5.0), 2.0)
+        self.assertEqual(_validated_number("abc", 1.5, 0.5, 5.0), 1.5)
+        self.assertEqual(_validated_number(float("nan"), 1.5, 0.5, 5.0), 1.5)
+
+    def test_validated_hex_color_accepts_only_hex_literals(self):
+        from .views.dashboards import _validated_hex_color
+
+        self.assertEqual(_validated_hex_color("#fff", "#000000"), "#fff")
+        self.assertEqual(_validated_hex_color("#1E293B", "#000000"), "#1E293B")
+        self.assertEqual(_validated_hex_color("  #abc  ", "#000000"), "#abc")
+        for bad in ("red", "#12345", "rgb(0,0,0)", "", None, 42, ["#fff"]):
+            self.assertEqual(_validated_hex_color(bad, "#000000"), "#000000", bad)
+
+    def test_validated_choice_reads_the_models_own_choices(self):
+        from .models import TextBoxComponent
+        from .views.dashboards import _validated_choice
+
+        choices = TextBoxComponent.TEXT_ALIGN_CHOICES
+        self.assertEqual(_validated_choice("center", choices, "left"), "center")
+        self.assertEqual(_validated_choice("Center", choices, "left"), "left")
+        self.assertEqual(_validated_choice("middle", choices, "left"), "left")
+        self.assertEqual(_validated_choice(None, choices, "left"), "left")
+        # The label side of a (value, label) pair must not be accepted.
+        self.assertEqual(_validated_choice("Center", choices, "left"), "left")
+
+
+class TextBoxRichTextValidationTests(SimpleTestCase):
+    """The rich-text whitelist (#373 follow-up).
+
+    The document comes from the browser and is served back to everyone who can
+    open the dashboard, so only known node types, marks and attribute values
+    may survive. It is never rendered as HTML, but it is still untrusted input.
+    """
+
+    def _doc(self, *content):
+        return {"type": "doc", "content": list(content)}
+
+    def _para(self, *content, **attrs):
+        node = {"type": "paragraph", "content": list(content)}
+        if attrs:
+            node["attrs"] = attrs
+        return node
+
+    def _text(self, text, marks=None):
+        node = {"type": "text", "text": text}
+        if marks is not None:
+            node["marks"] = marks
+        return node
+
+    def test_a_plain_document_survives_unchanged(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hello")))
+        self.assertEqual(validated_rich_text(doc), doc)
+
+    def test_known_marks_survive(self):
+        from .rich_text import validated_rich_text
+
+        marks = [{"type": "bold"}, {"type": "italic"}, {"type": "underline"}]
+        doc = self._doc(self._para(self._text("hi", marks)))
+        self.assertEqual(validated_rich_text(doc)["content"][0]["content"][0]["marks"], marks)
+
+    def test_unknown_marks_are_dropped_but_the_text_stays(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "bold"},
+            {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
+            {"type": "evil"},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertEqual(run["marks"], [{"type": "bold"}])
+
+    def test_text_style_keeps_only_valid_attributes(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "textStyle", "attrs": {
+                "color": "#F43F5E",
+                "fontSize": "24px",
+                "fontFamily": "var(--font-serif)",
+            }},
+        ])))
+        attrs = validated_rich_text(doc)["content"][0]["content"][0]["marks"][0]["attrs"]
+        self.assertEqual(
+            attrs,
+            {"color": "#f43f5e", "fontSize": "24px", "fontFamily": "var(--font-serif)"},
+        )
+
+    def test_text_style_rejects_hostile_or_unknown_attribute_values(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "textStyle", "attrs": {
+                "color": "red; background: url(https://evil.example/x)",
+                "fontSize": "24px; position: fixed",
+                "fontFamily": "Comic Sans",
+                "onclick": "alert(1)",
+            }},
+        ])))
+        # Nothing valid is left on the mark, so the mark itself goes.
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertNotIn("marks", run)
+
+    def test_font_size_is_clamped(self):
+        from .rich_text import validated_rich_text
+
+        for sent, expected in (("2px", "8px"), ("999px", "200px"), ("24px", "24px")):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "textStyle", "attrs": {"fontSize": sent}},
+            ])))
+            attrs = validated_rich_text(doc)["content"][0]["content"][0]["marks"][0]["attrs"]
+            self.assertEqual(attrs["fontSize"], expected, sent)
+
+    def test_paragraph_alignment_and_line_height(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi"), textAlign="center", lineHeight="2"))
+        attrs = validated_rich_text(doc)["content"][0]["attrs"]
+        self.assertEqual(attrs["textAlign"], "center")
+        self.assertEqual(attrs["lineHeight"], "2.0")
+
+    def test_unknown_alignment_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi"), textAlign="middle"))
+        self.assertNotIn("attrs", validated_rich_text(doc)["content"][0])
+
+    def test_heading_level_is_restricted(self):
+        from .rich_text import validated_rich_text
+
+        for sent in (9, 0, "2", True, None):
+            doc = self._doc({"type": "heading", "attrs": {"level": sent},
+                             "content": [self._text("h")]})
+            self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 1, sent)
+        doc = self._doc({"type": "heading", "attrs": {"level": 3},
+                         "content": [self._text("h")]})
+        self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3)
+
+    def test_unknown_node_types_are_dropped(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(
+            {"type": "script", "content": [self._text("boom")]},
+            {"type": "image", "attrs": {"src": "javascript:alert(1)"}},
+            self._para(self._text("kept")),
+        )
+        content = validated_rich_text(doc)["content"]
+        self.assertEqual(len(content), 1)
+        self.assertEqual(content[0]["content"][0]["text"], "kept")
+
+    def test_lists_and_blockquotes_survive(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc({"type": "bulletList", "content": [
+            {"type": "listItem", "content": [self._para(self._text("one"))]},
+        ]})
+        result = validated_rich_text(doc)
+        self.assertEqual(result["content"][0]["type"], "bulletList")
+        self.assertEqual(
+            result["content"][0]["content"][0]["content"][0]["content"][0]["text"], "one"
+        )
+
+    def test_anything_that_is_not_a_document_stores_nothing(self):
+        from .rich_text import validated_rich_text
+
+        for bad in (None, "", [], 42, {"type": "paragraph"}, {"content": []},
+                    self._doc(), {"type": "doc", "content": "nope"}):
+            self.assertIsNone(validated_rich_text(bad), bad)
+
+    def test_an_oversized_document_is_rejected_rather_than_stored(self):
+        from .rich_text import MAX_NODES, validated_rich_text
+
+        doc = self._doc(*[self._para(self._text("x")) for _ in range(MAX_NODES)])
+        self.assertIsNone(validated_rich_text(doc))
+
+    def test_a_deeply_nested_document_is_rejected(self):
+        from .rich_text import MAX_DEPTH, validated_rich_text
+
+        node = self._para(self._text("deep"))
+        for _ in range(MAX_DEPTH + 5):
+            node = {"type": "blockquote", "content": [node]}
+        self.assertIsNone(validated_rich_text(self._doc(node)))
+
+    def test_plain_text_is_derived_one_line_per_block(self):
+        from .rich_text import plain_text_from_doc
+
+        doc = self._doc(
+            self._para(self._text("first "), self._text("line", [{"type": "bold"}])),
+            self._para(self._text("second")),
+        )
+        self.assertEqual(plain_text_from_doc(doc), "first line\nsecond")
 
 
 class SqlDashboardComponentsLayoutTests(TestCase):
