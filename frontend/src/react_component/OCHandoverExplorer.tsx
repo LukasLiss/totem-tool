@@ -12,7 +12,7 @@ import {
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, Repeat, ScanIcon, Search, Settings2, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -25,12 +25,15 @@ import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CanvasMessage,
@@ -336,6 +339,10 @@ const ARROW_H   = 18;  // arrow height perpendicular to path, user space
 const BASE_CURVE = 38;
 
 const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+/** Borderless icon button of the animation panel's playback row. */
+const ANIM_ICON_BUTTON =
+  "flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors";
+
 function fmtSpeed(s: number): string {
   if (s === 1) return "1×";
   const exp = Math.log10(s);
@@ -408,6 +415,7 @@ export default function OCHandoverExplorer({
   const [animIsPlaying, setAnimIsPlaying] = useState(false);
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
+  const [animLoop, setAnimLoop] = useState(false);
   const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
@@ -1026,6 +1034,7 @@ export default function OCHandoverExplorer({
                 fileName={fileName}
                 flowsData={flowsData}
                 playSpeed={animPlaySpeed}
+                loop={animLoop}
                 connectorMode={connectorMode}
                 onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
                 playRef={animPlayRef}
@@ -1117,68 +1126,32 @@ export default function OCHandoverExplorer({
                   title="Animation"
                   icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
                   narrow
+                  plainHeading
                   style={{ position: "absolute", top: 54, right: 12, zIndex: 13 }}
                 >
-                  <div className="flex flex-col gap-2" style={{ width: 220 }}>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={flowsData ? "secondary" : "outline"}
-                      disabled={flowsStatus === "loading"}
-                      onClick={flowsData
-                        ? () => { setFlowsData(null); setFlowsStatus("idle"); }
-                        : fetchFlows}
-                    >
-                      {flowsStatus === "loading"
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : flowsData
-                          ? <><Square className="h-3.5 w-3.5" /> Stop</>
+                  {/* 242 + panel padding and border = 272, the centrality panel's width */}
+                  <div className="flex flex-col gap-2" style={{ width: 242 }}>
+                    {!flowsData && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={flowsStatus === "loading"}
+                        onClick={fetchFlows}
+                      >
+                        {flowsStatus === "loading"
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           : <><Play className="h-3.5 w-3.5" /> Animate</>}
-                    </Button>
+                      </Button>
+                    )}
                     {flowsData && (
                       <>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-8 w-8 shrink-0"
-                            onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
-                            title={animIsPlaying ? "Pause" : "Play"}
-                          >
-                            {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0 tabular-nums">
-                                <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
-                                <ChevronDown className="h-3 w-3 shrink-0" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                              <DropdownMenuRadioGroup value={String(animPlaySpeed)} onValueChange={v => setAnimPlaySpeed(Number(v))}>
-                                {_SPEED_OPTIONS.map(s => (
-                                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0">
-                                <span className="flex-1 text-center capitalize">{connectorMode}</span>
-                                <ChevronDown className="h-3 w-3 shrink-0" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                              <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
-                                <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
-                                <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
-                                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
+                        <ActivityChart
+                          flowsData={flowsData}
+                          time={animSliderTime}
+                          typeColorMap={typeColorMap}
+                          onScrub={t => animScrubRef.current?.(t)}
+                        />
                         <Slider
                           min={flowsData.timeline.start}
                           max={flowsData.timeline.end}
@@ -1186,12 +1159,82 @@ export default function OCHandoverExplorer({
                           value={[animSliderTime]}
                           onValueChange={([v]) => animScrubRef.current?.(v)}
                         />
-                        <div className="text-[11px] text-muted-foreground tabular-nums">
-                          {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
-                          {" "}
-                          {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          {" · "}
-                          {flowsData.flows.length.toLocaleString()} flows
+                        {/* Playback row below the slider, so the slider keeps the chart's full width.
+                            Equal side columns keep the timestamp centred in the panel. */}
+                        <div className="grid grid-cols-[1fr_auto_1fr] items-center -mx-1.5">
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              className={ANIM_ICON_BUTTON}
+                              onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                              title={animIsPlaying ? "Pause" : "Play"}
+                            >
+                              {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              className={cn(ANIM_ICON_BUTTON, animLoop && "text-blue-600 hover:text-blue-700")}
+                              onClick={() => setAnimLoop(l => !l)}
+                              title={animLoop ? "Loop on" : "Loop off"}
+                              aria-pressed={animLoop}
+                            >
+                              <Repeat className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <span className="px-1 text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                            {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                            {" "}
+                            {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                          <div className="flex items-center justify-end gap-0.5">
+                            <button
+                              type="button"
+                              className={ANIM_ICON_BUTTON}
+                              onClick={() => { setFlowsData(null); setFlowsStatus("idle"); }}
+                              title="Stop"
+                            >
+                              <Square className="h-3.5 w-3.5" />
+                            </button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  className={ANIM_ICON_BUTTON}
+                                  title={`Playback settings · ${fmtSpeed(animPlaySpeed)}, ${connectorMode}`}
+                                >
+                                  <Settings2 className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel className="text-xs">Playback options</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                {/* Speed and connectors side by side; the long speed list scrolls */}
+                                <div className="flex">
+                                  <div>
+                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Speed</DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup
+                                      value={String(animPlaySpeed)}
+                                      onValueChange={v => setAnimPlaySpeed(Number(v))}
+                                      className="max-h-24 overflow-y-auto"
+                                    >
+                                      {_SPEED_OPTIONS.map(s => (
+                                        <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                                      ))}
+                                    </DropdownMenuRadioGroup>
+                                  </div>
+                                  <div className="w-px bg-border mx-1 my-1" />
+                                  <div>
+                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Connectors</DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                                      <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                                    </DropdownMenuRadioGroup>
+                                  </div>
+                                </div>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </div>
                       </>
                     )}
@@ -1676,6 +1719,7 @@ export default function OCHandoverExplorer({
                     fileName={fileName}
                     flowsData={flowsData}
                     playSpeed={animPlaySpeed}
+                    loop={animLoop}
                     connectorMode={connectorMode}
                     onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
                     playRef={animPlayRef}
@@ -1848,6 +1892,411 @@ function EventLogTable({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── Activity timeline ──────────────────────────────────────── */
+const ACTIVITY_W = 1000;           // viewBox width; the SVG is stretched to the panel
+const ACTIVITY_H = 56;
+const ACTIVITY_MAX_STEPS = 2000;   // above this, a step curve is binned
+const ACTIVITY_BINS = 240;
+const ACTIVITY_SAMPLES = 480;      // sample points of the time-in-transit curve
+const RATE_MAX_WINDOWS = 120;      // the rate uses the shortest window giving at most this many
+const RATE_WINDOWS: { seconds: number; label: string }[] = [
+  { seconds: 60, label: "1 min" },
+  { seconds: 5 * 60, label: "5 min" },
+  { seconds: 15 * 60, label: "15 min" },
+  { seconds: 3600, label: "1 h" },
+  { seconds: 6 * 3600, label: "6 h" },
+  { seconds: 86400, label: "1 day" },
+  { seconds: 7 * 86400, label: "1 week" },
+  { seconds: 30 * 86400, label: "30 days" },
+  { seconds: 365 * 86400, label: "1 year" },
+];
+const NEUTRAL_CURVE_COLOR = "#64748b";
+const BALANCE_UP_COLOR = "#16a34a";    // more handovers started than completed
+const BALANCE_DOWN_COLOR = "#dc2626";  // more completed than started
+
+type ActivityMetric = "objects" | "rate" | "age";
+const ACTIVITY_METRICS: { value: ActivityMetric; label: string; hint: string }[] = [
+  { value: "objects", label: "Objects in transit", hint: "Distinct objects on any arc, per object type" },
+  { value: "rate", label: "Handover balance", hint: "Handovers started minus completed per time window: above zero work piles up between resources, below zero it drains" },
+  { value: "age", label: "Time in transit", hint: "How long the handovers currently in transit have been travelling, on average" },
+];
+
+/**
+ * A curve point. A step curve holds `v` from `x` until the next point; a line
+ * curve joins points straight, and a NaN `v` breaks it; a bar runs from `x` to
+ * the next point's `x` (the last to the chart's end) between zero and `v`.
+ */
+type CurvePoint = { x: number; v: number };
+type ActivitySeries = {
+  kind: "step" | "line" | "bars";
+  /**
+   * `negColor` marks a signed line: it colours negative bars and the legend
+   * dot of a negative value, and a zero value gets a grey dot.
+   */
+  lines: { key: string; label: string; color: string; negColor?: string; points: CurvePoint[] }[];
+  /** Each line's value at `time`, for the legend. */
+  valueAt: (time: number) => Record<string, number>;
+  format: (v: number) => string;
+  /** Appended to the peak, e.g. "/ h" for a rate. */
+  unit?: string;
+  /** Shown bottom left, e.g. the bin size. */
+  footnote?: string;
+};
+
+const activityXOf = (timeline: FlowsData["timeline"]) => {
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+  return (time: number) => Math.min(1, Math.max(0, (time - timeline.start) / span)) * ACTIVITY_W;
+};
+const ACTIVITY_BIN_W = ACTIVITY_W / ACTIVITY_BINS;
+const activityBinOf = (x: number) => Math.min(ACTIVITY_BINS - 1, Math.floor(x / ACTIVITY_BIN_W));
+const fmtCount = (v: number) => v.toLocaleString();
+const legendDotColor = (line: { color: string; negColor?: string }, v: number) =>
+  !line.negColor ? line.color : v > 0 ? line.color : v < 0 ? line.negColor : NEUTRAL_CURVE_COLOR;
+/** Chart y of `v` on a scale from `trough` (bottom) to `peak` (top). */
+const activityY = (v: number, peak: number, trough: number) =>
+  2 + ((peak - v) / (peak - trough > 0 ? peak - trough : 1)) * (ACTIVITY_H - 3);
+const fmtSigned = (v: number) => (v > 0 ? `+${v.toLocaleString()}` : v < 0 ? `−${(-v).toLocaleString()}` : "0");
+
+/**
+ * Distinct business objects in transit per object type over the timeline.
+ *
+ * An object is in transit while any flow carrying it is on screen — the same
+ * `start_time <= t < start_time + duration` window computeDotFrame uses — so
+ * an object on two overlapping arcs counts once.
+ *
+ * Each curve is exact unless it changes more than ACTIVITY_MAX_STEPS times;
+ * then it is binned, keeping each bin's maximum so short spikes survive.
+ */
+function computeObjectSeries(
+  flows: FlowEvent[],
+  timeline: FlowsData["timeline"],
+  typeColorMap: Record<string, string>,
+): ActivitySeries {
+  const xOf = activityXOf(timeline);
+
+  const eventsByType = new Map<string, { time: number; delta: 1 | -1; id: string }[]>();
+  for (const flow of flows) {
+    let events = eventsByType.get(flow.bo_type);
+    if (!events) { events = []; eventsByType.set(flow.bo_type, events); }
+    for (const id of flow.bo_ids) {
+      events.push({ time: flow.start_time, delta: 1, id });
+      events.push({ time: flow.start_time + flow.duration, delta: -1, id });
+    }
+  }
+
+  // Fixed type order from the colour map, so a type keeps its place across reloads
+  const order = Object.keys(typeColorMap);
+  const rank = (t: string) => { const i = order.indexOf(t); return i === -1 ? Infinity : i; };
+  const types = [...eventsByType.keys()].sort((a, b) => rank(a) - rank(b));
+
+  const lines: ActivitySeries["lines"] = [];
+  for (const type of types) {
+    const events = eventsByType.get(type)!;
+    events.sort((a, b) => a.time - b.time);
+    const refs = new Map<string, number>(); // object id → flows currently carrying it
+    const changes: { time: number; v: number }[] = [];
+    let current = 0;
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const n = (refs.get(ev.id) ?? 0) + ev.delta;
+      if (n === 0) refs.delete(ev.id); else refs.set(ev.id, n);
+      if (ev.delta === 1 && n === 1) current++;
+      else if (ev.delta === -1 && n === 0) current--;
+      // Record once all events at this instant are applied, so a handover
+      // ending exactly where the next starts doesn't show a dip.
+      const last = i === events.length - 1 || events[i + 1].time !== ev.time;
+      if (last && (changes.length === 0 || changes[changes.length - 1].v !== current)) {
+        changes.push({ time: ev.time, v: current });
+      }
+    }
+
+    let points: CurvePoint[];
+    if (changes.length <= ACTIVITY_MAX_STEPS) {
+      points = changes.map(c => ({ x: xOf(c.time), v: c.v }));
+    } else {
+      const out = new Array<number>(ACTIVITY_BINS).fill(0);
+      for (let i = 0; i < changes.length; i++) {
+        // changes[i].v holds until the next change, touching every bin in between
+        const b0 = activityBinOf(xOf(changes[i].time));
+        const b1 = i + 1 < changes.length ? activityBinOf(xOf(changes[i + 1].time)) : b0;
+        for (let k = b0; k <= b1; k++) if (changes[i].v > out[k]) out[k] = changes[i].v;
+      }
+      points = out.map((v, k) => ({ x: k * ACTIVITY_BIN_W, v }));
+    }
+    lines.push({ key: type, label: type, color: typeColorMap[type] ?? "#94a3b8", points });
+  }
+
+  return { kind: "step", lines, valueAt: time => objectsAt(flows, time), format: fmtCount };
+}
+
+/** Exact distinct-object count per object type at one instant. */
+function objectsAt(flows: FlowEvent[], time: number): Record<string, number> {
+  const ids = new Map<string, Set<string>>();
+  for (const flow of flows) {
+    if (flow.start_time > time || time >= flow.start_time + flow.duration) continue;
+    let set = ids.get(flow.bo_type);
+    if (!set) { set = new Set(); ids.set(flow.bo_type, set); }
+    for (const id of flow.bo_ids) set.add(id);
+  }
+  return Object.fromEntries([...ids].map(([type, set]) => [type, set.size]));
+}
+
+/**
+ * Handovers started (the dot leaves) minus completed (the dot arrives) per
+ * time window, as bars around zero. Summed from the start, the bars give the
+ * number of handovers in transit.
+ *
+ * The window is the shortest of RATE_WINDOWS that splits the timeline into at
+ * most RATE_MAX_WINDOWS windows, counted from the timeline's start.
+ */
+function computeBalanceSeries(flows: FlowEvent[], timeline: FlowsData["timeline"]): ActivitySeries {
+  const xOf = activityXOf(timeline);
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+  const win = RATE_WINDOWS.find(w => span / w.seconds <= RATE_MAX_WINDOWS) ?? RATE_WINDOWS[RATE_WINDOWS.length - 1];
+  const count = Math.max(1, Math.ceil(span / win.seconds));
+  const indexOf = (time: number) =>
+    Math.min(count - 1, Math.max(0, Math.floor((time - timeline.start) / win.seconds)));
+
+  const net = new Array<number>(count).fill(0);
+  for (const flow of flows) {
+    net[indexOf(flow.start_time)]++;
+    net[indexOf(flow.start_time + flow.duration)]--;
+  }
+
+  return {
+    kind: "bars",
+    lines: [{
+      key: "net",
+      label: `Started minus completed per ${win.label}`,
+      color: BALANCE_UP_COLOR,
+      negColor: BALANCE_DOWN_COLOR,
+      points: net.map((v, k) => ({ x: xOf(timeline.start + k * win.seconds), v })),
+    }],
+    valueAt: time => ({ net: net[indexOf(time)] }),
+    format: fmtSigned,
+    footnote: `${win.label} intervals`,
+  };
+}
+
+/**
+ * Average time the handovers in transit have been travelling, sampled at
+ * ACTIVITY_SAMPLES points. It rises while work waits and drops when old
+ * handovers arrive; the line breaks where nothing is in transit.
+ */
+function computeAgeSeries(flows: FlowEvent[], timeline: FlowsData["timeline"]): ActivitySeries {
+  const xOf = activityXOf(timeline);
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+
+  // Start times relative to the timeline keep the running sum precise
+  const events: { time: number; delta: 1 | -1; rel: number }[] = [];
+  for (const flow of flows) {
+    const rel = flow.start_time - timeline.start;
+    events.push({ time: flow.start_time, delta: 1, rel });
+    events.push({ time: flow.start_time + flow.duration, delta: -1, rel });
+  }
+  events.sort((a, b) => a.time - b.time);
+
+  const points: CurvePoint[] = [];
+  let active = 0, sumRel = 0, next = 0;
+  for (let j = 0; j < ACTIVITY_SAMPLES; j++) {
+    const t = timeline.start + span * j / (ACTIVITY_SAMPLES - 1);
+    // A flow is in transit for start <= t < end, so everything at or before t applies
+    while (next < events.length && events[next].time <= t) {
+      active += events[next].delta;
+      sumRel += events[next].delta * events[next].rel;
+      next++;
+    }
+    const v = active > 0 ? (t - timeline.start) - sumRel / active : NaN;
+    points.push({ x: xOf(t), v });
+  }
+
+  return {
+    kind: "line",
+    lines: [{ key: "age", label: "Average time in transit", color: NEUTRAL_CURVE_COLOR, points }],
+    valueAt: time => ({ age: ageAt(flows, time) }),
+    format: v => (Number.isFinite(v) ? fmtDuration(v) : "—"),
+  };
+}
+
+/** Exact average time in transit at one instant; NaN when nothing is in transit. */
+function ageAt(flows: FlowEvent[], time: number): number {
+  let active = 0, sum = 0;
+  for (const flow of flows) {
+    if (flow.start_time > time || time >= flow.start_time + flow.duration) continue;
+    active++;
+    sum += time - flow.start_time;
+  }
+  return active > 0 ? sum / active : NaN;
+}
+
+/**
+ * Curves of the selected activity metric, drawn above the animation
+ * slider. Clicking or dragging on it scrubs, like the slider.
+ *
+ * The caller insets it by the slider thumb's half-width, the range the thumb
+ * centre travels, so a time sits at the same x in both.
+ */
+function ActivityChart({
+  flowsData,
+  time,
+  typeColorMap,
+  onScrub,
+}: {
+  flowsData: FlowsData;
+  time: number;
+  typeColorMap: Record<string, string>;
+  onScrub: (time: number) => void;
+}) {
+  const [metric, setMetric] = useState<ActivityMetric>("objects");
+  const metricInfo = ACTIVITY_METRICS.find(m => m.value === metric)!;
+  const series = useMemo(() => {
+    if (metric === "rate") return computeBalanceSeries(flowsData.flows, flowsData.timeline);
+    if (metric === "age") return computeAgeSeries(flowsData.flows, flowsData.timeline);
+    return computeObjectSeries(flowsData.flows, flowsData.timeline, typeColorMap);
+  }, [flowsData, metric, typeColorMap]);
+  const values = useMemo(() => series.valueAt(time), [series, time]);
+
+  // Clicking a legend entry shows only that line, rescaled to its own peak
+  const [solo, setSolo] = useState<string | null>(null);
+  const visible = useMemo(
+    () => (series.lines.some(l => l.key === solo) ? series.lines.filter(l => l.key === solo) : series.lines),
+    [series, solo],
+  );
+  // Scale from the lowest to the highest visible value, always including zero
+  const { peak, trough } = useMemo(() => {
+    let hi = 0, lo = 0;
+    for (const line of visible) for (const p of line.points) {
+      if (p.v > hi) hi = p.v;
+      if (p.v < lo) lo = p.v;
+    }
+    return { peak: hi, trough: lo };
+  }, [visible]);
+
+  const paths = useMemo(() => {
+    const y = (v: number) => activityY(v, peak, trough).toFixed(2);
+    return visible.map(({ points }) => {
+      if (series.kind === "bars") {
+        let up = "", down = "";
+        points.forEach((p, i) => {
+          if (p.v === 0) return;
+          const x0 = p.x.toFixed(2), x1 = (points[i + 1]?.x ?? ACTIVITY_W).toFixed(2);
+          const rect = `M${x0} ${y(0)}H${x1}V${y(p.v)}H${x0}Z`;
+          if (p.v > 0) up += rect; else down += rect;
+        });
+        return { up, down };
+      }
+      if (series.kind === "step") {
+        return { line: `M0 ${y(0)}` + points.map(p => `H${p.x.toFixed(2)}V${y(p.v)}`).join("") + `H${ACTIVITY_W}` };
+      }
+      let d = "", pen = false;
+      for (const p of points) {
+        if (!Number.isFinite(p.v)) { pen = false; continue; }
+        d += `${pen ? "L" : "M"}${p.x.toFixed(2)} ${y(p.v)}`;
+        pen = true;
+      }
+      return { line: d };
+    });
+  }, [series, visible, peak, trough]);
+
+  const { start, end } = flowsData.timeline;
+  const span = Math.max(end - start, 1e-9);
+  const scrubFromPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    onScrub(start + frac * span);
+  };
+  const playheadPct = Math.min(100, Math.max(0, (time - start) / span * 100));
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-0.5 hover:text-foreground transition-colors" title={metricInfo.hint}>
+              <span>{metricInfo.label}</span>
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup value={metric} onValueChange={v => { setMetric(v as ActivityMetric); setSolo(null); }}>
+              {ACTIVITY_METRICS.map(m => (
+                <DropdownMenuRadioItem key={m.value} value={m.value}>{m.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <span className="tabular-nums">
+          {series.kind === "bars"
+            ? `peak ${fmtSigned(peak)} / ${fmtSigned(trough)}`
+            : `peak ${series.format(peak)}${series.unit ? ` ${series.unit}` : ""}`}
+        </span>
+      </div>
+      <div className="px-2">
+        <div
+          className="relative cursor-pointer touch-none"
+          style={{ height: ACTIVITY_H }}
+          onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); scrubFromPointer(e); }}
+          onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubFromPointer(e); }}
+        >
+          <svg
+            className="absolute inset-0 h-full w-full overflow-visible"
+            viewBox={`0 0 ${ACTIVITY_W} ${ACTIVITY_H}`}
+            preserveAspectRatio="none"
+          >
+            {visible.map((line, i) => (series.kind === "bars"
+              ? (
+                <g key={line.key}>
+                  <path d={paths[i].up} fill={line.color} />
+                  <path d={paths[i].down} fill={line.negColor ?? line.color} />
+                </g>
+              ) : (
+                <path
+                  key={line.key}
+                  d={paths[i].line}
+                  fill="none"
+                  stroke={line.color}
+                  strokeWidth={1.5}
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )
+            ))}
+            {/* Zero line, on top so it stays visible through bars */}
+            <line
+              x1={0} x2={ACTIVITY_W} y1={activityY(0, peak, trough)} y2={activityY(0, peak, trough)}
+              className="text-border" stroke="currentColor" vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+          <div
+            className="absolute top-0 bottom-0 w-px bg-foreground/40 pointer-events-none"
+            style={{ left: `${playheadPct}%` }}
+          />
+        </div>
+      </div>
+      <div className="flex items-start gap-2 text-[11px]">
+        {series.footnote && <span className="text-muted-foreground whitespace-nowrap">{series.footnote}</span>}
+        <div className="ml-auto flex flex-wrap justify-end gap-x-3 gap-y-0.5">
+          {series.lines.map(line => (
+            <button
+              key={line.key}
+              type="button"
+              className={`flex items-center gap-1 transition-opacity${visible.includes(line) ? "" : " opacity-40"}`}
+              title={solo === line.key ? `${line.label} · click to show all` : `${line.label} · click to show only this`}
+              onClick={() => setSolo(s => (s === line.key ? null : line.key))}
+            >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: legendDotColor(line, values[line.key] ?? 0) }}
+              />
+              <span className="tabular-nums">{series.format(values[line.key] ?? 0)}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -2109,6 +2558,7 @@ function HandoverGraph({
   fileName,
   flowsData,
   playSpeed: playSpeedProp = 100,
+  loop: loopProp = false,
   connectorMode: connectorModeProp = "fade" as const,
   onAnimStateChange,
   playRef,
@@ -2135,6 +2585,8 @@ function HandoverGraph({
   fileName?: string;
   flowsData?: FlowsData | null;
   playSpeed?: number;
+  /** Restart from the timeline's start instead of stopping at its end. */
+  loop?: boolean;
   connectorMode?: "fade" | "persist" | "none";
   onAnimStateChange?: (s: { isPlaying: boolean; sliderTime: number }) => void;
   playRef?: React.RefObject<(() => void) | null>;
@@ -2209,6 +2661,8 @@ function HandoverGraph({
   const [sliderTime, setSliderTime] = useState(0);
   const playSpeedRef = useRef(100);
   useEffect(() => { playSpeedRef.current = playSpeedProp; }, [playSpeedProp]);
+  const loopRef = useRef(loopProp);
+  useEffect(() => { loopRef.current = loopProp; }, [loopProp]);
   const connectorModeRef = useRef<"fade" | "persist" | "none">(connectorModeProp);
   useEffect(() => { connectorModeRef.current = connectorModeProp; }, [connectorModeProp]);
   const playheadTimeRef = useRef(0);
@@ -2469,6 +2923,10 @@ function HandoverGraph({
       frameCountRef.current = (frameCountRef.current + 1) % 4;
       if (frameCountRef.current === 0) setSliderTime(newTime);
       if (newTime < fd.timeline.end) {
+        animFrameRef.current = requestAnimationFrame(tick);
+      } else if (loopRef.current) {
+        playheadTimeRef.current = fd.timeline.start;
+        setSliderTime(fd.timeline.start);
         animFrameRef.current = requestAnimationFrame(tick);
       } else {
         setIsPlaying(false);
