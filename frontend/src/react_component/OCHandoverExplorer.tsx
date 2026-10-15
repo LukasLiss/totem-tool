@@ -339,6 +339,88 @@ const ARROW_H   = 18;  // arrow height perpendicular to path, user space
 const BASE_CURVE = 38;
 
 const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+/**
+ * Animation panel size: content width and chart height. The defaults are the
+ * minimum; 242 + panel padding and border = 272, the centrality panel's width.
+ */
+type AnimPanelSize = { width: number; chartHeight: number };
+const ANIM_PANEL_MIN: AnimPanelSize = { width: 242, chartHeight: 56 };
+const ANIM_PANEL_MAX: AnimPanelSize = { width: 720, chartHeight: 420 };
+const ANIM_PANEL_SIZE_KEY = "ochandover.animationPanelSize";
+const ANIM_PANEL_TOP = 54;
+/** Space kept free below the panel: the control pill, like the toolbar popovers (bottom: 68). */
+const ANIM_PANEL_PILL_CLEARANCE = 68;
+
+const clampAnimPanelSize = (size: AnimPanelSize): AnimPanelSize => ({
+  width: Math.min(ANIM_PANEL_MAX.width, Math.max(ANIM_PANEL_MIN.width, size.width)),
+  chartHeight: Math.min(ANIM_PANEL_MAX.chartHeight, Math.max(ANIM_PANEL_MIN.chartHeight, size.chartHeight)),
+});
+
+/** The size this viewer left the panel at; storage may be unavailable. */
+function loadAnimPanelSize(): AnimPanelSize {
+  try {
+    const raw = localStorage.getItem(ANIM_PANEL_SIZE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.width === "number" && typeof parsed?.chartHeight === "number") {
+        return clampAnimPanelSize(parsed);
+      }
+    }
+  } catch { /* fall back to the default */ }
+  return ANIM_PANEL_MIN;
+}
+
+/**
+ * Drag grip in the animation panel's bottom-left corner. The panel is pinned
+ * top right, so dragging left widens it and dragging down makes the chart
+ * taller, until the panel reaches the control pill. The size is stored when
+ * the drag ends.
+ */
+function AnimPanelResizeGrip({ size, onResize }: { size: AnimPanelSize; onResize: (size: AnimPanelSize) => void }) {
+  const drag = useRef<{ x: number; y: number; start: AnimPanelSize; last: AnimPanelSize; maxChart: number } | null>(null);
+  const endDrag = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    try { localStorage.setItem(ANIM_PANEL_SIZE_KEY, JSON.stringify(d.last)); } catch { /* not persisted */ }
+  };
+  return (
+    <div
+      role="separator"
+      aria-label="Resize animation panel"
+      title="Drag to resize"
+      className="absolute left-0 bottom-0 h-3.5 w-3.5 cursor-nesw-resize touch-none text-muted-foreground/60 hover:text-muted-foreground"
+      onPointerDown={e => {
+        e.preventDefault(); // no text selection while dragging
+        e.currentTarget.setPointerCapture(e.pointerId);
+        // The grip sits in the panel, the panel in the canvas: the chart may
+        // grow by whatever room is left between the panel and the pill.
+        const panel = e.currentTarget.offsetParent as HTMLElement | null;
+        const canvas = panel?.offsetParent as HTMLElement | null;
+        const room = panel && canvas
+          ? canvas.clientHeight - ANIM_PANEL_TOP - ANIM_PANEL_PILL_CLEARANCE - panel.scrollHeight
+          : Infinity;
+        drag.current = { x: e.clientX, y: e.clientY, start: size, last: size, maxChart: size.chartHeight + Math.max(0, room) };
+      }}
+      onPointerMove={e => {
+        const d = drag.current;
+        if (!d) return;
+        d.last = clampAnimPanelSize({
+          width: d.start.width + (d.x - e.clientX),
+          chartHeight: Math.min(d.maxChart, d.start.chartHeight + (e.clientY - d.y)),
+        });
+        onResize(d.last);
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    >
+      <svg viewBox="0 0 14 14" className="h-full w-full" aria-hidden>
+        <path d="M3 4 L10 11 M3 8 L6 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    </div>
+  );
+}
+
 /** Borderless icon button of the animation panel's playback row. */
 const ANIM_ICON_BUTTON =
   "flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors";
@@ -416,6 +498,7 @@ export default function OCHandoverExplorer({
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
   const [animLoop, setAnimLoop] = useState(false);
+  const [animPanelSize, setAnimPanelSize] = useState(loadAnimPanelSize);
   const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
@@ -1127,10 +1210,12 @@ export default function OCHandoverExplorer({
                   icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
                   narrow
                   plainHeading
-                  style={{ position: "absolute", top: 54, right: 12, zIndex: 13 }}
+                  style={{
+                    position: "absolute", top: ANIM_PANEL_TOP, right: 12, zIndex: 13,
+                    maxHeight: `calc(100% - ${ANIM_PANEL_TOP + ANIM_PANEL_PILL_CLEARANCE}px)`,
+                  }}
                 >
-                  {/* 242 + panel padding and border = 272, the centrality panel's width */}
-                  <div className="flex flex-col gap-2" style={{ width: 242 }}>
+                  <div className="flex flex-col gap-2" style={{ width: animPanelSize.width }}>
                     {!flowsData && (
                       <Button
                         type="button"
@@ -1151,6 +1236,7 @@ export default function OCHandoverExplorer({
                           time={animSliderTime}
                           typeColorMap={typeColorMap}
                           onScrub={t => animScrubRef.current?.(t)}
+                          height={animPanelSize.chartHeight}
                         />
                         <Slider
                           min={flowsData.timeline.start}
@@ -1239,6 +1325,7 @@ export default function OCHandoverExplorer({
                       </>
                     )}
                   </div>
+                  {flowsData && <AnimPanelResizeGrip size={animPanelSize} onResize={setAnimPanelSize} />}
                 </FloatingPanel>
               )}
             </>
@@ -1899,7 +1986,7 @@ function EventLogTable({
 
 /* ── Activity timeline ──────────────────────────────────────── */
 const ACTIVITY_W = 1000;           // viewBox width; the SVG is stretched to the panel
-const ACTIVITY_H = 56;
+const ACTIVITY_H = 56;             // default chart height; the panel can be resized taller
 const ACTIVITY_MAX_STEPS = 2000;   // above this, a step curve is binned
 const ACTIVITY_BINS = 240;
 const ACTIVITY_SAMPLES = 480;      // sample points of the time-in-transit curve
@@ -1957,9 +2044,9 @@ const activityBinOf = (x: number) => Math.min(ACTIVITY_BINS - 1, Math.floor(x / 
 const fmtCount = (v: number) => v.toLocaleString();
 const legendDotColor = (line: { color: string; negColor?: string }, v: number) =>
   !line.negColor ? line.color : v > 0 ? line.color : v < 0 ? line.negColor : NEUTRAL_CURVE_COLOR;
-/** Chart y of `v` on a scale from `trough` (bottom) to `peak` (top). */
-const activityY = (v: number, peak: number, trough: number) =>
-  2 + ((peak - v) / (peak - trough > 0 ? peak - trough : 1)) * (ACTIVITY_H - 3);
+/** Chart y of `v` on a scale from `trough` (bottom) to `peak` (top) in a chart `height` tall. */
+const activityY = (v: number, peak: number, trough: number, height: number) =>
+  2 + ((peak - v) / (peak - trough > 0 ? peak - trough : 1)) * (height - 3);
 const fmtSigned = (v: number) => (v > 0 ? `+${v.toLocaleString()}` : v < 0 ? `−${(-v).toLocaleString()}` : "0");
 
 /**
@@ -2146,11 +2233,13 @@ function ActivityChart({
   time,
   typeColorMap,
   onScrub,
+  height = ACTIVITY_H,
 }: {
   flowsData: FlowsData;
   time: number;
   typeColorMap: Record<string, string>;
   onScrub: (time: number) => void;
+  height?: number;
 }) {
   const [metric, setMetric] = useState<ActivityMetric>("objects");
   const metricInfo = ACTIVITY_METRICS.find(m => m.value === metric)!;
@@ -2178,7 +2267,7 @@ function ActivityChart({
   }, [visible]);
 
   const paths = useMemo(() => {
-    const y = (v: number) => activityY(v, peak, trough).toFixed(2);
+    const y = (v: number) => activityY(v, peak, trough, height).toFixed(2);
     return visible.map(({ points }) => {
       if (series.kind === "bars") {
         let up = "", down = "";
@@ -2201,7 +2290,7 @@ function ActivityChart({
       }
       return { line: d };
     });
-  }, [series, visible, peak, trough]);
+  }, [series, visible, peak, trough, height]);
 
   const { start, end } = flowsData.timeline;
   const span = Math.max(end - start, 1e-9);
@@ -2239,13 +2328,13 @@ function ActivityChart({
       <div className="px-2">
         <div
           className="relative cursor-pointer touch-none"
-          style={{ height: ACTIVITY_H }}
-          onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); scrubFromPointer(e); }}
+          style={{ height }}
+          onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); scrubFromPointer(e); }}
           onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubFromPointer(e); }}
         >
           <svg
             className="absolute inset-0 h-full w-full overflow-visible"
-            viewBox={`0 0 ${ACTIVITY_W} ${ACTIVITY_H}`}
+            viewBox={`0 0 ${ACTIVITY_W} ${height}`}
             preserveAspectRatio="none"
           >
             {visible.map((line, i) => (series.kind === "bars"
@@ -2268,7 +2357,7 @@ function ActivityChart({
             ))}
             {/* Zero line, on top so it stays visible through bars */}
             <line
-              x1={0} x2={ACTIVITY_W} y1={activityY(0, peak, trough)} y2={activityY(0, peak, trough)}
+              x1={0} x2={ACTIVITY_W} y1={activityY(0, peak, trough, height)} y2={activityY(0, peak, trough, height)}
               className="text-border" stroke="currentColor" vectorEffect="non-scaling-stroke"
             />
           </svg>

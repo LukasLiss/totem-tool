@@ -159,10 +159,10 @@ export function FloatingPanel({
         {...stop}
         style={{
           ...PANEL_SHELL,
-          ...style,
           maxHeight: "min(75%, 380px)",
           overflowY: "auto",
           minWidth: 132,
+          ...style,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
