@@ -20,8 +20,9 @@ process models.
   [open it in Google Colab](https://colab.research.google.com/github/LukasLiss/totem-tool/blob/main/totem_lib/docs/examples/getting_started.ipynb).
 - User guide: [causal nets](guide/occn.md), their
   [replay fitness](guide/occn_replay_fitness.md) and
-  [precision](guide/occn_precision.md), and
-  [process areas](guide/process_areas.md)
+  [precision](guide/occn_precision.md),
+  [process areas](guide/process_areas.md), and
+  [variants and process executions](guide/variants.ipynb)
 - [API reference](api/index.rst): every public function and class
 
 ```{toctree}
@@ -40,6 +41,7 @@ Causal nets (OCCN) <guide/occn>
 OCCN replay fitness <guide/occn_replay_fitness>
 OCCN precision <guide/occn_precision>
 Process areas <guide/process_areas>
+Variants <guide/variants>
 ```
 
 ```{toctree}
