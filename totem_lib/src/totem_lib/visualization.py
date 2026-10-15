@@ -11,7 +11,9 @@ Provides Graphviz-based rendering, plotting, and Jupyter inline display for:
 
 from __future__ import annotations
 
+import math
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -30,9 +32,38 @@ DEFAULT_PALETTE = [
     "#BAB0AC",  # gray
 ]
 
-GV_FONT = "Helvetica"
+GV_FONT = "Segoe UI, Roboto, Helvetica, Arial, sans-serif"
 GV_FONTSIZE_NODE = "10"
-GV_FONTSIZE_EDGE = "8"
+GV_FONTSIZE_EDGE = "9"
+
+
+def _ensure_graphviz_on_path() -> None:
+    """Proactively ensures Graphviz 'dot' executable is on PATH.
+
+    If 'dot' is not already on PATH (e.g. portable extraction on Windows),
+    searches standard installation and portable locations and prepends them.
+    """
+    if shutil.which("dot") is not None:
+        return
+
+    candidates = [
+        Path.home() / "graphviz" / "Graphviz-16.1.0-win64" / "bin",
+        Path.home() / "graphviz" / "bin",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Graphviz" / "bin",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Graphviz" / "bin",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Graphviz" / "bin",
+    ]
+    try:
+        user_home = Path.home()
+        for p in user_home.glob("graphviz/*/bin"):
+            candidates.append(p)
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        if candidate.exists() and ((candidate / "dot.exe").exists() or (candidate / "dot").exists()):
+            os.environ["PATH"] = str(candidate) + os.pathsep + os.environ.get("PATH", "")
+            return
 
 
 def get_object_type_colors(object_types: Sequence[str]) -> Dict[str, str]:
@@ -49,20 +80,24 @@ class VisualizableMixin:
 
     def plot(self, **kwargs) -> graphviz.Digraph:
         """Return the Graphviz Digraph representation for visual rendering."""
+        _ensure_graphviz_on_path()
         return self.to_graphviz(**kwargs)
 
     def view(self, **kwargs) -> Any:
         """Open the rendered model with the system default viewer."""
+        _ensure_graphviz_on_path()
         return self.to_graphviz(**kwargs).view()
 
     def _repr_mimebundle_(self, include=None, exclude=None):
         try:
+            _ensure_graphviz_on_path()
             return self.to_graphviz()._repr_mimebundle_(include=include, exclude=exclude)
         except Exception:
             return None
 
     def _repr_svg_(self):
         try:
+            _ensure_graphviz_on_path()
             return self.to_graphviz()._repr_svg_()
         except Exception:
             return None
@@ -74,6 +109,7 @@ def ocpn_to_graphviz(
     rankdir: str = "LR",
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for an Object-Centric Petri Net dictionary."""
+    _ensure_graphviz_on_path()
     name = ocpn.get("name") or "OCPN"
     G = graphviz.Digraph(
         name=name,
@@ -83,6 +119,10 @@ def ocpn_to_graphviz(
             "fontsize": "10",
             "compound": "true",
             "overlap": "false",
+            "splines": "spline",
+            "nodesep": "0.3",
+            "ranksep": "0.55",
+            "pad": "0.2",
             "margin": "0.1,0.1",
         },
         node_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_NODE},
@@ -98,8 +138,17 @@ def ocpn_to_graphviz(
     for ot, col in get_object_type_colors(declared_ots).items():
         colors.setdefault(ot, col)
 
-    # Places
+    # Compute place degree for clean source/sink rank pinning
+    place_in: Dict[str, int] = {}
+    place_out: Dict[str, int] = {}
+    for arc in ocpn.get("arcs", []):
+        place_out[str(arc["source"])] = place_out.get(str(arc["source"]), 0) + 1
+        place_in[str(arc["target"])] = place_in.get(str(arc["target"]), 0) + 1
+
+    source_places: List[str] = []
+    sink_places: List[str] = []
     place_ot_map: Dict[str, str] = {}
+
     for place in ocpn.get("places", []):
         pid = str(place["id"])
         ot = place.get("objectType", "")
@@ -108,16 +157,27 @@ def ocpn_to_graphviz(
 
         is_init = place.get("initial", False)
         is_final = place.get("final", False)
+        in_deg = place_in.get(pid, 0)
+        out_deg = place_out.get(pid, 0)
+
+        if is_init and in_deg == 0:
+            source_places.append(pid)
+        if is_final and out_deg == 0:
+            sink_places.append(pid)
+
         peripheries = "2" if (is_init or is_final) else "1"
+        lbl = "●" if (is_init and in_deg == 0) else ""
 
         G.node(
             pid,
-            label="",
+            label=lbl,
             shape="circle",
             peripheries=peripheries,
             style="filled",
             color=col,
-            fillcolor="#F8FAFC",
+            fillcolor="#FFFFFF",
+            fontcolor=col,
+            fontsize="12",
             fixedsize="true",
             width="0.32",
             height="0.32",
@@ -136,11 +196,11 @@ def ocpn_to_graphviz(
                 label="",
                 shape="box",
                 style="filled",
-                color="#333333",
-                fillcolor="#333333",
+                color="#1E293B",
+                fillcolor="#1E293B",
                 fixedsize="true",
-                width="0.15",
-                height="0.38",
+                width="0.14",
+                height="0.36",
                 tooltip=f"Silent transition {tid}",
             )
         else:
@@ -149,9 +209,25 @@ def ocpn_to_graphviz(
                 label=str(label),
                 shape="box",
                 style="rounded,filled",
-                color="#555555",
-                fillcolor="#FFFFFF",
+                color="#475569",
+                fillcolor="#F8FAFC",
+                fontcolor="#0F172A",
+                penwidth="1.2",
+                margin="0.1,0.06",
             )
+
+    # Align pure sources and sinks
+    if source_places:
+        with G.subgraph() as s:
+            s.attr(rank="source")
+            for p in source_places:
+                s.node(p)
+
+    if sink_places:
+        with G.subgraph() as s:
+            s.attr(rank="sink")
+            for p in sink_places:
+                s.node(p)
 
     # Arcs
     for arc in ocpn.get("arcs", []):
@@ -160,7 +236,6 @@ def ocpn_to_graphviz(
         is_variable = arc.get("variable", False)
         arc_style = "dashed" if is_variable else "solid"
 
-        # Color the arc by its place's object type if possible
         ot = place_ot_map.get(src) or place_ot_map.get(tgt) or ""
         edge_col = colors.get(ot, "#333333")
 
@@ -182,6 +257,7 @@ def accepting_petri_net_to_graphviz(
     rankdir: str = "LR",
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for an AcceptingPetriNet."""
+    _ensure_graphviz_on_path()
     G = graphviz.Digraph(
         name="AcceptingPetriNet",
         graph_attr={
@@ -189,6 +265,10 @@ def accepting_petri_net_to_graphviz(
             "fontname": GV_FONT,
             "fontsize": "10",
             "overlap": "false",
+            "splines": "spline",
+            "nodesep": "0.3",
+            "ranksep": "0.55",
+            "pad": "0.2",
             "margin": "0.1,0.1",
         },
         node_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_NODE},
@@ -202,14 +282,17 @@ def accepting_petri_net_to_graphviz(
         is_init = pid == source
         is_final = pid == sink
         peripheries = "2" if (is_init or is_final) else "1"
+        lbl = "●" if is_init else ""
         G.node(
             str(pid),
-            label="",
+            label=lbl,
             shape="circle",
             peripheries=peripheries,
             style="filled",
             color="#4E79A7",
-            fillcolor="#F8FAFC",
+            fillcolor="#FFFFFF",
+            fontcolor="#4E79A7",
+            fontsize="12",
             fixedsize="true",
             width="0.32",
             height="0.32",
@@ -222,11 +305,11 @@ def accepting_petri_net_to_graphviz(
                 label="",
                 shape="box",
                 style="filled",
-                color="#333333",
-                fillcolor="#333333",
+                color="#1E293B",
+                fillcolor="#1E293B",
                 fixedsize="true",
-                width="0.15",
-                height="0.38",
+                width="0.14",
+                height="0.36",
             )
         else:
             G.node(
@@ -234,12 +317,25 @@ def accepting_petri_net_to_graphviz(
                 label=str(label),
                 shape="box",
                 style="rounded,filled",
-                color="#555555",
-                fillcolor="#FFFFFF",
+                color="#475569",
+                fillcolor="#F8FAFC",
+                fontcolor="#0F172A",
+                penwidth="1.2",
+                margin="0.1,0.06",
             )
 
+    if source:
+        with G.subgraph() as s:
+            s.attr(rank="source")
+            s.node(str(source))
+
+    if sink:
+        with G.subgraph() as s:
+            s.attr(rank="sink")
+            s.node(str(sink))
+
     for src, tgt in sorted(getattr(net, "arcs", ())):
-        G.edge(str(src), str(tgt), arrowhead="vee")
+        G.edge(str(src), str(tgt), arrowhead="vee", penwidth="1.2", color="#4E79A7")
 
     return G
 
@@ -249,6 +345,7 @@ def totem_to_graphviz(
     ot_to_hex_color: Optional[dict] = None,
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for a Totem model."""
+    _ensure_graphviz_on_path()
     nodes = totem.tempgraph.get("nodes", set())
     colors = dict(ot_to_hex_color or {})
     for ot, col in get_object_type_colors(list(nodes)).items():
@@ -276,30 +373,35 @@ def totem_to_graphviz(
         graph_attr={
             "fontname": GV_FONT,
             "fontsize": "10",
-            "margin": "0.1,0.1",
-            "overlap": "false",
+            "margin": "0.15,0.15",
+            "nodesep": "0.4",
+            "ranksep": "0.7",
+            "splines": "spline",
             "rankdir": "LR",
         },
+        node_attr={"fontname": GV_FONT, "fontsize": "10"},
+        edge_attr={"fontname": GV_FONT, "fontsize": "9"},
     )
 
-    for ot in nodes:
-        col = colors.get(ot, "#000000")
+    for ot in sorted(nodes):
+        col = colors.get(ot, "#334155")
         G.node(
             ot,
             label=ot,
             shape="box",
             style="rounded,filled",
-            fontname=GV_FONT,
-            fontsize=GV_FONTSIZE_NODE,
             color=col,
             fillcolor="#FFFFFF",
+            fontcolor="#0F172A",
+            penwidth="2.0",
+            margin="0.15,0.1",
         )
 
-    for (ot_a, ot_b), edge_dict in edges.items():
+    for (ot_a, ot_b), edge_dict in sorted(edges.items()):
         tr_relation = edge_dict.get("TR")
         card_info = totem.cardinalities.get((ot_a, ot_b), {})
-        lc = card_info.get("LC", "")
-        ec = card_info.get("EC", "")
+        lc = card_info.get("LC", "").replace("...", "..")
+        ec = card_info.get("EC", "").replace("...", "..")
         edge_label = f"{lc}\n({ec})"
         arrowhead = tr_arrowhead.get(tr_relation, "none")
 
@@ -307,12 +409,12 @@ def totem_to_graphviz(
             ot_a,
             ot_b,
             label=edge_label,
-            fontname=GV_FONT,
-            fontsize=GV_FONTSIZE_EDGE,
+            fontcolor="#1E293B",
+            color="#475569",
+            penwidth="1.2",
             arrowhead=arrowhead,
-            arrowtail="none",
-            dir="both",
-            decorate="false",
+            arrowsize="0.9",
+            dir="forward",
         )
 
     return G
@@ -324,6 +426,7 @@ def occn_to_graphviz(
     rankdir: str = "LR",
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for an OCCausalNet model."""
+    _ensure_graphviz_on_path()
     G = graphviz.Digraph(
         name="OCCN",
         graph_attr={
@@ -331,6 +434,9 @@ def occn_to_graphviz(
             "fontname": GV_FONT,
             "fontsize": "10",
             "overlap": "false",
+            "splines": "spline",
+            "nodesep": "0.35",
+            "ranksep": "0.6",
             "margin": "0.1,0.1",
         },
         node_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_NODE},
@@ -342,42 +448,71 @@ def occn_to_graphviz(
     for ot, col in get_object_type_colors(declared_ots).items():
         colors.setdefault(ot, col)
 
+    start_nodes: List[str] = []
+    end_nodes: List[str] = []
+
     # Activities
     for act in occn.activities:
         act_str = str(act)
         if act_str.startswith("START_"):
             ot_name = act_str.replace("START_", "")
-            col = colors.get(ot_name, "#4E79A7")
+            col = colors.get(ot_name, "#2E7D32")
+            start_nodes.append(act_str)
             G.node(
                 act_str,
-                label=act_str,
-                shape="circle",
-                style="filled",
+                label=f"▶ {ot_name}",
+                shape="box",
+                style="rounded,filled",
                 color=col,
-                fillcolor="#F8FAFC",
+                fillcolor="#F0FDF4",
+                fontcolor="#166534",
                 fontsize="9",
+                penwidth="1.5",
+                margin="0.1,0.06",
             )
         elif act_str.startswith("END_"):
             ot_name = act_str.replace("END_", "")
-            col = colors.get(ot_name, "#E15759")
+            col = colors.get(ot_name, "#DC2626")
+            end_nodes.append(act_str)
             G.node(
                 act_str,
-                label=act_str,
-                shape="doublecircle",
-                style="filled",
-                color=col,
-                fillcolor="#F8FAFC",
-                fontsize="9",
-            )
-        else:
-            G.node(
-                act_str,
-                label=act_str,
+                label=f"■ {ot_name}",
                 shape="box",
                 style="rounded,filled",
-                color="#555555",
-                fillcolor="#FFFFFF",
+                color=col,
+                fillcolor="#FEF2F2",
+                fontcolor="#991B1B",
+                fontsize="9",
+                penwidth="1.5",
+                margin="0.1,0.06",
             )
+        else:
+            cnt = getattr(occn, "activity_count", {}).get(act_str)
+            lbl = f"{act_str}\n(x{cnt})" if cnt else act_str
+            G.node(
+                act_str,
+                label=lbl,
+                shape="box",
+                style="rounded,filled",
+                color="#475569",
+                fillcolor="#F8FAFC",
+                fontcolor="#1E293B",
+                penwidth="1.2",
+                margin="0.1,0.06",
+            )
+
+    # Constrain start and end nodes to opposite ranks
+    if start_nodes:
+        with G.subgraph() as s:
+            s.attr(rank="source")
+            for sn in start_nodes:
+                s.node(sn)
+
+    if end_nodes:
+        with G.subgraph() as s:
+            s.attr(rank="sink")
+            for en in end_nodes:
+                s.node(en)
 
     # Dependency graph edges
     dep_graph = occn.dependency_graph
@@ -387,6 +522,7 @@ def occn_to_graphviz(
             dep = data.get("dependenceMeasure")
             col = colors.get(ot, "#4E79A7")
             label = f"{ot} ({dep:.2f})" if dep is not None else ot
+            pw = "1.8" if (dep is not None and dep >= 0.8) else "1.0"
             G.edge(
                 str(u),
                 str(v),
@@ -394,9 +530,15 @@ def occn_to_graphviz(
                 color=col,
                 fontcolor=col,
                 arrowhead="vee",
+                penwidth=pw,
             )
 
     return G
+
+
+def _sanitize_dfg_node_id(node: Any) -> str:
+    """Sanitize node IDs to prevent Graphviz from treating colons ':' as port delimiters."""
+    return str(node).replace(":", "___")
 
 
 def ocdfg_to_graphviz(
@@ -405,6 +547,7 @@ def ocdfg_to_graphviz(
     rankdir: str = "LR",
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for an OCDFG or CCDFG."""
+    _ensure_graphviz_on_path()
     G = graphviz.Digraph(
         name="OCDFG",
         graph_attr={
@@ -412,14 +555,17 @@ def ocdfg_to_graphviz(
             "fontname": GV_FONT,
             "fontsize": "10",
             "overlap": "false",
+            "splines": "spline",
+            "nodesep": "0.35",
+            "ranksep": "0.6",
             "margin": "0.1,0.1",
         },
-        node_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_NODE},
-        edge_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_EDGE},
+        node_attr={"fontname": GV_FONT, "fontsize": "9"},
+        edge_attr={"fontname": GV_FONT, "fontsize": "8"},
     )
 
     # Collect object types
-    ots = set()
+    ots: Set[str] = set()
     for _, _, data in dfg.edges(data=True):
         if "weights" in data:
             ots.update(data["weights"].keys())
@@ -430,16 +576,78 @@ def ocdfg_to_graphviz(
     for ot, col in get_object_type_colors(list(ots)).items():
         colors.setdefault(ot, col)
 
+    start_nodes: List[str] = []
+    end_nodes: List[str] = []
+
     # Nodes
     for node, data in dfg.nodes(data=True):
-        label = data.get("label", str(node))
         node_str = str(node)
-        if node_str.startswith("START_"):
-            G.node(node_str, label=label, shape="circle", style="filled", color="#4E79A7", fillcolor="#F8FAFC", fontsize="9")
-        elif node_str.startswith("END_"):
-            G.node(node_str, label=label, shape="doublecircle", style="filled", color="#E15759", fillcolor="#F8FAFC", fontsize="9")
+        nid = _sanitize_dfg_node_id(node)
+        is_start = node_str.startswith("__start__") or node_str.startswith("START_") or data.get("role") == "start"
+        is_end = node_str.startswith("__end__") or node_str.startswith("END_") or data.get("role") == "end"
+
+        if is_start:
+            start_nodes.append(nid)
+            ot = data.get("object_type") or (
+                node_str.split(":", 1)[1] if ":" in node_str else node_str.replace("START_", "")
+            )
+            col = colors.get(ot, "#198754")
+            G.node(
+                nid,
+                label=f"{ot}\nstart",
+                shape="circle",
+                style="filled",
+                color=col,
+                fillcolor="#E8F5E9",
+                fontcolor="#1B5E20",
+                fontsize="8",
+                margin="0.05,0.05",
+            )
+        elif is_end:
+            end_nodes.append(nid)
+            ot = data.get("object_type") or (
+                node_str.split(":", 1)[1] if ":" in node_str else node_str.replace("END_", "")
+            )
+            col = colors.get(ot, "#DC3545")
+            G.node(
+                nid,
+                label=f"{ot}\nend",
+                shape="doublecircle",
+                style="filled",
+                color=col,
+                fillcolor="#FFEBEE",
+                fontcolor="#B71C1C",
+                fontsize="8",
+                margin="0.05,0.05",
+            )
         else:
-            G.node(node_str, label=label, shape="box", style="rounded,filled", color="#555555", fillcolor="#FFFFFF")
+            label = data.get("label", node_str)
+            count = data.get("count")
+            lbl = f"{label}\n({count})" if count else label
+            G.node(
+                nid,
+                label=lbl,
+                shape="box",
+                style="rounded,filled",
+                color="#455A64",
+                fillcolor="#ECEFF1",
+                fontcolor="#263238",
+                penwidth="1.2",
+                margin="0.1,0.06",
+            )
+
+    # Align start and end nodes on respective ranks
+    if start_nodes:
+        with G.subgraph() as s:
+            s.attr(rank="source")
+            for sn in start_nodes:
+                s.node(sn)
+
+    if end_nodes:
+        with G.subgraph() as s:
+            s.attr(rank="sink")
+            for en in end_nodes:
+                s.node(en)
 
     # Edges
     for u, v, data in dfg.edges(data=True):
@@ -450,14 +658,23 @@ def ocdfg_to_graphviz(
             col = colors.get(ot, "#333333")
             label = f"{ot}: {cnt}"
         elif weights:
-            col = "#333333"
+            col = "#455A64"
             breakdown = ", ".join(f"{ot}:{cnt}" for ot, cnt in sorted(weights.items()))
             label = f"{weight} ({breakdown})"
         else:
-            col = "#333333"
+            col = "#455A64"
             label = str(weight)
 
-        G.edge(str(u), str(v), label=label, color=col, fontcolor=col, arrowhead="vee")
+        pw = str(round(max(1.0, min(3.5, 1.0 + 0.5 * math.log10(max(1, weight)))), 2))
+        G.edge(
+            _sanitize_dfg_node_id(u),
+            _sanitize_dfg_node_id(v),
+            label=label,
+            color=col,
+            fontcolor=col,
+            penwidth=pw,
+            arrowhead="vee",
+        )
 
     return G
 
@@ -467,51 +684,101 @@ def process_areas_to_graphviz(
     rankdir: str = "TB",
 ) -> graphviz.Digraph:
     """Build a Graphviz Digraph for a process areas hierarchy {level: [([ot], {activities})]}.
-    
-    Rendered hierarchically with levels stacked from top to bottom.
+
+    Rendered hierarchically with levels stacked vertically from highest level to lowest.
     """
+    _ensure_graphviz_on_path()
     G = graphviz.Digraph(
         name="ProcessAreas",
         graph_attr={
             "rankdir": rankdir,
             "fontname": GV_FONT,
-            "fontsize": "10",
+            "fontsize": "11",
             "compound": "true",
-            "margin": "0.1,0.1",
+            "margin": "0.15,0.15",
+            "nodesep": "0.3",
+            "ranksep": "0.4",
+            "splines": "true",
         },
-        node_attr={"fontname": GV_FONT, "fontsize": GV_FONTSIZE_NODE},
+        node_attr={"fontname": GV_FONT, "fontsize": "9"},
+        edge_attr={"fontname": GV_FONT, "fontsize": "8"},
     )
 
-    # Stack highest level first (resources on top)
-    for level in sorted(process_areas.keys(), reverse=True):
-        with G.subgraph(name=f"cluster_level_{level}") as sub:
+    sorted_levels = sorted(process_areas.keys(), reverse=True)
+    level_rep_nodes: List[Tuple[str, str]] = []
+
+    for level in sorted_levels:
+        lvl_str = str(int(level)) if level == int(level) else str(level)
+        cluster_name = f"cluster_level_{lvl_str}"
+        with G.subgraph(name=cluster_name) as sub:
             sub.attr(
-                label=f"Level {level}",
-                style="rounded,dashed",
-                color="#76B7B2",
+                label=f"Level {lvl_str}",
+                style="rounded,filled",
+                color="#94A3B8",
                 bgcolor="#F8FAFC",
                 fontname=GV_FONT,
                 fontsize="11",
+                fontcolor="#334155",
+                margin="12",
             )
             areas = process_areas[level]
+            rep_id = None
             for i, (object_types, event_types) in enumerate(areas):
-                node_id = f"pa_{level}_{i}"
+                node_id = f"pa_{lvl_str}_{i}"
+                if rep_id is None:
+                    rep_id = node_id
+
                 ots_str = ", ".join(sorted(object_types))
                 acts_list = sorted(event_types)
-                if len(acts_list) > 6:
-                    acts_str = ", ".join(acts_list[:6]) + f" ... (+{len(acts_list) - 6} more)"
-                else:
-                    acts_str = ", ".join(acts_list)
 
-                label = f"{ots_str}\n({len(event_types)} activities: {acts_str})"
+                if acts_list:
+                    chunks = [", ".join(acts_list[j : j + 3]) for j in range(0, min(len(acts_list), 9), 3)]
+                    if len(acts_list) > 9:
+                        chunks.append(f"... (+{len(acts_list) - 9} more activities)")
+                    acts_formatted = "<BR/>".join(chunks)
+                    label = (
+                        f'<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">'
+                        f'<TR><TD><B><FONT POINT-SIZE="10" COLOR="#1E293B">{ots_str}</FONT></B></TD></TR>'
+                        f'<TR><TD><FONT POINT-SIZE="8" COLOR="#64748B">{len(event_types)} Activities:</FONT></TD></TR>'
+                        f'<TR><TD><FONT POINT-SIZE="8" COLOR="#334155">{acts_formatted}</FONT></TD></TR>'
+                        f"</TABLE>>"
+                    )
+                else:
+                    label = (
+                        f'<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">'
+                        f'<TR><TD><B><FONT POINT-SIZE="10" COLOR="#1E293B">{ots_str}</FONT></B></TD></TR>'
+                        f'<TR><TD><I><FONT POINT-SIZE="8" COLOR="#94A3B8">(Shared / Coordinating Level)</FONT></I></TD></TR>'
+                        f"</TABLE>>"
+                    )
+
                 sub.node(
                     node_id,
                     label=label,
                     shape="box",
                     style="rounded,filled",
                     fillcolor="#FFFFFF",
-                    color="#4E79A7",
+                    color="#3B82F6",
+                    penwidth="1.5",
+                    margin="0.1,0.08",
                 )
+            if rep_id:
+                level_rep_nodes.append((lvl_str, rep_id))
+
+    # Connect levels top to bottom to enforce hierarchical stacking
+    for idx in range(len(level_rep_nodes) - 1):
+        lvl_from, node_from = level_rep_nodes[idx]
+        lvl_to, node_to = level_rep_nodes[idx + 1]
+        G.edge(
+            node_from,
+            node_to,
+            style="dashed",
+            color="#94A3B8",
+            arrowhead="normal",
+            penwidth="1.2",
+            ltail=f"cluster_level_{lvl_from}",
+            lhead=f"cluster_level_{lvl_to}",
+            tooltip=f"Hierarchy: Level {lvl_from} -> Level {lvl_to}",
+        )
 
     return G
 
@@ -529,7 +796,7 @@ class ProcessAreas(dict, VisualizableMixin):
 
 def plot(model: Any, **kwargs) -> graphviz.Digraph:
     """Plot / render any supported totem_lib model using Graphviz.
-    
+
     Works with:
     - OCPN (Object-Centric Petri Net model dictionary or OCPN instance)
     - OCCausalNet (OCCN instance)
@@ -537,22 +804,19 @@ def plot(model: Any, **kwargs) -> graphviz.Digraph:
     - OCDFG / CCDFG (NetworkX graph instances)
     - ProcessAreas (Process area dictionary or ProcessAreas instance)
     """
+    _ensure_graphviz_on_path()
     if hasattr(model, "to_graphviz"):
         return model.to_graphviz(**kwargs)
 
-    # Check if model has a native plot method (e.g. OCHANDOVER)
     if hasattr(model, "plot") and callable(getattr(model, "plot")):
         return model.plot(**kwargs)
 
-    # Check dictionary formats
     if isinstance(model, dict):
         if model.get("format") == "ocpn" or ("places" in model and "transitions" in model):
             return ocpn_to_graphviz(model, **kwargs)
-        # Check if process areas dictionary: {int_level: [([ot], {acts})]}
-        if any(isinstance(k, int) for k in model.keys()):
+        if any(isinstance(k, (int, float)) for k in model.keys()):
             return process_areas_to_graphviz(model, **kwargs)
 
-    # Check networkx graph
     if hasattr(model, "edges") and hasattr(model, "nodes"):
         return ocdfg_to_graphviz(model, **kwargs)
 
