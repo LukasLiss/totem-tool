@@ -18,10 +18,11 @@ process models.
 - [Getting started](examples/getting_started.ipynb): load a log, discover a
   TOTeM model and find process areas. You can also
   [open it in Google Colab](https://colab.research.google.com/github/LukasLiss/totem-tool/blob/main/totem_lib/docs/examples/getting_started.ipynb).
-- User guide: [causal nets](guide/occn.md), their
+- User guide: [event logs](guide/event_logs.ipynb),
+  [TOTeM models](guide/totem.ipynb), [process areas](guide/process_areas.md),
+  [causal nets](guide/occn.md), their
   [replay fitness](guide/occn_replay_fitness.md) and
-  [precision](guide/occn_precision.md),
-  [process areas](guide/process_areas.md), and
+  [precision](guide/occn_precision.md), and
   [variants and process executions](guide/variants.ipynb)
 - [API reference](api/index.rst): every public function and class
 
@@ -37,10 +38,12 @@ examples/getting_started
 :hidden:
 :caption: User guide
 
+Event logs <guide/event_logs>
+TOTeM models <guide/totem>
+Process areas <guide/process_areas>
 Causal nets (OCCN) <guide/occn>
 OCCN replay fitness <guide/occn_replay_fitness>
 OCCN precision <guide/occn_precision>
-Process areas <guide/process_areas>
 Variants <guide/variants>
 ```
 
