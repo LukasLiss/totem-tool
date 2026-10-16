@@ -23,6 +23,9 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { useNavigate } from "react-router-dom"
+import { isCancelledError, useComputationStore } from "@/store/computationStore";
+import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
+import { ProgressBar } from "@/components/ComputationPanel";
 
 
 export function FileUploadValidator() {
@@ -36,6 +39,13 @@ export function FileUploadValidator() {
     const [isConverting, setIsConverting] = useState(false);
     const [uploadPercent, setUploadPercent] = useState<number | null>(null);
     const [uploadStage, setUploadStage] = useState<string>("");
+    // The upload request is a tracked computation (see computationStore):
+    // once the file is transferred, the backend reports the conversion
+    // progress through it, and it can be cancelled.
+    const importJob = useComputationStore((s) =>
+      Object.values(s.jobs).find((job) => job.label === "Importing event log") ?? null,
+    );
+    const cancelComputation = useComputationStore((s) => s.cancel);
 
 
     const {getRootProps, getInputProps} = useDropzone({
@@ -109,6 +119,7 @@ export function FileUploadValidator() {
       toast.success("Upload successful", {
         description: file.name,
       });
+      if (response?.id != null) await prepareLargeLogFilter(Number(response.id));
       setFile(null);
       setShowConversionModal(false);
       setIsConverting(false);
@@ -120,10 +131,13 @@ export function FileUploadValidator() {
       setIsConverting(false);
       setUploadPercent(null);
       setUploadStage("");
-      setValidationStatus('error');
+      setValidationStatus(isCancelledError(err) ? 'idle' : 'error');
       setTimeout(() => setValidationStatus('idle'), 3000);
 
-      if (axios.isAxiosError(err) && err.response?.data?.errors) {
+      if (isCancelledError(err)) {
+        setShowConversionModal(false);
+        toast.info("Upload cancelled", { description: "The file was not imported." });
+      } else if (axios.isAxiosError(err) && err.response?.data?.errors) {
         const errorList = err.response.data.errors as string[];
         toast.error("Validation Failed", {
           description: (
@@ -237,23 +251,43 @@ export function FileUploadValidator() {
         </DialogDescription>
       </DialogHeader>
       {isConverting && (
-        <div className="space-y-2 py-2">
+        <div className="space-y-2 py-2" data-testid="upload-progress">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{uploadStage || "Processing..."}</span>
-            {uploadPercent !== null && uploadPercent < 100 && (
-              <span>{uploadPercent}%</span>
-            )}
-          </div>
-          <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+            <span>
+              {uploadPercent !== null && uploadPercent >= 100 && importJob?.message
+                ? importJob.message
+                : uploadStage || "Processing..."}
+            </span>
             {uploadPercent !== null && uploadPercent < 100 ? (
+              <span>{uploadPercent}%</span>
+            ) : typeof importJob?.fraction === "number" ? (
+              <span>{Math.round(importJob.fraction * 100)}%</span>
+            ) : null}
+          </div>
+          {uploadPercent !== null && uploadPercent < 100 ? (
+            <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
               <div
                 className="bg-primary h-2 rounded-full transition-all duration-200"
                 style={{ width: `${uploadPercent}%` }}
               />
-            ) : (
-              <div className="bg-primary h-2 rounded-full animate-pulse w-full" />
-            )}
-          </div>
+            </div>
+          ) : (
+            <ProgressBar fraction={importJob?.fraction ?? null} cancelling={importJob?.status === "cancelling"} />
+          )}
+          {importJob && (
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={importJob.status === "cancelling"}
+                onClick={() => cancelComputation(importJob.id)}
+              >
+                {importJob.status === "cancelling" ? "Cancelling…" : "Cancel import"}
+              </Button>
+            </div>
+          )}
           <p className="text-[11px] text-muted-foreground italic">
             {uploadPercent !== null && uploadPercent >= 100
               ? "Building DuckDB tables, parsing timestamps, and verifying event relations. Large datasets may take up to a minute."

@@ -240,6 +240,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ORIGIN_ALLOW_ALL = os.environ.get('CORS_ORIGIN_ALLOW_ALL', '0') == '1'
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
+    # Client job id of a cancellable computation (see api/jobs.py).
+    "x-totem-job-id",
     "authorization",
     "content-type",
 ]

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
+import ComputationStatus from '@/components/ComputationStatus';
 import {
   ReactFlow,
   useReactFlow,
@@ -267,6 +269,7 @@ function NewOCDFGVisualizer({
   const [typeVisibility, setTypeVisibility] = useState<Record<string, boolean>>({});
 
   const [dfgData, setDfgData] = useState<OcdfgGraph | null>(null);
+  const [loading, setLoading] = useState(false);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
@@ -591,25 +594,33 @@ function NewOCDFGVisualizer({
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     const url = `/api/new-ocdfg/?file_id=${fileId}`;
 
     const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
     if (filterConfig._noResults) { setDfgData({ nodes: [], links: [] }); return; }
-    axios.get<DfgData>(url, filterConfig)
+    setLoading(true);
+    axios.get<DfgData>(url, { ...filterConfig, signal: controller.signal })
       .then(({ data: payload }) => {
         if (cancelled) return;
         const graph = payload?.dfg;
         if (graph) setDfgData(graph);
         else        setDfgData({ nodes: [], links: [] });
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          toast.error('OC-DFG could not be loaded');
+          if (isCancelledError(err)) toast.info('OC-DFG computation cancelled');
+          else toast.error('OC-DFG could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    // Leaving the page or changing the filter stops the running computation
+    // on the backend as well, so it does not block the next request.
+    return () => { cancelled = true; controller.abort(); };
   }, [data, fileId, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   const handleWeightLimitChange = useCallback(
@@ -1039,6 +1050,20 @@ function NewOCDFGVisualizer({
       className={interactionsDisabled ? 'interactions-disabled' : ''}
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
     >
+      {loading && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
+          <ComputationStatus
+            fileId={fileId}
+            urlIncludes="/new-ocdfg/"
+            fallback={(
+              <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm font-medium text-slate-700">Computing directly-follows graph…</span>
+              </div>
+            )}
+          />
+        </div>
+      )}
 
       <ReactFlow
         id={reactFlowId}

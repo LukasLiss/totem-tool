@@ -19,7 +19,11 @@ import { useFilterStack } from "@/contexts/filterStackHooks";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
 import { useFilterStore, type FilterStats } from "@/store/filterStore";
-import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
+import {
+  applyGlobalFilterRules,
+  LARGE_LOG_EVENT_LIMIT,
+  proposeLargeLogFilter,
+} from "@/store/applyGlobalFilter";
 import { toast } from "sonner";
 
 
@@ -431,12 +435,39 @@ export default function FilterChipStack() {
       restoredRules = null;
     }
 
+    let stale = false;
     if (restoredRules && Array.isArray(restoredRules) && restoredRules.length > 0) {
       replaceFilters(["time_range", "object_types", "activity"], restoredRules);
       applyGlobalFilterRules(fileId, restoredRules).catch(() => {});
+      // Active rules are shown, not hidden behind the collapsed header: a
+      // filter the user did not add by hand (the large-log time window) must
+      // be visible to be understood.
+      setExpanded(true);
     } else {
       useFilterStore.getState().clear();
       useFilterStore.getState().setStats(null);
+      // A large log gets a time-range filter straight away: the analyses on
+      // the overview page would otherwise run over the whole log, which can
+      // take minutes. The user sees the rule in the chip stack and can
+      // change or remove it like any other filter.
+      proposeLargeLogFilter(fileId).then(async (rule) => {
+        if (!rule || stale) return;
+        const rules = replaceFilters(["time_range"], [rule]);
+        try {
+          await applyGlobalFilterRules(fileId, rules);
+          sessionStorage.setItem(sessionKey, JSON.stringify(rules));
+        } catch {
+          return;
+        }
+        if (stale) return;
+        setExpanded(true);
+        toast.info("Large event log: showing the first events only", {
+          description:
+            `This log has more than ${LARGE_LOG_EVENT_LIMIT.toLocaleString()} events, so a global time-range ` +
+            "filter was applied to keep the analyses responsive. Adjust or remove it in the filter bar.",
+          duration: 10000,
+        });
+      }).catch(() => {});
     }
 
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
@@ -449,7 +480,7 @@ export default function FilterChipStack() {
     axios.get<{ num_objects: number; num_events: number }>(
       `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
     ).then(({ data }) => {
-      if (!restoredRules || restoredRules.length === 0) {
+      if ((!restoredRules || restoredRules.length === 0) && !useFilterStore.getState().isApplied) {
         useFilterStore.getState().setStats({
           objectPct:    1,
           eventPct:     1,
@@ -460,6 +491,7 @@ export default function FilterChipStack() {
         });
       }
     }).catch(() => {});
+    return () => { stale = true; };
   }, [fileId]);
 
   const currentKey = JSON.stringify(filters);

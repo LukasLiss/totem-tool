@@ -1,6 +1,7 @@
 from collections import defaultdict
 from typing import List, Optional
 import networkx as nx
+from ..progress import as_progress
 
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
 
@@ -489,6 +490,7 @@ class NewOCDFGDb(nx.MultiDiGraph):
         cls,
         ocel_db: OcelDuckDB,
         object_types: Optional[List[str]] = None,
+        progress=None,
     ) -> tuple["NewOCDFGDb", dict]:
         """
         Build the OC-DFG **and** annotate every edge with a ``variant_rank``.
@@ -520,9 +522,14 @@ class NewOCDFGDb(nx.MultiDiGraph):
               - ``graph`` is a ``NewOCDFGDb`` with ``variant_rank`` on every edge.
               - ``variant_counts`` is ``{obj_type: total_variant_count}`` so the
                 frontend can initialize the sliders to the right maximum.
+            ``progress`` is an optional ``callback(fraction, message)`` (see
+            :mod:`totem_lib.progress`).
         """
+        progress = as_progress(progress)
+        progress.report(0.0, "Building directly-follows graph")
         # Step 1: build the full unfiltered graph
         graph = cls.from_ocel_db(ocel_db, object_types=object_types)
+        progress.report(0.45, "Computing trace variants")
 
         # Step 2: collect variants per type (sorted most-frequent first)
         actual_types = list(set(
@@ -535,15 +542,20 @@ class NewOCDFGDb(nx.MultiDiGraph):
             return graph, {}
 
         variants_data = cls.compute_variants(ocel_db, object_types=actual_types)
+        progress.report(0.8, "Ranking arcs by variant frequency")
 
         # Step 3: annotate edges with variant ranks, including terminal edges
         # For each type: iterate variants by rank, add DF pairs that are not yet annotated
-        for otype, type_data in variants_data.items():
+        n_types = max(1, len(variants_data))
+        for type_index, (otype, type_data) in enumerate(variants_data.items()):
             variants = type_data.get("variants", [])
             start_node = f"__start__:{otype}"
             end_node = f"__end__:{otype}"
-            
+            progress.report(0.8 + 0.2 * type_index / n_types)
+
             for rank, variant in enumerate(variants, start=1):
+                if rank % 1000 == 0:
+                    progress.check()
                 trace = variant.get("trace", [])
                 if not trace:
                     continue
@@ -586,4 +598,5 @@ class NewOCDFGDb(nx.MultiDiGraph):
             for otype, type_data in variants_data.items()
         }
 
+        progress.report(1.0, "Done")
         return graph, variant_counts

@@ -13,6 +13,7 @@ totem_lib/evaluation/results/*.json
 !docs/MODEL_ASSETS.md
 !docs/OCCN_REPLAY_FITNESS.md
 !docs/RESOURCE_AWARE_VARIANTS.md
+!docs/LARGE_LOGS.md
 !docs/EDGE_CASE_TAXONOMY.md
 !docs/ORGANIZATIONAL_MINING.md
 !docs/Quality_Assurance_Report.md
