@@ -134,6 +134,30 @@ def test_ocdfg_visualization():
     assert isinstance(plot(dfg), graphviz.Digraph)
 
 
+def test_totem_plot_accepts_colors_and_kwargs():
+    from totem_lib import Totem
+
+    totem = Totem.__new__(Totem)
+    totem.tempgraph = {"nodes": {"order", "item"}, "D": {("order", "item")}}
+    totem.cardinalities = {("order", "item"): {"LC": "1", "EC": "1"}}
+
+    g = totem.plot(ot_colors={"order": "#123456"}, rankdir="TB")
+    assert "#123456" in g.source
+    assert "rankdir=TB" in g.source
+    assert "#123456" in plot(totem, ot_colors={"order": "#123456"}).source
+    # Legacy keyword still honored
+    assert "#654321" in totem_to_graphviz(totem, ot_to_hex_color={"order": "#654321"}).source
+
+
+def test_process_areas_labels_are_html_escaped():
+    pa = ProcessAreas({0: [(["R&D <team>"], {"Check & Approve", "a<b"})]})
+    dot_str = pa.to_graphviz().source
+    assert "R&amp;D &lt;team&gt;" in dot_str
+    assert "Check &amp; Approve" in dot_str
+    assert "a&lt;b" in dot_str
+    assert "Check & Approve" not in dot_str
+
+
 def test_unsupported_model_raises():
     with pytest.raises(TypeError):
         plot("not a model")

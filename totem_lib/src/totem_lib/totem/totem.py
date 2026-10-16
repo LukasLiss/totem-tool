@@ -99,9 +99,9 @@ class Totem(VisualizableMixin):
     #                        event_cardinalities=event_cardinalities,
     #                        temporal_relations=temporal_relations)
 
-    def to_graphviz(self, ot_to_hex_color: dict | None = None) -> graphviz.Digraph:
+    def to_graphviz(self, ot_colors: dict | None = None, **kwargs) -> graphviz.Digraph:
         """Draws the discovered TOTeM model as a Graphviz Digraph."""
-        return totem_to_graphviz(self, ot_to_hex_color)
+        return totem_to_graphviz(self, ot_colors, **kwargs)
 
     def visualize(
         self, output_dir: Path | str, output_file: str, ot_to_hex_color: dict | None = None

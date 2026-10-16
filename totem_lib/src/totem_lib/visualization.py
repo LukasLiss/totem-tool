@@ -11,6 +11,7 @@ Provides Graphviz-based rendering, plotting, and Jupyter inline display for:
 
 from __future__ import annotations
 
+import html
 import math
 import os
 import shutil
@@ -47,7 +48,6 @@ def _ensure_graphviz_on_path() -> None:
         return
 
     candidates = [
-        Path.home() / "graphviz" / "Graphviz-16.1.0-win64" / "bin",
         Path.home() / "graphviz" / "bin",
         Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Graphviz" / "bin",
         Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Graphviz" / "bin",
@@ -342,12 +342,17 @@ def accepting_petri_net_to_graphviz(
 
 def totem_to_graphviz(
     totem: Any,
+    ot_colors: Optional[dict] = None,
+    rankdir: str = "LR",
     ot_to_hex_color: Optional[dict] = None,
 ) -> graphviz.Digraph:
-    """Build a Graphviz Digraph for a Totem model."""
+    """Build a Graphviz Digraph for a Totem model.
+
+    ``ot_to_hex_color`` is a legacy alias for ``ot_colors``.
+    """
     _ensure_graphviz_on_path()
     nodes = totem.tempgraph.get("nodes", set())
-    colors = dict(ot_to_hex_color or {})
+    colors = dict(ot_colors or ot_to_hex_color or {})
     for ot, col in get_object_type_colors(list(nodes)).items():
         colors.setdefault(ot, col)
 
@@ -377,7 +382,7 @@ def totem_to_graphviz(
             "nodesep": "0.4",
             "ranksep": "0.7",
             "splines": "spline",
-            "rankdir": "LR",
+            "rankdir": rankdir,
         },
         node_attr={"fontname": GV_FONT, "fontsize": "10"},
         edge_attr={"fontname": GV_FONT, "fontsize": "9"},
@@ -728,8 +733,9 @@ def process_areas_to_graphviz(
                 if rep_id is None:
                     rep_id = node_id
 
-                ots_str = ", ".join(sorted(object_types))
-                acts_list = sorted(event_types)
+                # Names are user data; escape them for Graphviz HTML-like labels.
+                ots_str = html.escape(", ".join(sorted(object_types)))
+                acts_list = [html.escape(str(a)) for a in sorted(event_types)]
 
                 if acts_list:
                     chunks = [", ".join(acts_list[j : j + 3]) for j in range(0, min(len(acts_list), 9), 3)]
