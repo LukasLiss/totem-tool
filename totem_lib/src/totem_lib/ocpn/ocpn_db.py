@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 from ..visualization import VisualizableMixin, ocpn_to_graphviz
 from .inductive_miner import discover_petri_net
 
@@ -180,6 +181,7 @@ def discover_ocpn_db(
     timeout_s: Optional[float] = None,
     variable_arc_threshold: float = DEFAULT_VARIABLE_ARC_THRESHOLD,
     name: str = "Discovered OCPN",
+    progress=None,
 ) -> dict:
     """Discover an object-centric Petri net from a DuckDB-backed OCEL.
 
@@ -200,6 +202,8 @@ def discover_ocpn_db(
         of the activity's events refer to exactly one object of the type.
     name:
         Name stored in the returned model file.
+    progress:
+        Optional ``callback(fraction, message)`` (see :mod:`totem_lib.progress`).
 
     Returns
     -------
@@ -208,34 +212,42 @@ def discover_ocpn_db(
         (``{"format": "ocpn", "version": 1, "name", "objectTypes",
         "places", "transitions", "arcs"}``).
     """
+    progress = as_progress(progress)
     try:
         with _timeout_watchdog(ocel_db, timeout_s) as cancel_event:
             should_cancel = cancel_event.is_set if cancel_event is not None else None
 
+            progress.report(0.0, "Collecting object types")
             available_types = _fetch_object_types(ocel_db)
             if object_types is not None:
                 selected = [ot for ot in available_types if ot in set(object_types)]
             else:
                 selected = available_types
 
+            progress.report(0.05, "Scoring variable arcs")
             scores = _fetch_variable_arc_scores(ocel_db)
 
             per_type_nets = []
-            for obj_type in selected:
+            n_selected = max(1, len(selected))
+            for index, obj_type in enumerate(selected):
                 if should_cancel is not None and should_cancel():
                     raise TimeoutError("OCPN discovery cancelled (timeout)")
+                progress.report(0.1 + 0.85 * index / n_selected, f"Mining Petri net for {obj_type}")
                 variants = _fetch_variants(ocel_db, obj_type)
                 if not variants:
                     continue  # No object of this type participates in events.
                 net = discover_petri_net(variants, should_cancel)
                 per_type_nets.append((obj_type, net))
 
-        return _merge_nets_to_model(
+        progress.report(0.95, "Merging nets")
+        model = _merge_nets_to_model(
             per_type_nets,
             scores=scores,
             variable_arc_threshold=variable_arc_threshold,
             name=name,
         )
+        progress.report(1.0, "Done")
+        return model
     except TimeoutError:
         raise
     except Exception as exc:

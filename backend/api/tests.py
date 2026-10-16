@@ -3992,7 +3992,7 @@ class OcelDbConcurrencyTests(TestCase):
 
         discover_inputs = []
 
-        def fake_discover(ocel, relativeOccuranceThreshold, parameters):
+        def fake_discover(ocel, relativeOccuranceThreshold, parameters, progress=None):
             discover_inputs.append(ocel)
             return object()
 

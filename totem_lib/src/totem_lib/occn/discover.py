@@ -16,12 +16,14 @@ from . import OCCausalNet
 from .heuristics import discover_heuristics_net
 from totem_lib import ObjectCentricEventLog, filter_dead_objects
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 
 
 def discover_occn(
     ocel: ObjectCentricEventLog | OcelDuckDB | OCCNDiscoveryInput,
     relativeOccuranceThreshold: float,
     parameters: dict = None,
+    progress=None,
 ) -> OCCausalNet:
     """
     Discover an OCCN using the Flexible Heuristics Miner (FHM) algorithm.
@@ -50,6 +52,9 @@ def discover_occn(
         - `inconsumableObjects`: List of object types considered inconsumable
           (default: None).
         - `inconsumableThreshold`: Threshold for inconsumable objects (default: 1).
+    progress (Optional)
+        A ``callback(fraction, message)`` reporting the mining phases (see
+        :mod:`totem_lib.progress`); raising inside it aborts the discovery.
     
     When using multiple values for relativeOccuranceThreshold, it is recommended
     to conduct the expensive discovery only once without filtering and then 
@@ -72,8 +77,10 @@ def discover_occn(
     """
     if parameters is None:
         parameters = {}
+    progress = as_progress(progress)
 
     # Pre-process OCEL
+    progress.report(0.0, "Reading events and relations")
     eventLog, eventLogForMiner = _prepare_ocel_for_discovery(ocel)
 
     objectTypes = parameters.get("object_types")
@@ -107,10 +114,12 @@ def discover_occn(
         objectTypes,
         dependency_threshold,
         loop_two_threshold,
+        progress=progress.sub(0.05, 0.25, "Mining heuristics nets"),
     )
     events = _getEvents(heuNets)
 
     # Generate global dependency graph by aggregating all heuristic nets
+    progress.report(0.25, "Building dependency graph")
     dependencyDict, startActivities, endActivities = _generateDependencyDict(
         heuNets, events, inconsumableObjects, inconsumableThreshold
     )
@@ -124,9 +133,13 @@ def discover_occn(
 
     # Generate closest predecessor and successor per event
     closestPredecessorDF = _generateClosestPredecessorDF(
-        objectSet, eventLogDict, predecessors
+        objectSet, eventLogDict, predecessors,
+        progress=progress.sub(0.3, 0.4, "Finding closest predecessors"),
     )
-    closestSuccessorDF = _generateClosestSuccessorDF(objectSet, eventLogDict, successors)
+    closestSuccessorDF = _generateClosestSuccessorDF(
+        objectSet, eventLogDict, successors,
+        progress=progress.sub(0.4, 0.5, "Finding closest successors"),
+    )
 
     # Mine input marker groups and output marker groups
     eventToActivityDict = pd.Series(
@@ -142,6 +155,7 @@ def discover_occn(
         dependencyDict,
         eventLogForMiner,
         combo_threshold,
+        progress=progress.sub(0.5, 0.72, "Mining output bindings"),
     )
     inputBindings, _ = _mineInputBindings(
         eventIDSet,
@@ -152,9 +166,11 @@ def discover_occn(
         dependencyDict,
         eventLogForMiner,
         combo_threshold,
+        progress=progress.sub(0.72, 0.94, "Mining input bindings"),
     )
 
     # Generate activity counts for filtering
+    progress.report(0.95, "Assembling causal net")
     activityCount = _generateActivityCount(eventLog, startActivities, endActivities)
 
     # Create intermediate SimpleOCCNet
@@ -167,6 +183,7 @@ def discover_occn(
 
     # Convert to final OCCausalNet object, filter markers based on threshold
     occn = occnet.to_OCCausalNet(relativeOccurenceThreshold=relativeOccuranceThreshold)
+    progress.report(1.0, "Done")
     return occn
 
 @dataclass
@@ -328,6 +345,7 @@ def _mineHeuNets(
     objectTypes: list,
     dependency_threshold: float = 0.5,
     loop_two_threshold: float = 0.5,
+    progress=None,
 ) -> dict:
     """
     Mines a standard Heuristics Net for each object type individually.
@@ -349,8 +367,11 @@ def _mineHeuNets(
         A dictionary mapping object types to their mined
         :class:`~totem_lib.occn.heuristics.HeuristicsNet`.
     """
+    progress = as_progress(progress)
     heuNets = {}
-    for objType in objectTypes:
+    n_types = max(1, len(objectTypes))
+    for index, objType in enumerate(objectTypes):
+        progress.report(index / n_types)
         heuNets[objType] = discover_heuristics_net(
             eventLogForMiner[eventLogForMiner["object_type"] == objType],
             case_column="object",
@@ -703,7 +724,7 @@ def _getClosestSuccessor(
 
 
 def _generateClosestPredecessorDF(
-    objectSet: set, eventLogDict: dict, predecessors: pd.DataFrame
+    objectSet: set, eventLogDict: dict, predecessors: pd.DataFrame, progress=None
 ) -> pd.DataFrame:
     """
     Generates a DataFrame mapping every event instance to its closest valid predecessor instance.
@@ -728,7 +749,11 @@ def _generateClosestPredecessorDF(
         for k, v in predecessors.groupby(["activity", "object_type"])
     }
     predecessorActObjDictDefault = []
-    for objectID in objectSet:
+    progress = as_progress(progress)
+    n_objects = max(1, len(objectSet))
+    for object_index, objectID in enumerate(objectSet):
+        if object_index % 2000 == 0:
+            progress.report(object_index / n_objects)
         uniqueLogSnippet = eventLogDict[objectID]
         activityList = uniqueLogSnippet["event_activity"].to_list()
         for i in range(len(uniqueLogSnippet)):
@@ -770,7 +795,7 @@ def _generateClosestPredecessorDF(
 
 
 def _generateClosestSuccessorDF(
-    objectSet: set, eventLogDict: dict, successors: pd.DataFrame
+    objectSet: set, eventLogDict: dict, successors: pd.DataFrame, progress=None
 ) -> pd.DataFrame:
     """
     Generates a DataFrame mapping every event instance to its closest valid successor instance.
@@ -795,7 +820,11 @@ def _generateClosestSuccessorDF(
         for k, v in successors.groupby(["activity", "object_type"])
     }
     successorActObjDictDefault = []
-    for objectID in objectSet:
+    progress = as_progress(progress)
+    n_objects = max(1, len(objectSet))
+    for object_index, objectID in enumerate(objectSet):
+        if object_index % 2000 == 0:
+            progress.report(object_index / n_objects)
         uniqueLogSnippet = eventLogDict[objectID]
         for i in range(len(uniqueLogSnippet)):
             activity = uniqueLogSnippet["event_activity"].iloc[i]
@@ -1088,6 +1117,7 @@ def _mineOutputBindings(
     dependencyDict: dict,
     eventLogForMiner: pd.DataFrame,
     combo_threshold: int,
+    progress=None,
 ) -> tuple:
     """
     Mines output bindings by analyzing how objects flow into succeeding events.
@@ -1129,7 +1159,13 @@ def _mineOutputBindings(
         target_key_col="event_id",
     )
 
-    for event in tqdm(eventIDSet, desc="Mining OCCN: Step 1/2 (Output Bindings)"):
+    progress = as_progress(progress)
+    n_events = max(1, len(eventIDSet))
+    for event_index, event in enumerate(
+        tqdm(eventIDSet, desc="Mining OCCN: Step 1/2 (Output Bindings)", disable=progress.enabled)
+    ):
+        if event_index % 2000 == 0:
+            progress.report(event_index / n_events)
 
         activity = eventToActivityDict[event]
 
@@ -1227,6 +1263,7 @@ def _mineInputBindings(
     dependencyDict: dict,
     eventLogForMiner: pd.DataFrame,
     combo_threshold: int,
+    progress=None,
 ) -> tuple:
     """
     Mines input bindings by analyzing how objects flow from preceding events.
@@ -1267,7 +1304,13 @@ def _mineInputBindings(
         target_key_col="event_activity",
     )
 
-    for event in tqdm(eventIDSet, desc="Mining OCCN: Step 1/2 (Output Bindings)"):
+    progress = as_progress(progress)
+    n_events = max(1, len(eventIDSet))
+    for event_index, event in enumerate(
+        tqdm(eventIDSet, desc="Mining OCCN: Step 2/2 (Input Bindings)", disable=progress.enabled)
+    ):
+        if event_index % 2000 == 0:
+            progress.report(event_index / n_events)
 
         activity = eventToActivityDict[event]
 

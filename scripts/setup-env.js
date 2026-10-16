@@ -108,6 +108,9 @@ function confirm(question) {
     run(venvPython, ['manage.py', 'migrate'], BACKEND_DIR);
 
     // 9. NPM INSTALL
+    console.log('📦 Installing Root Dependencies (concurrently, cross-env, wait-on, ...)...');
+    run('npm', ['install'], ROOT_DIR);
+
     console.log('📦 Installing Frontend Dependencies...');
     run('npm', ['install'], path.join(ROOT_DIR, 'frontend'));
 
