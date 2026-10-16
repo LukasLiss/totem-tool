@@ -21,6 +21,7 @@ from totem_lib.ochandover import OCHANDOVER, ProfileMatrix
 from ..cache_utils import get_cached_result, set_cached_result
 from ..models import EventLog
 from ._filters import _parse_filter_params, _should_use_cache
+from ..jobs import JobCancelled, cancelled_response, job_scope
 from ._ocel_db import _filter_shadow, _object_types, _with_ocel_db
 
 VALID_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
@@ -235,9 +236,12 @@ def ochandover(request):
             return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        with _with_ocel_db(user_file) as db:
+        with job_scope(request, "Handover of work") as job, _with_ocel_db(user_file, job) as db:
+            job.report(None, "Computing handovers")
             with _filter_shadow(db, fp):
                 graph = OCHANDOVER.from_ocel_db(db, **kwargs)
+    except JobCancelled:
+        return cancelled_response()
     except Exception as exc:
         traceback.print_exc()
         return Response(
@@ -321,7 +325,8 @@ def profile_matrix(request):
             return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        with _with_ocel_db(user_file) as db:
+        with job_scope(request, "Resource profiles") as job, _with_ocel_db(user_file, job) as db:
+            job.report(None, "Computing resource profiles")
             with _filter_shadow(db, fp):
                 pm = ProfileMatrix.from_ocel_db(
                     db,
@@ -341,6 +346,8 @@ def profile_matrix(request):
             distance_metric=distance_metric,
             group_weights=group_weights,
         )
+    except JobCancelled:
+        return cancelled_response()
     except Exception as exc:
         traceback.print_exc()
         return Response({"error": f"Computation failed: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -388,12 +395,15 @@ def event_log_table(request):
 
     fp = _parse_filter_params(request)
     try:
-        with _with_ocel_db(user_file) as db:
+        with job_scope(request, "Event log table") as job, _with_ocel_db(user_file, job) as db:
+            job.report(None, "Collecting events")
             with _filter_shadow(db, fp):
                 object_types = _object_types(db)
                 sql = _EVENT_LOG_TABLE_SQL + (f" LIMIT {int(limit)}" if limit else "")
                 rows = db.conn.execute(sql).fetchall()
                 total_events = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    except JobCancelled:
+        return cancelled_response()
     except Exception as exc:
         traceback.print_exc()
         return Response({"error": f"Failed to build event log: {exc}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

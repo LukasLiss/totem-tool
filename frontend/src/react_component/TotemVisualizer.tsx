@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import ComputationStatus from '@/components/ComputationStatus';
+import { isCancelledError } from '@/store/computationStore';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -4821,6 +4823,7 @@ function TotemVisualizer({
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
+  const totemAbortRef = useRef<AbortController | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -5498,6 +5501,11 @@ function TotemVisualizer({
     // the canvas ends up showing the parameters the user has already left.
     const requestId = ++latestTotemRequestRef.current;
     const isCurrent = () => requestId === latestTotemRequestRef.current;
+    // A superseded request is aborted so the backend stops computing it
+    // instead of holding the per-file lock until it finishes.
+    totemAbortRef.current?.abort();
+    const controller = new AbortController();
+    totemAbortRef.current = controller;
 
     setLoading(true);
     setError(null);
@@ -5521,6 +5529,7 @@ function TotemVisualizer({
           : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
       const { data: payload } = await axios.get<TotemApiResponse>(url, {
         _skipGlobalFilter: filterConfig._skipGlobalFilter,
+        signal: controller.signal,
       });
       if (!isCurrent()) return;
       setRawTotem(payload);
@@ -5538,8 +5547,9 @@ function TotemVisualizer({
       }
     } catch (err) {
       if (!isCurrent()) return;
-      const message =
-        axios.isAxiosError(err) && err.response?.data?.error
+      const message = isCancelledError(err)
+        ? 'Computation cancelled.'
+        : axios.isAxiosError(err) && err.response?.data?.error
           ? String(err.response.data.error)
           : err instanceof Error
             ? err.message
@@ -5550,6 +5560,7 @@ function TotemVisualizer({
       if (isCurrent()) setLoading(false);
     }
   }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion, localFilterParams]);
+  useEffect(() => () => totemAbortRef.current?.abort(), []);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -6824,11 +6835,17 @@ function TotemVisualizer({
       </div>
 
       {loading && (
-        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
-          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <span className="text-sm font-medium text-slate-700">Discovering Totem model…</span>
-          </div>
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
+          <ComputationStatus
+            fileId={eventLogId}
+            urlIncludes={['/discover_process_areas/', '/discover_mlpa/']}
+            fallback={(
+              <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm font-medium text-slate-700">Discovering Totem model…</span>
+              </div>
+            )}
+          />
         </div>
       )}
       {tooltipState && <HoverTooltip {...tooltipState} />}

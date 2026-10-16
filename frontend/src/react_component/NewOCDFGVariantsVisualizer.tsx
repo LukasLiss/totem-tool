@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -619,9 +620,9 @@ function NewOCDFGVariantsVisualizer({
           });
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          toast.error('OC-DFG variants could not be loaded');
+          if (!isCancelledError(err)) toast.error('OC-DFG variants could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });

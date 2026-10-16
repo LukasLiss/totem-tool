@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isCancelledError } from "@/store/computationStore";
 import { getEffectiveFilterConfig } from "@/store/filterStore";
 import type { ProcessAreaSnapshot, ProcessAreasSnapshot } from "@/store/processAreaStore";
 
@@ -158,6 +159,7 @@ export async function fetchProcessAreas(
 
 /** A user-facing message for a failed variants / store request. */
 export function describeRequestError(error: unknown, fallback: string): string {
+  if (isCancelledError(error)) return "Computation cancelled.";
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { code?: string; timeout_s?: number; hint?: string; error?: string } | undefined;
     if (error.response?.status === 408 && data?.code === "timeout") {

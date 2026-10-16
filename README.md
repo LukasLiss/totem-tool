@@ -63,3 +63,4 @@ The Windows executable is built using Electron and includes everything needed to
 - [OCCN_REPLAY_FITNESS.md](docs/OCCN_REPLAY_FITNESS.md) - OCCN replay strategies, API and UI behavior, result interpretation, examples, and limitations
 - [PLAYOUT.md](docs/PLAYOUT.md) - Object-centric playout: enumerate and export all variants an OCPN/OCCN allows
 - [RESOURCE_AWARE_VARIANTS.md](docs/RESOURCE_AWARE_VARIANTS.md) - Resource-aware variants, storing process executions in the log, OCCN conformance on stored executions, and the process-area filter action
+- [LARGE_LOGS.md](docs/LARGE_LOGS.md) - Import pipeline for large logs, the automatic time-range filter, and cancellable computations with progress

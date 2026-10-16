@@ -93,6 +93,18 @@ Tools like `pyinstaller` and `pytest` are listed in **`backend/requirements-dev.
 
 ---
 
+## 📥 Importing large event logs offline
+
+Uploaded `.sqlite` logs are read by DuckDB's `sqlite_scanner` extension, which DuckDB downloads on first use. On a machine without internet access (or in a packaged build) install the matching extension wheel into the venv so the fast path keeps working:
+
+```bash
+node scripts/run-python.js -m pip install duckdb-extension-sqlite-scanner
+```
+
+The package pins the `duckdb` version it was built for. Without it, the importer falls back to a slower pure-Python path automatically. See [docs/LARGE_LOGS.md](docs/LARGE_LOGS.md) for the import pipeline, the automatic time-range filter for large logs, and cancellable computations.
+
+---
+
 ## 🧪 Running Tests
 
 Since `totem_lib` is installed in editable mode, you can test it directly from the root using the unified environment.
