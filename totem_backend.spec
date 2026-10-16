@@ -4,6 +4,9 @@ import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 simplejwt_hidden_imports = collect_submodules('rest_framework_simplejwt')
+# settings.py only imports the top-level package; the middleware and storage
+# classes are referenced by dotted-path strings, which PyInstaller cannot see.
+whitenoise_hidden_imports = collect_submodules('whitenoise')
 
 # PuLP ships its CBC solver as a platform binary under pulp/solverdir/; without
 # it mlpaDiscovery / process areas fail in the frozen app with "solver not found".
@@ -22,7 +25,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('backend/initial_user.json', '.')] + pulp_solver_files,
-    hiddenimports=simplejwt_hidden_imports,
+    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
