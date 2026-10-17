@@ -103,7 +103,10 @@ function confirm(question) {
         run(venvPython, ['-m', 'pip', 'install', '-e', 'totem_lib[test]']);
     }
 
-    // 8. APPLY DJANGO MIGRATIONS (creates db.sqlite3 + seeds Guest user for local mode)
+    // 8. APPLY DJANGO MIGRATIONS (creates db.sqlite3). Deliberately without
+    // LOCAL_MODE: this script may also set up a server, which must not get
+    // the well-known Guest/guest account. `npm run electron-dev` creates it
+    // (via `npm run migrate-local`) when local mode is actually started.
     console.log('🗄️  Applying database migrations...');
     run(venvPython, ['manage.py', 'migrate'], BACKEND_DIR);
 
@@ -119,7 +122,9 @@ function confirm(question) {
 
 
     console.log('\n✅ Setup Complete!');
-    console.log(`   Run dev stack:        npm run dev`);
+    console.log(`   Run the app (local mode, auto-login as Guest): npm run electron-dev`);
+    console.log(`   Run dev stack (server-mode login):             npm run dev`);
+    console.log(`     (needs an account: node scripts/run-python.js backend/manage.py createsuperuser)`);
     console.log(`   Run a python command: node scripts/run-python.js <args...>`);
     console.log(`   Manual activation:    source backend/.venv/bin/activate   (Mac/Linux)`);
     console.log(`                         backend\\.venv\\Scripts\\Activate.ps1 (Windows PS)`);
