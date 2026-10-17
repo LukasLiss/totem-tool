@@ -32,7 +32,8 @@
     "build-all": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run build-electron-win",
     "build-all-mac": "npm run build-backend && npm run build-frontend && npm run prebuild:electron && npm run copy:frontend && npm run copy:backend && npm run build-electron-mac",
     "dev": "concurrently \"npm run start-backend\" \"npm run start-frontend\"",
-    "electron-dev": "concurrently \"cross-env LOCAL_MODE=1 npm run start-backend\" \"wait-on http-get://localhost:8000/api/health-check/ && cross-env VITE_LOCAL_MODE=1 npm run start-frontend\" \"wait-on http-get://localhost:3000 && npm run start-electron\"",
+    "migrate-local": "cross-env LOCAL_MODE=1 node scripts/run-python.js backend/manage.py migrate --noinput",
+    "electron-dev": "npm run migrate-local && concurrently \"cross-env LOCAL_MODE=1 npm run start-backend\" \"wait-on http-get://localhost:8000/api/health-check/ && cross-env VITE_LOCAL_MODE=1 npm run start-frontend\" \"wait-on http-get://localhost:3000 && npm run start-electron\"",
     "setup-env": "node ./scripts/setup-env.js"
   },
   "devDependencies": {
