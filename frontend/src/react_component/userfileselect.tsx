@@ -28,6 +28,12 @@ import {
 import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
 import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 
+/** What the user named the project, falling back to the event log's file name.
+ * Mirrors projectLabel in components/team-switcher.tsx so a project reads the
+ * same here as it does in the sidebar switcher. */
+const projectLabel = (file: { display_name?: string; file?: string } | null) =>
+  file?.display_name || file?.file?.split("/").pop() || "Untitled project";
+
 
 function UserFileSelect() {
     const [open, setOpen] = useState(false)
@@ -81,9 +87,7 @@ function UserFileSelect() {
               aria-expanded={open}
               className="w-[300px] justify-between"
             >
-              {selectedFile?.file
-                ? selectedFile.file.split("/").pop()
-                : "Select OCEL File"}
+              {selectedFile ? projectLabel(selectedFile) : "Select OCEL File"}
               <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
@@ -96,7 +100,7 @@ function UserFileSelect() {
                   {files.map((file) => (
                     <CommandItem
                       key={file.id}
-                      value={file.file}
+                      value={`${projectLabel(file)} ${file.file}`}
                       onSelect={() => {
                         setSelectedFile(file)
                         setOpen(false);
@@ -110,7 +114,7 @@ function UserFileSelect() {
                             : "opacity-0"
                         )}
                       />
-                      {file.file.split("/").pop()}
+                      {projectLabel(file)}
                     </CommandItem>
                   ))}
                 </CommandGroup>

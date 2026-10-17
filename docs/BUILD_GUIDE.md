@@ -44,6 +44,9 @@ The packaged app includes:
 - ✅ **TOTeM Library** - The `totem_lib` Python library
 - ✅ **Database** - SQLite database file
 - ✅ **API endpoints** - All backend functionality
+- ✅ **Sample event log** - `backend/sample_data/container_logistics.duckdb`,
+  shipped through `datas` in `totem_backend.spec` and copied into the per-user
+  data directory on first launch (see `backend/api/sample_project.py`)
 
 ## 🎯 Distribution
 
