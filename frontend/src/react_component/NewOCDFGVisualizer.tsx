@@ -37,6 +37,12 @@ import { toast } from 'sonner';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
+// Graphs with more arcs are only laid out on request. ELK can need minutes and
+// more memory than the page has for them — its worker shares the page's
+// process, so running out of memory there crashes the whole page.
+const AUTO_LAYOUT_MAX_ARCS = 2000;
+// Room a size-reporting box needs for the layout status card (see below).
+const STATUS_CARD_ROOM = { width: 300, height: 130 };
 
 const VARIANT_PRESETS = {
   full: {
@@ -273,7 +279,17 @@ function NewOCDFGVisualizer({
   const [loading, setLoading] = useState(false);
   // The ELK layout of the current graph. While it runs (or after it failed)
   // there are no nodes yet, which must not read as "no activities here".
-  const [layoutState, setLayoutState] = useState<'idle' | 'running' | 'failed'>('idle');
+  // 'held': too large to lay out without asking (AUTO_LAYOUT_MAX_ARCS).
+  const [layoutState, setLayoutState] =
+    useState<'idle' | 'running' | 'failed' | 'held' | 'cancelled'>('idle');
+  const [layoutSize, setLayoutSize] = useState({ nodes: 0, arcs: 0 });
+  // The graph data the user asked to lay out despite its size, the running
+  // layout (for Cancel), and a counter that starts the layout once more.
+  const approvedLayoutRef = useRef<OcdfgGraph | null>(null);
+  // The graph data the drawn graph (`baseNodes`) was laid out from.
+  const drawnDataRef = useRef<OcdfgGraph | null>(null);
+  const layoutControllerRef = useRef<AbortController | null>(null);
+  const [layoutRun, setLayoutRun] = useState(0);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
@@ -898,6 +914,18 @@ function NewOCDFGVisualizer({
       return weight >= threshold;
     });
 
+    setLayoutSize({ nodes: filteredNodes.length, arcs: filteredEdges.length });
+    if (filteredEdges.length > AUTO_LAYOUT_MAX_ARCS && approvedLayoutRef.current !== dfgData) {
+      // A graph still drawn from other data (another log or filter) must not
+      // stay under the card as if it were this one.
+      if (drawnDataRef.current !== dfgData) {
+        setBaseNodes([]);
+        setBaseEdges([]);
+      }
+      setLayoutState('held');
+      return;
+    }
+
     const naiveNodes = dfgData.nodes;
     const naiveLinks = dfgData.links.map(l => ({
       source: l.source,
@@ -913,6 +941,7 @@ function NewOCDFGVisualizer({
     // and let only the newest one write its result.
     let stale = false;
     const layoutController = new AbortController();
+    layoutControllerRef.current = layoutController;
     setLayoutState('running');
     getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       if (stale) return;
@@ -934,6 +963,7 @@ function NewOCDFGVisualizer({
       const shifted = shiftForLegend(directedNodes, directedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
 
+      drawnDataRef.current = dfgData;
       setBaseNodes(spacedNodes);
       setBaseEdges(shifted.edges);
 
@@ -980,7 +1010,37 @@ function NewOCDFGVisualizer({
     shiftForLegend,
     addLegendSpacer,
     weightLimit,
+    layoutRun,
   ]);
+
+  const cancelLayout = useCallback(() => {
+    // A large graph then waits for a new request instead of starting again on
+    // the next input change; a small one lays out again on its own.
+    approvedLayoutRef.current = null;
+    layoutControllerRef.current?.abort();
+    if (drawnDataRef.current !== dfgData) {
+      setBaseNodes([]);
+      setBaseEdges([]);
+    }
+    setLayoutState('cancelled');
+  }, [dfgData]);
+
+  const startLayout = useCallback(() => {
+    approvedLayoutRef.current = dfgData;
+    setLayoutRun((run) => run + 1);
+  }, [dfgData]);
+
+  // A box that takes its size from the graph (the drill-downs in the process
+  // areas, via `onSizeChange`) is only as big as one object type while no
+  // graph is drawn; ask for room for the layout status card instead.
+  const statusCardShown = layoutState === 'running' || layoutState === 'held' || layoutState === 'cancelled';
+  useEffect(() => {
+    if (!statusCardShown || baseNodes.length > 0 || !onSizeChangeRef.current) return;
+    const previous = lastReportedSizeRef.current;
+    if (previous && previous.width >= STATUS_CARD_ROOM.width && previous.height >= STATUS_CARD_ROOM.height) return;
+    lastReportedSizeRef.current = STATUS_CARD_ROOM;
+    onSizeChangeRef.current(STATUS_CARD_ROOM);
+  }, [statusCardShown, baseNodes.length]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -1064,11 +1124,47 @@ function NewOCDFGVisualizer({
   const hasActivities = dfgData === null || baseNodes.some(n => n.data?.nodeVariant === 'center');
   const layoutMessage = layoutState === 'idle'
     ? (hasActivities ? null : 'All activities are displayed in lower levels.')
-    : baseNodes.length > 0
-      ? null // the previous graph stays on screen until the new layout is done
-      : layoutState === 'running'
-        ? 'Laying out the graph…'
-        : 'The graph could not be laid out.';
+    : layoutState === 'failed' && baseNodes.length === 0
+      ? 'The graph could not be laid out.'
+      : null;
+  // Running, held and cancelled layouts get a card with a button instead; it
+  // leaves the legend usable (hiding object types or raising Min Weight
+  // shrinks the graph). A previous graph stays on screen below it.
+  const sizeLabel = `${layoutSize.nodes.toLocaleString()} nodes, ${layoutSize.arcs.toLocaleString()} arcs`;
+  const layoutStatus =
+    layoutState === 'running'
+      ? {
+        text: `Laying out the graph (${sizeLabel})…`,
+        short: 'Laying out the graph…',
+        shortDetail: sizeLabel,
+        action: 'Cancel',
+        shortAction: 'Cancel',
+        onClick: cancelLayout,
+      }
+      : layoutState === 'held'
+        ? {
+          text:
+            `This graph is large (${sizeLabel}). Laying it out can take minutes and may crash the page.` +
+            (hideChrome ? '' : ' Hide object types or raise Min Weight in the legend for a smaller graph.'),
+          short: 'Large graph',
+          shortDetail: `${sizeLabel} · may take long or crash the page`,
+          action: 'Lay out anyway',
+          shortAction: 'Lay out anyway',
+          onClick: startLayout,
+        }
+        : layoutState === 'cancelled'
+          ? {
+            text: `Layout cancelled (${sizeLabel}).`,
+            short: 'Layout cancelled',
+            shortDetail: sizeLabel,
+            action: 'Lay out again',
+            shortAction: 'Lay out again',
+            onClick: startLayout,
+          }
+          : null;
+  // Small boxes (the drill-downs inside the process areas) get a stacked card
+  // with a short title and detail line; the full sentence is its tooltip.
+  const compactStatus = containerSize.width < 420 || containerSize.height < 220;
   const noEventLog = data == null && !fileId;
 
   return (
@@ -1148,6 +1244,54 @@ function NewOCDFGVisualizer({
           pointerEvents: 'none',
         }}>
           {layoutMessage}
+        </div>
+      )}
+
+      {!noEventLog && !loading && layoutStatus && (
+        <div
+          className={`pointer-events-none absolute inset-0 z-20 flex justify-center ${
+            compactStatus ? 'p-1' : 'p-4'
+          } ${baseNodes.length > 0 ? 'items-start' : 'items-center'}`}
+        >
+          <div
+            title={compactStatus ? layoutStatus.text : undefined}
+            className={`pointer-events-auto flex rounded-md border border-slate-200 bg-white font-medium text-slate-700 shadow-lg ${
+              compactStatus
+                ? 'max-w-full flex-col items-center gap-1.5 px-3 py-2 text-center'
+                : 'max-w-md items-center gap-3 px-4 py-3 text-xs'
+            }`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {compactStatus ? (
+              <>
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  {layoutState === 'running' && (
+                    <div className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  )}
+                  {layoutStatus.short}
+                </div>
+                <div className="text-[11px] font-normal leading-snug text-slate-500">
+                  {layoutStatus.shortDetail}
+                </div>
+              </>
+            ) : (
+              <>
+                {layoutState === 'running' && (
+                  <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                )}
+                <span>{layoutStatus.text}</span>
+              </>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className={compactStatus ? 'h-6 px-2.5 text-[11px]' : 'shrink-0'}
+              onClick={layoutStatus.onClick}
+            >
+              {compactStatus ? layoutStatus.shortAction : layoutStatus.action}
+            </Button>
+          </div>
         </div>
       )}
 
