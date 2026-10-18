@@ -79,6 +79,12 @@ export async function elkLayout(graph: ElkNode, signal?: AbortSignal): Promise<E
   if (workersUnavailable) return inThreadLayout(graph);
 
   await acquireSlot(signal);
+  // Aborted while the slot was being handed over: the abort event has fired
+  // already, so the listener below would never hear of it.
+  if (signal?.aborted) {
+    releaseSlot();
+    throw abortError();
+  }
   let slot: WorkerElk;
   try {
     slot = idleWorkers.pop() ?? startWorker();
