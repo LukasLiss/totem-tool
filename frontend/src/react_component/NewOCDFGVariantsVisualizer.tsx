@@ -39,6 +39,14 @@ import { toast } from 'sonner';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
+// The small text buttons in the legend header (All, None, Collapse).
+const LEGEND_HEADER_BUTTON_STYLE = {
+  border: 'none',
+  background: 'transparent',
+  color: '#64748B',
+  fontSize: 12,
+  cursor: 'pointer',
+} as const;
 
 const VARIANT_PRESETS = {
   full: {
@@ -1101,6 +1109,18 @@ function NewOCDFGVariantsVisualizer({
     setTypeVisibility(prev => ({ ...prev, [type]: checked }));
   };
 
+  // "All" / "None" in the legend. Like the single switches, greyed-out types
+  // (no arc in this graph) are not switched on.
+  const setAllTypesVisible = (visible: boolean) => {
+    setTypeVisibility(prev => {
+      const next = { ...prev };
+      Object.keys(typeColors).forEach((type) => {
+        if (!visible || typeAvailability[type] === true) next[type] = visible;
+      });
+      return next;
+    });
+  };
+
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
 
   const noEventLog = data == null && !fileId;
@@ -1233,19 +1253,25 @@ function NewOCDFGVariantsVisualizer({
                 >
                   Object Types
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setLegendCollapsed((prev) => !prev)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#64748B',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {legendCollapsed ? 'Expand' : 'Collapse'}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {!legendCollapsed && (
+                    <>
+                      <button type="button" onClick={() => setAllTypesVisible(true)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        All
+                      </button>
+                      <button type="button" onClick={() => setAllTypesVisible(false)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        None
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setLegendCollapsed((prev) => !prev)}
+                    style={LEGEND_HEADER_BUTTON_STYLE}
+                  >
+                    {legendCollapsed ? 'Expand' : 'Collapse'}
+                  </button>
+                </div>
               </div>
               {!legendCollapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

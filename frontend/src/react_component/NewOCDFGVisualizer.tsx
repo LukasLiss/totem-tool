@@ -38,6 +38,14 @@ import { toast } from 'sonner';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
+// The small text buttons in the legend header (All, None, Collapse).
+const LEGEND_HEADER_BUTTON_STYLE = {
+  border: 'none',
+  background: 'transparent',
+  color: '#64748B',
+  fontSize: 12,
+  cursor: 'pointer',
+} as const;
 // Room a size-reporting box needs for the layout status card (see below).
 const STATUS_CARD_ROOM = { width: 300, height: 130 };
 
@@ -1111,11 +1119,26 @@ function NewOCDFGVisualizer({
     setTypeVisibility(prev => ({ ...prev, [type]: checked }));
   };
 
+  // "All" / "None" in the legend. Like the single switches, greyed-out types
+  // (no arc in this graph) are not switched on.
+  const setAllTypesVisible = (visible: boolean) => {
+    setTypeVisibility(prev => {
+      const next = { ...prev };
+      Object.keys(typeColors).forEach((type) => {
+        if (!visible || typeAvailability[type] === true) next[type] = visible;
+      });
+      return next;
+    });
+  };
+  const anyTypeVisible = Object.values(typeVisibility).some((visible) => visible !== false);
+
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
   // `baseNodes`, not `nodes`: the rendered nodes follow one effect later, and
   // in between the message below would flash up.
   const hasActivities = dfgData === null || baseNodes.some(n => n.data?.nodeVariant === 'center');
-  const layoutMessage = layoutState === 'idle' && !hasActivities
+  // Not with every object type switched off: the canvas is just empty then,
+  // and the message would cover the legend needed to switch them on again.
+  const layoutMessage = layoutState === 'idle' && !hasActivities && anyTypeVisible
     ? 'All activities are displayed in lower levels.'
     : null;
   // Small boxes (the drill-downs inside the process areas) get a stacked
@@ -1282,19 +1305,25 @@ function NewOCDFGVisualizer({
                 >
                   Object Types
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setLegendCollapsed((prev) => !prev)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#64748B',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {legendCollapsed ? 'Expand' : 'Collapse'}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {!legendCollapsed && (
+                    <>
+                      <button type="button" onClick={() => setAllTypesVisible(true)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        All
+                      </button>
+                      <button type="button" onClick={() => setAllTypesVisible(false)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        None
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setLegendCollapsed((prev) => !prev)}
+                    style={LEGEND_HEADER_BUTTON_STYLE}
+                  >
+                    {legendCollapsed ? 'Expand' : 'Collapse'}
+                  </button>
+                </div>
               </div>
               {!legendCollapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
