@@ -35,7 +35,18 @@ let inThreadElk: ElkInstance | null = null;
 
 const abortError = () => new DOMException('Layout cancelled', 'AbortError');
 
+// Without a worker a layout blocks the page until it is done: for a large
+// graph that freezes the page for minutes, cannot be cancelled and can crash
+// it. Such layouts are refused there (and fail visibly); small ones still run.
+const MAX_IN_THREAD_EDGES = 500;
+
 function inThreadLayout(graph: ElkNode): Promise<ElkNode> {
+  const edgeCount = graph.edges?.length ?? 0;
+  if (edgeCount > MAX_IN_THREAD_EDGES) {
+    return Promise.reject(
+      new Error(`No ELK worker available; not laying out ${edgeCount} edges on the main thread`),
+    );
+  }
   inThreadElk ??= new ELK();
   return inThreadElk.layout(graph);
 }

@@ -18,7 +18,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
-import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
 import { isLayoutAbort } from '../utils/elk';
 import { mapTypesToColors } from '../utils/objectColors';
 import NewOcdfgEdge from './NewOcdfgEdge';
@@ -40,7 +40,7 @@ const DETAIL_FIT_PADDING = 0.12;
 // Graphs with more arcs are only laid out on request. ELK can need minutes and
 // more memory than the page has for them — its worker shares the page's
 // process, so running out of memory there crashes the whole page.
-const AUTO_LAYOUT_MAX_ARCS = 2000;
+const AUTO_LAYOUT_MAX_ARCS = 300;
 // Room a size-reporting box needs for the layout status card (see below).
 const STATUS_CARD_ROOM = { width: 300, height: 130 };
 
@@ -879,6 +879,13 @@ function NewOCDFGVisualizer({
       } as Edge;
     });
 
+    // Which object types the graph has at all, as the first layout of the full
+    // graph would report it (a layout keeps every node and edge). Taken from
+    // the data rather than from that first layout: a graph held for its size
+    // is first laid out with object types already hidden, and those types
+    // would then stay unavailable — their legend switches greyed out for good.
+    initialAvailabilityRef.current = computeTypeAvailability(initialNodes, initialEdges, Object.keys(colors));
+
     setRawNodes(initialNodes);
     setRawEdges(initialEdges);
   }, [dfgData, variantPreset, fallbackNodeWidth, nodePadding, fontSize, terminalSize, typeColorOverrides]);
@@ -926,16 +933,6 @@ function NewOCDFGVisualizer({
       return;
     }
 
-    const naiveNodes = dfgData.nodes;
-    const naiveLinks = dfgData.links.map(l => ({
-      source: l.source,
-      target: l.target,
-      weight: l.weight,
-      objtypes: [l.key ?? l.objtype],
-    }));
-
-    const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
-
     // Several inputs of this effect change together (new data, colours, type
     // availability), so a layout is often superseded while it runs. Stop it
     // and let only the newest one write its result.
@@ -943,7 +940,7 @@ function NewOCDFGVisualizer({
     const layoutController = new AbortController();
     layoutControllerRef.current = layoutController;
     setLayoutState('running');
-    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    getLayoutedElements(filteredNodes, filteredEdges, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       if (stale) return;
       setLayoutState('idle');
       const processedEdges = layoutedEdges.map(e => {
@@ -994,6 +991,7 @@ function NewOCDFGVisualizer({
     }).catch((err) => {
       if (stale || isLayoutAbort(err)) return;
       setLayoutState('failed');
+      console.error(`OC-DFG layout failed (${filteredNodes.length} nodes, ${filteredEdges.length} arcs)`, err);
       toast.error('OC-DFG layout failed');
     });
     return () => { stale = true; layoutController.abort(); };
@@ -1033,7 +1031,7 @@ function NewOCDFGVisualizer({
   // A box that takes its size from the graph (the drill-downs in the process
   // areas, via `onSizeChange`) is only as big as one object type while no
   // graph is drawn; ask for room for the layout status card instead.
-  const statusCardShown = layoutState === 'running' || layoutState === 'held' || layoutState === 'cancelled';
+  const statusCardShown = layoutState !== 'idle';
   useEffect(() => {
     if (!statusCardShown || baseNodes.length > 0 || !onSizeChangeRef.current) return;
     const previous = lastReportedSizeRef.current;
@@ -1122,11 +1120,9 @@ function NewOCDFGVisualizer({
   // `baseNodes`, not `nodes`: the rendered nodes follow one effect later, and
   // in between the message below would flash up.
   const hasActivities = dfgData === null || baseNodes.some(n => n.data?.nodeVariant === 'center');
-  const layoutMessage = layoutState === 'idle'
-    ? (hasActivities ? null : 'All activities are displayed in lower levels.')
-    : layoutState === 'failed' && baseNodes.length === 0
-      ? 'The graph could not be laid out.'
-      : null;
+  const layoutMessage = layoutState === 'idle' && !hasActivities
+    ? 'All activities are displayed in lower levels.'
+    : null;
   // Running, held and cancelled layouts get a card with a button instead; it
   // leaves the legend usable (hiding object types or raising Min Weight
   // shrinks the graph). A previous graph stays on screen below it.
@@ -1161,7 +1157,18 @@ function NewOCDFGVisualizer({
             shortAction: 'Lay out again',
             onClick: startLayout,
           }
-          : null;
+          : layoutState === 'failed'
+            ? {
+              text:
+                `The graph (${sizeLabel}) could not be laid out.` +
+                (hideChrome ? '' : ' Hide object types or raise Min Weight in the legend for a smaller graph.'),
+              short: 'Layout failed',
+              shortDetail: sizeLabel,
+              action: 'Try again',
+              shortAction: 'Try again',
+              onClick: startLayout,
+            }
+            : null;
   // Small boxes (the drill-downs inside the process areas) get a stacked card
   // with a short title and detail line; the full sentence is its tooltip.
   const compactStatus = containerSize.width < 420 || containerSize.height < 220;

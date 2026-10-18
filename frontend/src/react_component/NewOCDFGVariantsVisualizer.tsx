@@ -17,7 +17,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
-import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
 import { isLayoutAbort } from '../utils/elk';
 import { mapTypesToColors } from '../utils/objectColors';
 import NewOcdfgEdge from './NewOcdfgEdge';
@@ -894,22 +894,12 @@ function NewOCDFGVariantsVisualizer({
     });
 
 
-    const naiveNodes = dfgData.nodes;
-    const naiveLinks = dfgData.links.map(l => ({
-      source: l.source,
-      target: l.target,
-      weight: l.weight,
-      objtypes: [l.key ?? l.objtype],
-    }));
-
-    const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
-
     // A layout is often superseded while it runs (several inputs of this
     // effect change together, the trace slider moves). Stop it and let only
     // the newest one write its result.
     let stale = false;
     const layoutController = new AbortController();
-    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    getLayoutedElements(filteredNodes, filteredEdges, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
       if (stale) return;
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);

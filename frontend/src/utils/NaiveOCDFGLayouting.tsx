@@ -86,7 +86,6 @@ export function calculateNodeRanks(nodes: DfgNode[], links: DfgLink[]): Map<stri
 export function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
-  ranks: Map<string, number>,
   layoutDirection: 'TB' | 'LR' = 'TB',
   /** Aborting stops the layout and rejects with an `AbortError`. */
   signal?: AbortSignal,
