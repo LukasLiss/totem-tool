@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
 import { useFilterVersion } from "@/store/filterStore";
-import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import { fetchObjectTypeCounts } from "@/react_component/variants/variantsApi";
 import {
   DEFAULT_HANDOVER_SETTINGS,
   NORMALIZATION_LABELS,
@@ -453,6 +453,7 @@ export default function OCHandoverExplorer({
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
+  const [objectTypeCounts, setObjectTypeCounts] = useState<Record<string, number>>({});
   const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
   const [boTypes, setBoTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
   const [data, setData] = useState<HandoverData | null>(null);
@@ -543,6 +544,7 @@ export default function OCHandoverExplorer({
   // Phase 1: load object types when fileId changes
   useEffect(() => {
     setObjectTypes([]);
+    setObjectTypeCounts({});
     setResourceTypes(new Set(initial.resourceTypes));
     setBoTypes(new Set(initial.businessObjectTypes));
     setData(null);
@@ -557,9 +559,11 @@ export default function OCHandoverExplorer({
     (async () => {
       if (fileIdRef.current !== currentFileId) return;
       try {
-        const types = await fetchObjectTypes(currentFileId);
+        const typeCounts = await fetchObjectTypeCounts(currentFileId);
         if (fileIdRef.current !== currentFileId || cancelled) return;
+        const types = typeCounts.map(e => e.name);
         setObjectTypes(types);
+        setObjectTypeCounts(Object.fromEntries(typeCounts.map(e => [e.name, e.count])));
         // Preselected types that no longer exist in this log are dropped.
         const known = new Set(types);
         setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
@@ -893,6 +897,20 @@ export default function OCHandoverExplorer({
     if (clusterResourceTypes.has(t)) return;
     setBoTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
     setResourceTypes(prev => { if (!prev.has(t)) return prev; const n = new Set(prev); n.delete(t); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
+  // Bulk versions of the toggles above, keeping the same mutual exclusion.
+  const setManyResourceTypes = (types: string[], on: boolean) => {
+    setResourceTypes(prev => { const n = new Set(prev); types.forEach(t => (on ? n.add(t) : n.delete(t))); return n; });
+    if (on) setBoTypes(prev => { const n = new Set(prev); types.forEach(t => n.delete(t)); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
+  const setManyBoTypes = (types: string[], on: boolean) => {
+    const editable = types.filter(t => !clusterResourceTypes.has(t));
+    setBoTypes(prev => { const n = new Set(prev); editable.forEach(t => (on ? n.add(t) : n.delete(t))); return n; });
+    if (on) setResourceTypes(prev => { const n = new Set(prev); editable.forEach(t => n.delete(t)); return n; });
     setSelectedMlpaLevel(null);
   };
 
@@ -1579,12 +1597,14 @@ export default function OCHandoverExplorer({
 
         {fileId && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap justify-center">
-            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
+            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} onSetMany={setManyResourceTypes} counts={objectTypeCounts} disabled={useClusters && !!clusterInfo} />
             <TypeSelector
               title="Business object types"
               types={objectTypes}
               selected={boTypes}
               onToggle={toggleBoType}
+              onSetMany={setManyBoTypes}
+              counts={objectTypeCounts}
               lockedTypes={clusterResourceTypes}
               lockedHint="Used as a resource type by the organizational units"
             />
@@ -1857,32 +1877,71 @@ function fmtDuration(seconds: number | null | undefined): string {
 
 /* ── TypeSelector ───────────────────────────────────────────── */
 function TypeSelector({
-  title, types, selected, onToggle, disabled = false, lockedTypes, lockedHint,
+  title, types, selected, onToggle, onSetMany, counts, disabled = false, lockedTypes, lockedHint,
 }: {
   title: string;
   types: string[];
   selected: Set<string>;
   onToggle: (t: string) => void;
+  /** Selects (`on`) or clears every given type in one update. */
+  onSetMany: (types: string[], on: boolean) => void;
+  /** Number of objects per type, shown after the name. */
+  counts: Record<string, number>;
   disabled?: boolean;
   /** Individual types that cannot be toggled while the rest stay editable. */
   lockedTypes?: Set<string>;
   /** Why those types are locked, shown on hover. */
   lockedHint?: string;
 }) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visible = needle ? types.filter(t => t.toLowerCase().includes(needle)) : types;
+  // All / None only touch the types currently shown and not locked.
+  const bulkTargets = disabled ? [] : visible.filter(t => !(lockedTypes?.has(t) ?? false));
+  const nSelected = types.filter(t => selected.has(t)).length;
+
   return (
-    <div className={`border rounded-md p-3 min-w-[180px] ${disabled ? "opacity-60" : ""}`}>
+    <div className={`border rounded-md p-3 w-[300px] max-w-full ${disabled ? "opacity-60" : ""}`}>
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
-      <div className="space-y-1.5">
-        {types.map(t => {
+      <div className="relative mb-2">
+        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search…"
+          aria-label={`Search ${title.toLowerCase()}`}
+          className="h-8 pl-7 text-sm"
+        />
+      </div>
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">{nSelected} of {types.length}</span>
+        <div className="flex gap-1">
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={bulkTargets.length === 0} onClick={() => onSetMany(bulkTargets, true)}>
+            All
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={bulkTargets.length === 0} onClick={() => onSetMany(bulkTargets, false)}>
+            None
+          </Button>
+        </div>
+      </div>
+      <div className="h-56 overflow-y-auto space-y-1.5 pr-1">
+        {visible.length === 0 && <p className="text-sm text-muted-foreground">No matches</p>}
+        {visible.map(t => {
           const locked = disabled || (lockedTypes?.has(t) ?? false);
           return (
             <div key={t} className="flex items-center gap-2" title={!disabled && lockedTypes?.has(t) ? lockedHint : undefined}>
               <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={locked} />
               <Label
                 htmlFor={`${title}-${t}`}
-                className={`text-sm ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
+                className={`flex min-w-0 flex-1 items-baseline gap-3 text-sm leading-5 ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
               >
-                {t}
+                {/* Long names are cut off; the count keeps its own column on the right. */}
+                <span className="min-w-0 truncate" title={!disabled && lockedTypes?.has(t) ? undefined : t}>{t}</span>
+                {counts[t] !== undefined && (
+                  <span className="ml-auto shrink-0 whitespace-nowrap text-xs font-normal tabular-nums text-muted-foreground">
+                    {counts[t].toLocaleString()}
+                  </span>
+                )}
               </Label>
             </div>
           );
