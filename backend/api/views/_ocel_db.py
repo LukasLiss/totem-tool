@@ -335,81 +335,102 @@ def _filter_shadow(db, fp):
     # The event-level predicates are applied *first* (they are cheap: an
     # indexed timestamp range or an activity set) so that a narrow time window
     # over a very large log never copies the whole relation table.
-    if "object_types" in fp:
-        placeholders = ",".join("?" for _ in fp["object_types"])
-        conn.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE objects AS
-            SELECT * FROM main.objects WHERE obj_type IN ({placeholders})
-            """,
-            list(fp["object_types"]),
-        )
-    else:
-        conn.execute(
-            "CREATE OR REPLACE TEMP TABLE objects AS SELECT * FROM main.objects"
-        )
+    #
+    # The shadow is built inside the `try`: a statement that fails half-way
+    # (or is interrupted by a cancelled job — `CREATE ... event_object` is the
+    # slow one on a large log) must not leave the shadows created so far in
+    # place, or they would filter every later request on this connection.
+    try:
+        if "object_types" in fp:
+            placeholders = ",".join("?" for _ in fp["object_types"])
+            conn.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE objects AS
+                SELECT * FROM main.objects WHERE obj_type IN ({placeholders})
+                """,
+                list(fp["object_types"]),
+            )
+        else:
+            conn.execute(
+                "CREATE OR REPLACE TEMP TABLE objects AS SELECT * FROM main.objects"
+            )
 
-    if event_conditions:
-        conn.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE _shadow_events_pre AS
-            SELECT * FROM main.events WHERE {' AND '.join(event_conditions)}
-            """,
-            event_params,
-        )
-        event_source = "_shadow_events_pre"
-        event_restriction = "AND eo.event_id IN (SELECT event_id FROM _shadow_events_pre)"
-    else:
-        event_source = "main.events"
-        event_restriction = ""
+        if event_conditions:
+            conn.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE _shadow_events_pre AS
+                SELECT * FROM main.events WHERE {' AND '.join(event_conditions)}
+                """,
+                event_params,
+            )
+            event_source = "_shadow_events_pre"
+            event_restriction = "AND eo.event_id IN (SELECT event_id FROM _shadow_events_pre)"
+        else:
+            event_source = "main.events"
+            event_restriction = ""
 
-    conn.execute(f"""
-        CREATE OR REPLACE TEMP TABLE event_object AS
-        SELECT eo.* FROM main.event_object eo
-        WHERE eo.obj_id IN (SELECT obj_id FROM objects) {event_restriction}
-    """)
-
-    # An event survives if it passes the event-level predicates *and* still has
-    # at least one surviving object relation: an event stripped of all its
-    # objects carries no object-centric information.
-    conn.execute(f"""
-        CREATE OR REPLACE TEMP TABLE events AS
-        SELECT e.* FROM {event_source} e
-        WHERE e.event_id IN (SELECT event_id FROM event_object)
-    """)
-    if event_conditions:
-        conn.execute("DROP TABLE IF EXISTS _shadow_events_pre")
-        # Objects may be left with no relation at all once events are gone.
-        conn.execute("""
-            CREATE OR REPLACE TEMP TABLE objects AS
-            SELECT o.* FROM objects o
-            WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE event_object AS
+            SELECT eo.* FROM main.event_object eo
+            WHERE eo.obj_id IN (SELECT obj_id FROM objects) {event_restriction}
         """)
 
-    # `CREATE TABLE AS` copies no indexes, so every unqualified query in the
-    # algorithms would scan the shadows linearly — the opposite of the speed-up
-    # a filter is meant to buy. Mirror the indexes `ocel_duckdb` puts on main.
-    for stmt in (
-        "CREATE INDEX idx_shadow_eo_obj ON event_object(obj_id)",
-        "CREATE INDEX idx_shadow_eo_ev ON event_object(event_id)",
-        "CREATE INDEX idx_shadow_obj_type ON objects(obj_type)",
-        "CREATE INDEX idx_shadow_obj_id ON objects(obj_id)",
-        "CREATE INDEX idx_shadow_ev_ts ON events(timestamp_unix)",
-        "CREATE INDEX idx_shadow_ev_id ON events(event_id)",
-    ):
-        try:
-            conn.execute(stmt)
-        except Exception:
-            pass
+        # An event survives if it passes the event-level predicates *and* still has
+        # at least one surviving object relation: an event stripped of all its
+        # objects carries no object-centric information.
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE events AS
+            SELECT e.* FROM {event_source} e
+            WHERE e.event_id IN (SELECT event_id FROM event_object)
+        """)
+        if event_conditions:
+            conn.execute("DROP TABLE IF EXISTS _shadow_events_pre")
+            # Objects may be left with no relation at all once events are gone.
+            conn.execute("""
+                CREATE OR REPLACE TEMP TABLE objects AS
+                SELECT o.* FROM objects o
+                WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+            """)
 
-    try:
-        yield
-    finally:
-        for tbl in ("objects", "event_object", "events", "_shadow_events_pre"):
+        # `CREATE TABLE AS` copies no indexes, so every unqualified query in the
+        # algorithms would scan the shadows linearly — the opposite of the speed-up
+        # a filter is meant to buy. Mirror the indexes `ocel_duckdb` puts on main.
+        for stmt in (
+            "CREATE INDEX idx_shadow_eo_obj ON event_object(obj_id)",
+            "CREATE INDEX idx_shadow_eo_ev ON event_object(event_id)",
+            "CREATE INDEX idx_shadow_obj_type ON objects(obj_type)",
+            "CREATE INDEX idx_shadow_obj_id ON objects(obj_id)",
+            "CREATE INDEX idx_shadow_ev_ts ON events(timestamp_unix)",
+            "CREATE INDEX idx_shadow_ev_id ON events(event_id)",
+        ):
             try:
-                conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+                conn.execute(stmt)
             except Exception:
                 pass
+
+        yield
+    finally:
+        _drop_filter_shadow(conn)
+
+
+_SHADOW_TABLES = ("objects", "event_object", "events", "_shadow_events_pre")
+# A cancelled job keeps interrupting its connection until the view has unwound
+# (see `api.jobs`), and an interrupt can hit a DROP here. A retry right after
+# it goes through; the bound only keeps a broken connection from looping.
+_SHADOW_DROP_ATTEMPTS = 5
+
+
+def _drop_filter_shadow(conn) -> None:
+    """Drop the temp shadows of `_filter_shadow`, whichever of them exist."""
+    for tbl in _SHADOW_TABLES:
+        for _ in range(_SHADOW_DROP_ATTEMPTS):
+            try:
+                # Qualified on purpose: for a shadow that was never created, an
+                # unqualified DROP would resolve to the real table in `main`.
+                conn.execute(f"DROP TABLE IF EXISTS temp.main.{tbl}")
+                break
+            except Exception:
+                continue
 
 
 def _object_types(db: OcelDuckDB) -> list[str]:

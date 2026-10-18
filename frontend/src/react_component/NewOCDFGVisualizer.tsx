@@ -19,6 +19,7 @@ import '@xyflow/react/dist/style.css';
 import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
 import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { isLayoutAbort } from '../utils/elk';
 import { mapTypesToColors } from '../utils/objectColors';
 import NewOcdfgEdge from './NewOcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
@@ -270,6 +271,9 @@ function NewOCDFGVisualizer({
 
   const [dfgData, setDfgData] = useState<OcdfgGraph | null>(null);
   const [loading, setLoading] = useState(false);
+  // The ELK layout of the current graph. While it runs (or after it failed)
+  // there are no nodes yet, which must not read as "no activities here".
+  const [layoutState, setLayoutState] = useState<'idle' | 'running' | 'failed'>('idle');
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
@@ -865,7 +869,7 @@ function NewOCDFGVisualizer({
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0) { setBaseNodes([]); setBaseEdges([]); return; }
+    if (rawNodes.length === 0) { setBaseNodes([]); setBaseEdges([]); setLayoutState('idle'); return; }
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
@@ -875,6 +879,7 @@ function NewOCDFGVisualizer({
     if (activeTypes.length === 0) {
       setBaseNodes([]);
       setBaseEdges([]);
+      setLayoutState('idle');
       return;
     }
 
@@ -903,7 +908,15 @@ function NewOCDFGVisualizer({
 
     const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
 
-    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    // Several inputs of this effect change together (new data, colours, type
+    // availability), so a layout is often superseded while it runs. Stop it
+    // and let only the newest one write its result.
+    let stale = false;
+    const layoutController = new AbortController();
+    setLayoutState('running');
+    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+      if (stale) return;
+      setLayoutState('idle');
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);
         return {
@@ -948,7 +961,12 @@ function NewOCDFGVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(() => toast.error('OC-DFG layout failed'));
+    }).catch((err) => {
+      if (stale || isLayoutAbort(err)) return;
+      setLayoutState('failed');
+      toast.error('OC-DFG layout failed');
+    });
+    return () => { stale = true; layoutController.abort(); };
   }, [
     typeVisibility,
     rawNodes,
@@ -1041,7 +1059,16 @@ function NewOCDFGVisualizer({
   };
 
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
-  const hasActivities = dfgData === null || nodes.some(n => n.data?.nodeVariant === 'center');
+  // `baseNodes`, not `nodes`: the rendered nodes follow one effect later, and
+  // in between the message below would flash up.
+  const hasActivities = dfgData === null || baseNodes.some(n => n.data?.nodeVariant === 'center');
+  const layoutMessage = layoutState === 'idle'
+    ? (hasActivities ? null : 'All activities are displayed in lower levels.')
+    : baseNodes.length > 0
+      ? null // the previous graph stays on screen until the new layout is done
+      : layoutState === 'running'
+        ? 'Laying out the graph…'
+        : 'The graph could not be laid out.';
   const noEventLog = data == null && !fileId;
 
   return (
@@ -1103,7 +1130,7 @@ function NewOCDFGVisualizer({
         />
       )}
 
-      {!noEventLog && !hasActivities && (
+      {!noEventLog && layoutMessage && (
         <div style={{
           position: 'absolute',
           inset: 0,
@@ -1120,7 +1147,7 @@ function NewOCDFGVisualizer({
           zIndex: 10,
           pointerEvents: 'none',
         }}>
-          All activities are displayed in lower levels.
+          {layoutMessage}
         </div>
       )}
 

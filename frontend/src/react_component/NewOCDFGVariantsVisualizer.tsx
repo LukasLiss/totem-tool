@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
 import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { isLayoutAbort } from '../utils/elk';
 import { mapTypesToColors } from '../utils/objectColors';
 import NewOcdfgEdge from './NewOcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
@@ -903,7 +904,13 @@ function NewOCDFGVariantsVisualizer({
 
     const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
 
-    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    // A layout is often superseded while it runs (several inputs of this
+    // effect change together, the trace slider moves). Stop it and let only
+    // the newest one write its result.
+    let stale = false;
+    const layoutController = new AbortController();
+    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+      if (stale) return;
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);
         return {
@@ -948,7 +955,11 @@ function NewOCDFGVariantsVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(() => toast.error('OC-DFG layout failed'));
+    }).catch((err) => {
+      if (stale || isLayoutAbort(err)) return;
+      toast.error('OC-DFG layout failed');
+    });
+    return () => { stale = true; layoutController.abort(); };
   }, [
     typeVisibility,
     traceLimit,
