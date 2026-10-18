@@ -5,9 +5,10 @@ from typing import Any, Generic, Set, Tuple, List, Dict
 from collections import Counter, defaultdict
 from functools import cached_property
 from .utils.filter import filter4
+from ..visualization import VisualizableMixin, occn_to_graphviz
 
 
-class OCCausalNet(object):
+class OCCausalNet(VisualizableMixin):
     """
     Object-Centric Causal Net capturing dependency graph and marker groups.
     Start activities are named "START_{object_type}" and end activities "END_{object_type}".
@@ -443,6 +444,10 @@ class OCCausalNet(object):
         from .factory import create_from_dict
 
         return create_from_dict(marker_groups)
+
+    def to_graphviz(self, **kwargs):
+        """Draws the discovered OCCN model as a Graphviz Digraph."""
+        return occn_to_graphviz(self, **kwargs)
 
 
 class OCCausalNetState(defaultdict):

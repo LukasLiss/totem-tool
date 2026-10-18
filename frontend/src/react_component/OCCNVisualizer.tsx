@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
+import ComputationStatus from '@/components/ComputationStatus';
 import {
   ReactFlow,
   useReactFlow,
@@ -171,6 +173,7 @@ function OCCNVisualizer({
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     const filterConfig = getEffectiveFilterConfig(
@@ -183,7 +186,7 @@ function OCCNVisualizer({
         `/api/occn/?file_id=${fileId}&relativeOccuranceThreshold=${threshold}${
           objectTypesParam ? `&object_types=${encodeURIComponent(objectTypesParam)}` : ''
         }`,
-        filterConfig,
+        { ...filterConfig, signal: controller.signal },
       )
       .then(({ data: payload }) => {
         if (cancelled) return;
@@ -192,13 +195,20 @@ function OCCNVisualizer({
       .catch((err) => {
         if (cancelled) return;
         setNet(null);
-        setError(err?.response?.data?.error ?? 'Failed to discover the OCCN for this file.');
+        setError(
+          isCancelledError(err)
+            ? 'Computation cancelled.'
+            : err?.response?.data?.error ?? 'Failed to discover the OCCN for this file.',
+        );
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    // Leaving the page or changing the inputs stops the running discovery on
+    // the backend as well, so it does not block the next request.
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion, effectiveLocalParams]);
 
@@ -528,13 +538,22 @@ function OCCNVisualizer({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            pointerEvents: 'none',
+            pointerEvents: loading ? 'auto' : 'none',
+            zIndex: 20,
             fontFamily: 'var(--font-primary, Inter, sans-serif)',
             fontSize: 14,
             color: error ? '#B91C1C' : '#475569',
           }}
         >
-          {error ?? 'Discovering OCCN…'}
+          {loading ? (
+            <ComputationStatus
+              fileId={fileId}
+              urlIncludes="/occn/"
+              fallback={<span>Discovering OCCN…</span>}
+            />
+          ) : (
+            error
+          )}
         </div>
       )}
 

@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table, jobs_status, job_cancel
 from . import views_ocel_editor
 from . import views_process_executions
 
@@ -43,5 +43,8 @@ urlpatterns = [
     path("cache/stats/", cache_stats, name="cache-stats"),
     path("cache/clear/", cache_clear, name="cache-clear"),
     path("settings/", user_settings, name="user-settings"),
+    # Cancellable computations: progress and cancellation by client job id.
+    path("jobs/", jobs_status, name="jobs-status"),
+    path("jobs/<str:job_id>/cancel/", job_cancel, name="job-cancel"),
 ]
 

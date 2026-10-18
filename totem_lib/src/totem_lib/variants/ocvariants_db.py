@@ -24,6 +24,7 @@ import polars as pl
 from tqdm.auto import tqdm as _tqdm
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 from . import extraction as _ext
 from . import iso_strategies as _iso
 from .ocvariants import Variant, Variants
@@ -166,6 +167,49 @@ JOIN objects o ON ce.obj_id = o.obj_id
 # ---------------------------------------------------------------------------
 
 
+class _ProgressBar:
+    """The subset of the tqdm API the variant pipeline uses, forwarding to a
+    :class:`~totem_lib.progress.Progress` reporter (and optionally to a real
+    tqdm bar for the terminal)."""
+
+    def __init__(self, progress, bar=None, total: int = 0, message: str = ""):
+        self._progress = progress
+        self._bar = bar
+        self.total = max(0, int(total))
+        self.n = 0
+        self._message = message
+        self._progress.report(0.0, message)
+
+    def __enter__(self):
+        if self._bar is not None:
+            self._bar.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        if self._bar is not None:
+            self._bar.__exit__(*exc)
+        if not exc[0]:
+            self._progress.report(1.0)
+        return False
+
+    def reset(self, total: int = 0) -> None:
+        self.total = max(0, int(total))
+        self.n = 0
+        if self._bar is not None:
+            self._bar.reset(total=total)
+
+    def update(self, n: int = 1) -> None:
+        self.n += n
+        if self._bar is not None:
+            self._bar.update(n)
+        if self.total > 0 and (self.n % 200 == 0 or self.n >= self.total):
+            self._progress.report(min(1.0, self.n / self.total))
+
+    def set_postfix_str(self, s: str) -> None:
+        if self._bar is not None:
+            self._bar.set_postfix_str(s)
+
+
 def find_variants(
     ocel_db: OcelDuckDB,
     *,
@@ -177,6 +221,7 @@ def find_variants(
     timeout_s: Optional[float] = 10.0,
     verbose: bool = True,
     cases: Optional[Dict[str, Set[str]]] = None,
+    progress=None,
 ) -> Variants:
     """
     Discover object-centric variants from an OcelDuckDB.
@@ -214,6 +259,9 @@ def find_variants(
         :func:`~.process_executions.extract_process_executions`). When given,
         the extraction step is skipped and ``extraction`` only decides how the
         case graphs are built.
+    :param progress: Optional ``callback(fraction, message)`` reporting the
+        four steps (see :mod:`totem_lib.progress`); raising inside it aborts
+        the discovery.
     :return: Variants sorted by support descending.
     """
     if extraction in ("leading_1hop", "leading_bfs") and leading_type is None and cases is None:
@@ -231,6 +279,7 @@ def find_variants(
 
     total_t0 = time.time()
     conn = ocel_db.conn
+    progress = as_progress(progress)
 
     with _timeout_watchdog(ocel_db, timeout_s) as cancel_event:
         try:
@@ -240,6 +289,7 @@ def find_variants(
                 business_object_types=business_object_types,
                 business_activities=business_activities,
                 cases=cases,
+                progress=progress,
             )
         except TimeoutError:
             raise
@@ -273,9 +323,18 @@ def _find_variants_inner(
     business_object_types: Optional[Iterable[str]] = None,
     business_activities: Optional[Iterable[str]] = None,
     cases: Optional[Dict[str, Set[str]]] = None,
+    progress=None,
 ) -> Variants:
     """The actual `find_variants` body — split out so the timeout context
     manager wraps the whole thing cleanly."""
+    progress = as_progress(progress)
+    verbose = not _bar_kw.get("disable", False)
+
+    def _bar(lo: float, hi: float, message: str, total: int = 0, **kw) -> _ProgressBar:
+        """A progress bar for one step: terminal tqdm when verbose, always
+        the ``progress`` reporter (its sub-range ``[lo, hi]``)."""
+        real = _tqdm(total=total, **kw, **_bar_kw) if verbose else None
+        return _ProgressBar(progress.sub(lo, hi, message), real, total=total, message=message)
 
     # ---- Step 1: extract cases (unless the caller already did) ----
     if cases is None:
@@ -284,12 +343,12 @@ def _find_variants_inner(
             + (f" · {leading_type}" if leading_type else "")
             + ")"
         )
-        with _tqdm(
+        with _bar(
+            0.0, 0.3, "Extracting process executions",
             total=0,
             desc=_extract_label,
             unit="obj",
             bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}, {rate_fmt}]",
-            **_bar_kw,
         ) as pb:
             cases = _ext.extract_cases(
                 conn,
@@ -306,12 +365,12 @@ def _find_variants_inner(
 
     # ---- Step 2: materialise case tables ----
     _table_names = ["case_objs", "case_events", "case_edges"]
-    with _tqdm(
+    with _bar(
+        0.3, 0.45, "Building case tables",
         total=3,
         desc="[2/4] building case tables",
         unit="table",
         bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}]",
-        **_bar_kw,
     ) as pb:
         _materialise_case_objs(conn, cases)
         pb.set_postfix_str("case_objs ✓")
@@ -341,12 +400,12 @@ def _find_variants_inner(
     case_event_lists = _fetch_case_event_lists(conn, cases_with_edges)
 
     if iso in ("db_signature", "trace"):
-        with _tqdm(
+        with _bar(
+            0.45, 0.9, f"Grouping executions ({iso})",
             total=1,
             desc=f"[3/4] grouping ({iso})",
             unit="query",
             bar_format="{desc} {bar} [{elapsed}]",
-            **_bar_kw,
         ) as pb:
             if iso == "db_signature":
                 groups = _group_db_signature(conn, cases_with_edges)
@@ -355,22 +414,22 @@ def _find_variants_inner(
             pb.set_postfix_str(f"→ {len(groups):,} variants")
             pb.update(1)
     else:
-        with _tqdm(
+        with _bar(
+            0.45, 0.65, "Building execution graphs",
             total=n_cases,
             desc="[3/4] building case graphs",
             unit="case",
             bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}, {rate_fmt}]",
-            **_bar_kw,
         ) as pb:
             case_graphs = _build_case_graphs(conn, _progress_bar=pb)
 
         _iso_label = f"[3/4] grouping ({iso})"
-        with _tqdm(
+        with _bar(
+            0.65, 0.9, f"Grouping executions ({iso})",
             total=n_cases,
             desc=_iso_label,
             unit="case",
             bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}, {rate_fmt}]",
-            **_bar_kw,
         ) as pb:
             if iso == "signature":
                 groups = _iso.group_signature(
@@ -393,12 +452,12 @@ def _find_variants_inner(
             pb.set_postfix_str(f"→ {len(groups):,} variants")
 
     # ---- Step 4: format Variant objects ----
-    with _tqdm(
+    with _bar(
+        0.9, 1.0, "Formatting variants",
         total=len(groups),
         desc="[4/4] formatting variants",
         unit="variant",
         bar_format="{desc}: {n_fmt}/{total_fmt} {bar} [{elapsed}]",
-        **_bar_kw,
     ) as pb:
         variant_list = _format_variants(groups, case_event_lists, _progress_bar=pb)
 

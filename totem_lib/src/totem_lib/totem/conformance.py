@@ -258,17 +258,26 @@ def get_more_precise_ec(relation: Optional[str]) -> Tuple[str, ...]:
 def conformance_of_totem(
     totem: Totem,
     ocel_db: OcelDuckDB,
+    progress=None,
 ) -> TotemConformanceResult:
-    """Compare an existing TOTeM model with a DuckDB-backed event log."""
+    """Compare an existing TOTeM model with a DuckDB-backed event log.
+
+    ``progress`` is an optional ``callback(fraction, message)`` (see
+    :mod:`totem_lib.progress`).
+    """
     # Imported here because the shared histogram module uses the result types
     # defined above.
+    from ..progress import as_progress
     from .histograms_db import compute_totem_histograms_db
 
+    progress = as_progress(progress)
     histograms = compute_totem_histograms_db(
         ocel_db,
         include_details=True,
         connection_mode="conformance",
+        progress=progress.sub(0.0, 0.9),
     )
+    progress.report(0.9, "Comparing model and log")
     model_temporal_relations = _model_temporal_relations(totem)
     pair_metrics = []
     contributions: Dict[str, List[MetricContribution]] = {

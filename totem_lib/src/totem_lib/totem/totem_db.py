@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 from .histograms_db import compute_totem_histograms_db
 from .totem import (
     TR_DEPENDENT,
@@ -16,9 +17,15 @@ from .totem import (
 )
 
 
-def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
-    """Discover a TOTeM through DuckDB aggregations over an OCEL database."""
+def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9, progress=None) -> Totem:
+    """Discover a TOTeM through DuckDB aggregations over an OCEL database.
+
+    ``progress`` is an optional ``callback(fraction, message)`` (see
+    :mod:`totem_lib.progress`).
+    """
     conn = ocel_db.conn
+    progress = as_progress(progress)
+    progress.report(0.0, "Collecting activities per object type")
 
     activity_rows = conn.execute("""
         SELECT DISTINCT o.obj_type, e.activity
@@ -33,6 +40,7 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         object_type_to_event_types.setdefault(object_type, set()).add(activity)
         all_event_types.add(activity)
 
+    progress.report(0.1, "Collecting object type relations")
     type_pair_rows = conn.execute("""
         SELECT DISTINCT o1.obj_type AS t1, o2.obj_type AS t2
         FROM event_object eo1
@@ -45,7 +53,10 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
         frozenset({source, target}) for source, target in type_pair_rows
     }
 
-    histograms = compute_totem_histograms_db(ocel_db)
+    histograms = compute_totem_histograms_db(
+        ocel_db, progress=progress.sub(0.2, 0.9)
+    )
+    progress.report(0.9, "Deriving temporal and cardinality relations")
     event_cardinalities = histograms.event_cardinality
     log_cardinalities = histograms.log_cardinality
     temporal_relations = histograms.temporal
@@ -113,4 +124,5 @@ def totemDiscovery_db(ocel_db: OcelDuckDB, tau: float = 0.9) -> Totem:
     totem.h_event_cardinalities = event_cardinalities
     totem.h_log_cardinalities = log_cardinalities
     totem.h_temporal_relations = temporal_relations
+    progress.report(1.0, "Done")
     return totem
