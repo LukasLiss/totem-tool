@@ -495,3 +495,22 @@ class ResourceProfilingComponent(DashboardComponent):
         choices=[("graph", "Graph"), ("table", "Table")],
         default="graph",
     )
+
+
+class SeedState(models.Model):
+    """Records one-off provisioning that must never run twice.
+
+    ``migrate`` runs on every desktop-app launch (electron/main.js), so a seed
+    that only checked "does this row exist?" would resurrect itself the moment
+    the user deleted what it created. A row here means that seed has happened;
+    it is written in the same transaction as the objects it describes, and it
+    is deliberately never cleaned up when those objects are deleted.
+
+    Wiping the local database (a full reset) clears this table too, which is
+    the intended way to get a seed to run again. See api/sample_project.py.
+    """
+    key = models.CharField(max_length=64, unique=True)
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.key

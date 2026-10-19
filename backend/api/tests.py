@@ -4897,3 +4897,255 @@ class CacheClearPermissionTests(TestCase):
             response = self.client.post("/api/cache/clear/")
         self.assertEqual(response.status_code, 200)
         clear.assert_called_once()
+
+
+# --- First-launch sample project (issue #368) --------------------------------
+
+from pathlib import Path
+
+from django.conf import settings
+
+from .models import ImageAsset as _ImageAsset, SeedState
+from .asset_formats import (
+    SQL_QUERY_ASSET_SCHEMA as _SQL_SCHEMA,
+    validate_sql_query_asset_dict,
+)
+from .query_refs import resolve_query_references
+from .sample_project import (
+    LINKED_QUERY_BY_TITLE,
+    SAMPLE_DASHBOARD_NAME,
+    SAMPLE_LOGO_ASSET_NAME,
+    SAMPLE_PROJECT_DISPLAY_NAME,
+    SAMPLE_PROJECT_NAME,
+    SAMPLE_QUERIES,
+    SAMPLE_SEED_KEY,
+    _bundled_sample_log_path,
+    sample_dashboard_layout,
+    seed_sample_project,
+)
+
+# The floors the frontend enforces on each widget (MIN_SIZES in
+# frontend/src/gridstack/lib/gridstackprovider.tsx). Seeding writes geometry
+# straight to the DB, which bypasses that check entirely.
+_FRONTEND_MIN_SIZES = {
+    "TextBoxComponent": (2, 2),
+    "ImageComponent": (2, 2),
+    "KpiComponent": (2, 2),
+    "BarChartComponent": (3, 3),
+    "PieChartComponent": (2, 6),
+    "ProcessAreaComponent": (4, 4),
+}
+
+
+class SampleProjectSeedTests(TestCase):
+    """The sample project seeded on first launch (issue #368).
+
+    SEED_SAMPLE_PROJECT is deliberately false under the test runner, so every
+    test here turns it back on explicitly and points MEDIA_ROOT at a throwaway
+    directory -- the seed copies a 2.3 MB event log.
+    """
+
+    def setUp(self):
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+
+    def _seed(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=True):
+            seed_sample_project(sender=None)
+
+    def test_seeds_the_project_log_logo_and_dashboard(self):
+        self._seed()
+
+        project = Project.objects.get()
+        self.assertEqual(project.name, SAMPLE_PROJECT_NAME)
+        self.assertEqual(project.display_name, SAMPLE_PROJECT_DISPLAY_NAME)
+        self.assertEqual(
+            [u.username for u in project.users.all()],
+            [settings.LOCAL_GUEST_USERNAME],
+        )
+
+        self.assertTrue(EventLog.objects.get().file.name.endswith(".duckdb"))
+
+        logo = _ImageAsset.objects.get()
+        self.assertEqual(logo.name, SAMPLE_LOGO_ASSET_NAME)
+        self.assertEqual(logo.content_type, "image/svg+xml")
+
+        dashboard = Dashboard.objects.get()
+        self.assertEqual(dashboard.name, SAMPLE_DASHBOARD_NAME)
+        self.assertEqual(dashboard.project_id, project.pk)
+
+    def test_components_match_the_declared_layout(self):
+        self._seed()
+
+        expected = [
+            (component_name, geometry)
+            for _model, component_name, geometry, _fields in sample_dashboard_layout()
+        ]
+        actual = [
+            (component.component_name, (component.x, component.y, component.w, component.h))
+            for component in Dashboard.objects.get().components.order_by("order")
+        ]
+        self.assertEqual(actual, expected)
+
+    def test_image_component_points_at_the_seeded_logo(self):
+        self._seed()
+
+        from .models import ImageComponent
+
+        image = ImageComponent.objects.get()
+        self.assertEqual(image.image_asset_id, _ImageAsset.objects.get().pk)
+        # The legacy per-component upload stays unused.
+        self.assertFalse(image.image)
+
+    def test_widget_geometry_clears_the_frontend_minimums(self):
+        self._seed()
+
+        for component in Dashboard.objects.get().components.all():
+            min_w, min_h = _FRONTEND_MIN_SIZES[component.component_name]
+            with self.subTest(component=component.component_name):
+                self.assertGreaterEqual(component.w, min_w)
+                self.assertGreaterEqual(component.h, min_h)
+
+    def test_event_log_is_copied_into_media_root(self):
+        self._seed()
+
+        source = _bundled_sample_log_path()
+        # FieldFile.path resolves against MEDIA_ROOT at access time, so it has
+        # to be read back under the same override the seed ran with.
+        with self.settings(MEDIA_ROOT=self.media):
+            copied = EventLog.objects.get().file.path
+
+        self.assertTrue(
+            os.path.realpath(copied).startswith(os.path.realpath(self.media))
+        )
+        self.assertNotEqual(os.path.realpath(copied), os.path.realpath(source))
+        self.assertEqual(os.path.getsize(copied), os.path.getsize(source))
+
+    def test_seeding_twice_creates_one_project(self):
+        self._seed()
+        self._seed()
+
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Dashboard.objects.count(), 1)
+        self.assertEqual(SeedState.objects.filter(key=SAMPLE_SEED_KEY).count(), 1)
+
+    def test_does_nothing_when_the_flag_is_off(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=False):
+            seed_sample_project(sender=None)
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+
+    def test_deleted_sample_is_not_recreated(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        with self.settings(MEDIA_ROOT=self.media):
+            response = client.delete(f"/api/files/{event_log.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Project.objects.exists())
+
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
+    def test_rename_survives_a_later_seed(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        response = client.patch(
+            f"/api/files/{event_log.pk}/rename/",
+            {"name": "Q3 container review"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Project.objects.get().display_name, "Q3 container review")
+
+    def test_missing_bundled_log_fails_soft_and_stays_retryable(self):
+        missing = Path(self.media) / "nope" / "container_logistics.duckdb"
+        with patch("api.sample_project._bundled_sample_log_path", return_value=missing):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        # No tombstone: a build that ships the file correctly must still seed.
+        self.assertFalse(SeedState.objects.exists())
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_seeds_the_stored_query_library(self):
+        self._seed()
+
+        project = Project.objects.get()
+        assets = ProjectAsset.objects.filter(
+            project=project, asset_type=ProjectAsset.AssetType.QUERY
+        )
+        self.assertEqual(
+            sorted(assets.values_list("name", flat=True)),
+            sorted(name for name, _d, _s in SAMPLE_QUERIES),
+        )
+        for asset in assets:
+            with self.subTest(query=asset.name):
+                # Exactly what POST /api/assets/ would enforce on an upload.
+                validate_sql_query_asset_dict(asset.content_json)
+                self.assertEqual(asset.content_json["schema"], _SQL_SCHEMA)
+                self.assertTrue(asset.content_json["description"].strip())
+                self.assertEqual(asset.created_by_id, project.users.get().pk)
+
+    def test_stored_query_references_resolve(self):
+        """A seeded query may build on another by name; all must resolve."""
+        self._seed()
+
+        stored = {
+            asset.name: asset.content_json["query"]
+            for asset in ProjectAsset.objects.filter(
+                asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        composed = 0
+        for name, sql in stored.items():
+            with self.subTest(query=name):
+                resolved = resolve_query_references(sql, stored)
+                if resolved != sql:
+                    composed += 1
+        # The library is meant to demonstrate composition, not just contain it
+        # by accident -- if this drops to zero the demo value is gone.
+        self.assertGreaterEqual(composed, 1)
+
+    def test_linked_widgets_share_the_stored_query(self):
+        self._seed()
+
+        from .models import BarChartComponent, PieChartComponent
+
+        for model in (BarChartComponent, PieChartComponent):
+            widget = model.objects.get()
+            with self.subTest(widget=widget.component_name):
+                expected = LINKED_QUERY_BY_TITLE[widget.title]
+                self.assertIsNotNone(widget.query_asset_id)
+                self.assertEqual(widget.query_asset.name, expected)
+                # The widget keeps the same SQL inline, so deleting the asset
+                # (which nulls the FK) leaves it rendering exactly as before.
+                self.assertEqual(
+                    widget.query.strip(),
+                    widget.query_asset.content_json["query"].strip(),
+                )
+
+    def test_deleting_a_linked_query_leaves_the_widget_working(self):
+        self._seed()
+
+        from .models import BarChartComponent
+
+        widget = BarChartComponent.objects.get()
+        sql_before = widget.query
+        widget.query_asset.delete()
+
+        widget.refresh_from_db()
+        self.assertIsNone(widget.query_asset_id)
+        self.assertEqual(widget.query, sql_before)
