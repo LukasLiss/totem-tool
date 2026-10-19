@@ -54,6 +54,13 @@ from .occn import (
     serialize_occn,
 )
 from .dfg import OCDFG, CCDFG
+from .orgamining import (
+    discover_handover,
+    discover_resource_profiles,
+    HandoverGraph,
+    ProfileMatrix,
+    ResourceProfile,
+)
 from .variants import (
     calculate_layout,
     Edit,
@@ -108,11 +115,13 @@ __all__ = [
     "conformance_of_totem",
     "create_occn_engine",
     "create_ocpn_engine",
+    "discover_handover",
     "discover_occn",
     "extract_occn_input",
     "discover_ocpn_db",
     "discover_process_areas",
     "discover_process_areas_db",
+    "discover_resource_profiles",
     "Edit",
     "EditCosts",
     "event_column_summary",
@@ -124,6 +133,7 @@ __all__ = [
     "find_variants",
     "FilterRule",
     "FilterStack",
+    "HandoverGraph",
     "import_ocel",
     "LEADING_OBJECT_REPLAY_STRATEGY",
     "list_event_columns",
@@ -163,10 +173,12 @@ __all__ = [
     "ProcessAreas",
     "process_execution_edit_distance",
     "ProcessExecutions",
+    "ProfileMatrix",
     "project_replay_events",
     "replay_events_from_duckdb",
     "replay_events_from_ocel",
     "REPLAY_UNIT_STRATEGIES",
+    "ResourceProfile",
     "run_playout",
     "serialize_occn",
     "STORED_COLUMN_REPLAY_STRATEGY",

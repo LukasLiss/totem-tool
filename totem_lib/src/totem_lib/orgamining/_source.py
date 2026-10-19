@@ -1,7 +1,7 @@
 """Event/object sources for the organizational mining algorithms.
 
-Both the handover-of-work discovery (:mod:`.ochandover`) and the resource
-profiling (:mod:`.orgamining`) work on the same, very small slice of an
+Both the handover-of-work discovery (:mod:`.handover`) and the resource
+profiling (:mod:`.profiling`) work on the same, very small slice of an
 object-centric event log:
 
 * one row per *(event, object)* pair for the object types under study, with
