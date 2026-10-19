@@ -1,0 +1,13 @@
+task_id,category,model,prompt,harness,correct,score,latency_s,prompt_tokens,completion_tokens,total_tokens,expected_tools,invoked_tools,judge_score,judge_verdict,error
+T01_events_count_logistics,descriptive,mock,zero_shot,ungrounded,0,0.0,0.0,10,10,20,get_statistics,,2.0,fail,
+T02_objects_count_logistics,descriptive,mock,zero_shot,ungrounded,0,0.0,0.0,10,10,20,get_statistics,,2.0,fail,
+T03_object_types_logistics,descriptive,mock,zero_shot,ungrounded,0,0.0,0.0,10,10,20,get_object_types;get_statistics,,2.0,fail,
+T01_events_count_logistics,descriptive,mock,zero_shot,mcp,0,0.0,0.91,50,50,100,get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,
+T02_objects_count_logistics,descriptive,mock,zero_shot,mcp,0,0.0,0.04,50,50,100,get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,
+T03_object_types_logistics,descriptive,mock,zero_shot,mcp,0,0.0,0.04,50,50,100,get_object_types;get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,
+T01_events_count_logistics,descriptive,mock,few_shot_cot,ungrounded,0,0.0,0.0,10,10,20,get_statistics,,2.0,fail,
+T02_objects_count_logistics,descriptive,mock,few_shot_cot,ungrounded,0,0.0,0.0,10,10,20,get_statistics,,2.0,fail,
+T03_object_types_logistics,descriptive,mock,few_shot_cot,ungrounded,0,0.0,0.0,10,10,20,get_object_types;get_statistics,,2.0,fail,
+T01_events_count_logistics,descriptive,mock,few_shot_cot,mcp,0,0.0,0.04,50,50,100,get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,
+T02_objects_count_logistics,descriptive,mock,few_shot_cot,mcp,0,0.0,0.03,50,50,100,get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,
+T03_object_types_logistics,descriptive,mock,few_shot_cot,mcp,0,0.0,0.04,50,50,100,get_object_types;get_statistics,get_statistics;get_statistics;get_statistics;get_statistics;get_statistics,3.0,fail,

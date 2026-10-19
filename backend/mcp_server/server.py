@@ -760,10 +760,19 @@ def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=No
             return err
         threshold = _clamp_float(args.get("threshold", 0.0), 0.0, 1.0)
         object_types = args.get("object_types")
-        parameters = {"object_types": object_types} if object_types else {}
+        if not object_types:
+            try:
+                with _with_ocel_db(log) as db:
+                    all_types = _object_types(db)
+                    if len(all_types) > 2:
+                        object_types = all_types[:2]
+            except Exception:
+                pass
         try:
-            with _with_ocel_db(log) as db:
-                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
+            from api.views.occn import _get_or_discover_base_occn
+            base_occn = _get_or_discover_base_occn(log, object_types)
+            if base_occn is None:
+                return {"error": "OCCN discovery returned no model", "code": "EXECUTION_ERROR"}
             occn = (
                 base_occn.apply_relative_occurrence_threshold(threshold)
                 if threshold > 0

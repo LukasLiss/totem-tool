@@ -777,6 +777,14 @@ class MockProvider(BaseLLMProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        # If this is a feedback turn with tool results, synthesize response instead of looping tools
+        if history or user_message.startswith("Tool '") or "tool '" in user_message.lower():
+            return {
+                "text": f"Successfully executed process mining tool. Result: {user_message[:500]}",
+                "tool_calls": [],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 50, "total_tokens": 170},
+            }
+
         msg_lower = user_message.lower()
         tool_calls = []
         is_teach = "TEACH MODE ACTIVE" in (system_prompt or "")
@@ -941,9 +949,17 @@ class MockProvider(BaseLLMProvider):
                 tool_calls.append({
                     "id": "mock-tc-occn",
                     "name": "discover_occn",
-                    "arguments": {},
+                    "arguments": {"threshold": 0.1, "object_types": ["Container"]},
                 })
                 text = "Discovering the Object-Centric Causal Net (OCCN) for this log."
+
+            elif "totem" in msg_lower:
+                tool_calls.append({
+                    "id": "mock-tc-totem",
+                    "name": "discover_totem",
+                    "arguments": {},
+                })
+                text = "Discovering the TOTeM process model graph from the active event log."
 
             elif "stat" in msg_lower or "metric" in msg_lower or "event" in msg_lower or "how many" in msg_lower or "bottleneck" in msg_lower or "duration" in msg_lower or "object type" in msg_lower:
                 tool_calls.append({
