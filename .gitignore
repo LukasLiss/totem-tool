@@ -14,11 +14,13 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !totem_lib/test_data/edge_cases/README.md
 !.claude/**/*.md
 !backend/assistant/knowledge/*.md
+!evaluation/assistant_benchmark/README.md
 *.txt
 !*requirements*.txt
 !backend/requirements.txt
 !totem_lib/requirements.txt
 !totem_lib/tests/
+!evaluation/assistant_benchmark/tests/
 
 
 # TOTeM-Tool .gitignore
