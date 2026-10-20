@@ -26,6 +26,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
+import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 
 
 function UserFileSelect() {
@@ -47,7 +48,7 @@ function UserFileSelect() {
         fetchFiles();
         }, [selectedFile]);
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!selectedFile) {
             toast.warning("Please select an event log first.");
             return;
@@ -55,6 +56,9 @@ function UserFileSelect() {
         const file = files.find((f) => f.id === Number(selectedFile.id));
         if (file) {
             setSelectedFile(file);
+            // Large logs get their time-range filter before the overview
+            // mounts, so no view starts computing over the whole log.
+            await prepareLargeLogFilter(Number(file.id));
             navigate("/overview");
         } else {
             toast.error("The selected event log is no longer available.");

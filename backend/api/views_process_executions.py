@@ -50,6 +50,7 @@ from .variant_params import (
     resolve_extraction_params,
     serialize_variants,
 )
+from .jobs import JobCancelled, cancelled_response, job_scope
 from .views import (
     _activities_with_counts,
     _filter_shadow,
@@ -180,7 +181,8 @@ def process_executions(request, pk):
 
     fp = _parse_filter_params(request)
     try:
-        with _with_ocel_db(user_file) as db:
+        with job_scope(request, "Process executions") as job, _with_ocel_db(user_file, job) as db:
+            job.report(None, "Applying filters")
             with _filter_shadow(db, fp):
                 obj_types = _object_types(db)
                 activities = [a["name"] for a in _activities_with_counts(db)]
@@ -194,6 +196,7 @@ def process_executions(request, pk):
                 variants = None
                 serialized_variants = None
                 if resolved is not None:
+                    job.report(None, "Extracting process executions")
                     executions = extract_process_executions(db, **resolved.library_kwargs())
                     if settings["compute_variants"] and executions.execution_count:
                         variants = find_variants(
@@ -203,6 +206,7 @@ def process_executions(request, pk):
                             timeout_s=settings["timeout_s"],
                             verbose=False,
                             cases=executions.case_objects,
+                            progress=job.report,
                         )
                         serialized_variants = serialize_variants(variants, _layout_shim(db))
                     elif settings["compute_variants"]:
@@ -217,9 +221,12 @@ def process_executions(request, pk):
                 columns[settings["variant_column"]] = (
                     variant_assignment(partition, variants) if variants is not None else {}
                 )
+            job.report(None, "Storing event columns")
             written = _rewrite_ocel_db_file(
                 user_file, lambda db_path: write_event_columns_to_file(db_path, columns)
             )
+    except JobCancelled:
+        return cancelled_response()
     except TimeoutError as exc:
         return Response(
             {

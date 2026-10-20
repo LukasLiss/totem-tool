@@ -42,6 +42,13 @@ from ..serializers import (
     ImageAssetSerializer,
 )
 from rest_framework import serializers as drf_serializers
+from totem_lib.orgamining import (
+    CLUSTER_METHODS,
+    DISTANCE_METRICS,
+    FEATURE_GROUPS,
+    NORMALIZATION_SCOPES,
+    NORMALIZATIONS,
+)
 
 from ..rich_text import plain_text_from_doc, validated_rich_text
 
@@ -190,21 +197,15 @@ def _optional_non_negative_int(item, key: str):
         return None
 
 
-# Choice sets of the organizational mining widgets; mirror totem_lib.ochandover.
+# Choice sets of the organizational mining widgets. The algorithm options come
+# from totem_lib.orgamining; method and view modes are widget-only.
 _HANDOVER_METHODS = ("oc",)
-_HANDOVER_NORMALIZATIONS = ("by_source", "by_target", "by_arcs_in_eog", "by_total_weight")
-_HANDOVER_SCOPES = ("global", "per_bo_type")
+_HANDOVER_NORMALIZATIONS = NORMALIZATIONS
+_HANDOVER_SCOPES = NORMALIZATION_SCOPES
 _HANDOVER_VIEW_MODES = ("graph", "table", "log")
-_PROFILE_FEATURE_GROUPS = (
-    "activity_fractions",
-    "cooccurrence_fractions",
-    "object_collaboration_fractions",
-    "object_portfolio_fractions",
-    "time_fractions",
-    "weekday_fractions",
-)
-_PROFILE_CLUSTER_METHODS = ("kmeans", "agglomerative", "hdbscan")
-_PROFILE_DISTANCE_METRICS = ("euclidean", "hellinger")
+_PROFILE_FEATURE_GROUPS = FEATURE_GROUPS
+_PROFILE_CLUSTER_METHODS = CLUSTER_METHODS
+_PROFILE_DISTANCE_METRICS = DISTANCE_METRICS
 _PROFILE_VIEW_MODES = ("graph", "table")
 
 

@@ -1,5 +1,11 @@
 import axios from "axios";
 import { useFilterStore, buildFilterParams } from "@/store/filterStore";
+import {
+  computationFileId,
+  computationLabel,
+  newJobId,
+  useComputationStore,
+} from "@/store/computationStore";
 import { API_BASE_URL, getApiUrl } from "../config/api";
 
 /**
@@ -117,6 +123,64 @@ async function guestReAuth() {
   return access;
 }
 
+/**
+ * Computation tracking
+ * --------------------
+ * Requests to the heavy analysis endpoints get a client-generated job id in
+ * the `X-Totem-Job-Id` header and an AbortController, and are registered in
+ * the computation store, which polls their progress and can cancel them
+ * (see `store/computationStore.ts`). A caller-supplied `signal` keeps
+ * working: aborting it aborts the tracked request too.
+ */
+axios.interceptors.request.use((config) => {
+  if (config._skipJobTracking || config._totemJobId) return config;
+  const url = String(config.url ?? "");
+  const label = computationLabel(url, config.method);
+  if (!label) return config;
+
+  const id = newJobId();
+  const controller = new AbortController();
+  const callerSignal = config.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  config.signal = controller.signal;
+  // However the request gets aborted (the panel's Cancel button, a component
+  // unmounting or refetching), the backend must stop computing too, or the
+  // abandoned computation keeps the per-file lock busy for the next request.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      const store = useComputationStore.getState();
+      const job = store.jobs[id];
+      if (job && job.status !== "cancelling") store.cancel(id);
+    },
+    { once: true },
+  );
+  config.headers = config.headers || {};
+  config.headers["X-Totem-Job-Id"] = id;
+  config._totemJobId = id;
+  useComputationStore.getState().start({
+    id,
+    label,
+    url,
+    method: String(config.method ?? "get"),
+    fileId: computationFileId(url, config.params),
+    startedAt: Date.now(),
+    fraction: null,
+    message: "",
+    status: "running",
+    controller,
+  });
+  return config;
+});
+
+function finishTrackedJob(config) {
+  const id = config && config._totemJobId;
+  if (id) useComputationStore.getState().finish(id);
+}
+
 axios.interceptors.request.use((config) => {
   if (config._skipGlobalFilter) return config;
   const { appliedRules, isApplied } = useFilterStore.getState();
@@ -138,10 +202,22 @@ axios.interceptors.request.use((config) => {
 });
 
 axios.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    finishTrackedJob(resp.config);
+    return resp;
+  },
   async (error) => {
     const cfg = error.config || {};
     const url = String(cfg.url ?? "");
+    // A tracked request that will not be retried below is over for the
+    // computation store, whatever the reason (abort, cancel, failure).
+    const willRetry =
+      error.response &&
+      error.response.status === 401 &&
+      !cfg._skipAuthRefresh &&
+      !cfg._retried &&
+      !/\/token\/(refresh\/)?$/.test(url);
+    if (!willRetry) finishTrackedJob(cfg);
     // Only handle 401s, and never recurse on the token endpoints themselves
     // (login or refresh): a 401 from /token/ means bad credentials, and
     // retrying it via the refresh/guest path would loop indefinitely.

@@ -147,7 +147,7 @@ class OrganizationalMiningEndpointTests(APITestCase):
         edges = {(e["source"], e["target"]): e for e in body["edges"]}
         # o1: Mike->Anna, Anna->Anna (e2->e3), Anna->Mike; o2: Mike->Anna (via the robot event).
         self.assertEqual(set(edges), {("Mike", "Anna"), ("Anna", "Anna"), ("Anna", "Mike")})
-        self.assertEqual(edges[("Mike", "Anna")]["raw_weight"], 2)
+        self.assertEqual(edges[("Mike", "Anna")]["count"], 2)
         self.assertEqual(edges[("Mike", "Anna")]["businessobject_type"], "order")
         self.assertGreater(edges[("Mike", "Anna")]["weight"], 0)
         self.assertNotIn("flows", body)
@@ -158,7 +158,7 @@ class OrganizationalMiningEndpointTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         edges = {(e["source"], e["target"]): e for e in response.json()["edges"]}
         # Only the direct o1 handover survives; the o2 one passes the robot event.
-        self.assertEqual(edges[("Mike", "Anna")]["raw_weight"], 1)
+        self.assertEqual(edges[("Mike", "Anna")]["count"], 1)
 
     def test_handover_flows_and_bindings_are_optional_extras(self):
         response = self._handover(include_flows="true", include_bindings="true")
@@ -201,7 +201,7 @@ class OrganizationalMiningEndpointTests(APITestCase):
         response = self._handover(before=1_700_010_800)
         self.assertEqual(response.status_code, 200, response.data)
         edges = {(e["source"], e["target"]): e for e in response.json()["edges"]}
-        self.assertEqual(edges[("Mike", "Anna")]["raw_weight"], 1)
+        self.assertEqual(edges[("Mike", "Anna")]["count"], 1)
 
     def test_handover_result_is_cached_per_parameters(self):
         first = self._handover().json()

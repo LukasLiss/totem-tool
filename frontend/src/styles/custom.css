@@ -185,6 +185,12 @@
   background: rgba(148, 163, 184, 0.65);
 }
 
+/* Indeterminate progress bar of running computations (ComputationPanel). */
+@keyframes totem-progress-slide {
+  0% { left: -33%; }
+  100% { left: 100%; }
+}
+
 /* Dashboard Text Box editor (#373).
    TipTap's Placeholder extension marks the empty first block; without a rule
    the hint never renders. `pointer-events: none` so clicking the hint still

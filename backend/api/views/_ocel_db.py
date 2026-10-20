@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from totem_lib.ocel import OcelDuckDB, import_ocel_db
 from totem_lib.ocel.validation import OCELValidationException, validate_ocel
 
+from ..jobs import watch_connection
+
 
 def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB:
     """Open an uploaded OCEL file as an `OcelDuckDB`, dispatching on extension."""
@@ -68,6 +70,13 @@ def _build_ocel_db_from_path(path: str, strict_mode: bool = False) -> OcelDuckDB
 # There is no TTL — the connection stays open until the process exits.
 _OCEL_DB_REGISTRY: dict[int, OcelDuckDB] = {}
 _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
+# Per file: the time window covering the first LARGE_LOG_EVENT_LIMIT events,
+# computed once at load time (see `_log_time_window`) so the frontend can
+# pre-select a filter for a large log without queueing behind algorithms.
+_OCEL_TIME_WINDOW_REGISTRY: dict[int, dict] = {}
+
+# Logs with more events than this get a global time-range filter proposed.
+LARGE_LOG_EVENT_LIMIT = 25_000
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 # Per-file locks that outlive the connection objects. `_with_ocel_db` takes
 # this lock *before* looking the connection up, so a writer that has to close
@@ -127,9 +136,57 @@ def _get_or_load_ocel_db(user_file) -> OcelDuckDB:
             object_types = tuple(
                 (row["name"], row["count"]) for row in _object_types_with_counts(db)
             )
+            window = _log_time_window(db, LARGE_LOG_EVENT_LIMIT)
             _OCEL_DB_REGISTRY[pk] = db
             _OCEL_OBJECT_TYPES_REGISTRY[pk] = object_types
+            _OCEL_TIME_WINDOW_REGISTRY[pk] = window
     return db
+
+
+def _log_time_window(db: OcelDuckDB, max_events: int) -> dict:
+    """The time range covering the first ``max_events`` events of the log.
+
+    ``before`` is inclusive, so ``selected_events`` can exceed ``max_events``
+    when several events share the boundary second. ``needed`` is false when
+    the whole log fits.
+    """
+    conn = db.conn
+    total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    result = {
+        "needed": False,
+        "total_events": total,
+        "max_events": max_events,
+        "selected_events": total,
+        "after": None,
+        "before": None,
+    }
+    if total > max_events:
+        first = conn.execute("SELECT MIN(timestamp_unix) FROM events").fetchone()[0]
+        boundary = conn.execute(
+            "SELECT timestamp_unix FROM events ORDER BY timestamp_unix LIMIT 1 OFFSET ?",
+            [max_events - 1],
+        ).fetchone()[0]
+        selected = conn.execute(
+            "SELECT COUNT(*) FROM events WHERE timestamp_unix BETWEEN ? AND ?",
+            [first, boundary],
+        ).fetchone()[0]
+        result.update(needed=True, after=first, before=boundary, selected_events=selected)
+    return result
+
+
+def _get_ocel_time_window(user_file) -> dict:
+    """The load-time window for ``LARGE_LOG_EVENT_LIMIT`` events; never waits
+    for the per-file algorithm lock."""
+    pk = int(user_file.pk)
+    window = _OCEL_TIME_WINDOW_REGISTRY.get(pk)
+    if window is None:
+        _get_or_load_ocel_db(user_file)
+        window = _OCEL_TIME_WINDOW_REGISTRY.get(pk)
+    if window is None:
+        with _with_ocel_db(user_file) as db:
+            window = _log_time_window(db, LARGE_LOG_EVENT_LIMIT)
+        _OCEL_TIME_WINDOW_REGISTRY[pk] = window
+    return window
 
 
 def _get_ocel_object_types(user_file) -> list[dict]:
@@ -148,21 +205,29 @@ def _get_ocel_object_types(user_file) -> list[dict]:
 
 
 @contextmanager
-def _with_ocel_db(user_file):
+def _with_ocel_db(user_file, job=None):
     """
     Context manager that yields a loaded `OcelDuckDB` with the per-file lock
     held. Every view that runs an algorithm on the connection must use this
     so DuckDB never executes two queries on the same connection in parallel.
 
+    Pass the request's ``job`` (see ``api.jobs.job_scope``) so cancelling the
+    job interrupts whatever statement is running on the connection.
+
     Usage::
 
-        with _with_ocel_db(user_file) as db:
-            totem = totemDiscovery_db(db)
+        with job_scope(request, "TOTeM discovery") as job:
+            with _with_ocel_db(user_file, job) as db:
+                totem = totemDiscovery_db(db, progress=job.report)
     """
     with _ocel_file_lock(int(user_file.pk)):
+        if job is not None:
+            # Waiting for the lock may already have taken a while.
+            job.check()
         db = _get_or_load_ocel_db(user_file)
         with db.lock:
-            yield db
+            with watch_connection(job, db.conn):
+                yield db
 
 
 def _close_ocel_db(pk: int) -> None:
@@ -179,6 +244,7 @@ def _close_ocel_db(pk: int) -> None:
         with _OCEL_DB_REGISTRY_LOCK:
             db = _OCEL_DB_REGISTRY.pop(pk, None)
             _OCEL_OBJECT_TYPES_REGISTRY.pop(pk, None)
+            _OCEL_TIME_WINDOW_REGISTRY.pop(pk, None)
         if db is not None:
             try:
                 db.close()
@@ -208,6 +274,7 @@ def _rewrite_ocel_db_file(user_file, mutate):
     with _ocel_file_lock(pk):
         with _OCEL_DB_REGISTRY_LOCK:
             old_db = _OCEL_DB_REGISTRY.pop(pk, None)
+            _OCEL_TIME_WINDOW_REGISTRY.pop(pk, None)
         if old_db is not None:
             try:
                 old_db.close()
@@ -249,95 +316,121 @@ def _filter_shadow(db, fp):
     # *events* survive and are independent of the object-type predicate.
     event_conditions, event_params = [], []
     if "after" in fp:
-        event_conditions.append("e.timestamp_unix >= ?")
+        event_conditions.append("timestamp_unix >= ?")
         event_params.append(fp["after"])
     if "before" in fp:
-        event_conditions.append("e.timestamp_unix <= ?")
+        event_conditions.append("timestamp_unix <= ?")
         event_params.append(fp["before"])
     if "activities" in fp:
         placeholders = ",".join("?" for _ in fp["activities"])
-        event_conditions.append(f"e.activity IN ({placeholders})")
+        event_conditions.append(f"activity IN ({placeholders})")
         event_params.extend(fp["activities"])
 
-    # Order matters. Objects are filtered *by type directly*, then the relation
-    # is narrowed to the surviving objects, then events to the relation.
-    # Deriving objects from events (the reverse) silently re-admits a removed
-    # type whenever one of its objects shares an event with a kept type — in an
-    # OCEL that is almost always the case, so the removed type never disappears.
-    if "object_types" in fp:
-        placeholders = ",".join("?" for _ in fp["object_types"])
-        conn.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE objects AS
-            SELECT * FROM main.objects WHERE obj_type IN ({placeholders})
-            """,
-            list(fp["object_types"]),
-        )
-    else:
-        conn.execute(
-            "CREATE OR REPLACE TEMP TABLE objects AS SELECT * FROM main.objects"
-        )
-
-    conn.execute("""
-        CREATE OR REPLACE TEMP TABLE event_object AS
-        SELECT eo.* FROM main.event_object eo
-        WHERE eo.obj_id IN (SELECT obj_id FROM objects)
-    """)
-
-    # An event survives if it passes the event-level predicates *and* still has
-    # at least one surviving object relation: an event stripped of all its
-    # objects carries no object-centric information.
-    event_where = (
-        f"WHERE {' AND '.join(event_conditions)} AND" if event_conditions else "WHERE"
-    )
-    conn.execute(
-        f"""
-        CREATE OR REPLACE TEMP TABLE events AS
-        SELECT e.* FROM main.events e
-        {event_where} e.event_id IN (SELECT event_id FROM event_object)
-        """,
-        event_params,
-    )
-
-    # Re-narrow the relation and the objects: the event-level predicates may
-    # have dropped events that `event_object` still references, and objects may
-    # be left with no relation at all.
-    if event_conditions:
-        conn.execute("""
-            CREATE OR REPLACE TEMP TABLE event_object AS
-            SELECT eo.* FROM event_object eo
-            WHERE eo.event_id IN (SELECT event_id FROM events)
-        """)
-        conn.execute("""
-            CREATE OR REPLACE TEMP TABLE objects AS
-            SELECT o.* FROM objects o
-            WHERE o.obj_id IN (SELECT obj_id FROM event_object)
-        """)
-
-    # `CREATE TABLE AS` copies no indexes, so every unqualified query in the
-    # algorithms would scan the shadows linearly — the opposite of the speed-up
-    # a filter is meant to buy. Mirror the indexes `ocel_duckdb` puts on main.
-    for stmt in (
-        "CREATE INDEX idx_shadow_eo_obj ON event_object(obj_id)",
-        "CREATE INDEX idx_shadow_eo_ev ON event_object(event_id)",
-        "CREATE INDEX idx_shadow_obj_type ON objects(obj_type)",
-        "CREATE INDEX idx_shadow_obj_id ON objects(obj_id)",
-        "CREATE INDEX idx_shadow_ev_ts ON events(timestamp_unix)",
-        "CREATE INDEX idx_shadow_ev_id ON events(event_id)",
-    ):
-        try:
-            conn.execute(stmt)
-        except Exception:
-            pass
-
+    # Objects are filtered *by type directly*, then the relation is narrowed
+    # to the surviving objects, then events to the relation. Deriving objects
+    # from events (the reverse) silently re-admits a removed type whenever one
+    # of its objects shares an event with a kept type — in an OCEL that is
+    # almost always the case, so the removed type would never disappear.
+    #
+    # The event-level predicates are applied *first* (they are cheap: an
+    # indexed timestamp range or an activity set) so that a narrow time window
+    # over a very large log never copies the whole relation table.
+    #
+    # The shadow is built inside the `try`: a statement that fails half-way
+    # (or is interrupted by a cancelled job — `CREATE ... event_object` is the
+    # slow one on a large log) must not leave the shadows created so far in
+    # place, or they would filter every later request on this connection.
     try:
-        yield
-    finally:
-        for tbl in ("objects", "event_object", "events"):
+        if "object_types" in fp:
+            placeholders = ",".join("?" for _ in fp["object_types"])
+            conn.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE objects AS
+                SELECT * FROM main.objects WHERE obj_type IN ({placeholders})
+                """,
+                list(fp["object_types"]),
+            )
+        else:
+            conn.execute(
+                "CREATE OR REPLACE TEMP TABLE objects AS SELECT * FROM main.objects"
+            )
+
+        if event_conditions:
+            conn.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE _shadow_events_pre AS
+                SELECT * FROM main.events WHERE {' AND '.join(event_conditions)}
+                """,
+                event_params,
+            )
+            event_source = "_shadow_events_pre"
+            event_restriction = "AND eo.event_id IN (SELECT event_id FROM _shadow_events_pre)"
+        else:
+            event_source = "main.events"
+            event_restriction = ""
+
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE event_object AS
+            SELECT eo.* FROM main.event_object eo
+            WHERE eo.obj_id IN (SELECT obj_id FROM objects) {event_restriction}
+        """)
+
+        # An event survives if it passes the event-level predicates *and* still has
+        # at least one surviving object relation: an event stripped of all its
+        # objects carries no object-centric information.
+        conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE events AS
+            SELECT e.* FROM {event_source} e
+            WHERE e.event_id IN (SELECT event_id FROM event_object)
+        """)
+        if event_conditions:
+            conn.execute("DROP TABLE IF EXISTS _shadow_events_pre")
+            # Objects may be left with no relation at all once events are gone.
+            conn.execute("""
+                CREATE OR REPLACE TEMP TABLE objects AS
+                SELECT o.* FROM objects o
+                WHERE o.obj_id IN (SELECT obj_id FROM event_object)
+            """)
+
+        # `CREATE TABLE AS` copies no indexes, so every unqualified query in the
+        # algorithms would scan the shadows linearly — the opposite of the speed-up
+        # a filter is meant to buy. Mirror the indexes `ocel_duckdb` puts on main.
+        for stmt in (
+            "CREATE INDEX idx_shadow_eo_obj ON event_object(obj_id)",
+            "CREATE INDEX idx_shadow_eo_ev ON event_object(event_id)",
+            "CREATE INDEX idx_shadow_obj_type ON objects(obj_type)",
+            "CREATE INDEX idx_shadow_obj_id ON objects(obj_id)",
+            "CREATE INDEX idx_shadow_ev_ts ON events(timestamp_unix)",
+            "CREATE INDEX idx_shadow_ev_id ON events(event_id)",
+        ):
             try:
-                conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+                conn.execute(stmt)
             except Exception:
                 pass
+
+        yield
+    finally:
+        _drop_filter_shadow(conn)
+
+
+_SHADOW_TABLES = ("objects", "event_object", "events", "_shadow_events_pre")
+# A cancelled job keeps interrupting its connection until the view has unwound
+# (see `api.jobs`), and an interrupt can hit a DROP here. A retry right after
+# it goes through; the bound only keeps a broken connection from looping.
+_SHADOW_DROP_ATTEMPTS = 5
+
+
+def _drop_filter_shadow(conn) -> None:
+    """Drop the temp shadows of `_filter_shadow`, whichever of them exist."""
+    for tbl in _SHADOW_TABLES:
+        for _ in range(_SHADOW_DROP_ATTEMPTS):
+            try:
+                # Qualified on purpose: for a shadow that was never created, an
+                # unqualified DROP would resolve to the real table in `main`.
+                conn.execute(f"DROP TABLE IF EXISTS temp.main.{tbl}")
+                break
+            except Exception:
+                continue
 
 
 def _object_types(db: OcelDuckDB) -> list[str]:

@@ -4461,7 +4461,7 @@ class OcelDbConcurrencyTests(TestCase):
 
         discover_inputs = []
 
-        def fake_discover(ocel, relativeOccuranceThreshold, parameters):
+        def fake_discover(ocel, relativeOccuranceThreshold, parameters, progress=None):
             discover_inputs.append(ocel)
             return object()
 
@@ -4597,6 +4597,45 @@ class FilterShadowTests(SimpleTestCase):
         with views._filter_shadow(self.db, {}):
             self.assertEqual(self._types(), ["item", "order", "worker"])
             self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+    def _flaky_db(self, fail_on: str, times: int = 1):
+        """A db whose connection raises (like a DuckDB interrupt) the first
+        ``times`` statements containing ``fail_on``."""
+        conn = self.conn
+        state = {"left": times}
+
+        class _FlakyConn:
+            def execute(self, sql, *args):
+                if fail_on in sql and state["left"] > 0:
+                    state["left"] -= 1
+                    raise RuntimeError("INTERRUPT Error: Interrupted!")
+                return conn.execute(sql, *args)
+
+        db = type("_DbShim", (), {})()
+        db.conn = _FlakyConn()
+        return db
+
+    def _temp_tables(self):
+        return self.conn.execute(
+            "SELECT table_name FROM duckdb_tables() WHERE temporary"
+        ).fetchall()
+
+    def test_shadow_is_torn_down_when_setup_is_interrupted(self):
+        # `objects` is already shadowed when building `event_object` fails.
+        db = self._flaky_db("TEMP TABLE event_object")
+        with self.assertRaises(RuntimeError):
+            with views._filter_shadow(db, {"object_types": ["order"], "after": 1}):
+                pass
+        self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._types(), ["item", "order", "worker"])
+        self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+    def test_teardown_retries_an_interrupted_drop(self):
+        db = self._flaky_db("DROP TABLE IF EXISTS temp.main.events")
+        with views._filter_shadow(db, {"object_types": ["order"]}):
+            self.assertEqual(self._types(), ["order"])
+        self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
