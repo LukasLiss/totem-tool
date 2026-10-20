@@ -7,7 +7,9 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
 from django.db import transaction
+import math
 import os
+import re
 
 from ..models import (
     Dashboard,
@@ -47,6 +49,68 @@ from totem_lib.orgamining import (
     NORMALIZATION_SCOPES,
     NORMALIZATIONS,
 )
+
+from ..rich_text import plain_text_from_doc, validated_rich_text
+
+
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _validated_choice(raw, choices, default):
+    """Return ``raw`` when it is one of ``choices``, else ``default``.
+
+    ``choices`` is a model's ``(value, label)`` list, so the accepted set
+    cannot drift away from what the column actually allows.
+    """
+    allowed = {value for value, _label in choices}
+    return raw if isinstance(raw, str) and raw in allowed else default
+
+
+def _validated_hex_color(raw, default):
+    """Return ``raw`` only when it is a ``#rgb`` / ``#rrggbb`` literal.
+
+    These values are rendered into an inline ``style`` on every dashboard
+    that shows the component, so anything else is replaced rather than
+    stored.
+    """
+    if not isinstance(raw, str):
+        return default
+    candidate = raw.strip()
+    return candidate if _HEX_COLOR_RE.match(candidate) else default
+
+
+def _validated_number(raw, default, minimum, maximum):
+    """Clamp ``raw`` into ``[minimum, maximum]``, falling back to ``default``.
+
+    Keeps a stray 0 or 10000 from a hand-edited payload out of the CSS,
+    where it would render the text invisible or unusably large. A bool is
+    excluded on purpose: in Python it is an ``int``, so ``True`` would
+    otherwise become the minimum after clamping.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    # A non-finite value is nonsense input rather than "very large", so it
+    # falls back to the default — matching resolveTextBoxFormat on the
+    # frontend, which rejects anything Number.isFinite declines. Unreachable
+    # through the API (DRF's STRICT_JSON parser refuses NaN / Infinity
+    # first), but this is also called directly.
+    if not math.isfinite(value):
+        return default
+    return min(max(value, minimum), maximum)
+
+
+def _validated_int(raw, default, minimum, maximum):
+    """``_validated_number`` rounded to a whole number for an integer column.
+
+    Rounds rather than truncates so it agrees with the frontend, where
+    ``resolveTextBoxFormat`` uses ``Math.round``.
+    """
+    value = _validated_number(raw, None, minimum, maximum)
+    return default if value is None else int(round(value))
 
 
 def _validated_legacy_image_path(raw, project):
@@ -252,6 +316,22 @@ class DashboardViewSet(viewsets.ModelViewSet):
         for item in layout:
             component_name = item["component_name"]
             if component_name == "TextBoxComponent":
+                # Formatting is presentational, but it lands in an inline
+                # style, so every value is validated down to a known-safe one
+                # rather than trusted or rejected.
+                #
+                # The rich-text document is rebuilt from a whitelist too. When
+                # it survives, `text` is derived from it so the plain column
+                # stays in step with what the box actually shows; otherwise we
+                # keep whatever plain text was sent.
+                rich_text = validated_rich_text(item.get("rich_text"))
+                text = (
+                    plain_text_from_doc(rich_text)
+                    if rich_text is not None
+                    else item.get("text", "")
+                )
+                if not isinstance(text, str):
+                    text = ""
                 TextBoxComponent.objects.create(
                     dashboard=dashboard,
                     x=item["x"],
@@ -259,8 +339,40 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item["w"],
                     h=item["h"],
                     component_name=component_name,
-                    text=item.get("text", ""),
-                    font_size=item.get("font_size", 14),
+                    text=text,
+                    rich_text=rich_text,
+                    font_size=_validated_int(item.get("font_size"), 14, 8, 200),
+                    font_family=_validated_choice(
+                        item.get("font_family"),
+                        TextBoxComponent.FONT_FAMILY_CHOICES,
+                        "sans",
+                    ),
+                    font_weight=_validated_choice(
+                        item.get("font_weight"),
+                        TextBoxComponent.FONT_WEIGHT_CHOICES,
+                        "normal",
+                    ),
+                    italic=bool(item.get("italic", False)),
+                    underline=bool(item.get("underline", False)),
+                    text_align=_validated_choice(
+                        item.get("text_align"),
+                        TextBoxComponent.TEXT_ALIGN_CHOICES,
+                        "left",
+                    ),
+                    vertical_align=_validated_choice(
+                        item.get("vertical_align"),
+                        TextBoxComponent.VERTICAL_ALIGN_CHOICES,
+                        "top",
+                    ),
+                    text_color=_validated_hex_color(
+                        item.get("text_color"), "#1e293b"
+                    ),
+                    background_color=_validated_hex_color(
+                        item.get("background_color"), "#ffffff"
+                    ),
+                    line_height=_validated_number(
+                        item.get("line_height"), 1.5, 0.5, 5.0
+                    ),
                 )
 
             elif component_name == "NumberOfEventsComponent":

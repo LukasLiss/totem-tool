@@ -190,3 +190,25 @@
   0% { left: -33%; }
   100% { left: 100%; }
 }
+
+/* Dashboard Text Box editor (#373).
+   TipTap's Placeholder extension marks the empty first block; without a rule
+   the hint never renders. `pointer-events: none` so clicking the hint still
+   puts the caret in the editor. */
+.tiptap-text-box p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--muted-foreground);
+}
+
+/* The editor fills its tile; lists need their markers back, because the
+   Tailwind preflight removes them. */
+.tiptap-text-box ul { list-style: disc; padding-left: 1.4em; }
+.tiptap-text-box ol { list-style: decimal; padding-left: 1.6em; }
+.tiptap-text-box blockquote {
+  padding-left: 0.8em;
+  border-left: 3px solid currentColor;
+  opacity: 0.85;
+}
