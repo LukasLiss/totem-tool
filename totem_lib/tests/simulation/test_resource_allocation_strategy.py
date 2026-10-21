@@ -224,6 +224,58 @@ def test_calendar_offshift_type_not_scored():
     )
 
 
+def test_calendar_per_resource_overrides_type():
+    """
+    A resource's own calendar wins over its type calendar. r1 is off shift
+    (all-zero own calendar) while the type is always on: at t=100 only r2 is a
+    candidate, and picking r1 is not a fully idle pick -> unscored. Swapping the
+    own calendar to r2 makes r1 the sole candidate at position 0 -> FIFO.
+    """
+    ocel = make_ocel(
+        [
+            _event("e1", "A", 0, [], ["r1"]),
+            _event("e2", "A", 10, [], ["r2"]),
+            _event("e3", "A", 100, [], ["r1"]),
+        ],
+        [obj("r1", "Worker"), obj("r2", "Worker")],
+    )
+    off = {day: [0.0] * 24 for day in WEEKDAYS}
+    on = _flat_calendar(1.0)
+    assert (
+        calculate_resource_allocation_strategy(ocel, calendars={**on, "r1": off}) == {}
+    )
+    assert calculate_resource_allocation_strategy(
+        ocel, calendars={**on, "r2": off}
+    ) == {"Worker": "FIFO"}
+
+
+def test_calendar_per_resource_cooldown_reinflation():
+    """
+    The cooldown re-inflation uses the resource's own calendar: with r1 on a
+    0.5 calendar its 100s cooldown ends at t=200 (not idle at t=150, unscored),
+    while the always-on type calendar alone would free it at t=100 -> FIFO.
+    """
+    cooldowns = {"LongTask": {"Worker": _cd(100)}, "ShortTask": {"Worker": _cd(0)}}
+    ocel = make_ocel(
+        [
+            _event("e1", "LongTask", 0, [], ["r1"]),
+            _event("e2", "ShortTask", 150, [], ["r1"]),
+        ],
+        [obj("r1", "Worker")],
+    )
+    on = _flat_calendar(1.0)
+    half = _flat_calendar(0.5)["Worker"]
+    assert calculate_resource_allocation_strategy(ocel, cooldowns, calendars=on) == {
+        "Worker": "FIFO"
+    }
+    assert (
+        calculate_resource_allocation_strategy(
+            ocel, cooldowns, calendars={**on, "r1": half}
+        )
+        == {}
+    )
+
+
 # --- multiple resources of one type per event ---
 def _four_workers():
     """Four workers freed at t=0/10/20/30, so the idle queue is [r1, r2, r3, r4]."""

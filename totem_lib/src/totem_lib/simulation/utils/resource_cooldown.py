@@ -21,13 +21,17 @@ def resource_cooldown_distribution(
     When ``calendars`` is given, an interval's duration is the resource's
     *available* (working) time in the gap rather than the raw wall-clock span:
     the time the resource is simply not present (nights, weekends) is discounted.
+    The gap is discounted against the calendar of the resource that produced it,
+    so the samples become calendar-free occupation time that is comparable across
+    resources with different shifts.
 
     Args:
         ocel: ObjectCentricEventLog
         objects_to_analyze: list of object types to consider as resources
         activities: list of activity names to analyse
-        calendars: Optional ``{resource_type: {weekday: [24 floats]}}`` calendar
-            probabilities. A type without an entry falls back to wall-clock time.
+        calendars: Optional ``{key: {weekday: [24 floats]}}`` calendar
+            probabilities keyed by resource id (preferred) or resource type
+            (fallback). A resource with neither falls back to wall-clock time.
 
     Returns:
         dict: {
@@ -69,7 +73,7 @@ def resource_cooldown_distribution(
             if obj_id in open_cooldowns:
                 # Any event closes an open interval, regardless of whether its activity is tracked
                 start_ts, start_act = open_cooldowns.pop(obj_id)
-                calendar = calendars.get(resource_type)
+                calendar = calendars.get(obj_id) or calendars.get(resource_type)
                 duration = (
                     available_seconds_between(calendar, start_ts, timestamp)
                     if calendar

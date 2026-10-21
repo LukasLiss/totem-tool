@@ -315,6 +315,53 @@ def test_cooldown_calendar_missing_type_falls_back_to_wallclock():
     assert result["Load"]["Worker"]["max_duration_s"] == expected
 
 
+def test_cooldown_discounts_with_resource_own_calendar_over_type():
+    """A gap is discounted against the calendar of the resource that produced
+    it; the type calendar is only the fallback.
+
+    Morning worker r1 (08-12): Mon 11:00 -> Tue 09:00 is 1h (11-12) + 1h (08-09)
+    = 2h under its own calendar, but 5h*0.5 + 1h*0.5 = 3h under the 0.5 type
+    mean — the afternoon it never works charged to it. Afternoon worker r2
+    (12-16): Mon 13:00 -> Tue 14:00 is 3h + 2h = 5h under its own calendar,
+    3h*0.5 + 6h*0.5 = 4.5h under the type mean.
+    """
+
+    def shift(start, end):
+        cal = {day: [0.0] * 24 for day in WEEKDAYS}
+        for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+            for h in range(start, end):
+                cal[day][h] = 1.0
+        return cal
+
+    type_mean = {day: [0.0] * 24 for day in WEEKDAYS}
+    for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        for h in range(8, 16):
+            type_mean[day][h] = 0.5
+
+    ocel = _make_ocel(
+        [
+            _event("e1", "Load", _ts(day=1, hour=11), ["r1"]),  # Monday 11:00
+            _event("e2", "Unload", _ts(day=2, hour=9), ["r1"]),  # Tuesday 09:00
+            _event("e3", "Load", _ts(day=1, hour=13), ["r2"]),  # Monday 13:00
+            _event("e4", "Unload", _ts(day=2, hour=14), ["r2"]),  # Tuesday 14:00
+        ],
+        [_object("r1", "Worker"), _object("r2", "Worker")],
+    )
+    result = resource_cooldown_distribution(
+        ocel,
+        ["Worker"],
+        ["Load"],
+        calendars={"Worker": type_mean, "r1": shift(8, 12), "r2": shift(12, 16)},
+    )
+    assert sorted(result["Load"]["Worker"]["samples"]) == [2 * 3600, 5 * 3600]
+
+    # Only the type mean -> r1 reads 3h, r2 4.5h.
+    result = resource_cooldown_distribution(
+        ocel, ["Worker"], ["Load"], calendars={"Worker": type_mean}
+    )
+    assert sorted(result["Load"]["Worker"]["samples"]) == [3 * 3600, 4.5 * 3600]
+
+
 # --- empirical samples + bootstrap sampling ---
 
 

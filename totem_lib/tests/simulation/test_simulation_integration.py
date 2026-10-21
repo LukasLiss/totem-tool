@@ -100,6 +100,8 @@ def _build_model(
     delays=None,
     config=None,
     type_calendars=None,
+    resource_calendars=None,
+    shift_patterns=None,
 ):
     return OCProcessAreaSimulationModel(
         playout_strategy=VariantPlayoutStrategy(
@@ -113,13 +115,20 @@ def _build_model(
         source_log_start_unix=int(START.timestamp()),
         activity_delays=delays or {},
         type_calendars=type_calendars,
+        resource_calendars=resource_calendars,
+        shift_patterns=shift_patterns,
     )
 
 
-def _run(model, *, pool, duration_s=HOUR, tick_s=60, seed=42):
+def _run(model, *, pool, duration_s=HOUR, tick_s=60, seed=42, start=None):
     random.seed(seed)
     np.random.seed(seed)
-    return model.run(sim_duration_s=duration_s, resource_pool=pool, tick_size_s=tick_s)
+    return model.run(
+        sim_duration_s=duration_s,
+        resource_pool=pool,
+        tick_size_s=tick_s,
+        start_datetime=start,
+    )
 
 
 def _records(ocel):
@@ -369,6 +378,110 @@ def test_cooldown_burns_only_during_available_hours():
     # Off block inside the cooldown: the countdown skips the missing hour, so the
     # Worker frees ~1h later and every reuse gap grows by roughly that hour.
     assert min(off_block_gaps) > max(all_on_gaps) + HOUR - 240
+
+
+# --- shift patterns: one realized calendar per resource instance ---
+
+
+def _hours_by_resource(ocel):
+    """{resource_id: set of UTC clock hours in which it appears}."""
+    hours = defaultdict(set)
+    for rec in _records(ocel):
+        h = dt.datetime.fromtimestamp(rec["ts"], tz=UTC).hour
+        for rid in rec["resources"]:
+            hours[rid].add(h)
+    return hours
+
+
+def _pattern(start, end, share):
+    """A binary Mon-Sun ``[start, end)`` shift pattern dict with no spread."""
+    hours = [1.0 if start <= h < end else 0.0 for h in range(24)]
+    return {
+        "probability": {day: list(hours) for day in WEEKDAYS},
+        "spread": {day: [0.0] * 24 for day in WEEKDAYS},
+        "share": share,
+        "member_ids": [],
+    }
+
+
+def test_shift_patterns_give_each_instance_one_shift():
+    """A 50/50 morning (08-12) / afternoon (12-16) mixture over two Workers puts
+    one Worker on each shift for the whole day: every Worker's events fall into
+    exactly one of the two blocks. The type mean alone (0.5 across 08-16) has
+    both Workers flickering through both blocks."""
+    variant = _single("Load")
+    needed = _needs({"Load": {"Worker": 1}})
+    arrivals = _flat_arrivals(variant, rate=6.0)
+    mean = {day: [0.5 if 8 <= h < 16 else 0.0 for h in range(24)] for day in WEEKDAYS}
+    patterns = {"Worker": [_pattern(8, 12, 0.5), _pattern(12, 16, 0.5)]}
+    midnight = START.replace(hour=0)
+    morning, afternoon = set(range(8, 12)), set(range(12, 16))
+
+    with_patterns = _build_model(
+        variant,
+        needed=needed,
+        arrivals=arrivals,
+        type_calendars={"Worker": mean},
+        shift_patterns=patterns,
+    )
+    ocel, _, _ = _run(
+        with_patterns, pool={"Worker": 2}, duration_s=24 * HOUR, start=midnight
+    )
+    hours = _hours_by_resource(ocel)
+    assert set(hours) == {"Worker_1", "Worker_2"}
+    assert all(h <= morning or h <= afternoon for h in hours.values())
+    assert sorted(len(h) for h in hours.values()) == [4, 4]
+
+    mean_only = _build_model(
+        variant, needed=needed, arrivals=arrivals, type_calendars={"Worker": mean}
+    )
+    ocel, _, _ = _run(
+        mean_only, pool={"Worker": 2}, duration_s=24 * HOUR, start=midnight
+    )
+    hours = _hours_by_resource(ocel)
+    assert any(h & morning and h & afternoon for h in hours.values())
+
+
+def test_shift_patterns_scale_with_the_pool():
+    """The mixture is applied proportionally to whatever pool size the user
+    picks: 75/25 over four Workers is three mornings and one afternoon."""
+    variant = _single("Load")
+    needed = _needs({"Load": {"Worker": 1}})
+    patterns = {"Worker": [_pattern(8, 12, 0.75), _pattern(12, 16, 0.25)]}
+    model = _build_model(
+        variant,
+        needed=needed,
+        arrivals=_flat_arrivals(variant, rate=20.0),
+        shift_patterns=patterns,
+    )
+    ocel, _, _ = _run(
+        model, pool={"Worker": 4}, duration_s=24 * HOUR, start=START.replace(hour=0)
+    )
+    hours = _hours_by_resource(ocel)
+    mornings = [rid for rid, h in hours.items() if h <= set(range(8, 12))]
+    afternoons = [rid for rid, h in hours.items() if h <= set(range(12, 16))]
+    assert len(mornings) == 3 and len(afternoons) == 1
+
+
+def test_explicit_instance_calendar_beats_shift_pattern():
+    """A per-instance calendar on the model (user override) wins over the
+    pattern the instance would have drawn: Worker_1 is forced onto afternoons
+    although the type's only pattern is the morning shift."""
+    variant = _single("Load")
+    needed = _needs({"Load": {"Worker": 1}})
+    afternoon = _pattern(12, 16, 1.0)["probability"]
+    model = _build_model(
+        variant,
+        needed=needed,
+        arrivals=_flat_arrivals(variant, rate=6.0),
+        shift_patterns={"Worker": [_pattern(8, 12, 1.0)]},
+        resource_calendars={"Worker_1": afternoon},
+    )
+    ocel, _, _ = _run(
+        model, pool={"Worker": 1}, duration_s=24 * HOUR, start=START.replace(hour=0)
+    )
+    hours = _hours_by_resource(ocel)
+    assert hours["Worker_1"] and hours["Worker_1"] <= set(range(12, 16))
 
 
 # --- arrival distribution ---
